@@ -10,19 +10,18 @@ async function sfGet(accessToken, path) {
   return res.json();
 }
 
-async function resolveId(accessToken, id, fields = ['Name']) {
-  if (!id) return null;
-  // Determine object type from ID prefix (first 3 chars)
-  try {
-    const res = await sfGet(accessToken, `/sobjects/${id.substring(0, 3)}/${id}?fields=${fields.join(',')}`);
-    if (res.errorCode) return null;
-    return fields.length === 1 ? res[fields[0]] : res;
-  } catch {
-    return null;
+async function sfQuery(accessToken, soql) {
+  const encoded = encodeURIComponent(soql);
+  const res = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/query/?q=${encoded}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const data = await res.json();
+  if (data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
+    return [];
   }
+  return (data.records || []).map(({ attributes, ...rest }) => rest);
 }
 
-// Resolve using relationship query for reliability
 async function resolveViaQuery(accessToken, objectType, id, nameField = 'Name') {
   if (!id) return null;
   try {
@@ -66,8 +65,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Fetch full record
-    const res = await sfGet(accessToken, `/sobjects/stem__c/${stemId}`);
+    // Fetch full record + child records in parallel
+    const [res, lineItems, extraCosts, buyerBrokers] = await Promise.all([
+      sfGet(accessToken, `/sobjects/stem__c/${stemId}`),
+      sfQuery(accessToken, `SELECT Id, Name__c, Supplier_Name__c, Quantity__c, Quantity_Max__c, Price_Per_Unit__c, Total_Price__c, Cost_Per_Unit__c, Total_Cost__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c FROM STEM_Line_Item__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Name, Description__c, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Type__c, Payment_Term__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
+    ]);
 
     if (res.errorCode) {
       return Response.json({ error: res.message }, { status: 404 });
@@ -85,7 +89,16 @@ Deno.serve(async (req) => {
       res.Factoring_Invoice__c ? resolveViaQuery(accessToken, 'Invoice__c', res.Factoring_Invoice__c, 'Name') : Promise.resolve(null),
     ]);
 
-    // Attach resolved names alongside raw IDs
+    // Resolve buyer broker names for child STEM_Buyer_Broker__c records
+    const buyerBrokersWithNames = await Promise.all(
+      buyerBrokers.map(async (bb) => {
+        const brokerName = bb.Buyer_Broker__c
+          ? await resolveViaQuery(accessToken, 'Account', bb.Buyer_Broker__c, 'Name')
+          : null;
+        return { ...bb, _Buyer_Broker_Name: brokerName };
+      })
+    );
+
     const record = {
       ...res,
       _Vessel_Name: vesselName,
@@ -96,7 +109,7 @@ Deno.serve(async (req) => {
       _Factoring_Invoice_Name: factoringInvoiceName,
     };
 
-    return Response.json({ record });
+    return Response.json({ record, lineItems, extraCosts, buyerBrokers: buyerBrokersWithNames });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }

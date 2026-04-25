@@ -84,7 +84,6 @@ const SECTIONS = [
       { key: '_Buyer_Broker_Name', label: 'Buyer Broker' },
       { key: '_Factoring_Invoice_Name', label: 'Factoring Invoice' },
       { key: 'Mailing_Status__c', label: 'Mailing Status' },
-      { key: 'Office_Originated__c', label: 'Office Originated' },
       { key: 'Due_Date_Override__c', label: 'Due Date Override', fmt: fmtBool },
       { key: 'CreatedDate', label: 'Created', fmt: fmtDate },
       { key: 'LastModifiedDate', label: 'Last Modified', fmt: fmtDate },
@@ -102,6 +101,9 @@ function computePnl(record) {
 
 export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
   const [record, setRecord] = useState(null);
+  const [lineItems, setLineItems] = useState([]);
+  const [extraCosts, setExtraCosts] = useState([]);
+  const [buyerBrokers, setBuyerBrokers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -109,11 +111,19 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
   useEffect(() => {
     if (!open || !stemId) return;
     setRecord(null);
+    setLineItems([]);
+    setExtraCosts([]);
+    setBuyerBrokers([]);
     setError(null);
     setLoading(true);
     base44.functions.invoke('salesforceStemDetail', { stemId }).then(res => {
       if (res.data?.error) setError(res.data.error);
-      else setRecord(res.data.record);
+      else {
+        setRecord(res.data.record);
+        setLineItems(res.data.lineItems || []);
+        setExtraCosts(res.data.extraCosts || []);
+        setBuyerBrokers(res.data.buyerBrokers || []);
+      }
       setLoading(false);
     });
   }, [open, stemId]);
