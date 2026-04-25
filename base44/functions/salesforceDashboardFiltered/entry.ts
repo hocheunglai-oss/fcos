@@ -72,22 +72,22 @@ Deno.serve(async (req) => {
         ? sfQuery(accessToken, `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`)
         : Promise.resolve({ records: [] }),
       // 3: recent records (with P&L fields)
-      sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY CreatedDate DESC LIMIT 50`),
+      sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC LIMIT 200`),
       // 4: disputed count
       hasDispute
-        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true ${where ? `AND (${where})` : ''}`)
+        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${where ? ` AND (${where})` : ''}`)
         : Promise.resolve({ records: [] }),
       // 5: count distinct accounts (via GROUP BY)
       accountField
         ? sfQuery(accessToken, `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`)
         : Promise.resolve({ records: [] }),
-      // 6: sum buyer invoices (only where Delivery_Date__c is set, matching P&L logic)
+      // 6: sum buyer invoices
       buyerAmountField
-        ? sfQuery(accessToken, `SELECT SUM(${buyerAmountField}) total FROM stem__c WHERE Delivery_Date__c != null${where ? ` AND (${where})` : ''}`)
+        ? sfQuery(accessToken, `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`)
         : Promise.resolve({ records: [] }),
-      // 7: sum supplier invoices (only where Delivery_Date__c is set, matching P&L logic)
+      // 7: sum supplier invoices
       supplierAmountField
-        ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c WHERE Delivery_Date__c != null${where ? ` AND (${where})` : ''}`)
+        ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`)
         : Promise.resolve({ records: [] }),
     ];
 

@@ -2,43 +2,53 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import StatCard from '@/components/dashboard/StatCard';
 import PnlTable from '@/components/dashboard/PnlTable';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X } from 'lucide-react';
-
 import { format } from 'date-fns';
 
-const STORAGE_KEY = 'dashboard_filters_v1';
-
+const STORAGE_KEY = 'dashboard_filters_v2';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 
-const DATE_PRESETS = [
-  { label: 'All time', value: 'all' },
-  { label: 'Today', value: 'TODAY' },
-  { label: 'This week', value: 'THIS_WEEK' },
-  { label: 'This month', value: 'THIS_MONTH' },
-  { label: 'This quarter', value: 'THIS_QUARTER' },
-  { label: 'This year', value: 'THIS_YEAR' },
-  { label: 'Last 7 days', value: 'LAST_N_DAYS:7' },
-  { label: 'Last 30 days', value: 'LAST_N_DAYS:30' },
-  { label: 'Last 90 days', value: 'LAST_N_DAYS:90' },
-  { label: 'Last 6 months', value: 'LAST_N_DAYS:180' },
-  { label: 'Last year', value: 'LAST_YEAR' },
-  { label: 'Custom range', value: 'custom' },
+const MONTHS = [
+  { value: 1, label: 'Jan' }, { value: 2, label: 'Feb' }, { value: 3, label: 'Mar' },
+  { value: 4, label: 'Apr' }, { value: 5, label: 'May' }, { value: 6, label: 'Jun' },
+  { value: 7, label: 'Jul' }, { value: 8, label: 'Aug' }, { value: 9, label: 'Sep' },
+  { value: 10, label: 'Oct' }, { value: 11, label: 'Nov' }, { value: 12, label: 'Dec' },
 ];
 
+const now = new Date();
+const THIS_YEAR = now.getFullYear();
+const THIS_MONTH = now.getMonth() + 1; // 1-based
+const YEARS = [THIS_YEAR, THIS_YEAR - 1, THIS_YEAR - 2];
 
+// Build WHERE clause from selected years + months using Delivery_Date__c
+function buildDeliveryWhere(years, months) {
+  if (!years.length) return '';
+  const conditions = [];
+  for (const yr of years) {
+    if (!months.length || months.length === 12) {
+      // Whole year
+      conditions.push(`(Delivery_Date__c >= ${yr}-01-01 AND Delivery_Date__c <= ${yr}-12-31)`);
+    } else {
+      // Specific months within this year
+      for (const mo of months) {
+        const mm = String(mo).padStart(2, '0');
+        const lastDay = new Date(yr, mo, 0).getDate();
+        conditions.push(`(Delivery_Date__c >= ${yr}-${mm}-01 AND Delivery_Date__c <= ${yr}-${mm}-${lastDay})`);
+      }
+    }
+  }
+  return conditions.join(' OR ');
+}
 
 export default function DashboardSettings() {
-  // Load saved filters from localStorage
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
 
-  const [datePreset, setDatePreset] = useState(savedFilters.datePreset ?? 'THIS_YEAR');
-  const [customFrom, setCustomFrom] = useState(savedFilters.customFrom ?? '');
-  const [customTo, setCustomTo] = useState(savedFilters.customTo ?? '');
+  const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
+  const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -46,28 +56,25 @@ export default function DashboardSettings() {
   const [tableSearch, setTableSearch] = useState('');
   const debounceRef = useRef(null);
 
-  const buildDateFilter = (dp = datePreset, cf = customFrom, ct = customTo) => {
-    if (dp === 'all') return '';
-    if (dp === 'custom') {
-      const parts = [];
-      if (cf) parts.push(`Stem_Date__c >= ${cf}`);
-      if (ct) parts.push(`Stem_Date__c <= ${ct}`);
-      return parts.join(' AND ');
-    }
-    return `Stem_Date__c = ${dp}`;
-  };
+  const toggleYear = (yr) => setSelectedYears(prev =>
+    prev.includes(yr) ? (prev.length > 1 ? prev.filter(y => y !== yr) : prev) : [...prev, yr]
+  );
 
-  const buildWhereClause = (dp = datePreset, cf = customFrom, ct = customTo) => {
-    const parts = [];
-    const dateFilter = buildDateFilter(dp, cf, ct);
-    if (dateFilter) parts.push(dateFilter);
-    return parts.length > 0 ? parts.join(' AND ') : '';
-  };
+  const toggleMonth = (mo) => setSelectedMonths(prev =>
+    prev.includes(mo) ? (prev.length > 1 ? prev.filter(m => m !== mo) : prev) : [...prev, mo]
+  );
 
-  const load = async (dp = datePreset, cf = customFrom, ct = customTo) => {
+  const toggleAllMonths = () => setSelectedMonths(
+    selectedMonths.length === 12 ? [THIS_MONTH] : MONTHS.map(m => m.value)
+  );
+
+  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths) =>
+    buildDeliveryWhere(yrs, mos);
+
+  const load = async (yrs = selectedYears, mos = selectedMonths) => {
     setLoading(true);
     setError(null);
-    const where = buildWhereClause(dp, cf, ct);
+    const where = buildWhereClause(yrs, mos);
     const res = await base44.functions.invoke('salesforceDashboardFiltered', { where });
     if (res.data?.error) {
       setError(res.data.error);
@@ -78,15 +85,14 @@ export default function DashboardSettings() {
     setLoading(false);
   };
 
-  // Auto-save filters + debounced auto-load whenever filters change
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ datePreset, customFrom, customTo }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load(datePreset, customFrom, customTo);
-    }, 600);
+      load(selectedYears, selectedMonths);
+    }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [datePreset, customFrom, customTo]);
+  }, [selectedYears, selectedMonths]);
 
   // Filtered table rows by field-level search
   const filteredStems = useMemo(() => {
@@ -121,44 +127,62 @@ export default function DashboardSettings() {
 
       {/* Filter panel */}
       <div className="bg-card rounded-xl border border-border p-5 mb-6">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Filters</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Date range */}
-          <div>
-            <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">Date Range (Stem Date)</Label>
-            <Select value={datePreset} onValueChange={setDatePreset}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Filters — Delivery Date</h2>
+
+        {/* Year selector */}
+        <div className="mb-4">
+          <Label className="text-xs font-medium text-muted-foreground mb-2 block">Year</Label>
+          <div className="flex gap-2 flex-wrap">
+            {YEARS.map(yr => (
+              <button
+                key={yr}
+                onClick={() => toggleYear(yr)}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                  selectedYears.includes(yr)
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+                }`}
+              >
+                {yr}
+              </button>
+            ))}
           </div>
+        </div>
 
-          {/* Custom date inputs */}
-          {datePreset === 'custom' && (
-            <>
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">From Date</Label>
-                <Input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
-              </div>
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground mb-1.5 block">To Date</Label>
-                <Input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} />
-              </div>
-            </>
-          )}
-
-
+        {/* Month selector */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <Label className="text-xs font-medium text-muted-foreground">Month</Label>
+            <button
+              onClick={toggleAllMonths}
+              className="text-xs text-primary hover:underline"
+            >
+              {selectedMonths.length === 12 ? 'Clear all' : 'Select all'}
+            </button>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {MONTHS.map(m => (
+              <button
+                key={m.value}
+                onClick={() => toggleMonth(m.value)}
+                className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
+                  selectedMonths.includes(m.value)
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Active filter summary */}
-        {buildWhereClause() && (
-          <div className="mt-4 p-2.5 bg-muted/40 rounded-lg">
-            <p className="text-xs font-mono text-muted-foreground">
-              <span className="font-semibold text-foreground">WHERE</span> {buildWhereClause()}
-            </p>
-          </div>
-        )}
+        <div className="mt-4 p-2.5 bg-muted/40 rounded-lg">
+          <p className="text-xs font-mono text-muted-foreground truncate">
+            <span className="font-semibold text-foreground">WHERE</span> {buildWhereClause() || '(all records)'}
+          </p>
+        </div>
       </div>
 
       {error && (
