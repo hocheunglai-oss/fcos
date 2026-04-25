@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,8 +7,10 @@ import { Label } from '@/components/ui/label';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import StatCard from '@/components/dashboard/StatCard';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
-import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2 } from 'lucide-react';
+import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
+
+const STORAGE_KEY = 'dashboard_filters_v1';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 
@@ -35,40 +37,45 @@ const DISPUTED_OPTIONS = [
 ];
 
 export default function DashboardSettings() {
-  const [datePreset, setDatePreset] = useState('THIS_YEAR');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-  const [office, setOffice] = useState('All');
-  const [disputed, setDisputed] = useState('all');
+  // Load saved filters from localStorage
+  const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
+
+  const [datePreset, setDatePreset] = useState(savedFilters.datePreset ?? 'THIS_YEAR');
+  const [customFrom, setCustomFrom] = useState(savedFilters.customFrom ?? '');
+  const [customTo, setCustomTo] = useState(savedFilters.customTo ?? '');
+  const [office, setOffice] = useState(savedFilters.office ?? 'All');
+  const [disputed, setDisputed] = useState(savedFilters.disputed ?? 'all');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [tableSearch, setTableSearch] = useState('');
+  const debounceRef = useRef(null);
 
-  const buildDateFilter = () => {
-    if (datePreset === 'all') return '';
-    if (datePreset === 'custom') {
+  const buildDateFilter = (dp = datePreset, cf = customFrom, ct = customTo) => {
+    if (dp === 'all') return '';
+    if (dp === 'custom') {
       const parts = [];
-      if (customFrom) parts.push(`Stem_Date__c >= ${customFrom}`);
-      if (customTo) parts.push(`Stem_Date__c <= ${customTo}`);
+      if (cf) parts.push(`Stem_Date__c >= ${cf}`);
+      if (ct) parts.push(`Stem_Date__c <= ${ct}`);
       return parts.join(' AND ');
     }
-    return `Stem_Date__c = ${datePreset}`;
+    return `Stem_Date__c = ${dp}`;
   };
 
-  const buildWhereClause = () => {
+  const buildWhereClause = (dp = datePreset, cf = customFrom, ct = customTo, off = office, disp = disputed) => {
     const parts = [];
-    const dateFilter = buildDateFilter();
+    const dateFilter = buildDateFilter(dp, cf, ct);
     if (dateFilter) parts.push(dateFilter);
-    if (office !== 'All') parts.push(`Office__c = '${office}'`);
-    if (disputed !== 'all') parts.push(`Dispute__c = ${disputed}`);
+    if (off !== 'All') parts.push(`Office__c = '${off}'`);
+    if (disp !== 'all') parts.push(`Dispute__c = ${disp}`);
     return parts.length > 0 ? parts.join(' AND ') : '';
   };
 
-  const load = async () => {
+  const load = async (dp = datePreset, cf = customFrom, ct = customTo, off = office, disp = disputed) => {
     setLoading(true);
     setError(null);
-    const where = buildWhereClause();
+    const where = buildWhereClause(dp, cf, ct, off, disp);
     const res = await base44.functions.invoke('salesforceDashboardFiltered', { where });
     if (res.data?.error) {
       setError(res.data.error);
@@ -79,6 +86,26 @@ export default function DashboardSettings() {
     setLoading(false);
   };
 
+  // Auto-save filters + debounced auto-load whenever filters change
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ datePreset, customFrom, customTo, office, disputed }));
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      load(datePreset, customFrom, customTo, office, disputed);
+    }, 600);
+    return () => clearTimeout(debounceRef.current);
+  }, [datePreset, customFrom, customTo, office, disputed]);
+
+  // Filtered table rows by field-level search
+  const filteredStems = useMemo(() => {
+    if (!data?.recentStems?.length) return data?.recentStems || [];
+    if (!tableSearch.trim()) return data.recentStems;
+    const q = tableSearch.toLowerCase();
+    return data.recentStems.filter(row =>
+      Object.values(row).some(v => v != null && String(v).toLowerCase().includes(q))
+    );
+  }, [data?.recentStems, tableSearch]);
+
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       {/* Header */}
@@ -88,12 +115,15 @@ export default function DashboardSettings() {
             <SlidersHorizontal className="w-4 h-4" />
             <span>Dashboard</span>
           </div>
-          <h1 className="text-2xl font-bold text-foreground font-dm tracking-tight">Custom Dashboard</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-foreground font-dm tracking-tight">Custom Dashboard</h1>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">Auto-saved</span>
+          </div>
           {lastRefresh && <p className="text-xs text-muted-foreground mt-0.5">Last updated {format(lastRefresh, 'HH:mm:ss')}</p>}
         </div>
-        <Button onClick={load} disabled={loading} className="gap-2">
+        <Button variant="outline" onClick={() => load()} disabled={loading} className="gap-2">
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          Apply & Load
+          Refresh
         </Button>
       </div>
 
@@ -165,12 +195,7 @@ export default function DashboardSettings() {
         </div>
       )}
 
-      {!data && !loading && (
-        <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-3">
-          <SlidersHorizontal className="w-10 h-10 opacity-20" />
-          <p className="text-sm">Select your filters and click "Apply & Load" to view KPIs</p>
-        </div>
-      )}
+
 
       {loading && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -246,12 +271,28 @@ export default function DashboardSettings() {
 
           {/* Recent matches */}
           <div className="bg-card rounded-xl border border-border">
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Matching STEMs</h3>
-              <span className="text-xs text-muted-foreground">{data.recentStems?.length} shown</span>
+            <div className="px-5 py-4 border-b border-border flex items-center gap-3">
+              <h3 className="text-sm font-semibold text-foreground shrink-0">Matching STEMs</h3>
+              <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Search fields…"
+                  value={tableSearch}
+                  onChange={e => setTableSearch(e.target.value)}
+                  className="pl-8 h-8 text-xs"
+                />
+                {tableSearch && (
+                  <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground ml-auto shrink-0">
+                {filteredStems.length}{filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown
+              </span>
             </div>
             <div className="p-2">
-              <RecentStemsTable records={data.recentStems || []} />
+              <RecentStemsTable records={filteredStems} />
             </div>
           </div>
         </>
