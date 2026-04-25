@@ -244,6 +244,25 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                   );
                 })}
 
+                {/* Suppliers Summary */}
+                {lineItems.length > 0 && (() => {
+                  const uniqueSuppliers = Array.from(new Set(lineItems.map(li => li.Supplier_Name__c).filter(Boolean)));
+                  return uniqueSuppliers.length > 0 ? (
+                    <div>
+                      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 pb-1.5 border-b border-border">
+                        Suppliers ({uniqueSuppliers.length})
+                      </h3>
+                      <div className="space-y-2">
+                        {uniqueSuppliers.map((supplier) => (
+                          <div key={supplier} className="flex items-center px-3 py-2 rounded-lg bg-muted/30 text-sm">
+                            <span className="font-medium text-foreground">{supplier}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
                 {/* STEM Line Items */}
                 {lineItems.length > 0 && (
                   <div>
