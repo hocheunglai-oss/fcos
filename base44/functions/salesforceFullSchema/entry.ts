@@ -13,40 +13,40 @@ Deno.serve(async (req) => {
 
     const { accessToken } = await base44.asServiceRole.connectors.getConnection("salesforce");
 
-    // Use the bulk describe endpoint — one single call for all objects
-    const globalRes = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/describe/`, {
+    // Get list of all queryable objects via /sobjects/
+    const listRes = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-    const globalData = await globalRes.json();
+    const listData = await listRes.json();
 
-    const sobjects = (globalData.sobjects || []);
+    const allObjects = (listData.sobjects || []).filter(o => o.queryable);
 
     // Filter to custom objects + key standard objects only
-    const filtered = sobjects.filter(o => o.queryable && (o.custom || KEY_STANDARD.has(o.name)));
+    const filtered = allObjects.filter(o => o.custom || KEY_STANDARD.has(o.name));
 
-    // The global describe gives us name, label, custom but NOT fields.
-    // However it's much faster than individual describes.
-    // For fields, only describe the custom objects + key standard (much smaller set) in parallel — all at once, no batching.
+    // Describe all filtered objects in parallel (all at once)
     const described = await Promise.all(
       filtered.map(o =>
         fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/${o.name}/describe/`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         })
           .then(r => r.json())
-          .then(d => ({
-            name: d.name,
-            label: d.label,
-            custom: d.custom,
-            fields: (d.fields || [])
-              .filter(f => !['IsDeleted', 'SystemModstamp', 'LastReferencedDate', 'LastViewedDate', 'LastActivityDate'].includes(f.name))
-              .map(f => ({
-                name: f.name,
-                label: f.label,
-                type: f.type,
-                referenceTo: f.referenceTo || [],
-                relationshipName: f.relationshipName || null,
-              })),
-          }))
+          .then(d => {
+            if (d.errorCode) return null;
+            return {
+              name: d.name,
+              label: d.label,
+              custom: d.custom,
+              fields: (d.fields || [])
+                .filter(f => !['IsDeleted', 'SystemModstamp', 'LastReferencedDate', 'LastViewedDate', 'LastActivityDate', 'OwnerId', 'CreatedById', 'LastModifiedById'].includes(f.name))
+                .map(f => ({
+                  name: f.name,
+                  label: f.label,
+                  type: f.type,
+                  referenceTo: f.referenceTo || [],
+                })),
+            };
+          })
           .catch(() => null)
       )
     );
