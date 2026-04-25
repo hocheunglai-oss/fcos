@@ -1,9 +1,10 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileBarChart2, Database, Settings, ChevronRight, Anchor } from 'lucide-react';
+import { Outlet, NavLink } from 'react-router-dom';
+import { LayoutDashboard, FileBarChart2, Database, SlidersHorizontal, Anchor } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/dashboard-settings', label: 'Custom Dashboard', icon: SlidersHorizontal },
   { to: '/reports', label: 'Report Builder', icon: FileBarChart2 },
   { to: '/explorer', label: 'Data Explorer', icon: Database },
 ];

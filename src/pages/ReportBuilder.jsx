@@ -10,6 +10,7 @@ import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
 import FilterGroup from '@/components/report-builder/FilterGroup';
 import CalculatedFields from '@/components/report-builder/CalculatedFields';
 import LookupFields from '@/components/report-builder/LookupFields';
+import ColumnSelector from '@/components/report-builder/ColumnSelector';
 import { format } from 'date-fns';
 
 const CATEGORIES = [
@@ -262,12 +263,6 @@ export default function ReportBuilder() {
     a.click();
   };
 
-  const toggleField = (name) => {
-    setSelectedFields(prev =>
-      prev.includes(name) ? prev.filter(f => f !== name) : [...prev, name]
-    );
-  };
-
   const sortableFields = fields.filter(f => f.sortable);
   const soql = buildSoql();
 
@@ -398,31 +393,15 @@ export default function ReportBuilder() {
 
           {/* Columns */}
           <div className="mb-5 bg-card rounded-xl border border-border p-4">
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 block">
-              Columns ({selectedFields.length} selected)
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 block">
+              Columns
             </label>
-            {loadingFields ? (
-              <div className="flex gap-2 flex-wrap">
-                {[...Array(8)].map((_, i) => <div key={i} className="h-7 w-24 bg-muted animate-pulse rounded-full" />)}
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name)).map(f => (
-                  <button
-                    key={f.name}
-                    onClick={() => toggleField(f.name)}
-                    title={f.type}
-                    className={`px-3 py-1 text-xs rounded-full border transition-all font-medium ${
-                      selectedFields.includes(f.name)
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
-                    }`}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <ColumnSelector
+              fields={fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name))}
+              selectedFields={selectedFields}
+              onChange={setSelectedFields}
+              loading={loadingFields}
+            />
           </div>
 
           {/* Advanced panels: tabs */}
