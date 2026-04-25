@@ -31,9 +31,9 @@ const SECTIONS = [
   {
     title: 'Vessel & Port',
     fields: [
-      { key: 'Vessel__c', label: 'Vessel' },
-      { key: 'Port__c', label: 'Port' },
-      { key: 'Agent__c', label: 'Agent' },
+      { key: '_Vessel_Name', label: 'Vessel' },
+      { key: '_Port_Name', label: 'Port' },
+      { key: '_Agent_Name', label: 'Agent' },
       { key: 'ETA_Start_Date__c', label: 'ETA Start', fmt: fmtDate },
       { key: 'ETA_End_Date__c', label: 'ETA End', fmt: fmtDate },
       { key: 'ETA_ETB__c', label: 'ETB', fmt: fmtDate },
@@ -81,11 +81,9 @@ const SECTIONS = [
   {
     title: 'Other',
     fields: [
-      { key: 'Buyer_Broker__c', label: 'Buyer Broker' },
-      { key: 'Factoring_Invoice__c', label: 'Factoring Invoice' },
+      { key: '_Buyer_Broker_Name', label: 'Buyer Broker' },
+      { key: '_Factoring_Invoice_Name', label: 'Factoring Invoice' },
       { key: 'Mailing_Status__c', label: 'Mailing Status' },
-      { key: 'Quote__c', label: 'Quote' },
-      { key: 'Enquiry__c', label: 'Enquiry' },
       { key: 'Office_Originated__c', label: 'Office Originated' },
       { key: 'Due_Date_Override__c', label: 'Due Date Override', fmt: fmtBool },
       { key: 'CreatedDate', label: 'Created', fmt: fmtDate },
@@ -140,8 +138,8 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                 <DialogTitle className="text-lg font-bold font-dm">
                   {record?.KeyStem__c || record?.Name || stemId}
                 </DialogTitle>
-                {record?.Vessel__c && (
-                  <p className="text-sm text-muted-foreground mt-0.5">Vessel: {record.Vessel__c}</p>
+                {(record?._Vessel_Name || record?.Vessel__c) && (
+                  <p className="text-sm text-muted-foreground mt-0.5">Vessel: {record._Vessel_Name || record.Vessel__c}</p>
                 )}
               </div>
               <div className="flex items-center gap-2">
