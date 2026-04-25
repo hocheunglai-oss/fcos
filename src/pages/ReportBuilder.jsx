@@ -52,7 +52,7 @@ function buildWhereFromGroup(group) {
     const noQuote = ['true', 'false', 'null', 'TODAY', 'YESTERDAY', 'TOMORROW',
       'THIS_WEEK', 'LAST_WEEK', 'NEXT_WEEK', 'THIS_MONTH', 'LAST_MONTH', 'NEXT_MONTH',
       'THIS_QUARTER', 'LAST_QUARTER', 'NEXT_QUARTER', 'THIS_YEAR', 'LAST_YEAR', 'NEXT_YEAR',
-    ].includes(val) || val.startsWith('LAST_N_DAYS:') || /^\d/.test(val);
+    ].includes(val) || val.startsWith('LAST_N_DAYS:') || /^-?\d+(\.\d+)?$/.test(val);
 
     const op = cond.operator;
     if (op === 'IN' || op === 'NOT IN' || op === 'INCLUDES' || op === 'EXCLUDES') {
