@@ -58,7 +58,6 @@ Deno.serve(async (req) => {
     if (accountField) plFields.push(accountField);
     if (buyerAmountField) plFields.push(buyerAmountField);
     if (supplierAmountField) plFields.push(supplierAmountField);
-    if (hasDispute) plFields.push('Dispute__c');
     const usefulFields = plFields;
 
     const queries = [
@@ -82,13 +81,13 @@ Deno.serve(async (req) => {
       accountField
         ? sfQuery(accessToken, `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`)
         : Promise.resolve({ records: [] }),
-      // 6: sum buyer invoices
+      // 6: sum buyer invoices (only where Delivery_Date__c is set, matching P&L logic)
       buyerAmountField
-        ? sfQuery(accessToken, `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`)
+        ? sfQuery(accessToken, `SELECT SUM(${buyerAmountField}) total FROM stem__c WHERE Delivery_Date__c != null${where ? ` AND (${where})` : ''}`)
         : Promise.resolve({ records: [] }),
-      // 7: sum supplier invoices
+      // 7: sum supplier invoices (only where Delivery_Date__c is set, matching P&L logic)
       supplierAmountField
-        ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`)
+        ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c WHERE Delivery_Date__c != null${where ? ` AND (${where})` : ''}`)
         : Promise.resolve({ records: [] }),
     ];
 
