@@ -184,18 +184,18 @@ export default function DashboardSettings() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard label="Matching STEMs" value={data.stemTotal?.toLocaleString() ?? '—'} icon={Package} color="blue" />
             <StatCard
-              label="Total Invoice Value"
-              value={data.totalAmount != null ? `$${data.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-              icon={DollarSign}
-              color="amber"
+              label="Accounts"
+              value={data.accountCount != null ? data.accountCount.toLocaleString() : '—'}
+              sub="Distinct accounts in filtered STEMs"
+              icon={Building2}
+              color="green"
             />
             <StatCard
-              label="Avg Invoice Value"
-              value={data.totalAmount != null && data.stemTotal > 0
-                ? `$${(data.totalAmount / data.stemTotal).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-                : '—'}
+              label="Total Profit (P&L)"
+              value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              sub={data.totalProfit == null ? (data.buyerAmountField ? 'Supplier field not found' : 'Buyer/supplier fields not found') : `Buyer $${(data.totalBuyer ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Supplier $${(data.totalSupplier ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
               icon={DollarSign}
-              color="green"
+              color="amber"
             />
             <StatCard
               label="Disputed"

@@ -35,8 +35,26 @@ Deno.serve(async (req) => {
 
     const hasStatus = fieldNames.includes('Status__c');
     const hasType = fieldNames.includes('Type__c');
-    const hasAmount = fieldNames.includes('Amount__c');
     const hasDispute = fieldNames.includes('Dispute__c');
+
+    // Detect account field
+    const accountField = fieldNames.includes('Account__c') ? 'Account__c'
+      : fieldNames.includes('AccountId') ? 'AccountId'
+      : null;
+
+    // Detect buyer invoice amount field
+    const buyerAmountCandidates = [
+      'Buyer_Invoice_Amount__c', 'Invoice_Amount_Buyer__c', 'Total_Invoice_Amount_Buyer__c',
+      'Buyer_Amount__c', 'Invoice_Buyer__c', 'Amount_Buyer__c'
+    ];
+    const buyerAmountField = buyerAmountCandidates.find(f => fieldNames.includes(f)) || null;
+
+    // Detect supplier invoice amount field
+    const supplierAmountCandidates = [
+      'Supplier_Invoice_Amount__c', 'Invoice_Amount_Supplier__c', 'Total_Invoice_Amount_Supplier__c',
+      'Supplier_Amount__c', 'Invoice_Supplier__c', 'Amount_Supplier__c'
+    ];
+    const supplierAmountField = supplierAmountCandidates.find(f => fieldNames.includes(f)) || null;
 
     const whereClause = where ? `WHERE ${where}` : '';
 
@@ -45,36 +63,82 @@ Deno.serve(async (req) => {
     if (fieldNames.includes('Office__c')) usefulFields.push('Office__c');
     if (hasStatus) usefulFields.push('Status__c');
     if (hasType) usefulFields.push('Type__c');
-    if (hasAmount) usefulFields.push('Amount__c');
+    if (buyerAmountField) usefulFields.push(buyerAmountField);
+    if (supplierAmountField) usefulFields.push(supplierAmountField);
     if (hasDispute) usefulFields.push('Dispute__c');
+    if (accountField) usefulFields.push(accountField);
 
-    const results = await Promise.allSettled([
+    const queries = [
+      // 0: total stem count
       sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c ${whereClause}`),
-      hasStatus ? sfQuery(accessToken, `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`) : Promise.resolve({ records: [] }),
-      hasType ? sfQuery(accessToken, `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`) : Promise.resolve({ records: [] }),
+      // 1: by status
+      hasStatus
+        ? sfQuery(accessToken, `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`)
+        : Promise.resolve({ records: [] }),
+      // 2: by type
+      hasType
+        ? sfQuery(accessToken, `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`)
+        : Promise.resolve({ records: [] }),
+      // 3: recent records (with P&L fields)
       sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY CreatedDate DESC LIMIT 50`),
-      hasAmount ? sfQuery(accessToken, `SELECT SUM(Amount__c) total FROM stem__c ${whereClause}`) : Promise.resolve({ records: [] }),
-      hasDispute ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true ${where ? `AND (${where})` : ''}`) : Promise.resolve({ records: [] }),
-    ]);
+      // 4: disputed count
+      hasDispute
+        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true ${where ? `AND (${where})` : ''}`)
+        : Promise.resolve({ records: [] }),
+      // 5: count distinct accounts (via GROUP BY)
+      accountField
+        ? sfQuery(accessToken, `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`)
+        : Promise.resolve({ records: [] }),
+      // 6: sum buyer invoices
+      buyerAmountField
+        ? sfQuery(accessToken, `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`)
+        : Promise.resolve({ records: [] }),
+      // 7: sum supplier invoices
+      supplierAmountField
+        ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`)
+        : Promise.resolve({ records: [] }),
+    ];
 
+    const results = await Promise.allSettled(queries);
     const getValue = (r) => r.status === 'fulfilled' ? r.value : { records: [], totalSize: 0 };
 
-    const totalRes = getValue(results[0]);
-    const statusRes = getValue(results[1]);
-    const typeRes = getValue(results[2]);
-    const recentRes = getValue(results[3]);
-    const amountRes = getValue(results[4]);
-    const disputedRes = getValue(results[5]);
+    const totalRes      = getValue(results[0]);
+    const statusRes     = getValue(results[1]);
+    const typeRes       = getValue(results[2]);
+    const recentRes     = getValue(results[3]);
+    const disputedRes   = getValue(results[4]);
+    const accountsRes   = getValue(results[5]);
+    const buyerRes      = getValue(results[6]);
+    const supplierRes   = getValue(results[7]);
 
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => rest);
 
+    // Total profit = SUM(buyer invoice) - SUM(supplier invoice)
+    const totalBuyer = buyerRes.records?.[0]?.total ?? null;
+    const totalSupplier = supplierRes.records?.[0]?.total ?? null;
+    const totalProfit = (totalBuyer != null && totalSupplier != null)
+      ? totalBuyer - totalSupplier
+      : null;
+
+    // Count distinct non-null accounts
+    const accountCount = accountsRes.records
+      ? accountsRes.records.filter(r => r.acct != null).length
+      : null;
+
     return Response.json({
       stemTotal: totalRes.records?.[0]?.total ?? 0,
-      totalAmount: amountRes.records?.[0]?.total ?? null,
+      accountCount,
+      totalBuyer,
+      totalSupplier,
+      totalProfit,
       disputedCount: disputedRes.records?.[0]?.total ?? null,
       stemByStatus: (statusRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       stemByType: (typeRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       recentStems,
+      // debug info
+      buyerAmountField,
+      supplierAmountField,
+      accountField,
     });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });
