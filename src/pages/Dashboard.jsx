@@ -80,8 +80,9 @@ export default function Dashboard() {
               color="red"
             />
             <StatCard
-              label="Total Invoice Value"
-              value={data.totalAmount != null ? `$${data.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              label="Total Profit"
+              value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              sub={data.totalProfit == null ? 'No profit field found' : undefined}
               icon={DollarSign}
               color="amber"
             />

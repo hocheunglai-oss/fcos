@@ -35,6 +35,8 @@ Deno.serve(async (req) => {
     const hasStatus = fieldNames.includes('Status__c');
     const hasType = fieldNames.includes('Type__c');
     const hasAmount = fieldNames.includes('Amount__c');
+    const profitFieldCandidates = ['Profit__c', 'Net_Profit__c', 'Gross_Profit__c', 'Total_Profit__c', 'ProfitAmount__c'];
+    const profitField = profitFieldCandidates.find(f => fieldNames.includes(f)) || null;
     const hasOwner = fieldNames.includes('OwnerId');
     const hasAccount = fieldNames.includes('Account__c') || fieldNames.includes('AccountId');
     const accountField = fieldNames.includes('Account__c') ? 'Account__c' : 'AccountId';
@@ -53,6 +55,7 @@ Deno.serve(async (req) => {
       sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ORDER BY CreatedDate DESC LIMIT 20`),
       sfQuery(accessToken, `SELECT COUNT(Id) total FROM Account`),
       hasAmount ? sfQuery(accessToken, `SELECT SUM(Amount__c) total FROM stem__c`) : Promise.resolve({ records: [] }),
+      profitField ? sfQuery(accessToken, `SELECT SUM(${profitField}) total FROM stem__c`) : Promise.resolve({ records: [] }),
     ]);
 
     const getValue = (r) => r.status === 'fulfilled' ? r.value : { records: [], totalSize: 0 };
@@ -63,10 +66,12 @@ Deno.serve(async (req) => {
     const recentRes = getValue(results[3]);
     const accountRes = getValue(results[4]);
     const amountRes = getValue(results[5]);
+    const profitRes = getValue(results[6]);
 
     const stemTotal = totalRes.records?.[0]?.total ?? totalRes.totalSize ?? 0;
     const accountTotal = accountRes.records?.[0]?.total ?? 0;
     const totalAmount = amountRes.records?.[0]?.total ?? null;
+    const totalProfit = profitRes.records?.[0]?.total ?? null;
 
     // Clean records
     const recentStems = (recentRes.records || []).map(r => {
@@ -78,6 +83,8 @@ Deno.serve(async (req) => {
       stemTotal,
       accountTotal,
       totalAmount,
+      totalProfit,
+      profitField,
       stemByStatus: (statusRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       stemByType: (typeRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       recentStems,
