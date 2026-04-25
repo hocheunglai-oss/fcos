@@ -10,6 +10,7 @@ import Dashboard from '@/pages/Dashboard';
 import ReportBuilder from '@/pages/ReportBuilder';
 import DataExplorer from '@/pages/DataExplorer';
 import DashboardSettings from '@/pages/DashboardSettings';
+import SchemaExplorer from '@/pages/SchemaExplorer';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -38,6 +39,7 @@ const AuthenticatedApp = () => {
         <Route path="/reports" element={<ReportBuilder />} />
         <Route path="/explorer" element={<DataExplorer />} />
         <Route path="/dashboard-settings" element={<DashboardSettings />} />
+        <Route path="/schema" element={<SchemaExplorer />} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
