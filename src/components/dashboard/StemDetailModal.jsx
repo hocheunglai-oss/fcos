@@ -230,6 +230,106 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                     </div>
                   );
                 })}
+
+                {/* STEM Line Items */}
+                {lineItems.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 pb-1.5 border-b border-border">
+                      Line Items ({lineItems.length})
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border">
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Product</th>
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Supplier</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Qty</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Sell/Unit</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Buy/Unit</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Total Sell</th>
+                            <th className="text-right py-2 font-semibold text-muted-foreground">Total Buy</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lineItems.map((li) => (
+                            <tr key={li.Id} className="border-b border-border/40 hover:bg-muted/20">
+                              <td className="py-2 pr-3 font-medium text-foreground">{li.Name__c || '—'}</td>
+                              <td className="py-2 pr-3 text-muted-foreground">{li.Supplier_Name__c || '—'}</td>
+                              <td className="py-2 pr-3 text-right text-foreground">
+                                {li.Is_Quantity_Range__c && li.Quantity_Max__c
+                                  ? `${li.Quantity__c ?? '—'}–${li.Quantity_Max__c}`
+                                  : (li.Quantity_in_MT__c > 0 ? li.Quantity_in_MT__c.toLocaleString() : (li.Quantity__c != null ? li.Quantity__c.toLocaleString() : '—'))}
+                              </td>
+                              <td className="py-2 pr-3 text-right text-foreground">{li.Price_Per_Unit__c != null ? fmtMoney(li.Price_Per_Unit__c) : '—'}</td>
+                              <td className="py-2 pr-3 text-right text-foreground">{li.Cost_Per_Unit__c != null ? fmtMoney(li.Cost_Per_Unit__c) : '—'}</td>
+                              <td className="py-2 pr-3 text-right font-semibold text-foreground">{li.Total_Price__c != null ? fmtMoney(li.Total_Price__c) : '—'}</td>
+                              <td className="py-2 text-right font-semibold text-foreground">{li.Total_Cost__c != null ? fmtMoney(li.Total_Cost__c) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEM Extra Costs */}
+                {extraCosts.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 pb-1.5 border-b border-border">
+                      Extra Costs ({extraCosts.length})
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border">
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Name</th>
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Description</th>
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Supplier</th>
+                            <th className="text-left py-2 pr-3 font-semibold text-muted-foreground">Type</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Qty</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Sell/Unit</th>
+                            <th className="text-right py-2 pr-3 font-semibold text-muted-foreground">Buy/Unit</th>
+                            <th className="text-right py-2 font-semibold text-muted-foreground">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {extraCosts.map((ec) => (
+                            <tr key={ec.Id} className="border-b border-border/40 hover:bg-muted/20">
+                              <td className="py-2 pr-3 font-medium text-foreground">{ec.Name || '—'}</td>
+                              <td className="py-2 pr-3 text-muted-foreground">{ec.Description__c || '—'}</td>
+                              <td className="py-2 pr-3 text-muted-foreground">{ec.Supplier_Name__c || '—'}</td>
+                              <td className="py-2 pr-3 text-muted-foreground">{ec.Type__c || '—'}</td>
+                              <td className="py-2 pr-3 text-right text-foreground">{ec.Quantity__c != null ? ec.Quantity__c.toLocaleString() : '—'}</td>
+                              <td className="py-2 pr-3 text-right text-foreground">{ec.Unit_Price__c != null ? fmtMoney(ec.Unit_Price__c) : '—'}</td>
+                              <td className="py-2 pr-3 text-right text-foreground">{ec.Unit_Cost__c != null ? fmtMoney(ec.Unit_Cost__c) : '—'}</td>
+                              <td className="py-2 text-right font-semibold text-foreground">{ec.Line_Total__c != null ? fmtMoney(ec.Line_Total__c) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEM Buyer Brokers */}
+                {buyerBrokers.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 pb-1.5 border-b border-border">
+                      Buyer Brokers ({buyerBrokers.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {buyerBrokers.map((bb) => (
+                        <div key={bb.Id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
+                          <span className="font-medium text-foreground">{bb._Buyer_Broker_Name || bb.Buyer_Broker__c || '—'}</span>
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                            {bb.Refcode_Index__c && <span>Ref: {bb.Refcode_Index__c}</span>}
+                            {bb.Exported__c && <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">Exported</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
