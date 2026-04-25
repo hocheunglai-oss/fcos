@@ -39,7 +39,7 @@ const colLabel = (key) => {
   return key.replace(/__c$/i, '').replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
 };
 
-export default function PnlTable({ records = [] }) {
+export default function PnlTable({ records = [], onRowClick }) {
   if (!records.length) return (
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
@@ -101,7 +101,11 @@ export default function PnlTable({ records = [] }) {
             const pnlPositive = pnl != null && pnl >= 0;
 
             return (
-              <tr key={row.Id || i} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
+              <tr
+                key={row.Id || i}
+                className="border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
+                onClick={() => onRowClick?.(row)}
+              >
                 {displayCols.map(col => {
                   if (col === '__pnl__') {
                     return (

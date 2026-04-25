@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import StatCard from '@/components/dashboard/StatCard';
 import PnlTable from '@/components/dashboard/PnlTable';
+import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -54,6 +55,7 @@ export default function DashboardSettings() {
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [tableSearch, setTableSearch] = useState('');
+  const [selectedStemId, setSelectedStemId] = useState(null);
   const debounceRef = useRef(null);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
@@ -289,11 +291,17 @@ export default function DashboardSettings() {
               </span>
             </div>
             <div className="p-2">
-              <PnlTable records={filteredStems} />
+              <PnlTable records={filteredStems} onRowClick={(row) => setSelectedStemId(row.Id)} />
             </div>
           </div>
         </>
       )}
+      <StemDetailModal
+        stemId={selectedStemId}
+        open={!!selectedStemId}
+        onClose={() => setSelectedStemId(null)}
+        onUpdated={() => load(selectedYears, selectedMonths)}
+      />
     </div>
   );
 }
