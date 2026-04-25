@@ -48,6 +48,9 @@ Deno.serve(async (req) => {
     // Supplier invoice = Total Invoiced Amount From Suppliers
     const supplierAmountField = fieldNames.includes('Total_Invoiced_Amount_From_Suppliers__c') ? 'Total_Invoiced_Amount_From_Suppliers__c' : null;
 
+    // Total costs field
+    const totalCostsField = fieldNames.includes('Total_Costs__c') ? 'Total_Costs__c' : null;
+
     const whereClause = where ? `WHERE ${where}` : '';
 
     // Detect buyer name field
@@ -55,12 +58,13 @@ Deno.serve(async (req) => {
       : fieldNames.includes('Buyer__c') ? 'Buyer__c'
       : null;
 
-    // P&L report fields: Name, CreatedDate, Delivery Date, Buyer Name, Buyer Invoice, Supplier Invoice
+    // P&L report fields: Name, CreatedDate, Delivery Date, Buyer Name, Buyer Invoice, Supplier Invoice, Total Costs
     const plFields = ['Id', 'Name', 'CreatedDate'];
     if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
     if (buyerNameField) plFields.push(buyerNameField);
     if (buyerAmountField) plFields.push(buyerAmountField);
     if (supplierAmountField) plFields.push(supplierAmountField);
+    if (totalCostsField) plFields.push(totalCostsField);
     const usefulFields = plFields;
 
     const queries = [
@@ -92,6 +96,10 @@ Deno.serve(async (req) => {
       supplierAmountField
         ? sfQuery(accessToken, `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`)
         : Promise.resolve({ records: [] }),
+      // 8: sum total costs
+      totalCostsField
+        ? sfQuery(accessToken, `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`)
+        : Promise.resolve({ records: [] }),
     ];
 
     const results = await Promise.allSettled(queries);
@@ -105,14 +113,16 @@ Deno.serve(async (req) => {
     const accountsRes   = getValue(results[5]);
     const buyerRes      = getValue(results[6]);
     const supplierRes   = getValue(results[7]);
+    const costsRes      = getValue(results[8]);
 
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => rest);
 
-    // Total profit = SUM(buyer invoice) - SUM(supplier invoice)
+    // Total profit = SUM(buyer invoice) - SUM(supplier invoice) - SUM(total costs)
     const totalBuyer = buyerRes.records?.[0]?.total ?? null;
     const totalSupplier = supplierRes.records?.[0]?.total ?? null;
+    const totalCosts = costsRes.records?.[0]?.total ?? null;
     const totalProfit = (totalBuyer != null && totalSupplier != null)
-      ? totalBuyer - totalSupplier
+      ? totalBuyer - totalSupplier - (totalCosts ?? 0)
       : null;
 
     // Count distinct non-null accounts
@@ -130,9 +140,11 @@ Deno.serve(async (req) => {
       stemByStatus: (statusRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       stemByType: (typeRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       recentStems,
+      totalCosts,
       // debug info
       buyerAmountField,
       supplierAmountField,
+      totalCostsField,
       accountField,
     });
   } catch (error) {

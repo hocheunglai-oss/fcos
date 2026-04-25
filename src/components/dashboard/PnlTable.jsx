@@ -2,7 +2,17 @@ import { format } from 'date-fns';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
+const COSTS_FIELD = 'Total_Costs__c';
 const DELIVERY_FIELD = 'Delivery_Date__c';
+
+// Custom display labels for specific fields
+const FIELD_LABELS = {
+  [BUYER_FIELD]: 'Buyer Invoice Amount',
+  [SUPPLIER_FIELD]: 'Supplier Invoice Amount',
+  [COSTS_FIELD]: 'Total Costs',
+  'Buyer_Name__c': 'Buyer',
+  'Buyer__c': 'Buyer',
+};
 
 const fmtMoney = (val) => {
   if (val == null) return '—';
@@ -12,7 +22,7 @@ const fmtMoney = (val) => {
 const fmtVal = (key, val) => {
   if (val == null || val === '') return '—';
   if (typeof val === 'boolean') return val ? 'Yes' : 'No';
-  if (key.toLowerCase().includes('amount') || key.toLowerCase().includes('invoice') || key.toLowerCase().includes('price')) {
+  if (key.toLowerCase().includes('amount') || key.toLowerCase().includes('invoice') || key.toLowerCase().includes('price') || key === COSTS_FIELD) {
     const n = Number(val);
     if (!isNaN(n)) return fmtMoney(n);
   }
@@ -24,34 +34,43 @@ const fmtVal = (key, val) => {
   return s.length > 50 ? s.slice(0, 48) + '…' : s;
 };
 
-const colLabel = (key) =>
-  key.replace(/__c$/i, '').replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+const colLabel = (key) => {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  return key.replace(/__c$/i, '').replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+};
 
 export default function PnlTable({ records = [] }) {
   if (!records.length) return (
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
 
-  // Determine columns from actual data, exclude Id
   const allCols = Object.keys(records[0]).filter(k => k !== 'Id');
 
-  // Separate P&L special columns so we can inject computed P&L after supplier col
   const hasBuyer = allCols.includes(BUYER_FIELD);
   const hasSupplier = allCols.includes(SUPPLIER_FIELD);
+  const hasCosts = allCols.includes(COSTS_FIELD);
   const showPnl = hasBuyer && hasSupplier;
 
-  // Build column display order: regular cols + inject P&L after supplier if both present
+  // Build display column order; inject Total Costs after Supplier, then P&L after Costs (or after Supplier)
   const displayCols = [];
   allCols.forEach(col => {
     displayCols.push(col);
-    if (col === SUPPLIER_FIELD && showPnl) {
-      displayCols.push('__pnl__');
+    if (col === SUPPLIER_FIELD) {
+      // If costs column exists in data it will be pushed naturally after supplier
+      // but if not in allCols we skip; handled below
     }
   });
-  // If buyer present but supplier not last, still append P&L at end
-  if (showPnl && !displayCols.includes('__pnl__')) {
+
+  // Inject __pnl__ after COSTS_FIELD if present, else after SUPPLIER_FIELD
+  const pnlAnchor = hasCosts ? COSTS_FIELD : SUPPLIER_FIELD;
+  const anchorIdx = displayCols.indexOf(pnlAnchor);
+  if (showPnl && anchorIdx !== -1) {
+    displayCols.splice(anchorIdx + 1, 0, '__pnl__');
+  } else if (showPnl && !displayCols.includes('__pnl__')) {
     displayCols.push('__pnl__');
   }
+
+  const rightAligned = new Set([BUYER_FIELD, SUPPLIER_FIELD, COSTS_FIELD, '__pnl__']);
 
   return (
     <div className="overflow-x-auto">
@@ -62,7 +81,7 @@ export default function PnlTable({ records = [] }) {
               <th
                 key={col}
                 className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${
-                  col === '__pnl__' || col === BUYER_FIELD || col === SUPPLIER_FIELD ? 'text-right' : 'text-left'
+                  rightAligned.has(col) ? 'text-right' : 'text-left'
                 }`}
               >
                 {col === '__pnl__' ? 'P&L' : colLabel(col)}
@@ -74,8 +93,11 @@ export default function PnlTable({ records = [] }) {
           {records.map((row, i) => {
             const buyer = row[BUYER_FIELD] ?? null;
             const supplier = row[SUPPLIER_FIELD] ?? null;
+            const costs = row[COSTS_FIELD] ?? null;
             const hasDelivery = !!row[DELIVERY_FIELD];
-            const pnl = showPnl && hasDelivery && buyer != null && supplier != null ? buyer - supplier : null;
+            const pnl = showPnl && hasDelivery && buyer != null && supplier != null
+              ? buyer - supplier - (costs ?? 0)
+              : null;
             const pnlPositive = pnl != null && pnl >= 0;
 
             return (
@@ -86,13 +108,14 @@ export default function PnlTable({ records = [] }) {
                       <td key="__pnl__" className={`py-2.5 px-3 text-right font-semibold whitespace-nowrap ${
                         pnl == null ? 'text-muted-foreground' : pnlPositive ? 'text-emerald-600' : 'text-red-500'
                       }`}>
-                        {pnl == null ? (showPnl && !hasDelivery ? <span className="text-muted-foreground/50 text-xs">no delivery</span> : '—') : fmtMoney(pnl)}
+                        {pnl == null
+                          ? (showPnl && !hasDelivery ? <span className="text-muted-foreground/50 text-xs">no delivery</span> : '—')
+                          : fmtMoney(pnl)}
                       </td>
                     );
                   }
-                  const isNumericCol = col === BUYER_FIELD || col === SUPPLIER_FIELD;
                   return (
-                    <td key={col} className={`py-2.5 px-3 whitespace-nowrap ${isNumericCol ? 'text-right text-foreground' : 'text-foreground'}`}>
+                    <td key={col} className={`py-2.5 px-3 whitespace-nowrap ${rightAligned.has(col) ? 'text-right text-foreground' : 'text-foreground'}`}>
                       {fmtVal(col, row[col])}
                     </td>
                   );
