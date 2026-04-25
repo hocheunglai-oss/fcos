@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code } from 'lucide-react';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
+import FilterGroup from '@/components/report-builder/FilterGroup';
+import CalculatedFields from '@/components/report-builder/CalculatedFields';
+import LookupFields from '@/components/report-builder/LookupFields';
 import { format } from 'date-fns';
 
 const CATEGORIES = [
@@ -16,13 +18,11 @@ const CATEGORIES = [
   { value: 'invoicing_accounting', label: 'Invoicing & Accounting' },
   { value: 'general', label: 'General' },
 ];
-
 const SCHEDULE_FREQ = [
   { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
 ];
-
 const CAT_COLORS = {
   sales_operations: 'bg-blue-100 text-blue-700',
   sales_support: 'bg-emerald-100 text-emerald-700',
@@ -30,23 +30,66 @@ const CAT_COLORS = {
   general: 'bg-slate-100 text-slate-600',
 };
 
+const TABS = [
+  { id: 'filters', label: 'Filters', icon: Filter },
+  { id: 'aggregates', label: 'Aggregates', icon: Calculator },
+  { id: 'lookups', label: 'Cross-Object', icon: Link2 },
+];
+
+const defaultFilterGroup = () => ({ type: 'group', logic: 'AND', conditions: [], id: 1 });
+
+// Recursively build WHERE clause from filter group tree
+function buildWhereFromGroup(group) {
+  if (!group.conditions || group.conditions.length === 0) return '';
+  const parts = group.conditions.map(cond => {
+    if (cond.type === 'group') {
+      const inner = buildWhereFromGroup(cond);
+      return inner ? `(${inner})` : null;
+    }
+    if (!cond.field || !cond.operator || cond.value === '') return null;
+    const val = cond.value;
+    // Determine if value needs quoting
+    const noQuote = ['true', 'false', 'null', 'TODAY', 'YESTERDAY', 'TOMORROW',
+      'THIS_WEEK', 'LAST_WEEK', 'NEXT_WEEK', 'THIS_MONTH', 'LAST_MONTH', 'NEXT_MONTH',
+      'THIS_QUARTER', 'LAST_QUARTER', 'NEXT_QUARTER', 'THIS_YEAR', 'LAST_YEAR', 'NEXT_YEAR',
+    ].includes(val) || val.startsWith('LAST_N_DAYS:') || /^\d/.test(val);
+
+    const op = cond.operator;
+    if (op === 'IN' || op === 'NOT IN' || op === 'INCLUDES' || op === 'EXCLUDES') {
+      // Expect comma-separated list
+      const items = val.split(',').map(v => v.trim());
+      const formatted = items.map(v => (v.startsWith("'") ? v : `'${v}'`)).join(', ');
+      return `${cond.field} ${op} (${formatted})`;
+    }
+    if (op === 'LIKE' || op === 'NOT LIKE') {
+      return `${cond.field} ${op === 'NOT LIKE' ? 'NOT LIKE' : 'LIKE'} '${val}'`;
+    }
+    return `${cond.field} ${op} ${noQuote ? val : `'${val}'`}`;
+  }).filter(Boolean);
+
+  return parts.join(` ${group.logic} `);
+}
+
 export default function ReportBuilder() {
   const [savedReports, setSavedReports] = useState([]);
   const [objects, setObjects] = useState([]);
   const [fields, setFields] = useState([]);
 
-  // Current report state
+  // Report config
   const [reportName, setReportName] = useState('');
   const [reportDesc, setReportDesc] = useState('');
   const [reportCategory, setReportCategory] = useState('general');
   const [selectedObject, setSelectedObject] = useState('stem__c');
   const [selectedFields, setSelectedFields] = useState([]);
-  const [whereClause, setWhereClause] = useState('');
+  const [filterGroup, setFilterGroup] = useState(defaultFilterGroup());
+  const [calcFields, setCalcFields] = useState([]);
+  const [lookups, setLookups] = useState([]);
   const [orderByField, setOrderByField] = useState('CreatedDate');
   const [limitVal, setLimitVal] = useState(100);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleFreq, setScheduleFreq] = useState('weekly');
   const [scheduleEmail, setScheduleEmail] = useState('');
+  const [activeTab, setActiveTab] = useState('filters');
 
   // Execution state
   const [records, setRecords] = useState([]);
@@ -57,6 +100,7 @@ export default function ReportBuilder() {
   const [error, setError] = useState(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
+  const [showSoql, setShowSoql] = useState(false);
 
   useEffect(() => {
     loadSavedReports();
@@ -68,10 +112,15 @@ export default function ReportBuilder() {
     setLoadingFields(true);
     setFields([]);
     setSelectedFields([]);
+    setCalcFields([]);
+    setLookups([]);
+    setFilterGroup(defaultFilterGroup());
     base44.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
       const f = res.data?.fields || [];
       setFields(f);
-      const defaults = f.filter(x => !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp').slice(0, 10).map(x => x.name);
+      const defaults = f.filter(x =>
+        !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp'
+      ).slice(0, 10).map(x => x.name);
       setSelectedFields(defaults);
       setLoadingFields(false);
     });
@@ -82,14 +131,40 @@ export default function ReportBuilder() {
     setSavedReports(reports);
   };
 
-  const buildSoql = () => {
-    const cols = selectedFields.length > 0 ? selectedFields.join(', ') : 'Id, Name';
+  const buildSoql = useCallback(() => {
+    // Base columns: selected fields + lookup traversals + aggregates
+    const lookupCols = lookups
+      .filter(l => l.relName && l.relFieldName)
+      .map(l => `${l.relName}.${l.relFieldName}`);
+    const aggCols = calcFields
+      .filter(c => c.fn && c.field)
+      .map(c => `${c.fn}(${c.field})${c.label ? ` ${c.label.replace(/\s+/g, '_')}` : ''}`);
+
+    const isAggregateQuery = aggCols.length > 0;
+    let cols;
+
+    if (isAggregateQuery) {
+      // Aggregate query: GROUP BY the selected non-aggregate fields
+      const groupByCols = selectedFields.length > 0 ? selectedFields : ['Id'];
+      cols = [...groupByCols, ...lookupCols, ...aggCols].join(', ');
+      let q = `SELECT ${cols} FROM ${selectedObject}`;
+      const where = buildWhereFromGroup(filterGroup);
+      if (where) q += ` WHERE ${where}`;
+      q += ` GROUP BY ${groupByCols.join(', ')}`;
+      if (orderByField && selectedFields.includes(orderByField)) q += ` ORDER BY ${orderByField} DESC`;
+      q += ` LIMIT ${limitVal}`;
+      return q;
+    }
+
+    const baseCols = selectedFields.length > 0 ? selectedFields : ['Id', 'Name'];
+    cols = [...baseCols, ...lookupCols].join(', ');
     let q = `SELECT ${cols} FROM ${selectedObject}`;
-    if (whereClause.trim()) q += ` WHERE ${whereClause.trim()}`;
+    const where = buildWhereFromGroup(filterGroup);
+    if (where) q += ` WHERE ${where}`;
     if (orderByField) q += ` ORDER BY ${orderByField} DESC`;
     q += ` LIMIT ${limitVal}`;
     return q;
-  };
+  }, [selectedFields, lookups, calcFields, filterGroup, selectedObject, orderByField, limitVal]);
 
   const runQuery = async () => {
     setLoading(true);
@@ -116,6 +191,7 @@ export default function ReportBuilder() {
       object_name: selectedObject,
       soql,
       selected_fields: selectedFields,
+      filters: [filterGroup],
       schedule_enabled: scheduleEnabled,
       schedule_frequency: scheduleFreq,
       schedule_email: scheduleEmail,
@@ -139,10 +215,14 @@ export default function ReportBuilder() {
     setReportCategory(report.category || 'general');
     setSelectedObject(report.object_name);
     setSelectedFields(report.selected_fields || []);
+    setFilterGroup(report.filters?.[0] || defaultFilterGroup());
     setScheduleEnabled(report.schedule_enabled || false);
     setScheduleFreq(report.schedule_frequency || 'weekly');
     setScheduleEmail(report.schedule_email || '');
+    setCalcFields([]);
+    setLookups([]);
     setRecords([]);
+    setError(null);
   };
 
   const deleteReport = async (id, e) => {
@@ -158,7 +238,9 @@ export default function ReportBuilder() {
     setReportDesc('');
     setReportCategory('general');
     setSelectedObject('stem__c');
-    setWhereClause('');
+    setFilterGroup(defaultFilterGroup());
+    setCalcFields([]);
+    setLookups([]);
     setRecords([]);
     setError(null);
   };
@@ -187,11 +269,18 @@ export default function ReportBuilder() {
   };
 
   const sortableFields = fields.filter(f => f.sortable);
+  const soql = buildSoql();
+
+  const filterCount = (grp) => {
+    if (!grp?.conditions) return 0;
+    return grp.conditions.reduce((n, c) => n + (c.type === 'group' ? filterCount(c) : 1), 0);
+  };
+  const activeFilterCount = filterCount(filterGroup);
 
   return (
     <div className="flex h-full">
       {/* Saved reports sidebar */}
-      <aside className="w-64 shrink-0 border-r border-border bg-card flex flex-col">
+      <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">Saved Reports</h2>
           <Button size="sm" variant="ghost" onClick={newReport} className="h-7 w-7 p-0">
@@ -215,10 +304,7 @@ export default function ReportBuilder() {
                     {CATEGORIES.find(c => c.value === r.category)?.label || r.category}
                   </span>
                 </div>
-                <button
-                  onClick={(e) => deleteReport(r.id, e)}
-                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-1 shrink-0"
-                >
+                <button onClick={(e) => deleteReport(r.id, e)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-1 shrink-0">
                   <Trash2 className="w-3 h-3" />
                 </button>
               </div>
@@ -235,14 +321,14 @@ export default function ReportBuilder() {
 
       {/* Main builder */}
       <div className="flex-1 overflow-auto">
-        <div className="p-6 lg:p-8 max-w-full">
+        <div className="p-6 lg:p-8">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
-            <div>
+            <div className="flex-1 min-w-0 mr-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
                 <FileBarChart2 className="w-4 h-4" />
                 <span>Report Builder</span>
-                {selectedSavedReport && <><ChevronRight className="w-3 h-3" /><span className="text-foreground font-medium">{selectedSavedReport.name}</span></>}
+                {selectedSavedReport && <><ChevronRight className="w-3 h-3" /><span className="text-foreground font-medium truncate">{selectedSavedReport.name}</span></>}
               </div>
               <Input
                 placeholder="Untitled Report"
@@ -251,7 +337,10 @@ export default function ReportBuilder() {
                 className="text-xl font-bold border-none shadow-none px-0 h-auto font-dm focus-visible:ring-0 text-foreground placeholder:text-muted-foreground/40"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <Button variant="ghost" size="sm" onClick={() => setShowSoql(v => !v)} className="gap-1.5 text-muted-foreground">
+                <Code className="w-3.5 h-3.5" /> SOQL
+              </Button>
               {records.length > 0 && (
                 <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
                   <Download className="w-3.5 h-3.5" /> Export CSV
@@ -267,40 +356,37 @@ export default function ReportBuilder() {
             </div>
           </div>
 
+          {/* SOQL Preview */}
+          {showSoql && (
+            <div className="mb-5 p-3 bg-slate-900 rounded-xl overflow-x-auto">
+              <p className="text-xs font-mono text-emerald-400 whitespace-pre-wrap break-all">{soql}</p>
+            </div>
+          )}
+
           {/* Config row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
             <div>
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Object</label>
               <Select value={selectedObject} onValueChange={setSelectedObject}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent className="max-h-56">
-                  {objects.map(o => (
-                    <SelectItem key={o.name} value={o.name}>{o.label}</SelectItem>
-                  ))}
+                  {objects.map(o => <SelectItem key={o.name} value={o.name}>{o.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div>
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Order by</label>
               <Select value={orderByField} onValueChange={setOrderByField}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {sortableFields.map(f => (
-                    <SelectItem key={f.name} value={f.name}>{f.label}</SelectItem>
-                  ))}
+                  {sortableFields.map(f => <SelectItem key={f.name} value={f.name}>{f.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div>
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Limit</label>
               <Select value={String(limitVal)} onValueChange={v => setLimitVal(Number(v))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {[25, 50, 100, 200, 500, 1000, 2000].map(n => (
                     <SelectItem key={n} value={String(n)}>{n} rows</SelectItem>
@@ -310,21 +396,8 @@ export default function ReportBuilder() {
             </div>
           </div>
 
-          {/* WHERE clause */}
-          <div className="mb-5">
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">
-              WHERE clause <span className="font-normal normal-case">(optional SOQL filter)</span>
-            </label>
-            <Input
-              placeholder="e.g. Office__c = 'HK' AND Dispute__c = true AND CreatedDate = THIS_YEAR"
-              value={whereClause}
-              onChange={e => setWhereClause(e.target.value)}
-              className="font-mono text-sm"
-            />
-          </div>
-
-          {/* Field selection */}
-          <div className="mb-6">
+          {/* Columns */}
+          <div className="mb-5 bg-card rounded-xl border border-border p-4">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 block">
               Columns ({selectedFields.length} selected)
             </label>
@@ -338,10 +411,11 @@ export default function ReportBuilder() {
                   <button
                     key={f.name}
                     onClick={() => toggleField(f.name)}
+                    title={f.type}
                     className={`px-3 py-1 text-xs rounded-full border transition-all font-medium ${
                       selectedFields.includes(f.name)
                         ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-card text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
+                        : 'bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
                     }`}
                   >
                     {f.label}
@@ -349,6 +423,64 @@ export default function ReportBuilder() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Advanced panels: tabs */}
+          <div className="mb-5 bg-card rounded-xl border border-border overflow-hidden">
+            {/* Tab bar */}
+            <div className="flex border-b border-border">
+              {TABS.map(tab => {
+                const Icon = tab.icon;
+                const badge = tab.id === 'filters' ? activeFilterCount
+                  : tab.id === 'aggregates' ? calcFields.length
+                  : lookups.length;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                      activeTab === tab.id
+                        ? 'border-primary text-primary bg-accent/30'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {tab.label}
+                    {badge > 0 && (
+                      <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Panel content */}
+            <div className="p-4">
+              {activeTab === 'filters' && (
+                <FilterGroup
+                  group={filterGroup}
+                  fields={fields.filter(f => f.filterable && !['IsDeleted', 'SystemModstamp'].includes(f.name))}
+                  onChange={setFilterGroup}
+                  depth={0}
+                />
+              )}
+              {activeTab === 'aggregates' && (
+                <CalculatedFields
+                  calcFields={calcFields}
+                  onChange={setCalcFields}
+                  fields={fields}
+                />
+              )}
+              {activeTab === 'lookups' && (
+                <LookupFields
+                  lookups={lookups}
+                  onChange={setLookups}
+                  fields={fields.filter(f => f.type === 'reference')}
+                  selectedObject={selectedObject}
+                />
+              )}
+            </div>
           </div>
 
           {error && (
@@ -359,12 +491,11 @@ export default function ReportBuilder() {
 
           {/* Results */}
           <div className="bg-card rounded-xl border border-border">
-            <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
-              <span className="text-sm font-semibold text-foreground">
+            <div className="px-5 py-3.5 border-b border-border flex items-center justify-between gap-4">
+              <span className="text-sm font-semibold text-foreground shrink-0">
                 {records.length > 0 ? `${records.length.toLocaleString()} rows` : 'Results'}
                 {totalSize > records.length && <span className="text-xs text-muted-foreground ml-1">(of {totalSize.toLocaleString()} total)</span>}
               </span>
-              <span className="text-xs font-mono text-muted-foreground truncate max-w-xs">{buildSoql()}</span>
             </div>
             <div className="p-2">
               {loading ? (
@@ -401,11 +532,9 @@ export default function ReportBuilder() {
               <Input className="mt-1.5" value={reportDesc} onChange={e => setReportDesc(e.target.value)} placeholder="Optional description" />
             </div>
             <div>
-              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Category / Department</Label>
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Category</Label>
               <Select value={reportCategory} onValueChange={setReportCategory}>
-                <SelectTrigger className="mt-1.5">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {CATEGORIES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
                 </SelectContent>
@@ -413,13 +542,7 @@ export default function ReportBuilder() {
             </div>
             <div className="border-t border-border pt-4">
               <div className="flex items-center gap-2 mb-3">
-                <input
-                  type="checkbox"
-                  id="sched"
-                  checked={scheduleEnabled}
-                  onChange={e => setScheduleEnabled(e.target.checked)}
-                  className="accent-primary"
-                />
+                <input type="checkbox" id="sched" checked={scheduleEnabled} onChange={e => setScheduleEnabled(e.target.checked)} className="accent-primary" />
                 <label htmlFor="sched" className="text-sm font-medium text-foreground">Enable email schedule</label>
               </div>
               {scheduleEnabled && (
@@ -427,9 +550,7 @@ export default function ReportBuilder() {
                   <div>
                     <Label className="text-xs text-muted-foreground">Frequency</Label>
                     <Select value={scheduleFreq} onValueChange={setScheduleFreq}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
+                      <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {SCHEDULE_FREQ.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                       </SelectContent>
