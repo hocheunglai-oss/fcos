@@ -8,7 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 import StatCard from '@/components/dashboard/StatCard';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2 } from 'lucide-react';
-import { format, subDays, subMonths, subYears, startOfYear, startOfMonth, startOfQuarter } from 'date-fns';
+import { format } from 'date-fns';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 
