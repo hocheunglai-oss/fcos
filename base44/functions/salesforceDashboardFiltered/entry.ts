@@ -67,6 +67,11 @@ Deno.serve(async (req) => {
     if (totalCostsField) plFields.push(totalCostsField);
     const usefulFields = plFields;
 
+    // Build a sub-filter on STEM_Line_Item__c using a semi-join when a where clause exists
+    const lineItemWhere = where
+      ? `WHERE STEM__c IN (SELECT Id FROM stem__c WHERE ${where})`
+      : '';
+
     const queries = [
       // 0: total stem count
       sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c ${whereClause}`),
@@ -100,30 +105,42 @@ Deno.serve(async (req) => {
       totalCostsField
         ? sfQuery(accessToken, `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`)
         : Promise.resolve({ records: [] }),
+      // 9: sum supplier broker lumpsum commissions from line items
+      sfQuery(accessToken, `SELECT SUM(Suppliers_Brokers_Commission_Lumpsum__c) total FROM STEM_Line_Item__c ${lineItemWhere}`),
+      // 10: sum buyer broker commissions (per unit * qty) — fetch per-row since SOQL can't multiply in SUM
+      sfQuery(accessToken, `SELECT Buyers_Brokers_Commission_Per_Unit__c comm, Quantity__c qty FROM STEM_Line_Item__c ${lineItemWhere} WHERE Buyers_Brokers_Commission_Per_Unit__c != null`),
     ];
 
     const results = await Promise.allSettled(queries);
     const getValue = (r) => r.status === 'fulfilled' ? r.value : { records: [], totalSize: 0 };
 
-    const totalRes      = getValue(results[0]);
-    const statusRes     = getValue(results[1]);
-    const typeRes       = getValue(results[2]);
-    const recentRes     = getValue(results[3]);
-    const disputedRes   = getValue(results[4]);
-    const accountsRes   = getValue(results[5]);
-    const buyerRes      = getValue(results[6]);
-    const supplierRes   = getValue(results[7]);
-    const costsRes      = getValue(results[8]);
+    const totalRes          = getValue(results[0]);
+    const statusRes         = getValue(results[1]);
+    const typeRes           = getValue(results[2]);
+    const recentRes         = getValue(results[3]);
+    const disputedRes       = getValue(results[4]);
+    const accountsRes       = getValue(results[5]);
+    const buyerRes          = getValue(results[6]);
+    const supplierRes       = getValue(results[7]);
+    const costsRes          = getValue(results[8]);
+    const suppBrokerLumpsumRes = getValue(results[9]);
+    const buyerBrokerRowsRes   = getValue(results[10]);
 
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => rest);
 
-    // Total profit = SUM(buyer invoice) - SUM(supplier invoice) - SUM(total costs)
     const totalBuyer = buyerRes.records?.[0]?.total ?? null;
     const totalSupplier = supplierRes.records?.[0]?.total ?? null;
     const totalCosts = costsRes.records?.[0]?.total ?? null;
-    const totalProfit = (totalBuyer != null && totalSupplier != null)
-      ? totalBuyer - totalSupplier - (totalCosts ?? 0)
-      : null;
+    const totalSuppBrokerLumpsum = suppBrokerLumpsumRes.records?.[0]?.total ?? 0;
+    const totalBuyerBrokerComm = (buyerBrokerRowsRes.records || []).reduce((sum, r) => {
+      return sum + ((r.comm ?? 0) * (r.qty ?? 0));
+    }, 0);
+
+    // Total profit = buyer - supplier - costs - buyer broker comms - supplier broker lumpsums
+    // If either buyer or supplier is 0/null, profit is 0
+    const totalProfit = (!totalBuyer || !totalSupplier)
+      ? 0
+      : totalBuyer - totalSupplier - (totalCosts ?? 0) - totalBuyerBrokerComm - totalSuppBrokerLumpsum;
 
     // Count distinct non-null accounts
     const accountCount = accountsRes.records
