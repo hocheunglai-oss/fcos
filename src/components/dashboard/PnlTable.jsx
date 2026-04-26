@@ -10,8 +10,7 @@ const FIELD_LABELS = {
   [BUYER_FIELD]: 'Buyer Invoice Amount',
   [SUPPLIER_FIELD]: 'Supplier Invoice Amount',
   'Costs_Total__c': 'Total Costs',
-  'Buyer_Name__c': 'Buyer',
-  'Buyer__c': 'Buyer',
+  '_suppBrokerName': 'Supplier Broker',
 };
 
 const fmtMoney = (val) => {
@@ -39,12 +38,15 @@ const colLabel = (key) => {
   return key.replace(/__c$/i, '').replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
 };
 
+// Columns to hide from display
+const HIDDEN_COLS = new Set(['_buyerBrokerComm', '_suppBrokerLumpsum', 'Buyer_Name__c', 'Buyer__c']);
+
 export default function PnlTable({ records = [], onRowClick }) {
   if (!records.length) return (
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
 
-  const allCols = Object.keys(records[0]).filter(k => k !== 'Id');
+  const allCols = Object.keys(records[0]).filter(k => k !== 'Id' && !HIDDEN_COLS.has(k));
 
   const hasBuyer = allCols.includes(BUYER_FIELD);
   const hasSupplier = allCols.includes(SUPPLIER_FIELD);
@@ -61,8 +63,15 @@ export default function PnlTable({ records = [], onRowClick }) {
     }
   });
 
-  // Inject __pnl__ after COSTS_FIELD if present, else after SUPPLIER_FIELD
-  const pnlAnchor = hasCosts ? COSTS_FIELD : SUPPLIER_FIELD;
+  // Inject _suppBrokerName after COSTS_FIELD if present, else after SUPPLIER_FIELD
+  const brokerAnchor = hasCosts ? COSTS_FIELD : SUPPLIER_FIELD;
+  const brokerAnchorIdx = displayCols.indexOf(brokerAnchor);
+  if (brokerAnchorIdx !== -1 && !displayCols.includes('_suppBrokerName')) {
+    displayCols.splice(brokerAnchorIdx + 1, 0, '_suppBrokerName');
+  }
+
+  // Inject __pnl__ after _suppBrokerName if present, else after anchor
+  const pnlAnchor = displayCols.includes('_suppBrokerName') ? '_suppBrokerName' : (hasCosts ? COSTS_FIELD : SUPPLIER_FIELD);
   const anchorIdx = displayCols.indexOf(pnlAnchor);
   if (showPnl && anchorIdx !== -1) {
     displayCols.splice(anchorIdx + 1, 0, '__pnl__');
