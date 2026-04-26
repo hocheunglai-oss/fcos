@@ -46,10 +46,20 @@ Deno.serve(async (req) => {
 
     const { accessToken } = await base44.asServiceRole.connectors.getConnection("salesforce");
 
+    // If stemId looks like KeyStem__c (not a 15/18 char SF ID), look it up first
+    let actualStemId = stemId;
+    if (stemId.length < 15) {
+      const lookup = await sfQuery(accessToken, `SELECT Id FROM stem__c WHERE KeyStem__c = '${stemId}' LIMIT 1`);
+      if (lookup.length === 0) {
+        return Response.json({ error: `STEM with KeyStem__c '${stemId}' not found` }, { status: 404 });
+      }
+      actualStemId = lookup[0].Id;
+    }
+
     // If updates provided, PATCH the record
     if (updates && Object.keys(updates).length > 0) {
       const patchRes = await fetch(
-        `${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/stem__c/${stemId}`,
+        `${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/stem__c/${actualStemId}`,
         {
           method: 'PATCH',
           headers: {
@@ -67,11 +77,11 @@ Deno.serve(async (req) => {
 
     // Fetch full record + child records in parallel
     const [res, lineItems, extraCosts, buyerBrokers, supplierBrokers] = await Promise.all([
-      sfGet(accessToken, `/sobjects/stem__c/${stemId}`),
-      sfQuery(accessToken, `SELECT Id, Name__c, Supplier_Name__c, Quantity__c, Quantity_Max__c, Price_Per_Unit__c, Total_Price__c, Cost_Per_Unit__c, Total_Cost__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Buyers_Brokers_Commission_Per_Unit__c, Supplier_Broker_Commission_Per_Unit__c, Supplier_Broker_Comm_Inv_Number__c FROM STEM_Line_Item__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
-      sfQuery(accessToken, `SELECT Id, Name, Description__c, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Type__c, Payment_Term__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
-      sfQuery(accessToken, `SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
-      sfQuery(accessToken, `SELECT Id, Supplier_Broker__c FROM STEM_Supplier_Broker__c WHERE STEM__c = '${stemId}' ORDER BY CreatedDate ASC`),
+      sfGet(accessToken, `/sobjects/stem__c/${actualStemId}`),
+      sfQuery(accessToken, `SELECT Id, Name__c, Supplier_Name__c, Quantity__c, Quantity_Max__c, Price_Per_Unit__c, Total_Price__c, Cost_Per_Unit__c, Total_Cost__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Buyers_Brokers_Commission_Per_Unit__c, Supplier_Broker_Commission_Per_Unit__c, Supplier_Broker_Comm_Inv_Number__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Name, Description__c, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Type__c, Payment_Term__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Supplier_Broker__c FROM STEM_Supplier_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
     ]);
 
     if (res.errorCode) {
