@@ -127,8 +127,6 @@ Deno.serve(async (req) => {
     const lineItemsRes      = getValue(results[9]);
     const allStemsRes       = getValue(results[10]);
 
-    const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => rest);
-
     // Build per-stem broker commission maps from line items
     const brokerByStem = {};
     for (const li of (lineItemsRes.records || [])) {
@@ -137,6 +135,11 @@ Deno.serve(async (req) => {
       brokerByStem[id].buyerComm += (li.comm ?? li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * (li.qty ?? li.Quantity__c ?? 0);
       brokerByStem[id].suppLumpsum += (li.lumpsum ?? li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0);
     }
+
+    const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => {
+      const { buyerComm = 0, suppLumpsum = 0 } = brokerByStem[rest.Id] || {};
+      return { ...rest, _buyerBrokerComm: buyerComm, _suppBrokerLumpsum: suppLumpsum };
+    });
 
     // Compute total profit per-stem: skip stems where buyer or supplier invoice is 0/null
     const bf = buyerAmountField || 'Total_Invoice_Amount__c';

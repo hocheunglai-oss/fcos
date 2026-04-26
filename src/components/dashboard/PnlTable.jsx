@@ -95,8 +95,10 @@ export default function PnlTable({ records = [], onRowClick }) {
             const supplier = row[SUPPLIER_FIELD] ?? null;
             const costs = row[COSTS_FIELD] ?? null;
             const hasDelivery = !!row[DELIVERY_FIELD];
+            const buyerBrokerComm = row._buyerBrokerComm ?? 0;
+            const suppBrokerLumpsum = row._suppBrokerLumpsum ?? 0;
             const pnl = showPnl && hasDelivery
-              ? (!buyer || !supplier ? 0 : buyer - supplier - (costs ?? 0))
+              ? (!buyer || !supplier ? 0 : buyer - supplier - (costs ?? 0) - buyerBrokerComm - suppBrokerLumpsum)
               : null;
             const pnlPositive = pnl != null && pnl >= 0;
 
