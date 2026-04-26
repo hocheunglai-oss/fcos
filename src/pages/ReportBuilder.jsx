@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, Search } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, Search, Minimize2, Maximize2 } from 'lucide-react';
 import { getAllowedObjects } from '@/pages/Settings';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
 import PnlTable from '@/components/dashboard/PnlTable';
@@ -107,6 +107,7 @@ export default function ReportBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const pendingFieldsRef = useRef(null); // fields to restore after object switch
   const pendingFilterRef = useRef(null); // filter group to restore after object switch
 
@@ -409,6 +410,9 @@ export default function ReportBuilder() {
               />
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <Button variant="ghost" size="sm" onClick={() => setFocusMode(v => !v)} className="gap-1.5 text-muted-foreground" title={focusMode ? 'Exit focus mode' : 'Focus mode'}>
+                {focusMode ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => setShowSoql(v => !v)} className="gap-1.5 text-muted-foreground">
                 <Code className="w-3.5 h-3.5" /> SOQL
               </Button>
@@ -428,14 +432,14 @@ export default function ReportBuilder() {
           </div>
 
           {/* SOQL Preview */}
-          {showSoql && (
+          {!focusMode && showSoql && (
             <div className="mb-5 p-3 bg-slate-900 rounded-xl overflow-x-auto">
               <p className="text-xs font-mono text-emerald-400 whitespace-pre-wrap break-all">{soql}</p>
             </div>
           )}
 
           {/* Config row */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+          {!focusMode && <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
             <div>
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Object</label>
               <Select value={selectedObject} onValueChange={v => { setObjectSearch(''); setSelectedObject(v); }}>
@@ -483,6 +487,8 @@ export default function ReportBuilder() {
             </div>
           </div>
 
+          }
+
           {/* Columns */}
           <div className="mb-5 bg-card rounded-xl border border-border p-4">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 block">
@@ -506,7 +512,7 @@ export default function ReportBuilder() {
           </div>
 
           {/* Advanced panels: tabs */}
-          <div className="mb-5 bg-card rounded-xl border border-border overflow-hidden">
+          {!focusMode && <div className="mb-5 bg-card rounded-xl border border-border overflow-hidden">
             {/* Tab bar */}
             <div className="flex border-b border-border">
               {TABS.map(tab => {
@@ -561,16 +567,16 @@ export default function ReportBuilder() {
                 />
               )}
             </div>
-          </div>
+          </div>}
 
-          {error && (
+          {!focusMode && error && (
             <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm flex gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {error}
             </div>
           )}
 
           {/* Results */}
-          <div className="bg-card rounded-xl border border-border">
+          {!focusMode && <div className="bg-card rounded-xl border border-border">
             <div className="px-5 py-3.5 border-b border-border flex items-center justify-between gap-4">
               <span className="text-sm font-semibold text-foreground shrink-0">
                 {records.length > 0 ? `${records.length.toLocaleString()} rows` : 'Results'}
@@ -592,7 +598,7 @@ export default function ReportBuilder() {
                 </div>
               )}
             </div>
-          </div>
+          </div>}
         </div>
       </div>
 
