@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, Search, Minimize2, Maximize2 } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, Search, Minimize2, Maximize2, BookOpen, ChevronDown } from 'lucide-react';
 import { getAllowedObjects } from '@/pages/Settings';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
 import PnlTable from '@/components/dashboard/PnlTable';
@@ -108,6 +108,7 @@ export default function ReportBuilder() {
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const [showReportsPanel, setShowReportsPanel] = useState(false);
   const pendingFieldsRef = useRef(null); // fields to restore after object switch
   const pendingFilterRef = useRef(null); // filter group to restore after object switch
 
@@ -339,63 +340,11 @@ export default function ReportBuilder() {
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      {/* Saved reports horizontal strip */}
-      <div className="border-b border-border bg-card px-6 py-3 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Saved Reports</span>
-            <Button size="sm" variant="ghost" onClick={newReport} className="h-6 w-6 p-0">
-              <Plus className="w-3 h-3" />
-            </Button>
-          </div>
-          {savedReports.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No saved reports yet</p>
-          ) : (
-            <div className="flex gap-2 overflow-x-auto pb-0.5 flex-1 min-w-0">
-              {savedReports.map(r => (
-                <button
-                  key={r.id}
-                  onClick={() => loadReport(r)}
-                  className={`group flex-shrink-0 text-left px-3 py-1.5 rounded-lg border transition-colors ${
-                    selectedSavedReport?.id === r.id
-                      ? 'bg-primary/10 border-primary/40 text-foreground'
-                      : 'bg-background border-border hover:border-primary/30 hover:bg-muted/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-foreground whitespace-nowrap">{r.name}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className={`text-[9px] px-1 py-0 rounded font-medium ${CAT_COLORS[r.category] || CAT_COLORS.general}`}>
-                          {CATEGORIES.find(c => c.value === r.category)?.label || r.category}
-                        </span>
-                        {r.last_run_at && (
-                          <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
-                            <Clock className="w-2 h-2" />
-                            {format(new Date(r.last_run_at), 'dd MMM')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => deleteReport(r.id, e)}
-                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 ml-1"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
       {/* Main builder */}
       <div className="flex-1 overflow-auto">
         <div className="p-6 lg:p-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <div className="flex-1 min-w-0 mr-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
                 <FileBarChart2 className="w-4 h-4" />
@@ -410,6 +359,17 @@ export default function ReportBuilder() {
               />
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant={showReportsPanel ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => setShowReportsPanel(v => !v)}
+                className="gap-1.5 text-muted-foreground"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Saved
+                {savedReports.length > 0 && <span className="text-[10px] font-bold bg-muted rounded-full px-1.5">{savedReports.length}</span>}
+                <ChevronDown className={`w-3 h-3 transition-transform ${showReportsPanel ? 'rotate-180' : ''}`} />
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => setFocusMode(v => !v)} className="gap-1.5 text-muted-foreground" title={focusMode ? 'Exit focus mode' : 'Focus mode'}>
                 {focusMode ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
               </Button>
@@ -430,6 +390,58 @@ export default function ReportBuilder() {
               </Button>
             </div>
           </div>
+
+          {/* Saved Reports dropdown panel */}
+          {showReportsPanel && (
+            <div className="mb-4 bg-card rounded-xl border border-border p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Saved Reports</span>
+                <Button size="sm" variant="ghost" onClick={() => { newReport(); setShowReportsPanel(false); }} className="h-6 gap-1 text-xs text-muted-foreground">
+                  <Plus className="w-3 h-3" /> New
+                </Button>
+              </div>
+              {savedReports.length === 0 ? (
+                <p className="text-xs text-muted-foreground py-2">No saved reports yet</p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {savedReports.map(r => (
+                    <button
+                      key={r.id}
+                      onClick={() => { loadReport(r); setShowReportsPanel(false); }}
+                      className={`group text-left px-3 py-2 rounded-lg border transition-colors ${
+                        selectedSavedReport?.id === r.id
+                          ? 'bg-primary/10 border-primary/40'
+                          : 'bg-background border-border hover:border-primary/30 hover:bg-muted/40'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-foreground truncate">{r.name}</p>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className={`text-[9px] px-1 rounded font-medium ${CAT_COLORS[r.category] || CAT_COLORS.general}`}>
+                              {CATEGORIES.find(c => c.value === r.category)?.label || r.category}
+                            </span>
+                            {r.last_run_at && (
+                              <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
+                                <Clock className="w-2 h-2" />
+                                {format(new Date(r.last_run_at), 'dd MMM')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => deleteReport(r.id, e)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 mt-0.5"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* SOQL Preview */}
           {!focusMode && showSoql && (
@@ -603,6 +615,7 @@ export default function ReportBuilder() {
       </div>
 
       {/* Save Dialog */}
+
 
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
         <DialogContent className="sm:max-w-md">
