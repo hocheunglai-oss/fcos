@@ -159,10 +159,10 @@ export default function ReportBuilder() {
       .filter(l => l.relName && l.relFieldName)
       .map(l => `${l.relName}.${l.relFieldName}`);
     const aggCols = calcFields
-      .filter(c => c.fn && c.field)
+      .filter(c => c.type === 'aggregate' && c.fn && c.field)
       .map(c => `${c.fn}(${c.field})${c.label ? ` ${c.label.replace(/\s+/g, '_')}` : ''}`);
 
-    const isAggregateQuery = aggCols.length > 0;
+    const isAggregateQuery = aggCols.length > 0 || calcFields.some(c => c.type === 'formula');
     let cols;
 
     if (isAggregateQuery) {
@@ -206,6 +206,29 @@ export default function ReportBuilder() {
     return q;
   }, [selectedFields, lookups, calcFields, filterGroup, selectedObject, orderByField, limitVal]);
 
+  const evaluateFormulas = (records) => {
+    return records.map(row => {
+      const enriched = { ...row };
+      calcFields.filter(c => c.type === 'formula').forEach(cf => {
+        if (!cf.expr || !cf.label) return;
+        try {
+          // Replace field references like SUM(Field_Name__c) with actual values
+          let expr = cf.expr;
+          const fieldRegex = /([A-Z_]+)\(([A-Za-z0-9_]+)\)/g;
+          expr = expr.replace(fieldRegex, (match, fn, field) => {
+            const val = row[field];
+            return val != null ? String(val) : '0';
+          });
+          // Evaluate the expression
+          enriched[cf.label] = Function(`return ${expr}`)();
+        } catch (e) {
+          enriched[cf.label] = null;
+        }
+      });
+      return enriched;
+    });
+  };
+
   const runQuery = async () => {
     setLoading(true);
     setError(null);
@@ -214,7 +237,10 @@ export default function ReportBuilder() {
     if (res.data?.error) {
       setError(res.data.error);
     } else {
-      setRecords(res.data?.records || []);
+      let records = res.data?.records || [];
+      // Evaluate formula fields
+      records = evaluateFormulas(records);
+      setRecords(records);
       setTotalSize(res.data?.totalSize || 0);
     }
     setLoading(false);
