@@ -131,7 +131,6 @@ export default function ReportBuilder() {
       const f = res.data?.fields || [];
       setFields(f);
       setChildRelationships(res.data?.childRelationships || []);
-      // Restore fields from a loaded report if pending
       if (pendingFieldsRef.current) {
         setSelectedFields(pendingFieldsRef.current);
         pendingFieldsRef.current = null;
@@ -142,6 +141,9 @@ export default function ReportBuilder() {
         setFilterGroup(pendingFilterRef.current);
         pendingFilterRef.current = null;
       }
+    }).catch(err => {
+      console.error('Failed to load fields:', err);
+    }).finally(() => {
       setLoadingFields(false);
     });
   }, [selectedObject]);
@@ -302,6 +304,9 @@ export default function ReportBuilder() {
         setFields(f);
         setChildRelationships(res.data?.childRelationships || []);
         setSelectedFields([]);
+      }).catch(err => {
+        console.error('Failed to load fields:', err);
+      }).finally(() => {
         setLoadingFields(false);
       });
     } else {
