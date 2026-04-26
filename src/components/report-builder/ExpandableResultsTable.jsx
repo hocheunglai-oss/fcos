@@ -14,7 +14,10 @@ function fmtVal(key, val) {
   if (val == null || val === '') return '—';
   if (typeof val === 'object') {
     if (isSubqueryResult(val)) return '(subquery)';
-    return '(object)'; // nested object, not a subquery
+    // Try to extract Name from relationship objects
+    if (val.Name != null) return String(val.Name);
+    // Fallback for other object types
+    return '(object)';
   }
   if (typeof val === 'boolean') return val ? 'Yes' : 'No';
   if (key.toLowerCase().includes('date')) {
