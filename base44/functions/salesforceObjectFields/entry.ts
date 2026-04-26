@@ -19,6 +19,11 @@ Deno.serve(async (req) => {
     const res = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/${objectName}/describe/`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
+    
+    if (!res.ok) {
+      throw new Error(`Salesforce API error: ${res.status} ${res.statusText}`);
+    }
+    
     const data = await res.json();
 
     const fields = (data.fields || []).map(f => ({
