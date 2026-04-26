@@ -239,12 +239,28 @@ export default function ReportBuilder() {
     setReportName('');
     setReportDesc('');
     setReportCategory('general');
-    setSelectedObject('stem__c');
     setFilterGroup(defaultFilterGroup());
     setCalcFields([]);
     setLookups([]);
+    setSelectedFields([]);
+    setOrderByField('KeyStem__c');
     setRecords([]);
     setError(null);
+    // If object is already stem__c, manually reload fields since useEffect won't re-fire
+    if (selectedObject === 'stem__c') {
+      setLoadingFields(true);
+      base44.functions.invoke('salesforceObjectFields', { objectName: 'stem__c' }).then(res => {
+        const f = res.data?.fields || [];
+        setFields(f);
+        const defaults = f.filter(x =>
+          !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp'
+        ).slice(0, 10).map(x => x.name);
+        setSelectedFields(defaults);
+        setLoadingFields(false);
+      });
+    } else {
+      setSelectedObject('stem__c');
+    }
   };
 
   const exportCsv = () => {
