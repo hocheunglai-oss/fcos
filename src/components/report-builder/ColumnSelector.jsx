@@ -292,7 +292,7 @@ export default function ColumnSelector({
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
-                  className={`min-h-24 max-h-52 overflow-y-auto rounded-lg border p-2 space-y-1 transition-colors ${
+                  className={`min-h-24 max-h-64 overflow-y-auto rounded-lg border p-2 space-y-1 transition-colors ${
                     snapshot.isDraggingOver ? 'bg-muted/60 border-primary/30' : 'bg-muted/20 border-border'
                   }`}
                 >
@@ -344,12 +344,12 @@ export default function ColumnSelector({
               <div
                 ref={provided.innerRef}
                 {...provided.droppableProps}
-                className={`min-h-24 max-h-52 overflow-y-auto rounded-lg border p-2 space-y-1 transition-colors ${
+                className={`min-h-24 rounded-lg border p-2 space-y-1 transition-colors ${
                   snapshot.isDraggingOver ? 'bg-accent/40 border-primary/40' : 'bg-accent/10 border-primary/20'
                 }`}
               >
                 {selectedFields.map((fieldKey, idx) => (
-                  <Draggable key={fieldKey} draggableId={`sel-${idx}`} index={idx}>
+                  <Draggable key={fieldKey} draggableId={`sel-${fieldKey}`} index={idx}>
                     {(provided, snapshot) => (
                       <div
                         ref={provided.innerRef}

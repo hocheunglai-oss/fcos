@@ -108,6 +108,7 @@ export default function ReportBuilder() {
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
   const pendingFieldsRef = useRef(null); // fields to restore after object switch
+  const pendingFilterRef = useRef(null); // filter group to restore after object switch
 
   useEffect(() => {
     loadSavedReports();
@@ -137,6 +138,10 @@ export default function ReportBuilder() {
         pendingFieldsRef.current = null;
       } else {
         setSelectedFields([]);
+      }
+      if (pendingFilterRef.current) {
+        setFilterGroup(pendingFilterRef.current);
+        pendingFilterRef.current = null;
       }
       setLoadingFields(false);
     });
@@ -242,8 +247,8 @@ export default function ReportBuilder() {
     // We set filterGroup here; the useEffect resets it but we re-set it via a separate effect
     if (report.object_name !== selectedObject) {
       setSelectedObject(report.object_name);
-      // filterGroup will be restored after fields load — set it via timeout so it runs after useEffect
-      setTimeout(() => setFilterGroup(report.filters?.[0] || defaultFilterGroup()), 100);
+      // filterGroup will be restored after fields load via pendingFilterRef
+      pendingFilterRef.current = report.filters?.[0] || defaultFilterGroup();
     } else {
       // Same object: fields useEffect won't re-fire, restore directly
       setSelectedFields(report.selected_fields || []);
