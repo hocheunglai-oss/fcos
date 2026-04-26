@@ -41,11 +41,17 @@ Deno.serve(async (req) => {
       nextUrl = nextData.nextRecordsUrl;
     }
 
-    // Remove Salesforce internal attributes
-    const cleanRecords = records.map(r => {
-      const { attributes, ...rest } = r;
-      return rest;
-    });
+    // Remove Salesforce internal attributes (recursively clean nested objects)
+    const cleanRecord = (obj) => {
+      if (!obj || typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) return obj.map(cleanRecord);
+      const { attributes, ...rest } = obj;
+      return Object.entries(rest).reduce((acc, [key, val]) => {
+        acc[key] = cleanRecord(val);
+        return acc;
+      }, {});
+    };
+    const cleanRecords = records.map(cleanRecord);
 
     return Response.json({ records: cleanRecords, totalSize, fetched: cleanRecords.length });
   } catch (error) {
