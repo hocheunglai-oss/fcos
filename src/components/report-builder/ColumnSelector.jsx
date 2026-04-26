@@ -1,15 +1,10 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
-import { GripVertical, X, Plus, Search, Loader2, ChevronRight } from 'lucide-react';
+import { GripVertical, X, Search, Loader2, ChevronRight, ChevronDown, Plus, Columns } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 
 // ── Key encoding ─────────────────────────────────────────────────────────────
-// "FieldName"                     → main field
-// "Rel__r.FieldName"              → parent lookup
-// "__child__:childRel:fieldName"  → child field (direct)
-// "__child__:childRel:Lookup__r.fieldName" → child's child (lookup inside child)
-
 function parseField(name) {
   if (name.startsWith('__child__:')) {
     const rest = name.slice('__child__:'.length);
@@ -27,7 +22,6 @@ function parseField(name) {
   return { kind: 'main', name };
 }
 
-// Build the actual SOQL token for a selected field
 export function toSoqlToken(name) {
   const p = parseField(name);
   if (p.kind === 'child') return `(SELECT ${p.field} FROM ${p.rel})`;
@@ -43,22 +37,19 @@ export default function ColumnSelector({
   childRelationships = [],
 }) {
   const [search, setSearch] = useState('');
-  // activeSource: '__main__' | relationshipName
   const [activeSource, setActiveSource] = useState('__main__');
-  // For child tabs: which lookup sub-tab is active. '__direct__' = direct fields of the child object
   const [activeChildLookup, setActiveChildLookup] = useState('__direct__');
-  const [relFieldsCache, setRelFieldsCache] = useState({}); // objectName → fields[]
+  const [relFieldsCache, setRelFieldsCache] = useState({});
   const [loadingRel, setLoadingRel] = useState(false);
 
   const sources = [
-    { id: '__main__', label: 'Main Fields', objectName: null, kind: 'main' },
+    { id: '__main__', label: 'Main', objectName: null, kind: 'main' },
     ...relatedObjects.map(r => ({ id: r.relationshipName, label: r.label || r.relationshipName, objectName: r.objectName, kind: 'parent' })),
     ...childRelationships.map(r => ({ id: r.relationshipName, label: r.childSObject, objectName: r.childSObject, kind: 'child' })),
   ];
 
   const activeSourceMeta = sources.find(s => s.id === activeSource);
 
-  // Load fields for any non-main object by objectName
   const ensureFieldsLoaded = (objectName) => {
     if (!objectName || relFieldsCache[objectName]) return;
     setLoadingRel(true);
@@ -74,68 +65,51 @@ export default function ColumnSelector({
     ensureFieldsLoaded(activeSourceMeta?.objectName);
   }, [activeSource]);
 
-  // When switching to a child source, also load the lookup sub-object if one is selected
   useEffect(() => {
     if (activeSourceMeta?.kind !== 'child') return;
     if (activeChildLookup === '__direct__') return;
-    // activeChildLookup is a reference field name on the child object
     const childFields = relFieldsCache[activeSourceMeta.objectName] || [];
     const refField = childFields.find(f => f.name === activeChildLookup);
     const refObject = refField?.referenceTo?.[0];
     if (refObject) ensureFieldsLoaded(refObject);
   }, [activeChildLookup, relFieldsCache[activeSourceMeta?.objectName]]);
 
-  // Reset child lookup tab when switching source
   useEffect(() => {
     setActiveChildLookup('__direct__');
     setSearch('');
   }, [activeSource]);
 
-  // The child object's fields (direct)
   const childDirectFields = activeSourceMeta?.kind === 'child'
     ? (relFieldsCache[activeSourceMeta.objectName] || [])
     : [];
 
-  // Reference fields on the child object → available as sub-tabs
   const childLookupFields = childDirectFields.filter(f => f.type === 'reference' && f.relationshipName);
 
-  // Current lookup sub-object name (for child's child)
   const currentChildLookupRefObject = (() => {
     if (activeSourceMeta?.kind !== 'child' || activeChildLookup === '__direct__') return null;
     const refField = childDirectFields.find(f => f.name === activeChildLookup);
     return refField?.referenceTo?.[0] || null;
   })();
 
-  // The field name token inside the subquery for the active panel
-  // direct → just fieldName; child's child → Lookup__r.fieldName
   const makeKey = (rawFieldName) => {
     if (activeSource === '__main__') return rawFieldName;
     if (activeSourceMeta?.kind === 'child') {
-      if (activeChildLookup === '__direct__') {
-        return `__child__:${activeSource}:${rawFieldName}`;
-      }
-      // child's child: use relationshipName of the lookup field
+      if (activeChildLookup === '__direct__') return `__child__:${activeSource}:${rawFieldName}`;
       const refField = childDirectFields.find(f => f.name === activeChildLookup);
       const relName = refField?.relationshipName || activeChildLookup.replace(/__c$/i, '__r');
       return `__child__:${activeSource}:${relName}.${rawFieldName}`;
     }
-    return `${activeSource}.${rawFieldName}`; // parent
+    return `${activeSource}.${rawFieldName}`;
   };
 
-  // Pool of available fields to show
   const available = (() => {
     let pool;
     if (activeSource === '__main__') {
       pool = fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name));
     } else if (activeSourceMeta?.kind === 'child') {
-      if (activeChildLookup === '__direct__') {
-        pool = childDirectFields;
-      } else {
-        // child's child fields
-        pool = currentChildLookupRefObject
-          ? (relFieldsCache[currentChildLookupRefObject] || [])
-          : [];
-      }
+      pool = activeChildLookup === '__direct__'
+        ? childDirectFields
+        : (currentChildLookupRefObject ? (relFieldsCache[currentChildLookupRefObject] || []) : []);
     } else {
       pool = relFieldsCache[activeSourceMeta?.objectName] || [];
     }
@@ -144,34 +118,26 @@ export default function ColumnSelector({
       .filter(f => !search || f.label.toLowerCase().includes(search.toLowerCase()) || f.name.toLowerCase().includes(search.toLowerCase()));
   })();
 
-  // Resolve display label for a selected field key
   const resolveLabel = (fieldKey) => {
     const p = parseField(fieldKey);
-    if (p.kind === 'main') {
-      return fields.find(f => f.name === fieldKey)?.label || fieldKey;
-    }
+    if (p.kind === 'main') return fields.find(f => f.name === fieldKey)?.label || fieldKey;
     if (p.kind === 'parent') {
       const relObj = relatedObjects.find(r => r.relationshipName === p.rel);
       const relFields = relFieldsCache[relObj?.objectName] || [];
-      const fieldLabel = relFields.find(f => f.name === p.field)?.label || p.field;
-      return `${relObj?.label || p.rel} › ${fieldLabel}`;
+      return `${relObj?.label || p.rel} › ${relFields.find(f => f.name === p.field)?.label || p.field}`;
     }
     if (p.kind === 'child') {
       const childObj = childRelationships.find(r => r.relationshipName === p.rel);
       const childObjName = childObj?.childSObject || p.rel;
       const childFields = relFieldsCache[childObjName] || [];
       if (p.field.includes('.')) {
-        // child's child
         const [lookupRelName, subFieldName] = p.field.split('.');
-        // Find the reference field by relationshipName
         const refField = childFields.find(f => f.relationshipName === lookupRelName);
         const refObjName = refField?.referenceTo?.[0];
-        const subFields = refObjName ? (relFieldsCache[refObjName] || []) : [];
-        const subLabel = subFields.find(f => f.name === subFieldName)?.label || subFieldName;
+        const subLabel = refObjName ? (relFieldsCache[refObjName] || []).find(f => f.name === subFieldName)?.label || subFieldName : subFieldName;
         return `${childObjName} › ${refField?.label || lookupRelName} › ${subLabel}`;
       }
-      const fieldLabel = childFields.find(f => f.name === p.field)?.label || p.field;
-      return `${childObjName} › ${fieldLabel}`;
+      return `${childObjName} › ${childFields.find(f => f.name === p.field)?.label || p.field}`;
     }
     return fieldKey;
   };
@@ -192,18 +158,21 @@ export default function ColumnSelector({
 
   const kindBadge = (key) => {
     const p = parseField(key);
-    if (p.kind === 'parent') return <span className="text-[9px] px-1 rounded bg-blue-100 text-blue-600 shrink-0">lookup</span>;
+    if (p.kind === 'parent') return <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 shrink-0 font-medium">↑ lookup</span>;
     if (p.kind === 'child') {
-      if (p.field?.includes('.')) return <span className="text-[9px] px-1 rounded bg-fuchsia-100 text-fuchsia-600 shrink-0">child›child</span>;
-      return <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-600 shrink-0">child</span>;
+      if (p.field?.includes('.')) return <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-600 shrink-0 font-medium">↙↙</span>;
+      return <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-600 shrink-0 font-medium">↙ child</span>;
     }
     return null;
   };
 
   if (loading) {
     return (
-      <div className="flex gap-2 flex-wrap">
-        {[...Array(8)].map((_, i) => <div key={i} className="h-7 w-24 bg-muted animate-pulse rounded" />)}
+      <div className="flex flex-col gap-3">
+        <div className="h-8 w-48 bg-muted animate-pulse rounded" />
+        <div className="flex gap-2 flex-wrap">
+          {[...Array(12)].map((_, i) => <div key={i} className="h-7 w-24 bg-muted animate-pulse rounded" />)}
+        </div>
       </div>
     );
   }
@@ -213,56 +182,56 @@ export default function ColumnSelector({
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
-      <div className="flex gap-4">
-        {/* Available fields panel */}
-        <div className="flex-1 min-w-0">
-          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-            Available ({available.length})
-          </p>
+      <div className="flex gap-6">
 
-          {/* Level-1 source tabs */}
+        {/* ── LEFT: Field Browser ── */}
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+
+          {/* Source tabs */}
           {hasTabs && (
-            <div className="flex flex-wrap gap-1 mb-2">
+            <div className="flex flex-wrap gap-1">
               {sources.map(src => (
                 <button
                   key={src.id}
                   onClick={() => setActiveSource(src.id)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-all ${
                     activeSource === src.id
-                      ? 'bg-primary text-primary-foreground border-primary'
+                      ? src.kind === 'child'
+                        ? 'bg-purple-500 text-white border-purple-500'
+                        : 'bg-primary text-primary-foreground border-primary'
                       : src.kind === 'child'
-                        ? 'bg-purple-50 text-purple-600 border-purple-200 hover:border-purple-400'
-                        : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/40'
+                        ? 'text-purple-600 border-purple-200 bg-purple-50 hover:bg-purple-100'
+                        : 'text-muted-foreground border-border bg-muted/30 hover:bg-muted'
                   }`}
                 >
                   {src.label}
-                  {src.kind === 'child' && <span className="ml-1 text-[9px] opacity-60">↙</span>}
+                  {src.kind === 'child' && activeSource !== src.id && <span className="ml-1 opacity-50">↙</span>}
                 </button>
               ))}
             </div>
           )}
 
-          {/* Level-2 sub-tabs: direct fields + lookup fields of the child object */}
+          {/* Child sub-tabs */}
           {isChildSource && childLookupFields.length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-2 pl-2 border-l-2 border-purple-200">
+            <div className="flex flex-wrap gap-1 pl-3 border-l-2 border-purple-200">
               <button
                 onClick={() => setActiveChildLookup('__direct__')}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                   activeChildLookup === '__direct__'
-                    ? 'bg-purple-500 text-white border-purple-500'
-                    : 'bg-purple-50 text-purple-600 border-purple-200 hover:border-purple-400'
+                    ? 'bg-purple-400 text-white border-purple-400'
+                    : 'text-purple-500 border-purple-200 bg-purple-50 hover:bg-purple-100'
                 }`}
               >
-                Direct fields
+                Direct
               </button>
               {childLookupFields.map(f => (
                 <button
                   key={f.name}
                   onClick={() => setActiveChildLookup(f.name)}
-                  className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                  className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                     activeChildLookup === f.name
                       ? 'bg-fuchsia-500 text-white border-fuchsia-500'
-                      : 'bg-fuchsia-50 text-fuchsia-600 border-fuchsia-200 hover:border-fuchsia-400'
+                      : 'text-fuchsia-600 border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100'
                   }`}
                 >
                   <ChevronRight className="w-2.5 h-2.5" />
@@ -272,120 +241,150 @@ export default function ColumnSelector({
             </div>
           )}
 
-          <div className="relative mb-2">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
               placeholder="Search fields…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-7 h-7 text-xs"
+              className="pl-8 h-8 text-xs"
             />
           </div>
 
+          {/* Field list */}
           {loadingRel ? (
-            <div className="min-h-24 rounded-lg border bg-muted/20 border-border flex items-center justify-center">
+            <div className="h-48 rounded-lg border border-border flex items-center justify-center bg-muted/10">
               <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
             </div>
           ) : (
             <Droppable droppableId="available" isDropDisabled>
-              {(provided, snapshot) => (
+              {(provided) => (
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
-                  className={`min-h-24 max-h-64 overflow-y-auto rounded-lg border p-2 space-y-1 transition-colors ${
-                    snapshot.isDraggingOver ? 'bg-muted/60 border-primary/30' : 'bg-muted/20 border-border'
-                  }`}
+                  className="min-h-40 max-h-72 overflow-y-auto rounded-lg border border-border bg-muted/10"
                 >
-                  {available.map((f, idx) => (
-                    <Draggable key={f.name} draggableId={`avail-${f.name}`} index={idx} isDragDisabled>
-                      {(provided) => (
-                        <div
-                          ref={provided.innerRef}
-                          {...provided.draggableProps}
-                          {...provided.dragHandleProps}
-                          className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs select-none bg-card border border-border hover:border-primary/30 hover:bg-accent/30 transition-colors cursor-default"
-                        >
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="truncate text-foreground">{f.label}</span>
-                            <span className="text-[9px] text-muted-foreground/60 shrink-0">{f.type}</span>
-                          </div>
-                          <button
-                            onClick={() => addField(f.name)}
-                            className="ml-1 text-muted-foreground hover:text-primary shrink-0"
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                    </Draggable>
-                  ))}
-                  {provided.placeholder}
-                  {available.length === 0 && (
-                    <p className="text-xs text-muted-foreground text-center py-4">
+                  {available.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-32 text-muted-foreground text-xs gap-1">
+                      <Columns className="w-5 h-5 opacity-30" />
                       {search ? 'No matching fields' : 'All fields selected'}
-                    </p>
+                    </div>
+                  ) : (
+                    available.map((f, idx) => (
+                      <Draggable key={f.name} draggableId={`avail-${f.name}`} index={idx} isDragDisabled>
+                        {(provided) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            {...provided.dragHandleProps}
+                            onClick={() => addField(f.name)}
+                            className="group flex items-center justify-between px-3 py-2 text-xs border-b border-border/40 last:border-b-0 hover:bg-accent/50 transition-colors cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-medium text-foreground truncate">{f.label}</span>
+                              <span className="text-[10px] text-muted-foreground/50 shrink-0 hidden group-hover:inline">{f.type}</span>
+                            </div>
+                            <Plus className="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-all" />
+                          </div>
+                        )}
+                      </Draggable>
+                    ))
                   )}
+                  {provided.placeholder}
                 </div>
               )}
             </Droppable>
           )}
+
+          <p className="text-[10px] text-muted-foreground text-center">
+            Click a field to add it → then drag to reorder
+          </p>
         </div>
 
-        {/* Selected fields (orderable via drag) */}
-        <div className="flex-1 min-w-0">
-          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-            Selected & Order ({selectedFields.length})
-          </p>
-          {hasTabs && <div className="mb-2 h-[26px]" />}
-          {isChildSource && childLookupFields.length > 0 && <div className="mb-2 h-[26px]" />}
-          <div className="mb-2 h-7" />
+        {/* ── RIGHT: Selected columns (ordered) ── */}
+        <div className="w-64 shrink-0 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              Selected Columns
+            </span>
+            <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-2 py-0.5">
+              {selectedFields.length}
+            </span>
+          </div>
+
           <Droppable droppableId="selected">
             {(provided, snapshot) => (
               <div
                 ref={provided.innerRef}
                 {...provided.droppableProps}
-                className={`min-h-24 rounded-lg border p-2 space-y-1 transition-colors ${
-                  snapshot.isDraggingOver ? 'bg-accent/40 border-primary/40' : 'bg-accent/10 border-primary/20'
+                className={`min-h-40 max-h-72 overflow-y-auto rounded-lg border transition-colors ${
+                  snapshot.isDraggingOver
+                    ? 'border-primary/50 bg-accent/20'
+                    : selectedFields.length === 0
+                      ? 'border-dashed border-border bg-muted/10'
+                      : 'border-primary/20 bg-accent/5'
                 }`}
               >
-                {selectedFields.map((fieldKey, idx) => (
-                  <Draggable key={fieldKey} draggableId={`sel-${fieldKey}`} index={idx}>
-                    {(provided, snapshot) => (
-                      <div
-                        ref={provided.innerRef}
-                        {...provided.draggableProps}
-                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs select-none transition-colors ${
-                          snapshot.isDragging
-                            ? 'bg-primary text-primary-foreground shadow-md'
-                            : 'bg-primary/10 border border-primary/20 text-foreground'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <div {...provided.dragHandleProps} className="cursor-grab">
-                            <GripVertical className="w-3 h-3 text-primary/60 shrink-0" />
-                          </div>
-                          <span className="text-[10px] font-bold text-primary/50 w-4 shrink-0">{idx + 1}</span>
-                          <span className="truncate font-medium">{resolveLabel(fieldKey)}</span>
-                          {kindBadge(fieldKey)}
-                        </div>
-                        <button
-                          onClick={() => removeField(fieldKey)}
-                          className={`ml-1 shrink-0 ${snapshot.isDragging ? 'text-white/70 hover:text-white' : 'text-muted-foreground hover:text-destructive'}`}
+                {selectedFields.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-32 text-muted-foreground text-xs gap-1">
+                    <Columns className="w-5 h-5 opacity-30" />
+                    No columns selected
+                  </div>
+                ) : (
+                  selectedFields.map((fieldKey, idx) => (
+                    <Draggable key={fieldKey} draggableId={`sel-${fieldKey}`} index={idx}>
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          className={`group flex items-center gap-2 px-3 py-2 text-xs border-b border-border/30 last:border-b-0 transition-colors ${
+                            snapshot.isDragging
+                              ? 'bg-primary text-primary-foreground rounded-lg shadow-lg border-none'
+                              : 'hover:bg-accent/40'
+                          }`}
                         >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
-                  </Draggable>
-                ))}
-                {provided.placeholder}
-                {selectedFields.length === 0 && (
-                  <p className="text-xs text-muted-foreground text-center py-4">Click + to add fields</p>
+                          {/* Drag handle */}
+                          <div {...provided.dragHandleProps} className="cursor-grab shrink-0">
+                            <GripVertical className={`w-3.5 h-3.5 ${snapshot.isDragging ? 'text-primary-foreground/70' : 'text-muted-foreground/40 group-hover:text-muted-foreground'}`} />
+                          </div>
+                          {/* Index */}
+                          <span className={`text-[10px] font-bold w-4 shrink-0 ${snapshot.isDragging ? 'text-primary-foreground/60' : 'text-muted-foreground/40'}`}>
+                            {idx + 1}
+                          </span>
+                          {/* Label */}
+                          <span className={`flex-1 truncate font-medium ${snapshot.isDragging ? 'text-primary-foreground' : 'text-foreground'}`}>
+                            {resolveLabel(fieldKey)}
+                          </span>
+                          {/* Kind badge */}
+                          {!snapshot.isDragging && kindBadge(fieldKey)}
+                          {/* Remove */}
+                          <button
+                            onClick={() => removeField(fieldKey)}
+                            className={`shrink-0 ml-auto ${snapshot.isDragging ? 'text-primary-foreground/70' : 'text-muted-foreground/0 group-hover:text-muted-foreground hover:text-destructive'} transition-colors`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </Draggable>
+                  ))
                 )}
+                {provided.placeholder}
               </div>
             )}
           </Droppable>
+
+          {selectedFields.length > 0 && (
+            <button
+              onClick={() => onChange([])}
+              className="text-[10px] text-muted-foreground hover:text-destructive transition-colors text-center"
+            >
+              Clear all
+            </button>
+          )}
         </div>
+
       </div>
     </DragDropContext>
   );

@@ -12,7 +12,7 @@ const navItems = [
 ];
 
 export default function Layout() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
