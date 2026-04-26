@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -107,6 +107,7 @@ export default function ReportBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
+  const pendingFieldsRef = useRef(null); // fields to restore after object switch
 
   useEffect(() => {
     loadSavedReports();
@@ -122,15 +123,21 @@ export default function ReportBuilder() {
     setLoadingFields(true);
     setFields([]);
     setChildRelationships([]);
-    setSelectedFields([]);
     setCalcFields([]);
     setLookups([]);
     setFilterGroup(defaultFilterGroup());
+    setSelectedFields([]);
     base44.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
       const f = res.data?.fields || [];
       setFields(f);
       setChildRelationships(res.data?.childRelationships || []);
-      setSelectedFields([]);
+      // Restore fields from a loaded report if pending
+      if (pendingFieldsRef.current) {
+        setSelectedFields(pendingFieldsRef.current);
+        pendingFieldsRef.current = null;
+      } else {
+        setSelectedFields([]);
+      }
       setLoadingFields(false);
     });
   }, [selectedObject]);
@@ -222,9 +229,6 @@ export default function ReportBuilder() {
     setReportName(report.name);
     setReportDesc(report.description || '');
     setReportCategory(report.category || 'general');
-    setSelectedObject(report.object_name);
-    setSelectedFields(report.selected_fields || []);
-    setFilterGroup(report.filters?.[0] || defaultFilterGroup());
     setScheduleEnabled(report.schedule_enabled || false);
     setScheduleFreq(report.schedule_frequency || 'weekly');
     setScheduleEmail(report.schedule_email || '');
@@ -232,6 +236,20 @@ export default function ReportBuilder() {
     setLookups([]);
     setRecords([]);
     setError(null);
+    // Stash selected fields so they survive the object-load reset
+    pendingFieldsRef.current = report.selected_fields?.length ? report.selected_fields : null;
+    // Restore filter group after setting object (useEffect will clear it, so set after)
+    // We set filterGroup here; the useEffect resets it but we re-set it via a separate effect
+    if (report.object_name !== selectedObject) {
+      setSelectedObject(report.object_name);
+      // filterGroup will be restored after fields load — set it via timeout so it runs after useEffect
+      setTimeout(() => setFilterGroup(report.filters?.[0] || defaultFilterGroup()), 100);
+    } else {
+      // Same object: fields useEffect won't re-fire, restore directly
+      setSelectedFields(report.selected_fields || []);
+      setFilterGroup(report.filters?.[0] || defaultFilterGroup());
+      pendingFieldsRef.current = null;
+    }
   };
 
   const deleteReport = async (id, e) => {
@@ -256,6 +274,7 @@ export default function ReportBuilder() {
     // If object is already stem__c, manually reload fields since useEffect won't re-fire
     if (selectedObject === 'stem__c') {
       setLoadingFields(true);
+      pendingFieldsRef.current = null;
       base44.functions.invoke('salesforceObjectFields', { objectName: 'stem__c' }).then(res => {
         const f = res.data?.fields || [];
         setFields(f);
