@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     // Fetch full record + child records in parallel
     const [res, lineItems, extraCosts, buyerBrokers] = await Promise.all([
       sfGet(accessToken, `/sobjects/stem__c/${actualStemId}`),
-      sfQuery(accessToken, `SELECT Id, Name__c, Supplier_Name__c, Quantity__c, Quantity_Max__c, Price_Per_Unit__c, Total_Price__c, Cost_Per_Unit__c, Total_Cost__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Buyers_Brokers_Commission_Per_Unit__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
+      sfQuery(accessToken, `SELECT Id, Name, Product__c, Product__r.Name, Supplier_Name__c, Quantity__c, Quantity_Max__c, Price_Per_Unit__c, Total_Price__c, Cost_Per_Unit__c, Total_Cost__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Buyers_Brokers_Commission_Per_Unit__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
       sfQuery(accessToken, `SELECT Id, Name, Description__c, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Type__c, Payment_Term__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
       sfQuery(accessToken, `SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`),
     ]);
@@ -120,6 +120,7 @@ Deno.serve(async (req) => {
     );
     const lineItemsWithBrokerNames = lineItems.map(li => ({
       ...li,
+      _Product_Name: li['Product__r']?.Name ?? null,
       _Supplier_Broker_Name: li.Supplier_Broker__c ? supplierBrokerNameMap[li.Supplier_Broker__c] : null,
     }));
 

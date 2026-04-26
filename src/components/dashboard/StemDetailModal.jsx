@@ -296,7 +296,7 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                         <tbody>
                           {lineItems.map((li) => (
                             <tr key={li.Id} className="border-b border-border/40 hover:bg-muted/20">
-                              <td className="py-2 pr-3 font-medium text-foreground">{li.Name__c || '—'}</td>
+                              <td className="py-2 pr-3 font-medium text-foreground">{li._Product_Name || '—'}</td>
                               <td className="py-2 pr-3 text-muted-foreground">{li.Supplier_Name__c || '—'}</td>
                               <td className="py-2 pr-3 text-right text-foreground">
                                 {li.Is_Quantity_Range__c && li.Quantity_Max__c
