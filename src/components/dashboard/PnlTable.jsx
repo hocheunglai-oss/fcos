@@ -96,7 +96,7 @@ export default function PnlTable({ records = [], onRowClick }) {
             const costs = row[COSTS_FIELD] ?? null;
             const hasDelivery = !!row[DELIVERY_FIELD];
             const pnl = showPnl && hasDelivery
-              ? (buyer ?? 0) - (supplier ?? 0) - (costs ?? 0)
+              ? (!buyer || !supplier ? 0 : buyer - supplier - (costs ?? 0))
               : null;
             const pnlPositive = pnl != null && pnl >= 0;
 

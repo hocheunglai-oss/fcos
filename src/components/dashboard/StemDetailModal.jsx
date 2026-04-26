@@ -111,7 +111,7 @@ function computePnl(record, lineItems = []) {
     return sum + (li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0);
   }, 0);
   
-  if (buyer == null || supplier == null) return 0;
+  if (!buyer || !supplier) return 0;
   return buyer - supplier - costs - buyerBrokerComm - supplierBrokerLumpsum;
 }
 
