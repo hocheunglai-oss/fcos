@@ -13,6 +13,7 @@ import FilterGroup from '@/components/report-builder/FilterGroup';
 import CalculatedFields from '@/components/report-builder/CalculatedFields';
 import LookupFields from '@/components/report-builder/LookupFields';
 import ColumnSelector, { toSoqlToken } from '@/components/report-builder/ColumnSelector';
+import ExpandableResultsTable from '@/components/report-builder/ExpandableResultsTable';
 import { format } from 'date-fns';
 
 const CATEGORIES = [
@@ -529,7 +530,7 @@ export default function ReportBuilder() {
                   <span className="text-sm">Running query…</span>
                 </div>
               ) : records.length > 0 ? (
-                selectedObject === 'stem__c' ? <PnlTable records={records} /> : <RecentStemsTable records={records} />
+                <ExpandableResultsTable records={records} />
               ) : (
                 <div className="py-16 flex flex-col items-center gap-3 text-muted-foreground">
                   <Play className="w-8 h-8 opacity-20" />
