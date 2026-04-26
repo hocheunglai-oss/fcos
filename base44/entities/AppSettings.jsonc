@@ -1,0 +1,17 @@
+{
+  "name": "AppSettings",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "description": "Unique settings key (e.g. 'report_builder_config')"
+    },
+    "value": {
+      "type": "object",
+      "description": "JSON value for this setting"
+    }
+  },
+  "required": [
+    "key"
+  ]
+}

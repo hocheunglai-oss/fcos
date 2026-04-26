@@ -4,34 +4,48 @@ import { Settings, Search, Loader2, Check } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import ObjectSchemaTree from '@/components/settings/ObjectSchemaTree';
 
-const STORAGE_KEY = 'report_builder_allowed_objects';
+const SETTINGS_KEY = 'report_builder_config';
 
-export function getAllowedObjects() {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY);
-    return v ? JSON.parse(v) : null; // null = all allowed
-  } catch { return null; }
+async function loadSettingsRecord() {
+  const records = await base44.entities.AppSettings.filter({ key: SETTINGS_KEY });
+  return records[0] || null;
 }
 
 export default function SettingsPage() {
   const [allObjects, setAllObjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [search, setSearch] = useState('');
-  const [allowed, setAllowed] = useState(null); // null = all
+  const [settingsRecord, setSettingsRecord] = useState(null); // DB record
 
-  // Report Builder defaults
-  const [defaultObject, setDefaultObject] = useState(() => localStorage.getItem('rb_default_object') || 'stem__c');
-  const [defaultOrderBy, setDefaultOrderBy] = useState(() => localStorage.getItem('rb_default_orderby') || 'KeyStem__c');
-  const [defaultLimit, setDefaultLimit] = useState(() => localStorage.getItem('rb_default_limit') || '100');
+  // allowedMap: { [objectName]: true | false | { fields: {...}, children: {...} } }
+  const [allowedMap, setAllowedMap] = useState({});
+
+  // Report Builder defaults (also stored in DB)
+  const [defaultObject, setDefaultObject] = useState('stem__c');
+  const [defaultOrderBy, setDefaultOrderBy] = useState('KeyStem__c');
+  const [defaultLimit, setDefaultLimit] = useState('100');
   const [rbFields, setRbFields] = useState([]);
   const [rbFieldsLoading, setRbFieldsLoading] = useState(false);
-  const [rbSaved, setRbSaved] = useState(false);
 
+  // Load schema + settings from DB in parallel
   useEffect(() => {
-    setAllowed(getAllowedObjects());
-    base44.functions.invoke('salesforceSchema', {}).then(res => {
-      setAllObjects(res.data?.objects || []);
+    Promise.all([
+      base44.functions.invoke('salesforceSchema', {}).then(res => res.data?.objects || []),
+      loadSettingsRecord(),
+    ]).then(([objects, record]) => {
+      setAllObjects(objects);
+      if (record) {
+        setSettingsRecord(record);
+        const v = record.value || {};
+        setAllowedMap(v.allowedMap || {});
+        setDefaultObject(v.defaultObject || 'stem__c');
+        setDefaultOrderBy(v.defaultOrderBy || 'KeyStem__c');
+        setDefaultLimit(String(v.defaultLimit || 100));
+      }
       setLoading(false);
     });
   }, []);
@@ -45,124 +59,86 @@ export default function SettingsPage() {
     });
   }, [defaultObject]);
 
-  const saveRbDefaults = () => {
-    localStorage.setItem('rb_default_object', defaultObject);
-    localStorage.setItem('rb_default_orderby', defaultOrderBy);
-    localStorage.setItem('rb_default_limit', defaultLimit);
-    setRbSaved(true);
-    setTimeout(() => setRbSaved(false), 1500);
+  const saveAll = async () => {
+    setSaving(true);
+    const value = {
+      allowedMap,
+      defaultObject,
+      defaultOrderBy,
+      defaultLimit: Number(defaultLimit),
+    };
+    if (settingsRecord) {
+      await base44.entities.AppSettings.update(settingsRecord.id, { key: SETTINGS_KEY, value });
+    } else {
+      const created = await base44.entities.AppSettings.create({ key: SETTINGS_KEY, value });
+      setSettingsRecord(created);
+    }
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
-  const filtered = allObjects.filter(o =>
+  const filteredObjects = allObjects.filter(o =>
     !search || o.label.toLowerCase().includes(search.toLowerCase()) || o.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const isAllowed = (name) => allowed === null || allowed.includes(name);
-
-  const toggle = (name) => {
-    if (allowed === null) {
-      // Start from all selected, then remove this one
-      const next = allObjects.map(o => o.name).filter(n => n !== name);
-      setAllowed(next);
-    } else if (allowed.includes(name)) {
-      const next = allowed.filter(n => n !== name);
-      setAllowed(next.length === 0 ? [name] : next); // prevent empty
-    } else {
-      const next = [...allowed, name];
-      // If all selected, revert to null
-      setAllowed(next.length === allObjects.length ? null : next);
-    }
-  };
-
-  const selectAll = () => setAllowed(null);
-  const deselectAll = () => setAllowed(allObjects.slice(0, 1).map(o => o.name));
-
-  const save = () => {
-    if (allowed === null) {
-      localStorage.removeItem(STORAGE_KEY);
-    } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(allowed));
-    }
-    // Show brief feedback
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
-  };
-
-  const [saved, setSaved] = useState(false);
-
-  const allowedCount = allowed === null ? allObjects.length : allowed.length;
+  const enabledCount = Object.values(allowedMap).filter(v => v !== false).length +
+    allObjects.filter(o => allowedMap[o.name] === undefined).length; // default true
 
   return (
-    <div className="p-6 lg:p-8 max-w-3xl mx-auto">
+    <div className="p-6 lg:p-8 max-w-4xl mx-auto">
       <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
         <Settings className="w-4 h-4" />
         <span>Settings</span>
       </div>
-      <h1 className="text-2xl font-bold text-foreground font-dm tracking-tight mb-6">Settings</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-foreground font-dm tracking-tight">Settings</h1>
+        <Button onClick={saveAll} disabled={saving || loading} className="gap-2">
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
+          {saved ? 'Saved!' : 'Save All Settings'}
+        </Button>
+      </div>
 
-      <div className="bg-card rounded-xl border border-border p-5">
+      {/* ── Allowed Objects & Fields ── */}
+      <div className="bg-card rounded-xl border border-border p-5 mb-6">
         <div className="flex items-center justify-between mb-1">
-          <h2 className="text-sm font-semibold text-foreground">Report Builder — Allowed Objects</h2>
-          <span className="text-xs text-muted-foreground">{allowedCount} of {allObjects.length} enabled</span>
+          <h2 className="text-sm font-semibold text-foreground">Report Builder — Allowed Objects & Fields</h2>
+          {!loading && (
+            <span className="text-xs text-muted-foreground">{enabledCount} of {allObjects.length} objects enabled</span>
+          )}
         </div>
         <p className="text-xs text-muted-foreground mb-4">
-          Choose which Salesforce objects appear in the Report Builder object selector.
+          Expand any object to configure which fields and child objects are accessible. Drill down into child objects to configure grandchildren, and so on.
         </p>
 
-        <div className="flex items-center gap-2 mb-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Search objects…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="pl-8 h-8 text-xs"
-            />
-          </div>
-          <Button variant="outline" size="sm" onClick={selectAll} className="text-xs h-8">All</Button>
-          <Button variant="outline" size="sm" onClick={deselectAll} className="text-xs h-8">None</Button>
+        <div className="relative mb-3">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Filter objects…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 h-8 text-xs"
+          />
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading objects…
+          <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading schema…
           </div>
         ) : (
-          <div className="border border-border rounded-lg divide-y divide-border max-h-[420px] overflow-y-auto">
-            {filtered.map(obj => {
-              const on = isAllowed(obj.name);
-              return (
-                <button
-                  key={obj.name}
-                  onClick={() => toggle(obj.name)}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-muted/30 transition-colors ${on ? '' : 'opacity-50'}`}
-                >
-                  <div>
-                    <span className="text-sm font-medium text-foreground">{obj.label}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">{obj.name}</span>
-                  </div>
-                  <div className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${on ? 'bg-primary border-primary' : 'border-border'}`}>
-                    {on && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <ObjectSchemaTree
+            allObjects={filteredObjects}
+            allowedMap={allowedMap}
+            onChange={setAllowedMap}
+          />
         )}
-
-        <div className="mt-4 flex justify-end">
-          <Button onClick={save} className="gap-2" disabled={loading}>
-            {saved ? <Check className="w-3.5 h-3.5" /> : null}
-            {saved ? 'Saved!' : 'Save Settings'}
-          </Button>
-        </div>
       </div>
 
-      {/* Report Builder Defaults */}
-      <div className="bg-card rounded-xl border border-border p-5 mt-6">
+      {/* ── Report Builder Defaults ── */}
+      <div className="bg-card rounded-xl border border-border p-5">
         <h2 className="text-sm font-semibold text-foreground mb-1">Report Builder — Defaults</h2>
         <p className="text-xs text-muted-foreground mb-4">
-          Set the default Salesforce object, sort order, and row limit used when opening the Report Builder.
+          Default Salesforce object, sort field, and row limit when opening the Report Builder.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
@@ -203,12 +179,13 @@ export default function SettingsPage() {
             </Select>
           </div>
         </div>
-        <div className="mt-4 flex justify-end">
-          <Button onClick={saveRbDefaults} className="gap-2">
-            {rbSaved ? <Check className="w-3.5 h-3.5" /> : null}
-            {rbSaved ? 'Saved!' : 'Save Defaults'}
-          </Button>
-        </div>
+      </div>
+
+      <div className="mt-6 flex justify-end">
+        <Button onClick={saveAll} disabled={saving || loading} className="gap-2">
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
+          {saved ? 'Saved!' : 'Save All Settings'}
+        </Button>
       </div>
     </div>
   );
