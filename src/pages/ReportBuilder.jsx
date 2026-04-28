@@ -41,17 +41,17 @@ const TABS = [
 const defaultFilterGroup = () => ({ type: 'group', logic: 'AND', conditions: [], id: 1 });
 
 // Recursively build WHERE clause from filter group tree
-function buildWhereFromGroup(group) {
+function buildWhereFromGroup(group, childRelationships = []) {
   if (!group.conditions || group.conditions.length === 0) return '';
   const parts = group.conditions.map(cond => {
     if (cond.type === 'group') {
-      const inner = buildWhereFromGroup(cond);
+      const inner = buildWhereFromGroup(cond, childRelationships);
       return inner ? `(${inner})` : null;
     }
     if (!cond.field || !cond.operator || cond.value === '') return null;
 
     // Child relationship filter: __child__rel__:RelName:FieldName
-    // Convert to SOQL semi-join: Id IN (SELECT <lookup_back_field> FROM RelName WHERE FieldName op val)
+    // Convert to SOQL semi-join: Id IN (SELECT <parent_lookup_field> FROM <childSObject> WHERE FieldName op val)
     if (cond.field.startsWith('__child__rel__:')) {
       const rest = cond.field.slice('__child__rel__:'.length);
       const colon = rest.indexOf(':');
@@ -60,7 +60,11 @@ function buildWhereFromGroup(group) {
       const val = cond.value;
       const noQuote = ['true', 'false', 'null'].includes(val) || /^-?\d+(\.\d+)?$/.test(val);
       const formatted = noQuote ? val : `'${val}'`;
-      return `Id IN (SELECT ${relName.replace(/s$/i, '')}__c FROM ${relName} WHERE ${childField} ${cond.operator} ${formatted})`;
+      // Look up the real child object name and its parent lookup field from childRelationships
+      const relMeta = childRelationships.find(r => r.relationshipName === relName);
+      const childObject = relMeta?.childSObject || relName;
+      const lookupField = relMeta?.field || 'Id';
+      return `Id IN (SELECT ${lookupField} FROM ${childObject} WHERE ${childField} ${cond.operator} ${formatted})`;
     }
 
     const val = cond.value;
@@ -183,7 +187,7 @@ export default function ReportBuilder() {
       const groupByCols = selectedFields.length > 0 ? selectedFields : ['Id'];
       cols = [...groupByCols.map(toSoqlToken), ...lookupCols, ...aggCols].join(', ');
       let q = `SELECT ${cols} FROM ${selectedObject}`;
-      const where = buildWhereFromGroup(filterGroup);
+      const where = buildWhereFromGroup(filterGroup, childRelationships);
       if (where) q += ` WHERE ${where}`;
       q += ` GROUP BY ${groupByCols.join(', ')}`;
       if (orderByField && selectedFields.includes(orderByField)) q += ` ORDER BY ${orderByField} DESC`;
@@ -212,7 +216,7 @@ export default function ReportBuilder() {
     const baseCols = [...nonChildFields, ...childSubqueries];
     cols = [...baseCols, ...lookupCols].join(', ');
     let q = `SELECT ${cols} FROM ${selectedObject}`;
-    const where = buildWhereFromGroup(filterGroup);
+    const where = buildWhereFromGroup(filterGroup, childRelationships);
     if (where) q += ` WHERE ${where}`;
     if (orderByField) q += ` ORDER BY ${orderByField} DESC`;
     q += ` LIMIT ${limitVal}`;
