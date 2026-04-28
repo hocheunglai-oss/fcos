@@ -202,10 +202,28 @@ export default function ReportBuilder() {
       return q;
     }
 
+    // Extract fields referenced in formula expressions and add them to the query
+    const formulaReferencedFields = [];
+    calcFields.filter(c => c.type === 'formula' && c.expr).forEach(cf => {
+      const matches = cf.expr.matchAll(/[A-Za-z_]+\(([A-Za-z0-9_]+)\)/g);
+      for (const m of matches) {
+        const field = m[1];
+        if (field && !formulaReferencedFields.includes(field)) {
+          formulaReferencedFields.push(field);
+        }
+      }
+    });
+
     // Group child fields by relationship so each relationship becomes one subquery
     const childFieldsByRel = {};
     const nonChildFields = [];
-    for (const f of (selectedFields.length > 0 ? selectedFields : ['Id', 'Name'])) {
+    const baseFields = selectedFields.length > 0 ? selectedFields : ['Id', 'Name'];
+    // Add formula-referenced fields that aren't already in selectedFields
+    const allFields = [...baseFields];
+    formulaReferencedFields.forEach(f => {
+      if (!allFields.includes(f)) allFields.push(f);
+    });
+    for (const f of allFields) {
       if (f.startsWith('__child__:')) {
         const rest = f.slice('__child__:'.length);
         const colonIdx = rest.indexOf(':');
