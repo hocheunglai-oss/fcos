@@ -3,12 +3,12 @@ import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Trash2, GitBranch, Loader2, ChevronRight, X } from 'lucide-react';
+import { Plus, Trash2, GitBranch, Loader2, ChevronDown } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
-// ── Operators ────────────────────────────────────────────────────────────────
+// ── Operators ─────────────────────────────────────────────────────────────────
 const OPERATORS_BY_TYPE = {
-  string:    ['=', '!=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'INCLUDES', 'EXCLUDES'],
+  string:    ['=', '!=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN'],
   picklist:  ['=', '!=', 'IN', 'NOT IN', 'INCLUDES', 'EXCLUDES'],
   boolean:   ['='],
   date:      ['=', '!=', '<', '>', '<=', '>='],
@@ -19,7 +19,6 @@ const OPERATORS_BY_TYPE = {
   id:        ['=', '!=', 'IN', 'NOT IN'],
   reference: ['=', '!=', 'IN', 'NOT IN'],
 };
-
 const DATE_LITERALS = [
   'TODAY','YESTERDAY','TOMORROW',
   'THIS_WEEK','LAST_WEEK','NEXT_WEEK',
@@ -28,389 +27,263 @@ const DATE_LITERALS = [
   'THIS_YEAR','LAST_YEAR','NEXT_YEAR',
   'LAST_N_DAYS:7','LAST_N_DAYS:30','LAST_N_DAYS:90',
 ];
-
 function getOperators(t) { return OPERATORS_BY_TYPE[t] || OPERATORS_BY_TYPE.string; }
 
-// ── Cache ────────────────────────────────────────────────────────────────────
-const metaCache = {}; // objectName -> { fields, parentRels, childRels }
-
+// ── Meta cache ────────────────────────────────────────────────────────────────
+const metaCache = {};
 async function fetchMeta(objectName) {
   if (metaCache[objectName]) return metaCache[objectName];
   const res = await base44.functions.invoke('salesforceObjectFields', { objectName });
-  const fields = (res.data?.fields || []).sort((a, b) => a.label.localeCompare(b.label));
+  const fields = (res.data?.fields || [])
+    .filter(f => f.filterable !== false)
+    .sort((a, b) => a.label.localeCompare(b.label));
   const parentRels = fields
     .filter(f => f.type === 'reference' && f.relationshipName)
     .map(f => ({ relationshipName: f.relationshipName, objectName: f.referenceTo?.[0] || f.relationshipName, label: f.label }))
     .sort((a, b) => a.label.localeCompare(b.label));
   const childRels = (res.data?.childRelationships || [])
     .sort((a, b) => a.relationshipName.localeCompare(b.relationshipName));
-  const meta = { fields, parentRels, childRels };
-  metaCache[objectName] = meta;
-  return meta;
+  metaCache[objectName] = { fields, parentRels, childRels };
+  return metaCache[objectName];
 }
 
-// ── Searchable dropdown ──────────────────────────────────────────────────────
-function SearchableDropdown({ value, placeholder, options, onSelect, loading, className = '' }) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const [dropdownStyle, setDropdownStyle] = useState({});
-  const triggerRef = useRef(null);
-  const dropdownRef = useRef(null);
+// ── Portal dropdown ───────────────────────────────────────────────────────────
+function PortalDropdown({ triggerRef, open, onClose, children }) {
+  const [style, setStyle] = useState({});
+  const ref = useRef(null);
 
-  // Position dropdown relative to trigger using fixed positioning
-  const updatePosition = () => {
-    if (!triggerRef.current) return;
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    const dropdownHeight = 240; // approx max-height
-    const openUpward = spaceBelow < dropdownHeight && rect.top > dropdownHeight;
-    setDropdownStyle({
+    setStyle({
       position: 'fixed',
       left: rect.left,
-      width: Math.max(rect.width, 256),
+      width: Math.max(rect.width, 260),
       zIndex: 9999,
-      ...(openUpward
+      ...(spaceBelow < 260 && rect.top > 260
         ? { bottom: window.innerHeight - rect.top + 4 }
         : { top: rect.bottom + 4 }),
     });
-  };
-
-  const handleOpen = () => {
-    updatePosition();
-    setOpen(v => !v);
-    setSearch('');
-  };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
-      if (
-        triggerRef.current && !triggerRef.current.contains(e.target) &&
-        dropdownRef.current && !dropdownRef.current.contains(e.target)
-      ) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target) &&
+          triggerRef.current && !triggerRef.current.contains(e.target)) {
+        onClose();
+      }
     };
     document.addEventListener('mousedown', handler);
-    window.addEventListener('scroll', () => setOpen(false), true);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      window.removeEventListener('scroll', () => setOpen(false), true);
-    };
-  }, [open]);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open, onClose]);
 
-  const filtered = options.filter(o =>
-    !o.isHeader && o.label.toLowerCase().includes(search.toLowerCase())
+  if (!open) return null;
+  return createPortal(
+    <div ref={ref} style={style} className="bg-popover border border-border rounded-md shadow-xl">
+      {children}
+    </div>,
+    document.body
   );
-  // Re-insert headers that have at least one matching child
-  const visibleOptions = search
-    ? filtered
-    : options;
+}
 
-  const selected = options.find(o => o.value === value);
+// ── Searchable select ─────────────────────────────────────────────────────────
+function SearchableSelect({ value, placeholder, options, onChange, loading, className = '' }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const triggerRef = useRef(null);
+
+  const selected = options.find(o => o.value === value && !o.isHeader);
+  const filtered = search
+    ? options.filter(o => !o.isHeader && o.label.toLowerCase().includes(search.toLowerCase()))
+    : options;
 
   return (
     <div className={className}>
       <button
         ref={triggerRef}
         type="button"
-        onClick={handleOpen}
-        className="flex h-8 w-full items-center justify-between rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-sm text-left hover:bg-muted/30 transition-colors"
+        onClick={() => { setOpen(v => !v); setSearch(''); }}
+        className="flex h-8 w-full items-center justify-between gap-1 rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-sm hover:bg-muted/30 transition-colors"
       >
         <span className={`truncate ${selected ? 'text-foreground' : 'text-muted-foreground'}`}>
           {loading ? <Loader2 className="w-3 h-3 animate-spin inline" /> : (selected?.label || placeholder)}
         </span>
-        <ChevronRight className={`w-3 h-3 text-muted-foreground shrink-0 ml-1 transition-transform ${open ? 'rotate-90' : ''}`} />
+        <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
       </button>
-
-      {open && createPortal(
-        <div ref={dropdownRef} style={dropdownStyle} className="bg-popover border border-border rounded-md shadow-xl">
-          <div className="p-1.5 border-b border-border">
-            <input
-              autoFocus
-              className="w-full text-xs px-2 py-1 rounded bg-muted/40 outline-none placeholder:text-muted-foreground"
-              placeholder="Search…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="max-h-60 overflow-y-auto py-1">
-            {visibleOptions.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>
-            ) : visibleOptions.map((o, i) => (
-              <button
-                key={o.value + i}
-                type="button"
-                disabled={o.isHeader}
-                onClick={() => { if (!o.isHeader) { onSelect(o.value); setOpen(false); setSearch(''); } }}
-                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                  o.isHeader
-                    ? 'text-[10px] font-bold text-muted-foreground uppercase tracking-wide cursor-default bg-transparent'
-                    : o.value === value
-                      ? 'bg-accent/60 font-semibold hover:bg-accent'
-                      : 'hover:bg-accent'
-                }`}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>,
-        document.body
-      )}
-    </div>
-  );
-}
-
-// ── Object path picker ───────────────────────────────────────────────────────
-// Renders a chain: [Object level 0] > [Object level 1] > ... > [Field]
-// Each level can optionally pick a sub-relationship to drill into.
-// path = array of { relKey, relLabel, objectName } — the traversal chain
-// Returns a SOQL field string like "Account__r.Contact__r.Name"
-// or for child: "__child__rel__:ChildRel:FieldName"
-
-function ObjectPathPicker({ rootFields, rootParentRels, rootChildRels, value, onChange }) {
-  // Parse stored value back into path + fieldName
-  const parseValue = (v) => {
-    if (!v) return { path: [], fieldName: '' };
-
-    // child: __child__rel__:RelName:FieldName
-    if (v.startsWith('__child__rel__:')) {
-      const rest = v.slice('__child__rel__:'.length);
-      const colon = rest.indexOf(':');
-      const relName = rest.slice(0, colon);
-      const fn = rest.slice(colon + 1);
-      return {
-        path: [{ relKey: 'child:' + relName, relLabel: relName, objectName: null }],
-        fieldName: fn,
-      };
-    }
-    // parent traversal: Rel1.Rel2.FieldName -> multiple dots
-    if (v.includes('.')) {
-      const parts = v.split('.');
-      const fieldName = parts[parts.length - 1];
-      const rels = parts.slice(0, -1);
-      const path = rels.map(r => ({ relKey: 'parent:' + r, relLabel: r, objectName: null }));
-      return { path, fieldName };
-    }
-    return { path: [], fieldName: v };
-  };
-
-  const { path: initPath, fieldName: initField } = parseValue(value);
-
-  // levels[i] = { meta: {fields, parentRels, childRels} | null, loading: bool }
-  // level 0 = root object, level 1+ = sub-objects
-  const [levels, setLevels] = useState([{ meta: { fields: rootFields, parentRels: rootParentRels, childRels: rootChildRels }, loading: false }]);
-  // selectedRel[i] = the relKey chosen at level i (to drill into level i+1)
-  const [selectedRels, setSelectedRels] = useState(initPath.map(p => p.relKey));
-  const [selectedField, setSelectedField] = useState(initField);
-
-  // Load meta for a sub-object at a given depth
-  const loadLevel = async (depth, relKey) => {
-    // Determine objectName from relKey and the parent level's meta
-    const parentMeta = levels[depth]?.meta;
-    let objectName = null;
-
-    if (relKey.startsWith('parent:')) {
-      const relName = relKey.slice('parent:'.length);
-      const found = parentMeta?.parentRels?.find(r => r.relationshipName === relName);
-      objectName = found?.objectName || relName;
-    } else if (relKey.startsWith('child:')) {
-      const relName = relKey.slice('child:'.length);
-      const found = parentMeta?.childRels?.find(r => r.relationshipName === relName);
-      objectName = found?.childSObject || relName;
-    }
-
-    if (!objectName) return;
-
-    // Mark loading
-    setLevels(prev => {
-      const next = prev.slice(0, depth + 1);
-      next.push({ meta: null, loading: true });
-      return next;
-    });
-
-    const meta = await fetchMeta(objectName);
-
-    setLevels(prev => {
-      const next = prev.slice(0, depth + 1);
-      next.push({ meta, loading: false });
-      return next;
-    });
-  };
-
-  // When root meta changes (object switch), reset — but skip the initial mount
-  const prevRootFieldsRef = useRef(rootFields);
-  useEffect(() => {
-    if (prevRootFieldsRef.current === rootFields) return; // same reference, no reset
-    prevRootFieldsRef.current = rootFields;
-    setLevels([{ meta: { fields: rootFields, parentRels: rootParentRels, childRels: rootChildRels }, loading: false }]);
-    setSelectedRels([]);
-    setSelectedField('');
-  }, [rootFields]);
-
-  const handleRelSelect = async (depth, relKey) => {
-    // Trim path to current depth
-    const newRels = [...selectedRels.slice(0, depth), relKey];
-    setSelectedRels(newRels);
-    setSelectedField('');
-    // Remove deeper levels
-    setLevels(prev => prev.slice(0, depth + 1));
-    // Load next level
-    await loadLevel(depth, relKey);
-    onChange(''); // clear field until user picks one
-  };
-
-  const handleFieldSelect = (fieldName) => {
-    setSelectedField(fieldName);
-    // Build SOQL path
-    let soqlField;
-    if (selectedRels.length === 0) {
-      soqlField = fieldName;
-    } else {
-      const lastRel = selectedRels[selectedRels.length - 1];
-      if (lastRel.startsWith('child:')) {
-        const relName = lastRel.slice('child:'.length);
-        soqlField = `__child__rel__:${relName}:${fieldName}`;
-      } else {
-        // Build dot-path: Rel1__r.Rel2__r.FieldName
-        const relPath = selectedRels.map(rk => rk.slice('parent:'.length)).join('.');
-        soqlField = `${relPath}.${fieldName}`;
-      }
-    }
-    onChange(soqlField);
-  };
-
-  // For each depth, build the relationship options for that level
-  const buildRelOptions = (meta) => {
-    if (!meta) return [];
-    const opts = [];
-    if (meta.parentRels?.length) {
-      opts.push({ value: '__header_parent__', label: '↗ Parent Lookups', isHeader: true });
-      meta.parentRels.forEach(r => opts.push({
-        value: 'parent:' + r.relationshipName,
-        label: `${r.label} (${r.objectName})`,
-      }));
-    }
-    if (meta.childRels?.length) {
-      opts.push({ value: '__header_child__', label: '↙ Child Relationships', isHeader: true });
-      meta.childRels.forEach(r => opts.push({
-        value: 'child:' + r.relationshipName,
-        label: `${r.relationshipName} (${r.childSObject})`,
-      }));
-    }
-    return opts;
-  };
-
-  const buildFieldOptions = (meta) => {
-    if (!meta) return [];
-    return (meta.fields || []).map(f => ({ value: f.name, label: f.label }));
-  };
-
-  // Determine which level's fields to show for the field picker
-  const activeLevelIdx = selectedRels.length; // 0 = root, 1 = first sub, etc.
-  const activeMeta = levels[activeLevelIdx]?.meta;
-  const activeLoading = levels[activeLevelIdx]?.loading || false;
-  const fieldOptions = buildFieldOptions(activeMeta);
-
-  return (
-    <div className="flex items-center gap-1 flex-wrap">
-      {/* Render each depth level's relationship selector */}
-      {levels.map((level, depth) => {
-        const relOpts = buildRelOptions(level.meta);
-        if (relOpts.length === 0 && depth > 0) return null;
-        const currentRel = selectedRels[depth];
-
-        return (
-          <div key={depth} className="flex items-center gap-1">
-            {depth > 0 && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-            <SearchableDropdown
-              value={currentRel || ''}
-              placeholder={depth === 0 ? 'This Object' : 'Drill into…'}
-              options={[
-                ...(depth === 0 ? [{ value: '', label: 'This Object' }] : []),
-                ...relOpts,
-              ]}
-              onSelect={(v) => {
-                if (v === '') {
-                  // Reset to this level
-                  const newRels = selectedRels.slice(0, depth);
-                  setSelectedRels(newRels);
-                  setSelectedField('');
-                  setLevels(prev => prev.slice(0, depth + 1));
-                  onChange('');
-                } else {
-                  handleRelSelect(depth, v);
-                }
-              }}
-              loading={level.loading}
-              className="w-44"
-            />
-          </div>
-        );
-      })}
-
-      {/* Field picker — shown at active level */}
-      {activeLevelIdx <= levels.length && (
-        <div className="flex items-center gap-1">
-          <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
-          <SearchableDropdown
-            value={selectedField}
-            placeholder="Field…"
-            options={fieldOptions}
-            onSelect={handleFieldSelect}
-            loading={activeLoading}
-            className="w-44"
+      <PortalDropdown triggerRef={triggerRef} open={open} onClose={() => setOpen(false)}>
+        <div className="p-1.5 border-b border-border">
+          <input
+            autoFocus
+            className="w-full text-xs px-2 py-1 rounded bg-muted/40 outline-none placeholder:text-muted-foreground"
+            placeholder="Search…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
           />
         </div>
-      )}
+        <div className="max-h-60 overflow-y-auto py-1">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>
+          ) : filtered.map((o, i) => (
+            <button
+              key={o.value + i}
+              type="button"
+              disabled={!!o.isHeader}
+              onClick={() => { if (!o.isHeader) { onChange(o.value); setOpen(false); setSearch(''); } }}
+              className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                o.isHeader
+                  ? 'text-[10px] font-bold text-muted-foreground uppercase tracking-wide cursor-default'
+                  : o.value === value
+                    ? 'bg-accent/70 font-semibold hover:bg-accent'
+                    : 'hover:bg-accent'
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </PortalDropdown>
     </div>
   );
 }
 
-// ── FilterRow ────────────────────────────────────────────────────────────────
+// ── FilterRow ─────────────────────────────────────────────────────────────────
+// Fully controlled — all state lives in `condition` prop, no internal state
 function FilterRow({ condition, fields, relatedObjects, childRelationships, onChange, onRemove }) {
-  // Determine field type from the stored soql field
-  const getFieldType = () => {
-    const f = condition.field;
-    if (!f || f.startsWith('__child__rel__:') || f.includes('.')) return 'string';
-    const found = fields.find(x => x.name === f);
-    return found?.type || 'string';
+  // ── Parse condition.field into parts ──────────────────────────────────────
+  // condition.field formats:
+  //   "FieldName"                      → plain field on this object
+  //   "Rel__r.FieldName"               → parent lookup (1 level)
+  //   "__child__rel__:RelName:Field"   → child relationship filter
+  const parseField = (f) => {
+    if (!f) return { relType: 'this', relName: '', fieldName: '' };
+    if (f.startsWith('__child__rel__:')) {
+      const rest = f.slice('__child__rel__:'.length);
+      const colon = rest.indexOf(':');
+      return { relType: 'child', relName: rest.slice(0, colon), fieldName: rest.slice(colon + 1) };
+    }
+    if (f.includes('.')) {
+      const dot = f.indexOf('.');
+      return { relType: 'parent', relName: f.slice(0, dot), fieldName: f.slice(dot + 1) };
+    }
+    return { relType: 'this', relName: '', fieldName: f };
   };
 
-  const fieldType = getFieldType();
+  const { relType, relName, fieldName } = parseField(condition.field);
+
+  // ── Related object fields (loaded on demand, cached) ─────────────────────
+  const [relFields, setRelFields] = useState([]);
+  const [loadingRel, setLoadingRel] = useState(false);
+
+  useEffect(() => {
+    if (relType === 'this') { setRelFields([]); return; }
+    let objectName = null;
+    if (relType === 'parent') {
+      const ro = (relatedObjects || []).find(r => r.relationshipName === relName);
+      objectName = ro?.objectName || relName;
+    } else if (relType === 'child') {
+      const cr = (childRelationships || []).find(r => r.relationshipName === relName);
+      objectName = cr?.childSObject || relName;
+    }
+    if (!objectName) return;
+    if (metaCache[objectName]) { setRelFields(metaCache[objectName].fields); return; }
+    setLoadingRel(true);
+    fetchMeta(objectName).then(meta => {
+      setRelFields(meta.fields);
+      setLoadingRel(false);
+    });
+  }, [relType, relName]);
+
+  // ── Object (relationship) selector options ────────────────────────────────
+  const relOptions = useMemo(() => {
+    const opts = [{ value: '__this__', label: 'This Object' }];
+    const parents = [...(relatedObjects || [])].sort((a, b) => a.label.localeCompare(b.label));
+    const children = [...(childRelationships || [])].sort((a, b) => a.relationshipName.localeCompare(b.relationshipName));
+    if (parents.length) {
+      opts.push({ value: '__h_parent__', label: '↗ Parent Lookups', isHeader: true });
+      parents.forEach(r => opts.push({ value: 'parent:' + r.relationshipName, label: `${r.label} (${r.objectName})` }));
+    }
+    if (children.length) {
+      opts.push({ value: '__h_child__', label: '↙ Child Relationships', isHeader: true });
+      children.forEach(r => opts.push({ value: 'child:' + r.relationshipName, label: `${r.relationshipName} (${r.childSObject})` }));
+    }
+    return opts;
+  }, [relatedObjects, childRelationships]);
+
+  const relValue = relType === 'this' ? '__this__'
+    : relType === 'parent' ? 'parent:' + relName
+    : 'child:' + relName;
+
+  // ── Field options (for current level) ────────────────────────────────────
+  const activeFields = relType === 'this'
+    ? [...fields].sort((a, b) => a.label.localeCompare(b.label))
+    : relFields;
+  const fieldOptions = activeFields.map(f => ({ value: f.name, label: f.label }));
+
+  // ── Field type for operator/value rendering ───────────────────────────────
+  const activeField = activeFields.find(f => f.name === fieldName);
+  const fieldType = activeField?.type || 'string';
   const operators = getOperators(fieldType);
   const isDate = fieldType === 'date' || fieldType === 'datetime';
   const isBool = fieldType === 'boolean';
 
-  // Root meta for ObjectPathPicker — memoized so array refs stay stable across re-renders
-  const rootMeta = useMemo(() => ({
-    fields: [...fields].sort((a, b) => a.label.localeCompare(b.label)),
-    parentRels: [...(relatedObjects || [])].sort((a, b) => a.label.localeCompare(b.label)),
-    childRels: [...(childRelationships || [])].sort((a, b) => a.relationshipName.localeCompare(b.relationshipName)),
-  }), [fields, relatedObjects, childRelationships]);
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const handleRelChange = (v) => {
+    // Reset everything when object changes
+    onChange({ ...condition, field: '', operator: '=', value: '' });
+  };
+
+  // We need the raw relKey to build the SOQL path when field is chosen
+  const pendingRelRef = useRef(relValue);
+  const handleRelSelect = (v) => {
+    pendingRelRef.current = v;
+    onChange({ ...condition, field: '', operator: '=', value: '' });
+  };
+
+  const handleFieldSelect = (fn) => {
+    const rv = pendingRelRef.current !== relValue ? pendingRelRef.current : relValue;
+    let soqlField;
+    if (rv === '__this__') {
+      soqlField = fn;
+    } else if (rv.startsWith('parent:')) {
+      const rn = rv.slice('parent:'.length);
+      soqlField = `${rn}.${fn}`;
+    } else if (rv.startsWith('child:')) {
+      const rn = rv.slice('child:'.length);
+      soqlField = `__child__rel__:${rn}:${fn}`;
+    } else {
+      soqlField = fn;
+    }
+    // Only reset value if field actually changed
+    const valueToKeep = soqlField !== condition.field ? '' : condition.value;
+    const opToKeep = soqlField !== condition.field ? '=' : condition.operator;
+    onChange({ ...condition, field: soqlField, operator: opToKeep, value: valueToKeep });
+  };
 
   return (
-    <div className="flex items-start gap-2 flex-wrap">
-      {/* Object + field path picker */}
-      <ObjectPathPicker
-        rootFields={rootMeta.fields}
-        rootParentRels={rootMeta.parentRels}
-        rootChildRels={rootMeta.childRels}
-        value={condition.field}
-        onChange={(soqlField) => {
-          // Only reset value/operator when the field actually changes to a new field
-          if (soqlField === condition.field) return;
-          const fieldChanged = soqlField !== '' && condition.field !== '' && soqlField !== condition.field;
-          onChange({
-            ...condition,
-            field: soqlField,
-            operator: fieldChanged ? '=' : condition.operator,
-            value: fieldChanged ? '' : condition.value,
-          });
-        }}
+    <div className="flex items-center gap-2 flex-wrap py-1">
+      {/* Object / relationship picker */}
+      <SearchableSelect
+        value={relValue}
+        placeholder="Object…"
+        options={relOptions}
+        onChange={handleRelSelect}
+        className="w-44"
+      />
+
+      {/* Field picker */}
+      <SearchableSelect
+        value={fieldName}
+        placeholder="Field…"
+        options={fieldOptions}
+        onChange={handleFieldSelect}
+        loading={loadingRel}
+        className="w-44"
       />
 
       {/* Operator */}
-      <Select value={condition.operator} onValueChange={v => onChange({ ...condition, operator: v })}>
+      <Select value={condition.operator || '='} onValueChange={v => onChange({ ...condition, operator: v })}>
         <SelectTrigger className="w-28 h-8 text-xs">
           <SelectValue />
         </SelectTrigger>
@@ -423,46 +296,51 @@ function FilterRow({ condition, fields, relatedObjects, childRelationships, onCh
 
       {/* Value */}
       {isBool ? (
-        <Select value={condition.value} onValueChange={v => onChange({ ...condition, value: v })}>
-          <SelectTrigger className="w-24 h-8 text-xs"><SelectValue placeholder="Value" /></SelectTrigger>
+        <Select value={condition.value || ''} onValueChange={v => onChange({ ...condition, value: v })}>
+          <SelectTrigger className="w-24 h-8 text-xs"><SelectValue placeholder="Value…" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="true" className="text-xs">true</SelectItem>
             <SelectItem value="false" className="text-xs">false</SelectItem>
           </SelectContent>
         </Select>
       ) : isDate ? (
-        <div className="flex gap-1">
-          <Select value={DATE_LITERALS.includes(condition.value) ? condition.value : '__custom'} onValueChange={v => {
-            if (v !== '__custom') onChange({ ...condition, value: v });
-          }}>
+        <div className="flex gap-1.5">
+          <Select
+            value={DATE_LITERALS.includes(condition.value) ? condition.value : '__custom__'}
+            onValueChange={v => { if (v !== '__custom__') onChange({ ...condition, value: v }); }}
+          >
             <SelectTrigger className="w-36 h-8 text-xs"><SelectValue placeholder="Date literal…" /></SelectTrigger>
             <SelectContent className="max-h-52">
               {DATE_LITERALS.map(l => <SelectItem key={l} value={l} className="text-xs font-mono">{l}</SelectItem>)}
-              <SelectItem value="__custom" className="text-xs">Custom date…</SelectItem>
+              <SelectItem value="__custom__" className="text-xs">Custom…</SelectItem>
             </SelectContent>
           </Select>
           {!DATE_LITERALS.includes(condition.value) && (
-            <Input className="w-32 h-8 text-xs font-mono" placeholder="YYYY-MM-DD"
-              value={condition.value} onChange={e => onChange({ ...condition, value: e.target.value })} />
+            <Input
+              className="w-32 h-8 text-xs font-mono"
+              placeholder="YYYY-MM-DD"
+              value={condition.value || ''}
+              onChange={e => onChange({ ...condition, value: e.target.value })}
+            />
           )}
         </div>
       ) : (
         <Input
-          className="w-36 h-8 text-xs font-mono"
+          className="w-40 h-8 text-xs font-mono"
           placeholder={condition.operator === 'IN' || condition.operator === 'NOT IN' ? "'A','B'" : 'value'}
-          value={condition.value}
+          value={condition.value || ''}
           onChange={e => onChange({ ...condition, value: e.target.value })}
         />
       )}
 
-      <button onClick={onRemove} className="text-muted-foreground hover:text-destructive p-1 shrink-0 mt-0.5">
+      <button onClick={onRemove} className="text-muted-foreground hover:text-destructive p-1 shrink-0">
         <Trash2 className="w-3.5 h-3.5" />
       </button>
     </div>
   );
 }
 
-// ── FilterGroup (recursive) ──────────────────────────────────────────────────
+// ── FilterGroup (recursive) ───────────────────────────────────────────────────
 export default function FilterGroup({ group, fields, relatedObjects, childRelationships, onChange, depth = 0 }) {
   const addCondition = () => {
     onChange({
@@ -495,10 +373,11 @@ export default function FilterGroup({ group, fields, relatedObjects, childRelati
   };
 
   const borderColors = ['border-primary/30', 'border-amber-400/40', 'border-emerald-400/40', 'border-violet-400/40'];
-  const bgColors = ['bg-accent/20', 'bg-amber-50/50', 'bg-emerald-50/50', 'bg-violet-50/50'];
+  const bgColors    = ['bg-accent/20',       'bg-amber-50/50',       'bg-emerald-50/50',      'bg-violet-50/50'];
 
   return (
-    <div className={`rounded-lg border ${borderColors[depth % 4]} ${bgColors[depth % 4]} p-3 space-y-2`}>
+    <div className={`rounded-lg border ${borderColors[depth % 4]} ${bgColors[depth % 4]} p-3 space-y-1`}>
+      {/* Logic toggle */}
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
           {depth === 0 ? 'Where' : 'Group'}
@@ -520,10 +399,11 @@ export default function FilterGroup({ group, fields, relatedObjects, childRelati
         )}
       </div>
 
+      {/* Conditions */}
       {group.conditions.map((cond, idx) => (
         <div key={cond.id || idx}>
           {idx > 0 && (
-            <div className="text-[10px] font-bold text-muted-foreground/60 uppercase pl-1 my-1">{group.logic}</div>
+            <div className="text-[10px] font-bold text-muted-foreground/60 uppercase pl-1 my-0.5">{group.logic}</div>
           )}
           {cond.type === 'group' ? (
             <div className="relative">
@@ -553,6 +433,7 @@ export default function FilterGroup({ group, fields, relatedObjects, childRelati
         </div>
       ))}
 
+      {/* Add buttons */}
       <div className="flex gap-2 pt-1">
         <Button size="sm" variant="ghost" onClick={addCondition} className="h-7 text-xs gap-1 text-primary">
           <Plus className="w-3 h-3" /> Add Condition
