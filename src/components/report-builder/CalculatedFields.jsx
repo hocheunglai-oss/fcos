@@ -177,19 +177,46 @@ function FieldPicker({ value, onChange, mainFields, relatedObjects, allowAllType
 }
 
 // ── Formula autocomplete input ────────────────────────────────────────────────
-function FormulaInput({ value, onChange, fields }) {
+function FormulaInput({ value, onChange, fields, relatedObjects = [] }) {
   const [suggestions, setSuggestions] = useState([]);
   const [tokenStart, setTokenStart] = useState(0);
   const [dropStyle, setDropStyle] = useState({});
+  const [relFieldsCache, setRelFieldsCache] = useState({});
   const inputRef = useRef(null);
   const dropRef = useRef(null);
 
-  const fieldNames = fields.map(f => f.name);
-  const fieldByName = Object.fromEntries(fields.map(f => [f.name, f]));
+  // Pre-fetch related fields eagerly so autocomplete is instant
+  useEffect(() => {
+    relatedObjects.forEach(r => {
+      if (!r.objectName || relFieldsCache[r.objectName]) return;
+      fetchFields(r.objectName).then(f => {
+        setRelFieldsCache(prev => ({ ...prev, [r.objectName]: f }));
+      }).catch(() => {});
+    });
+  }, [relatedObjects]);
+
+  // Build a flat list of all tokens: fn names, main fields, rel.field paths
+  const buildAllTokens = () => {
+    const tokens = [];
+    // Main fields
+    fields.forEach(f => {
+      tokens.push({ value: f.name, label: `${f.name} — ${f.label}`, isField: true, sub: null });
+    });
+    // Related fields as Rel__r.Field__c
+    relatedObjects.forEach(r => {
+      const rFields = relFieldsCache[r.objectName] || [];
+      rFields.forEach(f => {
+        const soql = `${r.relationshipName}.${f.name}`;
+        tokens.push({ value: soql, label: `${soql} — ${r.label} › ${f.label}`, isField: true, sub: r.label });
+      });
+    });
+    return tokens;
+  };
 
   const getActiveToken = (text, cursor) => {
+    // Walk back from cursor, allow dots for relationship paths
     let start = cursor;
-    while (start > 0 && /[\w]/.test(text[start - 1])) start--;
+    while (start > 0 && /[\w.]/.test(text[start - 1])) start--;
     const token = text.slice(start, cursor);
     const before = text.slice(0, start);
     const insideFn = !!before.match(/([A-Z_]+)\($/i);
@@ -201,20 +228,29 @@ function FormulaInput({ value, onChange, fields }) {
     setTokenStart(start);
     if (!token) { setSuggestions([]); return; }
     const q = token.toUpperCase();
+    const allTokens = buildAllTokens();
+
     if (insideFn) {
-      setSuggestions(fieldNames.filter(n => n.toUpperCase().includes(q)).slice(0, 12)
-        .map(n => ({ value: n, label: `${n}  ${fieldByName[n]?.label ? '— ' + fieldByName[n].label : ''}`, isField: true })));
+      // Inside fn(...) — suggest fields + rel.fields
+      const matches = allTokens
+        .filter(t => t.value.toUpperCase().includes(q))
+        .slice(0, 14);
+      setSuggestions(matches);
     } else {
-      const fnMatches = AGGREGATE_FNS.filter(fn => fn.startsWith(q)).map(fn => ({ value: fn + '(', label: fn + '(…)', isFn: true }));
-      const fieldMatches = fieldNames.filter(n => n.toUpperCase().startsWith(q)).slice(0, 8).map(n => ({ value: n, label: n, isField: true }));
-      setSuggestions([...fnMatches, ...fieldMatches].slice(0, 12));
+      // Outside fn — suggest function names first, then fields
+      const fnMatches = AGGREGATE_FNS.filter(fn => fn.startsWith(q))
+        .map(fn => ({ value: fn + '(', label: fn + '(…)', isFn: true }));
+      const fieldMatches = allTokens
+        .filter(t => t.value.toUpperCase().startsWith(q))
+        .slice(0, 10);
+      setSuggestions([...fnMatches, ...fieldMatches].slice(0, 14));
     }
   };
 
   const positionDropdown = () => {
     if (!inputRef.current) return;
     const rect = inputRef.current.getBoundingClientRect();
-    setDropStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, minWidth: rect.width, zIndex: 9999 });
+    setDropStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, minWidth: Math.max(rect.width, 320), zIndex: 9999 });
   };
 
   const handleChange = (e) => {
@@ -256,7 +292,7 @@ function FormulaInput({ value, onChange, fields }) {
       <input
         ref={inputRef}
         className="flex h-8 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        placeholder="e.g. sum(Total_Invoice_Amount__c) - sum(Costs_Total__c)"
+        placeholder="e.g. sum(Total_Invoice__c) - sum(Account__r.Cost__c)"
         value={value}
         onChange={handleChange}
         onKeyDown={e => { if (e.key === 'Escape') setSuggestions([]); }}
@@ -265,13 +301,13 @@ function FormulaInput({ value, onChange, fields }) {
         spellCheck={false}
       />
       {suggestions.length > 0 && createPortal(
-        <div ref={dropRef} style={dropStyle} className="bg-popover border border-border rounded-md shadow-xl overflow-hidden">
+        <div ref={dropRef} style={dropStyle} className="bg-popover border border-border rounded-md shadow-xl overflow-hidden max-h-60 overflow-y-auto">
           {suggestions.map((s, i) => (
             <button key={i} type="button" onMouseDown={e => { e.preventDefault(); applySuggestion(s); }}
               className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-accent transition-colors flex items-center gap-2">
-              {s.isFn && <span className="text-[9px] px-1 rounded bg-primary/10 text-primary font-bold uppercase">fn</span>}
-              {s.isField && <span className="text-[9px] px-1 rounded bg-muted text-muted-foreground font-bold uppercase">field</span>}
-              {s.label}
+              {s.isFn && <span className="text-[9px] px-1 rounded bg-primary/10 text-primary font-bold uppercase shrink-0">fn</span>}
+              {s.isField && <span className={`text-[9px] px-1 rounded font-bold uppercase shrink-0 ${s.sub ? 'bg-blue-100 text-blue-600' : 'bg-muted text-muted-foreground'}`}>{s.sub || 'field'}</span>}
+              <span className="truncate">{s.label}</span>
             </button>
           ))}
         </div>,
@@ -335,6 +371,7 @@ export default function CalculatedFields({ calcFields, onChange, fields, related
                   value={cf.expr}
                   onChange={v => update(cf.id, { expr: v })}
                   fields={fields}
+                  relatedObjects={relatedObjects}
                 />
               </>
             )}
