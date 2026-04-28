@@ -231,19 +231,33 @@ export default function ReportBuilder() {
   }, [selectedFields, lookups, calcFields, filterGroup, selectedObject, orderByField, limitVal]);
 
   const evaluateFormulas = (records) => {
+    // Build a map: "FN(Field__c)" → aggregate label (for resolving aggregate refs in formulas)
+    const aggLabelMap = {};
+    calcFields.filter(c => c.type === 'aggregate' && c.fn && c.field && c.label).forEach(c => {
+      // Key: "SUM(Field__c)" (case-insensitive match)
+      aggLabelMap[`${c.fn.toUpperCase()}(${c.field})`] = c.label;
+    });
+
     return records.map(row => {
       const enriched = { ...row };
       calcFields.filter(c => c.type === 'formula').forEach(cf => {
         if (!cf.expr || !cf.label) return;
         try {
-          // Replace field references like SUM(Field__c) or sum(Field__c) with actual field values
           let expr = cf.expr;
-          const fieldRegex = /[A-Za-z_]+\(([A-Za-z0-9_]+)\)/gi;
-          expr = expr.replace(fieldRegex, (match, field) => {
+          // Replace FN(Field__c) references — first try to resolve via aggregate label map,
+          // then fall back to reading the field directly from the row
+          const fieldRegex = /([A-Za-z_]+)\(([A-Za-z0-9_.]+)\)/gi;
+          expr = expr.replace(fieldRegex, (match, fn, field) => {
+            const aggKey = `${fn.toUpperCase()}(${field})`;
+            if (aggLabelMap[aggKey] !== undefined) {
+              // This fn(field) corresponds to a named aggregate column
+              const val = row[aggLabelMap[aggKey]];
+              return val != null ? String(val) : '0';
+            }
+            // Plain field reference wrapped in a pseudo-fn — just use the field value
             const val = row[field];
             return val != null ? String(val) : '0';
           });
-          // Evaluate the expression
           enriched[cf.label] = Function(`return ${expr}`)();
         } catch (e) {
           enriched[cf.label] = null;
