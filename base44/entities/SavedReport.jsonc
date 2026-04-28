@@ -29,6 +29,20 @@
         "type": "object"
       }
     },
+    "calc_fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Aggregate and formula calculated fields"
+    },
+    "lookups": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Cross-object lookup columns"
+    },
     "category": {
       "type": "string",
       "enum": [
@@ -65,5 +79,44 @@
     "name",
     "object_name",
     "soql"
-  ]
+  ],
+  "rls": {
+    "create": true,
+    "read": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
 }

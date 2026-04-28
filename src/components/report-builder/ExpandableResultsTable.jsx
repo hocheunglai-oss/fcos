@@ -33,7 +33,7 @@ function fmtVal(key, val) {
     const n = Number(val);
     if (!isNaN(n)) return `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
   }
-  if (typeof val === 'number') return val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (typeof val === 'number') return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const s = String(val);
   return s.length > 60 ? s.slice(0, 58) + '…' : s;
 }
@@ -130,11 +130,14 @@ export default function ExpandableResultsTable({ records }) {
                 </button>
               </th>
             )}
-            {mainCols.map(c => (
-              <th key={c} className="py-2.5 px-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
-                {colLabel(c)}
-              </th>
-            ))}
+            {mainCols.map(c => {
+              const isNum = typeof records[0]?.[c] === 'number';
+              return (
+                <th key={c} className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${isNum ? 'text-right' : 'text-left'}`}>
+                  {colLabel(c)}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -156,11 +159,15 @@ export default function ExpandableResultsTable({ records }) {
                         : <ChevronRight className="w-3.5 h-3.5" />}
                     </td>
                   )}
-                  {mainCols.map(c => (
-                    <td key={c} className="py-2.5 px-3 text-foreground whitespace-nowrap">
-                      {fmtVal(c, row[c])}
-                    </td>
-                  ))}
+                  {mainCols.map(c => {
+                    const v = row[c];
+                    const isNum = typeof v === 'number';
+                    return (
+                      <td key={c} className={`py-2.5 px-3 text-foreground whitespace-nowrap ${isNum ? 'text-right font-mono' : ''}`}>
+                        {fmtVal(c, v)}
+                      </td>
+                    );
+                  })}
                 </tr>
                 {hasSubtables && isExpanded && (
                   <tr key={`sub-${idx}`} className="bg-purple-50/30">

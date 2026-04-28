@@ -282,6 +282,8 @@ export default function ReportBuilder() {
       soql,
       selected_fields: selectedFields,
       filters: [filterGroup],
+      calc_fields: calcFields,
+      lookups: lookups,
       schedule_enabled: scheduleEnabled,
       schedule_frequency: scheduleFreq,
       schedule_email: scheduleEmail,
@@ -306,20 +308,16 @@ export default function ReportBuilder() {
     setScheduleEnabled(report.schedule_enabled || false);
     setScheduleFreq(report.schedule_frequency || 'weekly');
     setScheduleEmail(report.schedule_email || '');
-    setCalcFields([]);
-    setLookups([]);
+    setCalcFields(report.calc_fields || []);
+    setLookups(report.lookups || []);
     setRecords([]);
     setError(null);
     // Stash selected fields so they survive the object-load reset
     pendingFieldsRef.current = report.selected_fields?.length ? report.selected_fields : null;
-    // Restore filter group after setting object (useEffect will clear it, so set after)
-    // We set filterGroup here; the useEffect resets it but we re-set it via a separate effect
     if (report.object_name !== selectedObject) {
       setSelectedObject(report.object_name);
-      // filterGroup will be restored after fields load via pendingFilterRef
       pendingFilterRef.current = report.filters?.[0] || defaultFilterGroup();
     } else {
-      // Same object: fields useEffect won't re-fire, restore directly
       setSelectedFields(report.selected_fields || []);
       setFilterGroup(report.filters?.[0] || defaultFilterGroup());
       pendingFieldsRef.current = null;
@@ -573,6 +571,13 @@ export default function ReportBuilder() {
                   calcFields={calcFields}
                   onChange={setCalcFields}
                   fields={fields}
+                  relatedObjects={fields
+                    .filter(f => f.type === 'reference' && f.relationshipName)
+                    .map(f => ({
+                      relationshipName: f.relationshipName,
+                      objectName: f.referenceTo?.[0] || f.relationshipName,
+                      label: f.label,
+                    }))}
                 />
               )}
               {activeTab === 'lookups' && (

@@ -3,12 +3,180 @@ import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Trash2, Calculator } from 'lucide-react';
+import { Plus, Trash2, Calculator, ChevronDown, Loader2, Search } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
 
 const AGGREGATE_FNS = ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'COUNT_DISTINCT'];
 
+// ── Field cache for sub-object fetching ───────────────────────────────────────
+const fieldCache = {};
+async function fetchFields(objectName) {
+  if (fieldCache[objectName]) return fieldCache[objectName];
+  const res = await base44.functions.invoke('salesforceObjectFields', { objectName });
+  const fields = res.data?.fields || [];
+  fieldCache[objectName] = fields;
+  return fields;
+}
+
+// ── Searchable field picker with sub-object support ───────────────────────────
+function FieldPicker({ value, onChange, mainFields, relatedObjects, allowAllTypes }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [activeSource, setActiveSource] = useState('__main__');
+  const [relFieldsCache, setRelFieldsCache] = useState({});
+  const [loadingRel, setLoadingRel] = useState(false);
+  const triggerRef = useRef(null);
+  const dropRef = useRef(null);
+
+  const numericTypes = ['double', 'currency', 'integer', 'percent'];
+
+  const sources = [
+    { id: '__main__', label: 'Main' },
+    ...relatedObjects.map(r => ({ id: r.relationshipName, label: r.label || r.objectName, objectName: r.objectName })),
+  ];
+
+  useEffect(() => {
+    if (activeSource === '__main__') return;
+    const src = sources.find(s => s.id === activeSource);
+    if (!src?.objectName || relFieldsCache[src.objectName]) return;
+    setLoadingRel(true);
+    fetchFields(src.objectName).then(f => {
+      setRelFieldsCache(prev => ({ ...prev, [src.objectName]: f }));
+      setLoadingRel(false);
+    }).catch(() => setLoadingRel(false));
+  }, [activeSource]);
+
+  const activeObjectName = sources.find(s => s.id === activeSource)?.objectName;
+  const pool = activeSource === '__main__'
+    ? mainFields
+    : (relFieldsCache[activeObjectName] || []);
+
+  const filtered = (allowAllTypes ? pool : pool.filter(f => numericTypes.includes(f.type)))
+    .filter(f => !search || f.label.toLowerCase().includes(search.toLowerCase()) || f.name.toLowerCase().includes(search.toLowerCase()));
+
+  // Resolve display label for current value
+  const resolveLabel = (v) => {
+    if (!v) return null;
+    if (v.includes('.')) {
+      const [rel, field] = v.split('.');
+      const src = relatedObjects.find(r => r.relationshipName === rel);
+      const objFields = relFieldsCache[src?.objectName] || [];
+      return `${src?.label || rel} › ${objFields.find(f => f.name === field)?.label || field}`;
+    }
+    return mainFields.find(f => f.name === v)?.label || v;
+  };
+
+  const handleSelect = (fieldName) => {
+    const soqlField = activeSource === '__main__' ? fieldName : `${activeSource}.${fieldName}`;
+    onChange(soqlField);
+    setOpen(false);
+    setSearch('');
+  };
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (dropRef.current && !dropRef.current.contains(e.target) &&
+          triggerRef.current && !triggerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Position dropdown
+  const [dropStyle, setDropStyle] = useState({});
+  const openDropdown = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 280), zIndex: 9999 });
+    }
+    setOpen(v => !v);
+    setSearch('');
+  };
+
+  const label = resolveLabel(value);
+
+  return (
+    <div className="w-52">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={openDropdown}
+        className="flex h-8 w-full items-center justify-between gap-1 rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-sm hover:bg-muted/30 transition-colors"
+      >
+        <span className={`truncate ${label ? 'text-foreground' : 'text-muted-foreground'}`}>
+          {label || 'Field…'}
+        </span>
+        <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+      </button>
+
+      {open && createPortal(
+        <div ref={dropRef} style={dropStyle} className="bg-popover border border-border rounded-md shadow-xl flex flex-col max-h-72 overflow-hidden">
+          {/* Source tabs */}
+          {sources.length > 1 && (
+            <div className="flex gap-1 p-1.5 border-b border-border flex-wrap shrink-0">
+              {sources.map(src => (
+                <button
+                  key={src.id}
+                  type="button"
+                  onClick={() => { setActiveSource(src.id); setSearch(''); }}
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
+                    activeSource === src.id
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'text-muted-foreground border-border bg-muted/30 hover:bg-muted'
+                  }`}
+                >
+                  {src.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Search */}
+          <div className="p-1.5 border-b border-border shrink-0 flex items-center gap-1.5">
+            <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+            <input
+              autoFocus
+              className="w-full text-xs bg-transparent outline-none placeholder:text-muted-foreground"
+              placeholder="Search fields…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          {/* Field list */}
+          <div className="overflow-y-auto flex-1">
+            {loadingRel ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground">No fields found</div>
+            ) : filtered.map(f => (
+              <button
+                key={f.name}
+                type="button"
+                onClick={() => handleSelect(f.name)}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${
+                  (activeSource === '__main__' ? f.name : `${activeSource}.${f.name}`) === value
+                    ? 'bg-accent/70 font-semibold'
+                    : 'hover:bg-accent'
+                }`}
+              >
+                <span className="truncate">{f.label}</span>
+                <span className="text-[9px] text-muted-foreground shrink-0">{f.type}</span>
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 // ── Formula autocomplete input ────────────────────────────────────────────────
-// Detects the token being typed (fn name or field name inside parens) and shows suggestions
 function FormulaInput({ value, onChange, fields }) {
   const [suggestions, setSuggestions] = useState([]);
   const [tokenStart, setTokenStart] = useState(0);
@@ -19,39 +187,25 @@ function FormulaInput({ value, onChange, fields }) {
   const fieldNames = fields.map(f => f.name);
   const fieldByName = Object.fromEntries(fields.map(f => [f.name, f]));
 
-  // Parse what the user is currently typing at cursor
   const getActiveToken = (text, cursor) => {
-    // Walk back from cursor to find start of current word
     let start = cursor;
     while (start > 0 && /[\w]/.test(text[start - 1])) start--;
     const token = text.slice(start, cursor);
-
-    // Are we inside a function call? Look for unclosed '('
     const before = text.slice(0, start);
-    const parenMatch = before.match(/([A-Z_]+)\($/i);
-    const insideFn = !!parenMatch;
-
+    const insideFn = !!before.match(/([A-Z_]+)\($/i);
     return { token, start, insideFn };
   };
 
   const computeSuggestions = (text, cursor) => {
     const { token, start, insideFn } = getActiveToken(text, cursor);
     setTokenStart(start);
-
     if (!token) { setSuggestions([]); return; }
-
     const q = token.toUpperCase();
     if (insideFn) {
-      // Suggest field names
-      const matches = fieldNames
-        .filter(n => n.toUpperCase().includes(q))
-        .slice(0, 12)
-        .map(n => ({ value: n, label: `${n}  ${fieldByName[n]?.label ? '— ' + fieldByName[n].label : ''}`, isField: true }));
-      setSuggestions(matches);
+      setSuggestions(fieldNames.filter(n => n.toUpperCase().includes(q)).slice(0, 12)
+        .map(n => ({ value: n, label: `${n}  ${fieldByName[n]?.label ? '— ' + fieldByName[n].label : ''}`, isField: true })));
     } else {
-      // Suggest function names
       const fnMatches = AGGREGATE_FNS.filter(fn => fn.startsWith(q)).map(fn => ({ value: fn + '(', label: fn + '(…)', isFn: true }));
-      // Also suggest bare field names
       const fieldMatches = fieldNames.filter(n => n.toUpperCase().startsWith(q)).slice(0, 8).map(n => ({ value: n, label: n, isField: true }));
       setSuggestions([...fnMatches, ...fieldMatches].slice(0, 12));
     }
@@ -69,30 +223,22 @@ function FormulaInput({ value, onChange, fields }) {
     positionDropdown();
   };
 
-  const handleKeyDown = (e) => {
-    if (suggestions.length === 0) return;
-    if (e.key === 'Escape') { setSuggestions([]); }
-  };
-
   const applySuggestion = (suggestion) => {
     const cursor = inputRef.current?.selectionStart ?? value.length;
     const before = value.slice(0, tokenStart);
     const after = value.slice(cursor);
-    const inserted = suggestion.value;
-    const newVal = before + inserted + after;
+    const newVal = before + suggestion.value + after;
     onChange(newVal);
     setSuggestions([]);
-    // Move cursor after inserted text
     setTimeout(() => {
       if (inputRef.current) {
-        const pos = tokenStart + inserted.length;
+        const pos = tokenStart + suggestion.value.length;
         inputRef.current.setSelectionRange(pos, pos);
         inputRef.current.focus();
       }
     }, 0);
   };
 
-  // Close on outside click
   useEffect(() => {
     if (suggestions.length === 0) return;
     const handler = (e) => {
@@ -110,10 +256,10 @@ function FormulaInput({ value, onChange, fields }) {
       <input
         ref={inputRef}
         className="flex h-8 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        placeholder="e.g. SUM(Total_Invoice_Amount__c) - SUM(Costs_Total__c)"
+        placeholder="e.g. sum(Total_Invoice_Amount__c) - sum(Costs_Total__c)"
         value={value}
         onChange={handleChange}
-        onKeyDown={handleKeyDown}
+        onKeyDown={e => { if (e.key === 'Escape') setSuggestions([]); }}
         onClick={e => { computeSuggestions(value, e.target.selectionStart); positionDropdown(); }}
         autoComplete="off"
         spellCheck={false}
@@ -121,12 +267,8 @@ function FormulaInput({ value, onChange, fields }) {
       {suggestions.length > 0 && createPortal(
         <div ref={dropRef} style={dropStyle} className="bg-popover border border-border rounded-md shadow-xl overflow-hidden">
           {suggestions.map((s, i) => (
-            <button
-              key={i}
-              type="button"
-              onMouseDown={e => { e.preventDefault(); applySuggestion(s); }}
-              className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-accent transition-colors flex items-center gap-2"
-            >
+            <button key={i} type="button" onMouseDown={e => { e.preventDefault(); applySuggestion(s); }}
+              className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-accent transition-colors flex items-center gap-2">
               {s.isFn && <span className="text-[9px] px-1 rounded bg-primary/10 text-primary font-bold uppercase">fn</span>}
               {s.isField && <span className="text-[9px] px-1 rounded bg-muted text-muted-foreground font-bold uppercase">field</span>}
               {s.label}
@@ -139,13 +281,8 @@ function FormulaInput({ value, onChange, fields }) {
   );
 }
 
-// A calculated field is either:
-// - An aggregate: SUM(Amount__c) → aliased
-// - A formula expression shown as a computed column client-side
-export default function CalculatedFields({ calcFields, onChange, fields }) {
-  const numericFields = fields.filter(f =>
-    ['double', 'currency', 'integer', 'percent'].includes(f.type)
-  );
+export default function CalculatedFields({ calcFields, onChange, fields, relatedObjects = [] }) {
+  const numericFields = fields.filter(f => ['double', 'currency', 'integer', 'percent'].includes(f.type));
 
   const add = (type = 'aggregate') => {
     onChange([
@@ -168,7 +305,6 @@ export default function CalculatedFields({ calcFields, onChange, fields }) {
           <div key={cf.id} className="flex items-center gap-2 flex-wrap">
             {cf.type === 'aggregate' ? (
               <>
-                {/* Function */}
                 <Select value={cf.fn} onValueChange={v => update(cf.id, { fn: v })}>
                   <SelectTrigger className="w-32 h-8 text-xs font-mono">
                     <SelectValue />
@@ -182,20 +318,13 @@ export default function CalculatedFields({ calcFields, onChange, fields }) {
 
                 <span className="text-muted-foreground text-sm">(</span>
 
-                {/* Field */}
-                <Select value={cf.field} onValueChange={v => update(cf.id, { field: v })}>
-                  <SelectTrigger className="w-44 h-8 text-xs">
-                    <SelectValue placeholder="Field…" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-48">
-                    {(cf.fn === 'COUNT' || cf.fn === 'COUNT_DISTINCT'
-                      ? fields
-                      : numericFields
-                    ).map(f => (
-                      <SelectItem key={f.name} value={f.name} className="text-xs">{f.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <FieldPicker
+                  value={cf.field}
+                  onChange={v => update(cf.id, { field: v })}
+                  mainFields={cf.fn === 'COUNT' || cf.fn === 'COUNT_DISTINCT' ? fields : numericFields}
+                  relatedObjects={relatedObjects}
+                  allowAllTypes={cf.fn === 'COUNT' || cf.fn === 'COUNT_DISTINCT'}
+                />
 
                 <span className="text-muted-foreground text-sm">)</span>
               </>
@@ -212,7 +341,6 @@ export default function CalculatedFields({ calcFields, onChange, fields }) {
 
             <span className="text-muted-foreground text-xs">as</span>
 
-            {/* Alias label */}
             <Input
               className="w-32 h-8 text-xs"
               placeholder="label"
@@ -239,7 +367,7 @@ export default function CalculatedFields({ calcFields, onChange, fields }) {
       {calcFields.length > 0 && (
         <p className="text-[10px] text-muted-foreground mt-2 flex items-center gap-1">
           <Calculator className="w-3 h-3" />
-          Aggregates require GROUP BY. Formulas: use SUM(FieldName), AVG(FieldName), etc. in expressions.
+          Aggregates run as SOQL GROUP BY. Formulas are computed per-row after fetching (use field names directly).
         </p>
       )}
     </div>
