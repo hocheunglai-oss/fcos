@@ -302,7 +302,7 @@ export default function DashboardSettings() {
                   return (
                     <div key={b.name} className="flex items-center gap-3">
                       <span className="w-5 text-xs font-bold text-muted-foreground text-right shrink-0">{i + 1}</span>
-                      <span className="w-36 text-xs text-foreground truncate shrink-0" title={b.name}>{b.name}</span>
+                      <span className="w-52 text-xs text-foreground shrink-0" title={b.name}>{b.name}</span>
                       <div className="flex-1 bg-muted/50 rounded-full h-2 overflow-hidden">
                         <div
                           className="h-2 rounded-full bg-primary transition-all"
