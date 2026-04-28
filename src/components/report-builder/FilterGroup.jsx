@@ -345,7 +345,17 @@ function FilterRow({ condition, fields, relatedObjects, childRelationships, onCh
         rootParentRels={rootMeta.parentRels}
         rootChildRels={rootMeta.childRels}
         value={condition.field}
-        onChange={(soqlField) => onChange({ ...condition, field: soqlField, operator: '=', value: '' })}
+        onChange={(soqlField) => {
+          // Only reset value/operator when the field actually changes to a new field
+          if (soqlField === condition.field) return;
+          const fieldChanged = soqlField !== '' && condition.field !== '' && soqlField !== condition.field;
+          onChange({
+            ...condition,
+            field: soqlField,
+            operator: fieldChanged ? '=' : condition.operator,
+            value: fieldChanged ? '' : condition.value,
+          });
+        }}
       />
 
       {/* Operator */}
