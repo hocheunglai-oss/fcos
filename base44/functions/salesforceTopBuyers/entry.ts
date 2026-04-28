@@ -10,11 +10,15 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json();
-    const { year = 2025, limit = 10 } = body;
+    const { where = '', limit = 10 } = body;
 
     const { accessToken } = await base44.asServiceRole.connectors.getConnection("salesforce");
 
-    const soql = `SELECT Account__c, Account__r.Name, SUM(Total_Invoice_Amount__c) totalInvoice FROM stem__c WHERE Delivery_Date__c >= ${year}-01-01 AND Delivery_Date__c <= ${year}-12-31 AND Account__c != null GROUP BY Account__c, Account__r.Name ORDER BY SUM(Total_Invoice_Amount__c) DESC LIMIT ${limit}`;
+    const whereClause = where
+      ? `(${where}) AND Account__c != null`
+      : `Account__c != null`;
+
+    const soql = `SELECT Account__c, Account__r.Name, SUM(Total_Invoice_Amount__c) totalInvoice FROM stem__c WHERE ${whereClause} GROUP BY Account__c, Account__r.Name ORDER BY SUM(Total_Invoice_Amount__c) DESC LIMIT ${limit}`;
 
     const encoded = encodeURIComponent(soql);
     const res = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/query/?q=${encoded}`, {

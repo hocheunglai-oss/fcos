@@ -75,11 +75,9 @@ export default function DashboardSettings() {
   const buildWhereClause = (yrs = selectedYears, mos = selectedMonths) =>
     buildDeliveryWhere(yrs, mos);
 
-  const loadTopBuyers = async (yrs = selectedYears) => {
+  const loadTopBuyers = async (where = '') => {
     setLoadingBuyers(true);
-    // Use the first selected year for top buyers; if multiple, pick the latest
-    const year = Math.max(...yrs);
-    const res = await base44.functions.invoke('salesforceTopBuyers', { year, limit: 10 });
+    const res = await base44.functions.invoke('salesforceTopBuyers', { where, limit: 10 });
     if (!res.data?.error) setTopBuyers(res.data?.buyers || []);
     setLoadingBuyers(false);
   };
@@ -90,7 +88,7 @@ export default function DashboardSettings() {
     const where = buildWhereClause(yrs, mos);
     const [res] = await Promise.all([
       base44.functions.invoke('salesforceDashboardFiltered', { where }),
-      loadTopBuyers(yrs),
+      loadTopBuyers(where),
     ]);
     if (res.data?.error) {
       setError(res.data.error);
@@ -286,7 +284,9 @@ export default function DashboardSettings() {
           <div className="bg-card rounded-xl border border-border p-5 mb-8">
             <h3 className="text-sm font-semibold text-foreground mb-1">
               Top 10 Buyers by Invoice Amount
-              <span className="ml-2 text-xs font-normal text-muted-foreground">({Math.max(...selectedYears)})</span>
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                ({selectedYears.sort((a,b) => a-b).join(', ')} · {selectedMonths.length === 12 ? 'All months' : selectedMonths.map(m => MONTHS.find(x => x.value === m)?.label).join(', ')})
+              </span>
             </h3>
             {loadingBuyers ? (
               <div className="flex items-center gap-2 py-8 text-muted-foreground text-sm justify-center">
