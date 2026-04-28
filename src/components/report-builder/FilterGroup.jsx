@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -52,35 +53,76 @@ async function fetchMeta(objectName) {
 function SearchableDropdown({ value, placeholder, options, onSelect, loading, className = '' }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const ref = useRef(null);
+  const [dropdownStyle, setDropdownStyle] = useState({});
+  const triggerRef = useRef(null);
+  const dropdownRef = useRef(null);
+
+  // Position dropdown relative to trigger using fixed positioning
+  const updatePosition = () => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const dropdownHeight = 240; // approx max-height
+    const openUpward = spaceBelow < dropdownHeight && rect.top > dropdownHeight;
+    setDropdownStyle({
+      position: 'fixed',
+      left: rect.left,
+      width: Math.max(rect.width, 256),
+      zIndex: 9999,
+      ...(openUpward
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+    });
+  };
+
+  const handleOpen = () => {
+    updatePosition();
+    setOpen(v => !v);
+    setSearch('');
+  };
 
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (!open) return;
+    const handler = (e) => {
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target)
+      ) setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    window.addEventListener('scroll', () => setOpen(false), true);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      window.removeEventListener('scroll', () => setOpen(false), true);
+    };
+  }, [open]);
 
   const filtered = options.filter(o =>
-    o.label.toLowerCase().includes(search.toLowerCase())
+    !o.isHeader && o.label.toLowerCase().includes(search.toLowerCase())
   );
+  // Re-insert headers that have at least one matching child
+  const visibleOptions = search
+    ? filtered
+    : options;
 
   const selected = options.find(o => o.value === value);
 
   return (
-    <div ref={ref} className={`relative ${className}`}>
+    <div className={className}>
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => { setOpen(v => !v); setSearch(''); }}
+        onClick={handleOpen}
         className="flex h-8 w-full items-center justify-between rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-sm text-left hover:bg-muted/30 transition-colors"
       >
-        <span className={selected ? 'text-foreground' : 'text-muted-foreground'}>
+        <span className={`truncate ${selected ? 'text-foreground' : 'text-muted-foreground'}`}>
           {loading ? <Loader2 className="w-3 h-3 animate-spin inline" /> : (selected?.label || placeholder)}
         </span>
-        <ChevronRight className={`w-3 h-3 text-muted-foreground shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+        <ChevronRight className={`w-3 h-3 text-muted-foreground shrink-0 ml-1 transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
 
-      {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 w-64 bg-popover border border-border rounded-md shadow-lg">
+      {open && createPortal(
+        <div ref={dropdownRef} style={dropdownStyle} className="bg-popover border border-border rounded-md shadow-xl">
           <div className="p-1.5 border-b border-border">
             <input
               autoFocus
@@ -90,23 +132,29 @@ function SearchableDropdown({ value, placeholder, options, onSelect, loading, cl
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          <div className="max-h-52 overflow-y-auto py-1">
-            {filtered.length === 0 ? (
+          <div className="max-h-60 overflow-y-auto py-1">
+            {visibleOptions.length === 0 ? (
               <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>
-            ) : filtered.map(o => (
+            ) : visibleOptions.map((o, i) => (
               <button
-                key={o.value}
+                key={o.value + i}
                 type="button"
-                onClick={() => { onSelect(o.value); setOpen(false); setSearch(''); }}
-                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-accent transition-colors ${
-                  o.value === value ? 'bg-accent/60 font-semibold' : ''
-                } ${o.isHeader ? 'text-[10px] font-bold text-muted-foreground uppercase tracking-wide pointer-events-none bg-transparent' : ''}`}
+                disabled={o.isHeader}
+                onClick={() => { if (!o.isHeader) { onSelect(o.value); setOpen(false); setSearch(''); } }}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                  o.isHeader
+                    ? 'text-[10px] font-bold text-muted-foreground uppercase tracking-wide cursor-default bg-transparent'
+                    : o.value === value
+                      ? 'bg-accent/60 font-semibold hover:bg-accent'
+                      : 'hover:bg-accent'
+                }`}
               >
                 {o.label}
               </button>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
