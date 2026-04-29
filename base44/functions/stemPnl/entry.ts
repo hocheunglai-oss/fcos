@@ -96,9 +96,11 @@ Deno.serve(async (req) => {
     const byId = {};
     const initStem = (id) => {
       if (!byId[id]) byId[id] = {
-        suppBrokerComm: 0,
-        buyerBrokerCommPerUnit: 0,
+        suppBrokerCommPerUnit: 0,
+        suppBrokerLumpsumSet: false,
+        suppBrokerLumpsum: 0,
         buyerBrokerLumpsum: 0,
+        buyerBrokerLumpsumLineItem: 0,
         suppBrokerName: null,
       };
     };
@@ -108,8 +110,14 @@ Deno.serve(async (req) => {
       if (!id) continue;
       initStem(id);
       const qty = li.Quantity__c ?? 0;
-      byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0) + (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
-      byId[id].buyerBrokerLumpsumLineItem = (byId[id].buyerBrokerLumpsumLineItem ?? 0) + (li.Buyers_Brokers_Commission_Lumpsum__c ?? 0);
+      // Per-unit supplier commission: sum across all line items
+      byId[id].suppBrokerCommPerUnit += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
+      // Lumpsum is a stem-level value repeated on every line item — only take it once
+      if (!byId[id].suppBrokerLumpsumSet && (li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0) !== 0) {
+        byId[id].suppBrokerLumpsum = li.Suppliers_Brokers_Commission_Lumpsum__c;
+        byId[id].suppBrokerLumpsumSet = true;
+      }
+      byId[id].buyerBrokerLumpsumLineItem += (li.Buyers_Brokers_Commission_Lumpsum__c ?? 0);
       if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
@@ -127,7 +135,7 @@ Deno.serve(async (req) => {
       const buyer = s.Total_Invoice_Amount__c ?? 0;
       const supplier = s.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
       const agg = byId[s.Id] || {};
-      const suppBrokerComm = agg.suppBrokerComm ?? 0;
+      const suppBrokerComm = (agg.suppBrokerCommPerUnit ?? 0) + (agg.suppBrokerLumpsum ?? 0);
       const buyerBrokerComm = (agg.buyerBrokerLumpsum ?? 0) + (agg.buyerBrokerLumpsumLineItem ?? 0);
       const totalBroker = suppBrokerComm + buyerBrokerComm;
       const grossProfit = buyer - supplier;
