@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -439,6 +439,36 @@ export default function ReportBuilder() {
 
   const soql = buildSoql();
 
+  // Stable derived arrays — prevent child components from re-mounting on every render
+  const relatedObjects = useMemo(() => fields
+    .filter(f => f.type === 'reference' && f.relationshipName)
+    .map(f => ({
+      relationshipName: f.relationshipName,
+      objectName: f.referenceTo?.[0] || f.relationshipName,
+      label: f.label,
+      isChild: false,
+    })), [fields]);
+
+  const relatedObjectsNoChild = useMemo(() => fields
+    .filter(f => f.type === 'reference' && f.relationshipName)
+    .map(f => ({
+      relationshipName: f.relationshipName,
+      objectName: f.referenceTo?.[0] || f.relationshipName,
+      label: f.label,
+    })), [fields]);
+
+  const filterableFields = useMemo(() =>
+    fields.filter(f => f.filterable && !['IsDeleted', 'SystemModstamp'].includes(f.name)),
+  [fields]);
+
+  const columnFields = useMemo(() =>
+    fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name)),
+  [fields]);
+
+  const referenceFields = useMemo(() =>
+    fields.filter(f => f.type === 'reference'),
+  [fields]);
+
   const filterCount = (grp) => {
     if (!grp?.conditions) return 0;
     return grp.conditions.reduce((n, c) => n + (c.type === 'group' ? filterCount(c) : 1), 0);
@@ -581,18 +611,11 @@ export default function ReportBuilder() {
               )}
             </div>
             <ColumnSelector
-              fields={fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name))}
+              fields={columnFields}
               selectedFields={selectedFields}
               onChange={setSelectedFields}
               loading={loadingFields}
-              relatedObjects={fields
-                .filter(f => f.type === 'reference' && f.relationshipName)
-                .map(f => ({
-                  relationshipName: f.relationshipName,
-                  objectName: f.referenceTo?.[0] || f.relationshipName,
-                  label: f.label,
-                  isChild: false,
-                }))}
+              relatedObjects={relatedObjects}
               childRelationships={childRelationships}
             />
           </div>
@@ -632,14 +655,8 @@ export default function ReportBuilder() {
               {activeTab === 'filters' && (
                 <FilterGroup
                   group={filterGroup}
-                  fields={fields.filter(f => f.filterable && !['IsDeleted', 'SystemModstamp'].includes(f.name))}
-                  relatedObjects={fields
-                    .filter(f => f.type === 'reference' && f.relationshipName)
-                    .map(f => ({
-                      relationshipName: f.relationshipName,
-                      objectName: f.referenceTo?.[0] || f.relationshipName,
-                      label: f.label,
-                    }))}
+                  fields={filterableFields}
+                  relatedObjects={relatedObjectsNoChild}
                   childRelationships={childRelationships}
                   onChange={setFilterGroup}
                   depth={0}
@@ -650,13 +667,7 @@ export default function ReportBuilder() {
                   calcFields={calcFields}
                   onChange={setCalcFields}
                   fields={fields}
-                  relatedObjects={fields
-                    .filter(f => f.type === 'reference' && f.relationshipName)
-                    .map(f => ({
-                      relationshipName: f.relationshipName,
-                      objectName: f.referenceTo?.[0] || f.relationshipName,
-                      label: f.label,
-                    }))}
+                  relatedObjects={relatedObjectsNoChild}
                   childRelationships={childRelationships}
                 />
               )}
@@ -664,7 +675,7 @@ export default function ReportBuilder() {
                 <LookupFields
                   lookups={lookups}
                   onChange={setLookups}
-                  fields={fields.filter(f => f.type === 'reference')}
+                  fields={referenceFields}
                   selectedObject={selectedObject}
                 />
               )}
