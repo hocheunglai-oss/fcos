@@ -5,7 +5,7 @@ import { format } from 'date-fns';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function isSubqueryResult(val) {
-  return val && typeof val === 'object' && Array.isArray(val.records) && 'totalSize' in val;
+  return val && typeof val === 'object' && 'totalSize' in val && (Array.isArray(val.records) || val.records === null);
 }
 
 function fmtVal(key, val) {
@@ -46,7 +46,7 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
   if (!subqueryResult?.records?.length) {
     return <p className="text-xs text-muted-foreground italic px-2 py-1">No {label} records</p>;
   }
-  const rows = subqueryResult.records;
+  const rows = subqueryResult.records || [];
 
   // Scan ALL rows to detect subquery cols (not just first row)
   const allCols = Array.from(new Set(rows.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
@@ -94,17 +94,26 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
                 {hasNested && isExpanded && (
                   <tr className={`${colors.bg}/30`}>
                     <td colSpan={mainCols.length + 1} className="p-0">
-                      {nestedCols.map(nc => (
-                        <div key={nc} className={`border-t ${colors.border}`}>
-                          <div className={`px-4 py-1 ${colors.header} flex items-center gap-2`}>
-                            <span className={`text-[9px] font-bold ${colors.headerText} uppercase tracking-wide`}>{colLabel(nc)}</span>
-                            <span className={`text-[9px] ${colors.headerText}/60`}>({row[nc]?.totalSize ?? 0} records)</span>
+                      {nestedCols.map(nc => {
+                        // Only render if this row actually has a subquery result for this col
+                        const subVal = row[nc];
+                        return (
+                          <div key={nc} className={`border-t ${colors.border}`}>
+                            <div className={`px-4 py-1 ${colors.header} flex items-center gap-2`}>
+                              <span className={`text-[9px] font-bold ${colors.headerText} uppercase tracking-wide`}>{colLabel(nc)}</span>
+                              <span className={`text-[9px] ${colors.headerText}/60`}>
+                                ({isSubqueryResult(subVal) ? subVal.totalSize : 0} records)
+                              </span>
+                            </div>
+                            <div className="px-2 py-1">
+                              {isSubqueryResult(subVal)
+                                ? <SubTable subqueryResult={subVal} label={colLabel(nc)} depth={depth + 1} />
+                                : <p className="text-xs text-muted-foreground italic px-2 py-1">No {colLabel(nc)} records</p>
+                              }
+                            </div>
                           </div>
-                          <div className="px-2 py-1">
-                            <SubTable subqueryResult={row[nc]} label={colLabel(nc)} depth={depth + 1} />
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </td>
                   </tr>
                 )}
