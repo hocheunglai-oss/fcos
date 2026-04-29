@@ -1,11 +1,9 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, ChevronsUpDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Detect which columns in a record are child subquery results (Salesforce wraps them as { records: [...], totalSize: n, done: true })
 function isSubqueryResult(val) {
   return val && typeof val === 'object' && Array.isArray(val.records) && 'totalSize' in val;
 }
@@ -14,9 +12,7 @@ function fmtVal(key, val) {
   if (val == null || val === '') return '—';
   if (typeof val === 'object') {
     if (isSubqueryResult(val)) return '(subquery)';
-    // Try to extract Name from relationship objects
     if (val.Name != null) return String(val.Name);
-    // Fallback for other object types
     return '(object)';
   }
   if (typeof val === 'boolean') return val ? 'Yes' : 'No';
@@ -28,7 +24,8 @@ function fmtVal(key, val) {
     key.toLowerCase().includes('price') ||
     key.toLowerCase().includes('invoice') ||
     key.toLowerCase().includes('total') ||
-    key.toLowerCase().includes('cost')
+    key.toLowerCase().includes('cost') ||
+    key.toLowerCase().includes('commission')
   ) {
     const n = Number(val);
     if (!isNaN(n)) return `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
@@ -50,9 +47,11 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
     return <p className="text-xs text-muted-foreground italic px-2 py-1">No {label} records</p>;
   }
   const rows = subqueryResult.records;
-  const allCols = Object.keys(rows[0]).filter(k => k !== 'attributes');
-  const mainCols = allCols.filter(k => !isSubqueryResult(rows[0][k]));
-  const nestedCols = allCols.filter(k => isSubqueryResult(rows[0][k]));
+
+  // Scan ALL rows to detect subquery cols (not just first row)
+  const allCols = Array.from(new Set(rows.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
+  const nestedCols = allCols.filter(k => rows.some(r => isSubqueryResult(r[k])));
+  const mainCols = allCols.filter(k => !nestedCols.includes(k));
   const hasNested = nestedCols.length > 0;
 
   const colors = depth === 0
@@ -76,9 +75,8 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
           {rows.map((row, i) => {
             const isExpanded = expandedSubRows.has(i);
             return (
-              <>
+              <React.Fragment key={row.Id || i}>
                 <tr
-                  key={row.Id || i}
                   className={`border-b ${colors.border} hover:${colors.bg}/50 transition-colors ${hasNested ? 'cursor-pointer' : ''}`}
                   onClick={hasNested ? () => setExpandedSubRows(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; }) : undefined}
                 >
@@ -94,7 +92,7 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
                   ))}
                 </tr>
                 {hasNested && isExpanded && (
-                  <tr key={`nsub-${i}`} className={`${colors.bg}/30`}>
+                  <tr className={`${colors.bg}/30`}>
                     <td colSpan={mainCols.length + 1} className="p-0">
                       {nestedCols.map(nc => (
                         <div key={nc} className={`border-t ${colors.border}`}>
@@ -110,7 +108,7 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
                     </td>
                   </tr>
                 )}
-              </>
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -129,11 +127,10 @@ export default function ExpandableResultsTable({ records }) {
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
 
-  // Separate main columns from subquery columns
-  const firstRow = records[0];
-  const allKeys = Object.keys(firstRow).filter(k => k !== 'attributes');
-  const mainCols = allKeys.filter(k => !isSubqueryResult(firstRow[k]));
-  const subqueryCols = allKeys.filter(k => isSubqueryResult(firstRow[k]));
+  // Scan ALL rows to correctly detect subquery columns (some rows may have null for a subquery col)
+  const allKeys = Array.from(new Set(records.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
+  const subqueryCols = allKeys.filter(k => records.some(r => isSubqueryResult(r[k])));
+  const mainCols = allKeys.filter(k => !subqueryCols.includes(k));
   const hasSubtables = subqueryCols.length > 0;
 
   const toggleRow = (idx) => {
@@ -178,7 +175,7 @@ export default function ExpandableResultsTable({ records }) {
               </th>
             )}
             {mainCols.map(c => {
-              const isNum = typeof records[0]?.[c] === 'number';
+              const isNum = records.some(r => typeof r[c] === 'number');
               return (
                 <th key={c} className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${isNum ? 'text-right' : 'text-left'}`}>
                   {colLabel(c)}
@@ -191,9 +188,8 @@ export default function ExpandableResultsTable({ records }) {
           {records.map((row, idx) => {
             const isExpanded = expandedRows.has(idx);
             return (
-              <>
+              <React.Fragment key={idx}>
                 <tr
-                  key={`row-${idx}`}
                   className={`border-b border-border/50 transition-colors ${
                     hasSubtables ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'
                   } ${isExpanded ? 'bg-muted/20' : ''}`}
@@ -217,7 +213,7 @@ export default function ExpandableResultsTable({ records }) {
                   })}
                 </tr>
                 {hasSubtables && isExpanded && (
-                  <tr key={`sub-${idx}`} className="bg-purple-50/30">
+                  <tr className="bg-purple-50/30">
                     <td colSpan={mainCols.length + 1} className="p-0">
                       <div className="border-b border-purple-200">
                         {subqueryCols.map(col => (
@@ -239,7 +235,7 @@ export default function ExpandableResultsTable({ records }) {
                     </td>
                   </tr>
                 )}
-              </>
+              </React.Fragment>
             );
           })}
           {numericCols.length > 0 && (
