@@ -546,12 +546,12 @@ export default function ReportBuilder() {
                             )}
                           </div>
                         </div>
-                        <button
+                        <div
                           onClick={(e) => deleteReport(r.id, e)}
-                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 mt-0.5"
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 mt-0.5 cursor-pointer"
                         >
                           <Trash2 className="w-3 h-3" />
-                        </button>
+                        </div>
                       </div>
                     </button>
                   ))}
