@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ChevronRight, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -48,7 +48,7 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
   }
   const rows = subqueryResult.records || [];
 
-  // Scan ALL rows to detect subquery cols (not just first row)
+  // Scan ALL rows to detect subquery cols
   const allCols = Array.from(new Set(rows.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
   const nestedCols = allCols.filter(k => rows.some(r => isSubqueryResult(r[k])));
   const mainCols = allCols.filter(k => !nestedCols.includes(k));
@@ -57,6 +57,63 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
   const colors = depth === 0
     ? { bg: 'bg-purple-50', border: 'border-purple-200', th: 'text-purple-700', header: 'bg-purple-100/60', headerText: 'text-purple-600' }
     : { bg: 'bg-orange-50', border: 'border-orange-200', th: 'text-orange-700', header: 'bg-orange-100/60', headerText: 'text-orange-600' };
+
+  const toggleSubRow = (i) => setExpandedSubRows(prev => {
+    const s = new Set(prev);
+    s.has(i) ? s.delete(i) : s.add(i);
+    return s;
+  });
+
+  // Build flat array of <tr> elements to avoid Fragment prop issues
+  const bodyRows = [];
+  rows.forEach((row, i) => {
+    const isExpanded = expandedSubRows.has(i);
+    bodyRows.push(
+      <tr
+        key={`sub-row-${i}`}
+        className={`border-b ${colors.border} transition-colors ${hasNested ? 'cursor-pointer hover:bg-muted/10' : ''}`}
+        onClick={hasNested ? () => toggleSubRow(i) : undefined}
+      >
+        {hasNested && (
+          <td className="py-1.5 px-2 text-muted-foreground">
+            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </td>
+        )}
+        {mainCols.map(c => (
+          <td key={c} className="py-1.5 px-2.5 text-foreground whitespace-nowrap">
+            {fmtVal(c, row[c])}
+          </td>
+        ))}
+      </tr>
+    );
+    if (hasNested && isExpanded) {
+      bodyRows.push(
+        <tr key={`sub-nested-${i}`} className="bg-orange-50/40">
+          <td colSpan={mainCols.length + 1} className="p-0">
+            {nestedCols.map(nc => {
+              const subVal = row[nc];
+              return (
+                <div key={nc} className={`border-t ${colors.border}`}>
+                  <div className={`px-4 py-1 ${colors.header} flex items-center gap-2`}>
+                    <span className={`text-[9px] font-bold ${colors.headerText} uppercase tracking-wide`}>{colLabel(nc)}</span>
+                    <span className={`text-[9px] ${colors.headerText}/60`}>
+                      ({isSubqueryResult(subVal) ? subVal.totalSize : 0} records)
+                    </span>
+                  </div>
+                  <div className="px-2 py-1">
+                    {isSubqueryResult(subVal)
+                      ? <SubTable subqueryResult={subVal} label={colLabel(nc)} depth={depth + 1} />
+                      : <p className="text-xs text-muted-foreground italic px-2 py-1">No {colLabel(nc)} records</p>
+                    }
+                  </div>
+                </div>
+              );
+            })}
+          </td>
+        </tr>
+      );
+    }
+  });
 
   return (
     <div className="overflow-x-auto">
@@ -71,56 +128,7 @@ function SubTable({ subqueryResult, label, depth = 0 }) {
             ))}
           </tr>
         </thead>
-        <tbody>
-          {rows.map((row, i) => {
-            const isExpanded = expandedSubRows.has(i);
-            return (
-              <React.Fragment key={row.Id || i}>
-                <tr
-                  className={`border-b ${colors.border} hover:${colors.bg}/50 transition-colors ${hasNested ? 'cursor-pointer' : ''}`}
-                  onClick={hasNested ? () => setExpandedSubRows(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; }) : undefined}
-                >
-                  {hasNested && (
-                    <td className="py-1.5 px-2 text-muted-foreground">
-                      {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                    </td>
-                  )}
-                  {mainCols.map(c => (
-                    <td key={c} className="py-1.5 px-2.5 text-foreground whitespace-nowrap">
-                      {fmtVal(c, row[c])}
-                    </td>
-                  ))}
-                </tr>
-                {hasNested && isExpanded && (
-                  <tr className={`${colors.bg}/30`}>
-                    <td colSpan={mainCols.length + 1} className="p-0">
-                      {nestedCols.map(nc => {
-                        // Only render if this row actually has a subquery result for this col
-                        const subVal = row[nc];
-                        return (
-                          <div key={nc} className={`border-t ${colors.border}`}>
-                            <div className={`px-4 py-1 ${colors.header} flex items-center gap-2`}>
-                              <span className={`text-[9px] font-bold ${colors.headerText} uppercase tracking-wide`}>{colLabel(nc)}</span>
-                              <span className={`text-[9px] ${colors.headerText}/60`}>
-                                ({isSubqueryResult(subVal) ? subVal.totalSize : 0} records)
-                              </span>
-                            </div>
-                            <div className="px-2 py-1">
-                              {isSubqueryResult(subVal)
-                                ? <SubTable subqueryResult={subVal} label={colLabel(nc)} depth={depth + 1} />
-                                : <p className="text-xs text-muted-foreground italic px-2 py-1">No {colLabel(nc)} records</p>
-                              }
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
+        <tbody>{bodyRows}</tbody>
       </table>
     </div>
   );
@@ -136,7 +144,7 @@ export default function ExpandableResultsTable({ records }) {
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
 
-  // Scan ALL rows to correctly detect subquery columns (some rows may have null for a subquery col)
+  // Scan ALL rows to correctly detect subquery columns
   const allKeys = Array.from(new Set(records.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
   const subqueryCols = allKeys.filter(k => records.some(r => isSubqueryResult(r[k])));
   const mainCols = allKeys.filter(k => !subqueryCols.includes(k));
@@ -167,6 +175,55 @@ export default function ExpandableResultsTable({ records }) {
     totals[c] = records.reduce((sum, r) => sum + (typeof r[c] === 'number' ? r[c] : 0), 0);
   });
 
+  // Build flat array of <tr> elements to avoid Fragment prop issues from dev tooling
+  const bodyRows = [];
+  records.forEach((row, idx) => {
+    const isExpanded = expandedRows.has(idx);
+    bodyRows.push(
+      <tr
+        key={`row-${idx}`}
+        className={`border-b border-border/50 transition-colors ${hasSubtables ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'} ${isExpanded ? 'bg-muted/20' : ''}`}
+        onClick={hasSubtables ? () => toggleRow(idx) : undefined}
+      >
+        {hasSubtables && (
+          <td className="py-2.5 px-2 text-muted-foreground">
+            {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </td>
+        )}
+        {mainCols.map(c => {
+          const v = row[c];
+          const isNum = typeof v === 'number';
+          return (
+            <td key={c} className={`py-2.5 px-3 text-foreground whitespace-nowrap ${isNum ? 'text-right font-mono' : ''}`}>
+              {fmtVal(c, v)}
+            </td>
+          );
+        })}
+      </tr>
+    );
+    if (hasSubtables && isExpanded) {
+      bodyRows.push(
+        <tr key={`sub-${idx}`} className="bg-purple-50/30">
+          <td colSpan={mainCols.length + 1} className="p-0">
+            <div className="border-b border-purple-200">
+              {subqueryCols.map(col => (
+                <div key={col} className="border-t border-purple-100 first:border-t-0">
+                  <div className="px-4 py-1.5 bg-purple-100/60 flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wide">{colLabel(col)}</span>
+                    <span className="text-[10px] text-purple-400">({row[col]?.totalSize ?? 0} records)</span>
+                  </div>
+                  <div className="px-2 py-1">
+                    <SubTable subqueryResult={row[col]} label={colLabel(col)} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </td>
+        </tr>
+      );
+    }
+  });
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -174,11 +231,7 @@ export default function ExpandableResultsTable({ records }) {
           <tr className="border-b border-border">
             {hasSubtables && (
               <th className="py-2.5 px-2 w-8">
-                <button
-                  onClick={toggleAll}
-                  title={allExpanded ? 'Collapse all' : 'Expand all'}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
+                <button onClick={toggleAll} title={allExpanded ? 'Collapse all' : 'Expand all'} className="text-muted-foreground hover:text-foreground transition-colors">
                   <ChevronsUpDown className="w-3.5 h-3.5" />
                 </button>
               </th>
@@ -194,59 +247,7 @@ export default function ExpandableResultsTable({ records }) {
           </tr>
         </thead>
         <tbody>
-          {records.map((row, idx) => {
-            const isExpanded = expandedRows.has(idx);
-            return (
-              <React.Fragment key={idx}>
-                <tr
-                  className={`border-b border-border/50 transition-colors ${
-                    hasSubtables ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'
-                  } ${isExpanded ? 'bg-muted/20' : ''}`}
-                  onClick={hasSubtables ? () => toggleRow(idx) : undefined}
-                >
-                  {hasSubtables && (
-                    <td className="py-2.5 px-2 text-muted-foreground">
-                      {isExpanded
-                        ? <ChevronDown className="w-3.5 h-3.5" />
-                        : <ChevronRight className="w-3.5 h-3.5" />}
-                    </td>
-                  )}
-                  {mainCols.map(c => {
-                    const v = row[c];
-                    const isNum = typeof v === 'number';
-                    return (
-                      <td key={c} className={`py-2.5 px-3 text-foreground whitespace-nowrap ${isNum ? 'text-right font-mono' : ''}`}>
-                        {fmtVal(c, v)}
-                      </td>
-                    );
-                  })}
-                </tr>
-                {hasSubtables && isExpanded && (
-                  <tr className="bg-purple-50/30">
-                    <td colSpan={mainCols.length + 1} className="p-0">
-                      <div className="border-b border-purple-200">
-                        {subqueryCols.map(col => (
-                          <div key={col} className="border-t border-purple-100 first:border-t-0">
-                            <div className="px-4 py-1.5 bg-purple-100/60 flex items-center gap-2">
-                              <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wide">
-                                {colLabel(col)}
-                              </span>
-                              <span className="text-[10px] text-purple-400">
-                                ({row[col]?.totalSize ?? 0} records)
-                              </span>
-                            </div>
-                            <div className="px-2 py-1">
-                              <SubTable subqueryResult={row[col]} label={colLabel(col)} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
+          {bodyRows}
           {numericCols.length > 0 && (
             <tr className="border-t-2 border-border bg-muted/40 font-semibold sticky bottom-0">
               {hasSubtables && <td className="py-2.5 px-2" />}
