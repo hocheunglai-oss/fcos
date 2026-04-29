@@ -42,8 +42,7 @@ Deno.serve(async (req) => {
       SELECT Id, KeyStem__c, Name, Delivery_Date__c,
              Account__r.Name,
              Total_Invoice_Amount__c,
-             Total_Invoiced_Amount_From_Suppliers__c,
-             Costs_Total__c
+             Total_Invoiced_Amount_From_Suppliers__c
       FROM stem__c
       ${whereClause}
       ORDER BY Delivery_Date__c DESC
@@ -70,6 +69,7 @@ Deno.serve(async (req) => {
         return sfQuery(accessToken, `
           SELECT Id, STEM__c, Quantity__c,
                  Buyers_Brokers_Commission_Per_Unit__c,
+                 Buyers_Brokers_Commission_Lumpsum__c,
                  Suppliers_Brokers_Commission_Lumpsum__c,
                  Suppliers_Brokers_Commission_Per_Unit__c,
                  Supplier_Broker__r.Name
@@ -111,6 +111,7 @@ Deno.serve(async (req) => {
       const qty = li.Quantity__c ?? 0;
       byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0) + (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
       byId[id].buyerBrokerCommPerUnit += (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
+      byId[id].buyerBrokerLumpsumLineItem = (byId[id].buyerBrokerLumpsumLineItem ?? 0) + (li.Buyers_Brokers_Commission_Lumpsum__c ?? 0);
       if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
@@ -127,12 +128,11 @@ Deno.serve(async (req) => {
     const rows = stems.map(s => {
       const buyer = s.Total_Invoice_Amount__c ?? 0;
       const supplier = s.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
-      const costs = s.Costs_Total__c ?? 0;
       const agg = byId[s.Id] || {};
       const suppBrokerComm = agg.suppBrokerComm ?? 0;
-      const buyerBrokerComm = (agg.buyerBrokerCommPerUnit ?? 0) + (agg.buyerBrokerLumpsum ?? 0);
+      const buyerBrokerComm = (agg.buyerBrokerCommPerUnit ?? 0) + (agg.buyerBrokerLumpsum ?? 0) + (agg.buyerBrokerLumpsumLineItem ?? 0);
       const totalBroker = suppBrokerComm + buyerBrokerComm;
-      const grossProfit = buyer - supplier - costs;
+      const grossProfit = buyer - supplier;
       const netProfit = grossProfit - totalBroker;
       const margin = buyer > 0 ? (netProfit / buyer) * 100 : null;
 
@@ -144,7 +144,6 @@ Deno.serve(async (req) => {
         Buyer: s['Account__r']?.Name ?? null,
         Buyer_Invoice: buyer || null,
         Supplier_Invoice: supplier || null,
-        Costs: costs || null,
         Supplier_Broker_Comm: suppBrokerComm || null,
         Buyer_Broker_Comm: buyerBrokerComm || null,
         Total_Broker_Comm: totalBroker || null,
@@ -161,7 +160,6 @@ Deno.serve(async (req) => {
       complete: complete.length,
       Buyer_Invoice: complete.reduce((s, r) => s + (r.Buyer_Invoice ?? 0), 0),
       Supplier_Invoice: complete.reduce((s, r) => s + (r.Supplier_Invoice ?? 0), 0),
-      Costs: complete.reduce((s, r) => s + (r.Costs ?? 0), 0),
       Total_Broker_Comm: complete.reduce((s, r) => s + (r.Total_Broker_Comm ?? 0), 0),
       Gross_Profit: complete.reduce((s, r) => s + (r.Gross_Profit ?? 0), 0),
       Net_Profit: complete.reduce((s, r) => s + (r.Net_Profit ?? 0), 0),
