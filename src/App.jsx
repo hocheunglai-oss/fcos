@@ -11,6 +11,7 @@ import DataExplorer from '@/pages/DataExplorer';
 import DashboardSettings from '@/pages/DashboardSettings';
 import SchemaExplorer from '@/pages/SchemaExplorer';
 import SettingsPage from '@/pages/Settings';
+import StemPnlReport from '@/pages/StemPnlReport';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -40,6 +41,7 @@ const AuthenticatedApp = () => {
         <Route path="/explorer" element={<DataExplorer />} />
         <Route path="/schema" element={<SchemaExplorer />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/pnl" element={<StemPnlReport />} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
