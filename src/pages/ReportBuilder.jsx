@@ -121,6 +121,8 @@ export default function ReportBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
+  const [rawSoqlMode, setRawSoqlMode] = useState(false);
+  const [rawSoql, setRawSoql] = useState('');
   const [fieldsError, setFieldsError] = useState(false);
   const [fieldsRetry, setFieldsRetry] = useState(0);
   const [compact, setCompact] = useState(() => localStorage.getItem('rb_compact') === 'true');
@@ -386,7 +388,8 @@ export default function ReportBuilder() {
   const runQuery = async () => {
     setLoading(true);
     setError(null);
-    const soql = buildSoql();
+    const soql = rawSoqlMode ? rawSoql.trim() : buildSoql();
+    if (!soql) { setError('Please enter a SOQL query.'); setLoading(false); return; }
     const res = await base44.functions.invoke('salesforceQuery', { soql });
     if (res.data?.error) {
       setError(res.data.error);
@@ -571,8 +574,17 @@ export default function ReportBuilder() {
               <Button variant="ghost" size="sm" onClick={toggleCompact} className="gap-1.5 text-muted-foreground" title={compact ? 'Comfortable view' : 'Compact view'}>
                 {compact ? <AlignJustify className="w-3.5 h-3.5" /> : <LayoutList className="w-3.5 h-3.5" />}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setShowSoql(v => !v)} className="gap-1.5 text-muted-foreground">
-                <Code className="w-3.5 h-3.5" /> SOQL
+              <Button
+                variant={rawSoqlMode ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  if (!rawSoqlMode) setRawSoql(buildSoql());
+                  setRawSoqlMode(v => !v);
+                }}
+                className="gap-1.5 text-muted-foreground"
+                title={rawSoqlMode ? 'Back to builder' : 'Edit raw SOQL'}
+              >
+                <Code className="w-3.5 h-3.5" /> {rawSoqlMode ? 'Builder' : 'Raw SOQL'}
               </Button>
               {records.length > 0 && (
                 <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
@@ -651,106 +663,125 @@ export default function ReportBuilder() {
             </div>
           )}
 
-          {/* SOQL Preview */}
-          {!compact && showSoql && (
+          {/* Raw SOQL editor */}
+          {rawSoqlMode && (
+            <div className="mb-5 bg-slate-900 rounded-xl overflow-hidden border border-slate-700">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
+                <span className="text-xs font-semibold text-emerald-400 font-mono">SOQL Editor</span>
+                <span className="text-[10px] text-slate-500">Paste or type any SOQL query — the builder is bypassed</span>
+              </div>
+              <textarea
+                className="w-full bg-slate-900 text-emerald-300 font-mono text-xs p-3 outline-none resize-none"
+                rows={6}
+                value={rawSoql}
+                onChange={e => setRawSoql(e.target.value)}
+                placeholder="SELECT Id, Name FROM Account WHERE ..."
+                spellCheck={false}
+              />
+            </div>
+          )}
+
+          {/* SOQL Preview (builder mode only) */}
+          {!rawSoqlMode && !compact && showSoql && (
             <div className="mb-5 p-3 bg-slate-900 rounded-xl overflow-x-auto">
               <p className="text-xs font-mono text-emerald-400 whitespace-pre-wrap break-all">{soql}</p>
             </div>
           )}
 
-
-          {/* Columns */}
-          <div className="mb-5 bg-card rounded-xl border border-border p-4">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Columns
-              </label>
-              {fieldsError && (
-                <button onClick={() => setFieldsRetry(v => v + 1)} className="text-xs text-destructive hover:underline flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> Failed to load — click to retry
-                </button>
-              )}
-            </div>
-            <ColumnSelector
-              fields={columnFields}
-              selectedFields={selectedFields}
-              onChange={setSelectedFields}
-              loading={loadingFields}
-              relatedObjects={relatedObjects}
-              childRelationships={childRelationships}
-            />
-          </div>
-
-          {/* Advanced panels: tabs */}
-          {!compact && <div className="mb-5 bg-card rounded-xl border border-border overflow-hidden">
-            {/* Tab bar */}
-            <div className="flex border-b border-border">
-              {TABS.map(tab => {
-                const Icon = tab.icon;
-                const badge = tab.id === 'filters' ? activeFilterCount
-                  : tab.id === 'aggregates' ? calcFields.length
-                  : lookups.length;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
-                      activeTab === tab.id
-                        ? 'border-primary text-primary bg-accent/30'
-                        : 'border-transparent text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    {tab.label}
-                    {badge > 0 && (
-                      <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
-                        {badge}
-                      </span>
-                    )}
+          {/* Columns + advanced panels — hidden in raw SOQL mode */}
+          {!rawSoqlMode && <>
+            <div className="mb-5 bg-card rounded-xl border border-border p-4">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Columns
+                </label>
+                {fieldsError && (
+                  <button onClick={() => setFieldsRetry(v => v + 1)} className="text-xs text-destructive hover:underline flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Failed to load — click to retry
                   </button>
-                );
-              })}
+                )}
+              </div>
+              <ColumnSelector
+                fields={columnFields}
+                selectedFields={selectedFields}
+                onChange={setSelectedFields}
+                loading={loadingFields}
+                relatedObjects={relatedObjects}
+                childRelationships={childRelationships}
+              />
             </div>
-            {/* Panel content */}
-            <div className="p-4">
-              {activeTab === 'filters' && (
-                <FilterGroup
-                  group={filterGroup}
-                  fields={filterableFields}
-                  relatedObjects={relatedObjectsNoChild}
-                  childRelationships={childRelationships}
-                  onChange={setFilterGroup}
-                  depth={0}
-                />
-              )}
-              {activeTab === 'aggregates' && (
-                <CalculatedFields
-                  calcFields={calcFields}
-                  onChange={setCalcFields}
-                  fields={fields}
-                  relatedObjects={relatedObjectsNoChild}
-                  childRelationships={childRelationships}
-                />
-              )}
-              {activeTab === 'lookups' && (
-                <LookupFields
-                  lookups={lookups}
-                  onChange={setLookups}
-                  fields={referenceFields}
-                  selectedObject={selectedObject}
-                />
-              )}
-            </div>
-          </div>}
 
-          {!compact && error && (
+            {/* Advanced panels: tabs */}
+            {!compact && <div className="mb-5 bg-card rounded-xl border border-border overflow-hidden">
+              {/* Tab bar */}
+              <div className="flex border-b border-border">
+                {TABS.map(tab => {
+                  const Icon = tab.icon;
+                  const badge = tab.id === 'filters' ? activeFilterCount
+                    : tab.id === 'aggregates' ? calcFields.length
+                    : lookups.length;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                        activeTab === tab.id
+                          ? 'border-primary text-primary bg-accent/30'
+                          : 'border-transparent text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      {tab.label}
+                      {badge > 0 && (
+                        <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                          {badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Panel content */}
+              <div className="p-4">
+                {activeTab === 'filters' && (
+                  <FilterGroup
+                    group={filterGroup}
+                    fields={filterableFields}
+                    relatedObjects={relatedObjectsNoChild}
+                    childRelationships={childRelationships}
+                    onChange={setFilterGroup}
+                    depth={0}
+                  />
+                )}
+                {activeTab === 'aggregates' && (
+                  <CalculatedFields
+                    calcFields={calcFields}
+                    onChange={setCalcFields}
+                    fields={fields}
+                    relatedObjects={relatedObjectsNoChild}
+                    childRelationships={childRelationships}
+                  />
+                )}
+                {activeTab === 'lookups' && (
+                  <LookupFields
+                    lookups={lookups}
+                    onChange={setLookups}
+                    fields={referenceFields}
+                    selectedObject={selectedObject}
+                  />
+                )}
+              </div>
+            </div>}
+          </>}
+
+          {(!compact || rawSoqlMode) && error && (
             <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm flex gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {error}
             </div>
           )}
 
           {/* Results */}
-          {!compact && <div className="bg-card rounded-xl border border-border">
+          {(!compact || rawSoqlMode) && <div className="bg-card rounded-xl border border-border">
             <div className="px-5 py-3.5 border-b border-border flex items-center justify-between gap-4">
               <span className="text-sm font-semibold text-foreground shrink-0">
                 {records.length > 0 ? `${records.length.toLocaleString()} rows` : 'Results'}
