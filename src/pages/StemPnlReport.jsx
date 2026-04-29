@@ -24,7 +24,6 @@ const COLUMNS = [
 
   { key: 'Buyer_Invoice',      label: 'Buyer Invoice',     num: true },
   { key: 'Supplier_Invoice',   label: 'Supplier Invoice',  num: true },
-  { key: 'Costs',              label: 'Costs',             num: true },
   { key: 'Supplier_Broker_Comm', label: 'Supp. Broker',   num: true },
   { key: 'Buyer_Broker_Comm',  label: 'Buyer Broker',      num: true },
   { key: 'Gross_Profit',       label: 'Gross P&L',         num: true },
@@ -192,7 +191,6 @@ export default function StemPnlReport() {
             <StatCard label="Stems" value={totals.count} sub={`${totals.complete} complete`} />
             <StatCard label="Buyer Invoices" value={fmt(totals.Buyer_Invoice)} color="blue" />
             <StatCard label="Supplier Invoices" value={fmt(totals.Supplier_Invoice)} color="amber" />
-            <StatCard label="Total Costs" value={fmt(totals.Costs)} />
             <StatCard label="Broker Commissions" value={fmt(totals.Total_Broker_Comm)} color="amber" />
             <StatCard
               label="Net P&L"
