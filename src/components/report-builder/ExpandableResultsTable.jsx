@@ -41,16 +41,21 @@ function colLabel(key) {
 
 // ── SubTable ─────────────────────────────────────────────────────────────────
 
-function SubTable({ subqueryResult, label, depth = 0 }) {
+function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
   const [expandedSubRows, setExpandedSubRows] = useState(new Set());
   if (!subqueryResult?.records?.length) {
     return <p className="text-xs text-muted-foreground italic px-2 py-1">No {label} records</p>;
   }
   const rows = subqueryResult.records || [];
 
-  // Scan ALL rows to detect subquery cols
+  // Scan ALL rows to detect subquery cols. Also include knownNestedCols passed from parent
+  // (needed when this specific record's rows all have null for a nested subquery col,
+  // but sibling records in the parent DO have data — the column still exists)
   const allCols = Array.from(new Set(rows.flatMap(r => Object.keys(r)))).filter(k => k !== 'attributes');
-  const nestedCols = allCols.filter(k => rows.some(r => isSubqueryResult(r[k])));
+  const detectedNestedCols = allCols.filter(k => rows.some(r => isSubqueryResult(r[k])));
+  // Also treat cols ending in __r that are null (potential subquery cols) as nested if known from siblings
+  const nullRelCols = allCols.filter(k => k.endsWith('__r') && !detectedNestedCols.includes(k) && rows.every(r => r[k] === null));
+  const nestedCols = [...new Set([...detectedNestedCols, ...knownNestedCols.filter(k => allCols.includes(k)), ...nullRelCols])];
   const mainCols = allCols.filter(k => !nestedCols.includes(k));
   const hasNested = nestedCols.length > 0;
 
@@ -175,6 +180,22 @@ export default function ExpandableResultsTable({ records }) {
     totals[c] = records.reduce((sum, r) => sum + (typeof r[c] === 'number' ? r[c] : 0), 0);
   });
 
+  // For each subquery column, scan ALL records to find which nested cols appear anywhere
+  // This ensures SubTable knows about nested cols even if a specific row has all-null values
+  const allNestedColsPerSubquery = {};
+  subqueryCols.forEach(col => {
+    const nestedSet = new Set();
+    records.forEach(row => {
+      const sub = row[col];
+      if (isSubqueryResult(sub) && sub.records) {
+        sub.records.forEach(r => {
+          Object.keys(r).filter(k => k !== 'attributes' && (isSubqueryResult(r[k]) || (k.endsWith('__r') && r[k] === null))).forEach(k => nestedSet.add(k));
+        });
+      }
+    });
+    allNestedColsPerSubquery[col] = [...nestedSet];
+  });
+
   // Build flat array of <tr> elements to avoid Fragment prop issues from dev tooling
   const bodyRows = [];
   records.forEach((row, idx) => {
@@ -213,7 +234,11 @@ export default function ExpandableResultsTable({ records }) {
                     <span className="text-[10px] text-purple-400">({row[col]?.totalSize ?? 0} records)</span>
                   </div>
                   <div className="px-2 py-1">
-                    <SubTable subqueryResult={row[col]} label={colLabel(col)} />
+                    <SubTable
+                      subqueryResult={row[col]}
+                      label={colLabel(col)}
+                      knownNestedCols={allNestedColsPerSubquery[col] || []}
+                    />
                   </div>
                 </div>
               ))}

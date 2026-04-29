@@ -53,6 +53,8 @@ Deno.serve(async (req) => {
     };
     const cleanRecords = records.map(cleanRecord);
 
+
+
     return Response.json({ records: cleanRecords, totalSize, fetched: cleanRecords.length });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });
