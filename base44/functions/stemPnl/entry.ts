@@ -85,7 +85,7 @@ Deno.serve(async (req) => {
                  STEM_Line_Item__r.Quantity__c
           FROM STEM_Line_Item_Buyer_Broker__c
           WHERE STEM_Line_Item__r.STEM__c IN (${inList})
-          LIMIT 2000
+          LIMIT 5000
         `);
       })),
     ]);
@@ -120,7 +120,6 @@ Deno.serve(async (req) => {
       const id = bb['STEM_Line_Item__r']?.STEM__c;
       if (!id) continue;
       initStem(id);
-      const qty = bb['STEM_Line_Item__r']?.Quantity__c ?? 0;
       byId[id].buyerBrokerLumpsum += (bb.Commission_Lumpsum__c ?? 0);
     }
 
