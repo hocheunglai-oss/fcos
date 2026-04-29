@@ -9,7 +9,7 @@ import { format } from 'date-fns';
 const fmt = (v, isPercent = false) => {
   if (v == null) return '—';
   if (isPercent) return `${Number(v).toFixed(1)}%`;
-  return `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 const fmtDate = (v) => {
