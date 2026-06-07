@@ -1,0 +1,11 @@
+{
+  "type": "salesforce",
+  "scopes": [
+    "api",
+    "refresh_token",
+    "offline_access",
+    "openid",
+    "email",
+    "profile"
+  ]
+}
