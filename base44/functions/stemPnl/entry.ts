@@ -69,8 +69,7 @@ Deno.serve(async (req) => {
         const inList = chunk.map(id => `'${id}'`).join(',');
         return sfQuery(accessToken, `
           SELECT Id, STEM__c, Quantity__c,
-                 Buyers_Brokers_Commission_Lumpsum__c,
-                 Suppliers_Brokers_Commission_Lumpsum__c,
+                 Buyers_Brokers_Commission_Per_Unit__c,
                  Suppliers_Brokers_Commission_Per_Unit__c,
                  Supplier_Broker__r.Name
           FROM STEM_Line_Item__c
@@ -97,11 +96,8 @@ Deno.serve(async (req) => {
     const byId = {};
     const initStem = (id) => {
       if (!byId[id]) byId[id] = {
-        suppBrokerCommPerUnit: 0,
-        suppBrokerLumpsumSet: false,
-        suppBrokerLumpsum: 0,
-        buyerBrokerLumpsum: 0,
-        buyerBrokerLumpsumLineItem: 0,
+        suppBrokerComm: 0,       // SUM(per_unit * qty) — negative = profit, positive = cost
+        buyerBrokerComm: 0,
         suppBrokerName: null,
       };
     };
@@ -110,12 +106,11 @@ Deno.serve(async (req) => {
       const id = li.STEM__c;
       if (!id) continue;
       initStem(id);
-      // Lumpsum is a stem-level value repeated on every line item — only take it once
-      if (!byId[id].suppBrokerLumpsumSet && (li.Suppliers_Brokers_Commission_Lumpsum__c ?? 0) !== 0) {
-        byId[id].suppBrokerLumpsum = li.Suppliers_Brokers_Commission_Lumpsum__c;
-        byId[id].suppBrokerLumpsumSet = true;
-      }
-      byId[id].buyerBrokerLumpsumLineItem += (li.Buyers_Brokers_Commission_Lumpsum__c ?? 0);
+      const qty = li.Quantity__c ?? 0;
+      // Supplier broker: per_unit * qty (negative value = profit when subtracted)
+      byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
+      // Buyer broker: per_unit * qty
+      byId[id].buyerBrokerComm += (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
       if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
@@ -125,7 +120,7 @@ Deno.serve(async (req) => {
       const id = bb['STEM_Line_Item__r']?.STEM__c;
       if (!id) continue;
       initStem(id);
-      byId[id].buyerBrokerLumpsum += (bb.Commission_Lumpsum__c ?? 0);
+      byId[id].buyerBrokerComm += (bb.Commission_Lumpsum__c ?? 0);
     }
 
     // Build final rows
@@ -133,11 +128,11 @@ Deno.serve(async (req) => {
       const buyer = s.Total_Invoice_Amount__c ?? 0;
       const supplier = s.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
       const agg = byId[s.Id] || {};
-      const suppBrokerComm = agg.suppBrokerLumpsum ?? 0;
-      const buyerBrokerComm = (agg.buyerBrokerLumpsum ?? 0) + (agg.buyerBrokerLumpsumLineItem ?? 0);
+      const suppBrokerComm = agg.suppBrokerComm ?? 0;   // negative = profit (subtract a negative = add)
+      const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
       const totalBroker = suppBrokerComm + buyerBrokerComm;
       const grossProfit = buyer - supplier;
-      const netProfit = grossProfit - totalBroker;
+      const netProfit = grossProfit - totalBroker; // subtracting negative suppBrokerComm = adding to profit
       const margin = buyer > 0 ? (netProfit / buyer) * 100 : null;
 
       return {
@@ -148,9 +143,10 @@ Deno.serve(async (req) => {
         Buyer: s['Account__r']?.Name ?? null,
         Buyer_Invoice: buyer || null,
         Supplier_Invoice: supplier || null,
-        Supplier_Broker_Comm: suppBrokerComm || null,
-        Buyer_Broker_Comm: buyerBrokerComm || null,
-        Total_Broker_Comm: totalBroker || null,
+        Supplier_Broker_Name: agg.suppBrokerName || null,
+        Supplier_Broker_Comm: suppBrokerComm !== 0 ? suppBrokerComm : null,
+        Buyer_Broker_Comm: buyerBrokerComm !== 0 ? buyerBrokerComm : null,
+        Total_Broker_Comm: totalBroker !== 0 ? totalBroker : null,
         Gross_Profit: (buyer && supplier) ? grossProfit : null,
         Net_Profit: (buyer && supplier) ? netProfit : null,
         Margin_Pct: (buyer && supplier) ? margin : null,
