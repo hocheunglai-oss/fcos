@@ -304,10 +304,10 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                                   : (li.Quantity_in_MT__c > 0 ? li.Quantity_in_MT__c.toLocaleString() : (li.Quantity__c != null ? li.Quantity__c.toLocaleString() : '—'))}
                               </td>
                               <td className="py-2 pr-3 text-right text-foreground">{
-                                (li.Subtotal_Sell_At__c != null && li.Quantity__c) ? fmtMoney(li.Subtotal_Sell_At__c / li.Quantity__c) : '—'
+                                li['Offer_Line_Item__r']?.UnitPrice != null ? fmtMoney(li['Offer_Line_Item__r'].UnitPrice) : '—'
                               }</td>
                               <td className="py-2 pr-3 text-right text-foreground">{
-                                (li.Subtotal_Buy_At__c != null && li.Quantity__c) ? fmtMoney(li.Subtotal_Buy_At__c / li.Quantity__c) : '—'
+                                li['Offer_Line_Item__r']?.Supplier_Unit_Price__c != null ? fmtMoney(li['Offer_Line_Item__r'].Supplier_Unit_Price__c) : '—'
                               }</td>
                               <td className="py-2 pr-3 text-right font-semibold text-foreground">{li.Total_Price__c != null ? fmtMoney(li.Total_Price__c) : '—'}</td>
                               <td className="py-2 pr-3 text-right font-semibold text-foreground">{li.Total_Cost__c != null ? fmtMoney(li.Total_Cost__c) : '—'}</td>
