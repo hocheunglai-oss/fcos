@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Search, Download, AlertCircle, Loader2, Database } from 'lucide-react';
-import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
+import { Search, Download, AlertCircle, Loader2, Database, Copy, Check } from 'lucide-react';
+import ExplorerResultsTable from '@/components/data-explorer/ExplorerResultsTable';
 
 export default function DataExplorer() {
   const [objects, setObjects] = useState([]);
@@ -21,6 +21,7 @@ export default function DataExplorer() {
   const [loadingFields, setLoadingFields] = useState(false);
   const [loadingObjects, setLoadingObjects] = useState(true);
   const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     base44.functions.invoke('salesforceSchema', {}).then(res => {
@@ -53,10 +54,11 @@ export default function DataExplorer() {
     return q;
   };
 
+  const soql = buildSoql();
+
   const runQuery = async () => {
     setLoading(true);
     setError(null);
-    const soql = buildSoql();
     const res = await base44.functions.invoke('salesforceQuery', { soql });
     if (res.data?.error) {
       setError(res.data.error);
@@ -86,6 +88,12 @@ export default function DataExplorer() {
     URL.revokeObjectURL(url);
   };
 
+  const copySoql = () => {
+    navigator.clipboard.writeText(soql);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   const toggleField = (name) => {
     setSelectedFields(prev =>
       prev.includes(name) ? prev.filter(f => f !== name) : [...prev, name]
@@ -96,7 +104,7 @@ export default function DataExplorer() {
 
   return (
     <div className="p-6 lg:p-8 max-w-full">
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-2xl font-bold text-foreground font-dm tracking-tight">Data Explorer</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Query any Salesforce object and export results</p>
       </div>
@@ -202,12 +210,32 @@ export default function DataExplorer() {
         </div>
 
         {/* Results */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 space-y-4">
+          {/* SOQL Preview */}
+          <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700">
+              <span className="text-xs font-semibold text-emerald-400 font-mono">SOQL Preview</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={copySoql}
+                className="h-6 gap-1 text-xs text-slate-400 hover:text-white"
+              >
+                {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                {copied ? 'Copied!' : 'Copy'}
+              </Button>
+            </div>
+            <div className="px-4 py-3 overflow-x-auto">
+              <code className="text-xs text-emerald-300 font-mono whitespace-pre-wrap break-all">{soql}</code>
+            </div>
+          </div>
+
           {error && (
-            <div className="mb-4 p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm flex gap-2">
+            <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm flex gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {error}
             </div>
           )}
+
           <div className="bg-card rounded-xl border border-border">
             <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -232,7 +260,7 @@ export default function DataExplorer() {
                   <span className="text-sm">Querying Salesforce…</span>
                 </div>
               ) : records.length > 0 ? (
-                <RecentStemsTable records={records} />
+                <ExplorerResultsTable records={records} />
               ) : (
                 <div className="py-16 flex flex-col items-center gap-3 text-muted-foreground">
                   <Database className="w-8 h-8 opacity-30" />

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, BookOpen, ChevronDown, LayoutList, AlignJustify } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, BookOpen, ChevronDown, LayoutList, AlignJustify, Copy, Check } from 'lucide-react';
 
 import FilterGroup from '@/components/report-builder/FilterGroup';
 import CalculatedFields from '@/components/report-builder/CalculatedFields';
@@ -120,7 +120,8 @@ export default function ReportBuilder() {
   const [error, setError] = useState(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
-  const [showSoql, setShowSoql] = useState(false);
+  const [showSoql, setShowSoql] = useState(true);
+  const [soqlCopied, setSoqlCopied] = useState(false);
   const [rawSoqlMode, setRawSoqlMode] = useState(false);
   const [rawSoql, setRawSoql] = useState('');
   const [fieldsError, setFieldsError] = useState(false);
@@ -682,9 +683,27 @@ export default function ReportBuilder() {
           )}
 
           {/* SOQL Preview (builder mode only) */}
-          {!rawSoqlMode && !compact && showSoql && (
-            <div className="mb-5 p-3 bg-slate-900 rounded-xl overflow-x-auto">
-              <p className="text-xs font-mono text-emerald-400 whitespace-pre-wrap break-all">{soql}</p>
+          {!rawSoqlMode && !compact && (
+            <div className="mb-5 bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
+                <span className="text-xs font-semibold text-emerald-400 font-mono">SOQL Preview</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    navigator.clipboard.writeText(soql);
+                    setSoqlCopied(true);
+                    setTimeout(() => setSoqlCopied(false), 1500);
+                  }}
+                  className="h-6 gap-1 text-xs text-slate-400 hover:text-white"
+                >
+                  {soqlCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  {soqlCopied ? 'Copied!' : 'Copy'}
+                </Button>
+              </div>
+              <div className="px-3 py-2.5 overflow-x-auto max-h-28">
+                <p className="text-xs font-mono text-emerald-300 whitespace-pre-wrap break-all">{soql}</p>
+              </div>
             </div>
           )}
 
