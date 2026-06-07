@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json();
-    const { stemId, updates } = body;
+    const { stemId, updates, childObject, childId, childUpdates } = body;
 
     if (!stemId) return Response.json({ error: 'stemId required' }, { status: 400 });
 
@@ -54,6 +54,22 @@ Deno.serve(async (req) => {
         return Response.json({ error: `STEM with KeyStem__c '${stemId}' not found` }, { status: 404 });
       }
       actualStemId = lookup[0].Id;
+    }
+
+    // If child record updates provided, PATCH the child record
+    if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
+      const patchRes = await fetch(
+        `${SF_INSTANCE}/services/data/${SF_API_VERSION}/sobjects/${childObject}/${childId}`,
+        {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(childUpdates),
+        }
+      );
+      if (!patchRes.ok) {
+        const err = await patchRes.json();
+        return Response.json({ error: err[0]?.message || 'Child update failed' }, { status: 400 });
+      }
     }
 
     // If updates provided, PATCH the record
