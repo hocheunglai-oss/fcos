@@ -4,15 +4,19 @@ const SF_INSTANCE = "https://fratellicosulich.my.salesforce.com";
 const SF_API_VERSION = "v59.0";
 
 async function sfQuery(accessToken, soql) {
-  const encoded = encodeURIComponent(soql);
-  const res = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/query/?q=${encoded}`, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  const data = await res.json();
-  if (data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
-    throw new Error(data.message || (Array.isArray(data) && data[0]?.message) || 'Query error');
+  try {
+    const encoded = encodeURIComponent(soql);
+    const res = await fetch(`${SF_INSTANCE}/services/data/${SF_API_VERSION}/query/?q=${encoded}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+    if (data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
+      return { records: [], totalSize: 0 };
+    }
+    return { records: data.records || [], totalSize: data.totalSize ?? 0 };
+  } catch {
+    return { records: [], totalSize: 0 };
   }
-  return { records: data.records || [], totalSize: data.totalSize ?? 0 };
 }
 
 Deno.serve(async (req) => {
