@@ -68,11 +68,6 @@ Deno.serve(async (req) => {
     if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
     const usefulFields = plFields;
 
-    // Build a sub-filter on STEM_Line_Item__c using a semi-join when a where clause exists
-    const lineItemWhere = where
-      ? `WHERE STEM__c IN (SELECT Id FROM stem__c WHERE ${where})`
-      : '';
-
     const queries = [
       // 0: total stem count
       sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c ${whereClause}`),
@@ -106,9 +101,7 @@ Deno.serve(async (req) => {
       totalCostsField
         ? sfQuery(accessToken, `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`)
         : Promise.resolve({ records: [] }),
-      // 9: all line items for broker commissions (grouped by stem)
-      sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__c, Supplier_Broker__r.Name, Buyer_Broker__c, Buyer_Broker__r.Name FROM STEM_Line_Item__c ${lineItemWhere}`),
-      // 10: all stems with financial fields (no limit) for accurate profit sum
+      // 9: all stems with financial fields (no limit) for accurate profit sum
       sfQuery(accessToken, `SELECT Id, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'} FROM stem__c ${whereClause} LIMIT 2000`),
     ];
 
@@ -124,8 +117,25 @@ Deno.serve(async (req) => {
     const buyerRes          = getValue(results[6]);
     const supplierRes       = getValue(results[7]);
     const costsRes          = getValue(results[8]);
-    const lineItemsRes      = getValue(results[9]);
-    const allStemsRes       = getValue(results[10]);
+    const allStemsRes       = getValue(results[9]);
+
+    // Fetch line items for broker commissions using explicit stem IDs (avoids semi-join scope issues)
+    const allStemIds = (allStemsRes.records || []).map(s => s.Id);
+    const chunkIds = (ids, size = 200) => {
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+      return chunks;
+    };
+    let lineItemsRes = { records: [] };
+    if (allStemIds.length > 0) {
+      const lineItemChunks = await Promise.all(
+        chunkIds(allStemIds).map(chunk => {
+          const inList = chunk.map(id => `'${id}'`).join(',');
+          return sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__c, Supplier_Broker__r.Name, Buyer_Broker__c, Buyer_Broker__r.Name FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
+        })
+      );
+      lineItemsRes = { records: lineItemChunks.flatMap(c => c.records || []) };
+    }
 
     // Build per-stem broker commission maps from line items
     const brokerByStem = {};
