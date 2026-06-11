@@ -88,13 +88,13 @@ export default function PnlTable({ records = [], onRowClick }) {
           <tr className="border-b border-border">
             {displayCols.map(col => (
               <th
-                key={col}
-                className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${
-                  MONEY_COLS.has(col) ? 'text-right' : 'text-left'
-                }`}
-              >
-                {col === '__pnl__' ? 'P&L' : colLabel(col)}
-              </th>
+                 key={col}
+                 className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${
+                   MONEY_COLS.has(col) ? 'text-right' : 'text-left'
+                 }`}
+               >
+                 {col === '__pnl__' ? 'Net P&L' : colLabel(col)}
+               </th>
             ))}
           </tr>
         </thead>
@@ -123,8 +123,8 @@ export default function PnlTable({ records = [], onRowClick }) {
                         pnl == null ? 'text-muted-foreground' : pnlPositive ? 'text-emerald-600' : 'text-red-500'
                       }`}>
                         {pnl == null
-                          ? (showPnl && !hasDelivery ? <span className="text-muted-foreground/50 text-xs">no delivery</span> : '—')
-                          : fmtMoney(pnl)}
+                           ? (showPnl && !hasDelivery ? <span className="text-muted-foreground/50 text-xs">no delivery</span> : '—')
+                           : fmtMoney(pnl)}
                       </td>
                     );
                   }

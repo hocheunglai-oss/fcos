@@ -227,7 +227,7 @@ export default function DashboardSettings() {
               color="green"
             />
             <StatCard
-              label="Total Profit (P&L)"
+              label="Total Net Profit"
               value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
               sub={data.totalProfit == null ? (data.buyerAmountField ? 'Supplier field not found' : 'Buyer/supplier fields not found') : `Buyer $${(data.totalBuyer ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Supplier $${(data.totalSupplier ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
               icon={DollarSign}
