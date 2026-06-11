@@ -108,16 +108,26 @@ export default function DashboardSettings() {
     return () => clearTimeout(debounceRef.current);
   }, [selectedYears, selectedMonths]);
 
-  // Filtered table rows: search by vessel name, stem name, or buyer name
+  // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
     if (!data?.recentStems?.length) return data?.recentStems || [];
-    if (!tableSearch.trim()) return data.recentStems;
+    const yearsSet = new Set(selectedYears);
+    const monthsSet = new Set(selectedMonths);
+    // Parse date string directly (e.g. "2026-04-30") to avoid any timezone issues
+    let stems = data.recentStems.filter(row => {
+      if (!row.Delivery_Date__c) return false;
+      const parts = row.Delivery_Date__c.split('-');
+      const yr = Number(parts[0]);
+      const mo = Number(parts[1]);
+      return yearsSet.has(yr) && monthsSet.has(mo);
+    });
+    if (!tableSearch.trim()) return stems;
     const q = tableSearch.toLowerCase();
     const SEARCH_FIELDS = ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c'];
-    return data.recentStems.filter(row =>
+    return stems.filter(row =>
       SEARCH_FIELDS.some(f => row[f] != null && String(row[f]).toLowerCase().includes(q))
     );
-  }, [data?.recentStems, tableSearch]);
+  }, [data?.recentStems, tableSearch, selectedYears, selectedMonths]);
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
