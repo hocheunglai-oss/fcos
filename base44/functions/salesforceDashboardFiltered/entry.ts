@@ -131,17 +131,23 @@ Deno.serve(async (req) => {
       return chunks;
     };
     let lineItemsRes = { records: [] };
+    let buyerBrokersRes = { records: [] };
     if (allStemIds.length > 0) {
-      const lineItemChunks = await Promise.all(
-        chunkIds(allStemIds).map(chunk => {
+      const [lineItemChunks, buyerBrokerChunks] = await Promise.all([
+        Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
-          return sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__c, Supplier_Broker__r.Name, Buyer_Broker__c, Buyer_Broker__r.Name FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
-        })
-      );
+          return sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
+        })),
+        Promise.all(chunkIds(allStemIds).map(chunk => {
+          const inList = chunk.map(id => `'${id}'`).join(',');
+          return sfQuery(accessToken, `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
+        })),
+      ]);
       lineItemsRes = { records: lineItemChunks.flatMap(c => c.records || []) };
+      buyerBrokersRes = { records: buyerBrokerChunks.flatMap(c => c.records || []) };
     }
 
-    // Build per-stem broker commission maps from line items
+    // Build per-stem broker commission maps from line items + buyer broker lumpsums
     const brokerByStem = {};
     for (const li of (lineItemsRes.records || [])) {
       const id = li.STEM__c;
@@ -155,6 +161,13 @@ Deno.serve(async (req) => {
       if (!brokerByStem[id].buyerBrokerName && li['Buyer_Broker__r']?.Name) {
         brokerByStem[id].buyerBrokerName = li['Buyer_Broker__r'].Name;
       }
+    }
+    // Add buyer broker lumpsums
+    for (const bb of (buyerBrokersRes.records || [])) {
+      const id = bb.STEM__c;
+      if (!id) continue;
+      if (!brokerByStem[id]) brokerByStem[id] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
+      brokerByStem[id].buyerComm += (bb.Commission_Lumpsum__c ?? 0);
     }
 
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => {
