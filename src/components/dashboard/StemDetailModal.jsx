@@ -310,6 +310,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                           <tr className="bg-muted/40 border-b border-border">
                             <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground">Product</th>
                             <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground">Supplier</th>
+                            {lineItems.some(li => li.BDN_Company__c) && (
+                              <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground">BDN Company</th>
+                            )}
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Qty (MT)</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Sell/Unit</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Buy/Unit</th>
@@ -335,6 +338,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                               <tr key={li.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
                                 <td className="py-2.5 px-3 font-medium text-foreground">{li._Product_Name || '—'}</td>
                                 <td className="py-2.5 px-3 text-muted-foreground">{li.Supplier_Name__c || '—'}</td>
+                                {lineItems.some(l => l.BDN_Company__c) && (
+                                  <td className="py-2.5 px-3 text-muted-foreground">{li.BDN_Company__c || '—'}</td>
+                                )}
                                 <td className="py-2.5 px-3 text-right text-foreground">
                                   {li.Is_Quantity_Range__c && li.Quantity_Max__c
                                     ? `${li.Quantity__c ?? '—'}–${li.Quantity_Max__c}`
