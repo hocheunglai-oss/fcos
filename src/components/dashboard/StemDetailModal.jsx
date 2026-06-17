@@ -390,10 +390,12 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                           </tr>
                         </thead>
                         <tbody>
-                          {visibleExtraCosts.map((ec, idx) => (
+                          {visibleExtraCosts.map((ec, idx) => {
+                            const productName = ec._Product_Name || (ec['Product2Id__r']?.Name) || ec.Description__c || '—';
+                            return (
                             <tr key={ec.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
                               <td className="py-2.5 px-3 font-medium text-foreground">{ec.Name || '—'}</td>
-                              <td className="py-2.5 px-3 text-muted-foreground">{ec._Product_Name || ec.Description__c || '—'}</td>
+                              <td className="py-2.5 px-3 text-muted-foreground">{productName}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{ec.Supplier_Name__c || '—'}</td>
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Quantity__c != null ? ec.Quantity__c.toLocaleString() : '—'}</td>
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Unit_Price__c != null ? fmtMoney(ec.Unit_Price__c) : '—'}</td>
@@ -401,7 +403,8 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                               <td className="py-2.5 px-3 text-right font-semibold text-foreground">{ec.Line_Total__c != null ? fmtMoney(ec.Line_Total__c) : '—'}</td>
                               <td className="py-2.5 px-3 text-right font-semibold text-foreground">{ec.Line_Total_Buy__c != null ? fmtMoney(ec.Line_Total_Buy__c) : '—'}</td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
