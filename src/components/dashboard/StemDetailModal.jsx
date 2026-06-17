@@ -388,13 +388,16 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Buy/Unit</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Sell</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Buy</th>
+                            <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Net</th>
                           </tr>
                         </thead>
                         <tbody>
                           {visibleExtraCosts.map((ec, idx) => {
                             const productName = ec._Product_Name || (ec['Product2Id__r']?.Name) || ec.Description__c || '—';
+                            const net = (ec.Line_Total__c ?? 0) - (ec.Line_Total_Buy__c ?? 0);
+                            const isNegative = net < 0 && ((ec.Line_Total__c != null && ec.Line_Total_Buy__c != null) || ec.Line_Total__c != null || ec.Line_Total_Buy__c != null);
                             return (
-                            <tr key={ec.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
+                            <tr key={ec.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${isNegative ? 'bg-red-50 border-red-200' : idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
                               <td className="py-2.5 px-3 font-medium text-foreground">{ec.Name || '—'}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{productName}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{ec.Supplier_Name__c || '—'}</td>
@@ -403,6 +406,7 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Unit_Cost__c != null ? fmtMoney(ec.Unit_Cost__c) : '—'}</td>
                               <td className="py-2.5 px-3 text-right font-semibold text-foreground">{ec.Line_Total__c != null ? fmtMoney(ec.Line_Total__c) : '—'}</td>
                               <td className="py-2.5 px-3 text-right font-semibold text-foreground">{ec.Line_Total_Buy__c != null ? fmtMoney(ec.Line_Total_Buy__c) : '—'}</td>
+                              <td className={`py-2.5 px-3 text-right font-semibold ${isNegative ? 'text-red-600' : 'text-emerald-700'}`}>{ec.Line_Total__c != null && ec.Line_Total_Buy__c != null ? fmtMoney(net) : '—'}</td>
                             </tr>
                             );
                           })}
