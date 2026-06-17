@@ -212,6 +212,23 @@ Deno.serve(async (req) => {
       ? accountsRes.records.filter(r => r.acct != null).length
       : null;
 
+    // Compute top buyers by net P&L from per-stem data
+    const buyerPnlMap = {};
+    for (const stem of recentStems) {
+      const buyerName = stem[buyerNameField] || null;
+      if (!buyerName) continue;
+      const buyer = stem[bf];
+      const supplier = stem[sf2];
+      if (!buyer || !supplier) continue;
+      const stemPnl = buyer - supplier - (stem.__buyerCommCalc ?? 0) - (stem.__suppCommPerUnitCalc ?? 0);
+      if (!buyerPnlMap[buyerName]) buyerPnlMap[buyerName] = 0;
+      buyerPnlMap[buyerName] += stemPnl;
+    }
+    const topBuyersByNetPnl = Object.entries(buyerPnlMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, pnl]) => ({ name, netPnl: pnl }));
+
     return Response.json({
       stemTotal: totalRes.records?.[0]?.total ?? 0,
       accountCount,
@@ -227,6 +244,7 @@ Deno.serve(async (req) => {
       supplierAmountField,
       totalCostsField,
       accountField,
+      topBuyersByNetPnl,
     });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });

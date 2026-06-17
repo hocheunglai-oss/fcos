@@ -56,8 +56,6 @@ export default function DashboardSettings() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [tableSearch, setTableSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
-  const [topBuyers, setTopBuyers] = useState([]);
-  const [loadingBuyers, setLoadingBuyers] = useState(false);
   const debounceRef = useRef(null);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
@@ -75,21 +73,11 @@ export default function DashboardSettings() {
   const buildWhereClause = (yrs = selectedYears, mos = selectedMonths) =>
     buildDeliveryWhere(yrs, mos);
 
-  const loadTopBuyers = async (where = '') => {
-    setLoadingBuyers(true);
-    const res = await base44.functions.invoke('salesforceTopBuyers', { where, limit: 10 });
-    if (!res.data?.error) setTopBuyers(res.data?.buyers || []);
-    setLoadingBuyers(false);
-  };
-
   const load = async (yrs = selectedYears, mos = selectedMonths) => {
     setLoading(true);
     setError(null);
     const where = buildWhereClause(yrs, mos);
-    const [res] = await Promise.all([
-      base44.functions.invoke('salesforceDashboardFiltered', { where }),
-      loadTopBuyers(where),
-    ]);
+    const res = await base44.functions.invoke('salesforceDashboardFiltered', { where });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -290,44 +278,41 @@ export default function DashboardSettings() {
             </div>
           )}
 
-          {/* Top 10 Buyers */}
+          {/* Top 10 Buyers by Net P&L */}
+          {data.topBuyersByNetPnl && data.topBuyersByNetPnl.length > 0 && (
           <div className="bg-card rounded-xl border border-border p-5 mb-8">
             <h3 className="text-sm font-semibold text-foreground mb-1">
-              Top 10 Buyers by Invoice Amount
+              Top 10 Buyers by Net P&amp;L
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 ({selectedYears.sort((a,b) => a-b).join(', ')} · {selectedMonths.length === 12 ? 'All months' : selectedMonths.map(m => MONTHS.find(x => x.value === m)?.label).join(', ')})
               </span>
             </h3>
-            {loadingBuyers ? (
-              <div className="flex items-center gap-2 py-8 text-muted-foreground text-sm justify-center">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-              </div>
-            ) : topBuyers.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-6 text-center">No buyer data available</p>
-            ) : (
-              <div className="mt-4 space-y-2">
-                {topBuyers.map((b, i) => {
-                  const max = topBuyers[0].total || 1;
-                  const pct = (b.total / max) * 100;
+            <div className="mt-4 space-y-2">
+              {(() => {
+                const maxAbs = Math.max(...data.topBuyersByNetPnl.map(b => Math.abs(b.netPnl)), 1);
+                return data.topBuyersByNetPnl.map((b, i) => {
+                  const pct = (Math.abs(b.netPnl) / maxAbs) * 100;
+                  const isPos = b.netPnl >= 0;
                   return (
                     <div key={b.name} className="flex items-center gap-3">
                       <span className="w-5 text-xs font-bold text-muted-foreground text-right shrink-0">{i + 1}</span>
-                      <span className="w-52 text-xs text-foreground shrink-0" title={b.name}>{b.name}</span>
+                      <span className="w-52 text-xs text-foreground truncate shrink-0" title={b.name}>{b.name}</span>
                       <div className="flex-1 bg-muted/50 rounded-full h-2 overflow-hidden">
                         <div
-                          className="h-2 rounded-full bg-primary transition-all"
+                          className={`h-2 rounded-full transition-all ${isPos ? 'bg-emerald-500' : 'bg-red-500'}`}
                           style={{ width: `${pct}%` }}
                         />
                       </div>
-                      <span className="text-xs font-semibold text-foreground w-28 text-right shrink-0">
-                        ${b.total.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      <span className={`text-xs font-semibold w-28 text-right shrink-0 ${isPos ? 'text-emerald-600' : 'text-red-600'}`}>
+                        ${b.netPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </span>
                     </div>
                   );
-                })}
-              </div>
-            )}
+                });
+              })()}
+            </div>
           </div>
+          )}
 
           {/* P&L Report */}
           <div className="bg-card rounded-xl border border-border">
