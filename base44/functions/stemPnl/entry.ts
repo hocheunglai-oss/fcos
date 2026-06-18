@@ -77,16 +77,7 @@ Deno.serve(async (req) => {
           LIMIT 2000
         `);
       })),
-      Promise.all(idChunks.map(chunk => {
-        const inList = chunk.map(id => `'${id}'`).join(',');
-        return sfQuery(accessToken, `
-          SELECT STEM_Line_Item__r.STEM__c, Commission_Lumpsum__c,
-                 STEM_Line_Item__r.Quantity__c
-          FROM STEM_Line_Item_Buyer_Broker__c
-          WHERE STEM_Line_Item__r.STEM__c IN (${inList})
-          LIMIT 5000
-        `);
-      })),
+      Promise.all(idChunks.map(() => Promise.resolve([]))),
       Promise.all(idChunks.map(chunk => {
         const inList = chunk.map(id => `'${id}'`).join(',');
         return sfQuery(accessToken, `
@@ -133,7 +124,7 @@ Deno.serve(async (req) => {
     }
 
     for (const bb of buyerBrokerItems) {
-      const id = bb['STEM_Line_Item__r']?.STEM__c;
+      const id = bb.STEM__c;
       if (!id) continue;
       initStem(id);
       byId[id].buyerBrokerComm += (bb.Commission_Lumpsum__c ?? 0);
@@ -156,7 +147,7 @@ Deno.serve(async (req) => {
       const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
       const totalBroker = suppBrokerComm + buyerBrokerComm;
       const grossProfit = buyer - supplier;
-      const netProfit = grossProfit;
+      const netProfit = grossProfit - totalBroker;
       const margin = buyer > 0 ? (netProfit / buyer) * 100 : null;
 
       return {
