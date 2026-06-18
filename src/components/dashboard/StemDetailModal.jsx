@@ -99,8 +99,10 @@ function SectionHeader({ title }) {
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
   const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
-  const supplier = (record.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + supplierExtraCosts;
-  if (!buyer || !supplier) return null;
+  const supplierLineTotal = lineItems.reduce((sum, li) => sum + (li.Total_Cost__c ?? 0), 0);
+  const supplierBase = (record.Total_Invoiced_Amount_From_Suppliers__c ?? 0) || supplierLineTotal;
+  const supplier = supplierBase + supplierExtraCosts;
+  if (buyer == null) return null;
 
   // Supplier broker: per_unit × BDN qty when available, otherwise ordered qty (negative = profit)
   const suppBrokerComm = lineItems.reduce((sum, li) => {
@@ -114,8 +116,8 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   }, 0);
   const buyerBrokerLumpsum = buyerBrokers.reduce((sum, bb) => sum + (bb.Commission_Lumpsum__c ?? 0), 0);
   const buyerBrokerComm = buyerBrokerCommPerUnit + buyerBrokerLumpsum;
-  const grossProfit = buyer - supplier;
-  const netProfit = grossProfit - suppBrokerComm - buyerBrokerComm;
+  const grossProfit = buyer - supplierBase - supplierExtraCosts;
+  const netProfit = grossProfit;
   const isPositive = netProfit >= 0;
 
   return (
@@ -128,32 +130,14 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
         <div className="text-muted-foreground self-end pb-0.5">−</div>
         <div className="flex flex-col">
           <span className="text-xs text-muted-foreground mb-0.5">Supplier Invoice</span>
-          <span className="font-semibold text-foreground">{fmtMoney(supplier)}</span>
+          <span className="font-semibold text-foreground">{fmtMoney(supplierBase)}</span>
         </div>
-        {suppBrokerComm !== 0 && (
+        {supplierExtraCosts !== 0 && (
           <>
             <div className="text-muted-foreground self-end pb-0.5">−</div>
             <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-0.5">Supp Broker Comm</span>
-              <span className="font-semibold text-foreground">{fmtMoney(suppBrokerComm)}</span>
-            </div>
-          </>
-        )}
-        {buyerBrokerCommPerUnit !== 0 && (
-          <>
-            <div className="text-muted-foreground self-end pb-0.5">−</div>
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-0.5">Buyer Broker Comm</span>
-              <span className="font-semibold text-foreground">{fmtMoney(buyerBrokerCommPerUnit)}</span>
-            </div>
-          </>
-        )}
-        {buyerBrokerLumpsum !== 0 && (
-          <>
-            <div className="text-muted-foreground self-end pb-0.5">−</div>
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground mb-0.5">Buyer Broker Lumpsum</span>
-              <span className="font-semibold text-foreground">{fmtMoney(buyerBrokerLumpsum)}</span>
+              <span className="text-xs text-muted-foreground mb-0.5">Extra Costs</span>
+              <span className="font-semibold text-foreground">{fmtMoney(supplierExtraCosts)}</span>
             </div>
           </>
         )}

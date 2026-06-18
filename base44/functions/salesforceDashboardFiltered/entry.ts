@@ -144,7 +144,7 @@ Deno.serve(async (req) => {
       const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
-          return sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
+          return sfQuery(accessToken, `SELECT STEM__c, Total_Cost__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
         })),
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
@@ -165,6 +165,13 @@ Deno.serve(async (req) => {
       const id = ec.STEM__c;
       if (!id) continue;
       extraCostBuyByStem[id] = (extraCostBuyByStem[id] || 0) + (ec.Line_Total_Buy__c ?? 0);
+    }
+
+    const supplierLineBuyByStem = {};
+    for (const li of (lineItemsRes.records || [])) {
+      const id = li.STEM__c;
+      if (!id) continue;
+      supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + (li.Total_Cost__c ?? 0);
     }
 
     // Build per-stem broker commission maps from line items + buyer broker lumpsums
@@ -194,10 +201,11 @@ Deno.serve(async (req) => {
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => {
       const { buyerComm = 0, suppCommPerUnit = 0, suppBrokerName = null, buyerBrokerName = null } = brokerByStem[rest.Id] || {};
       const buyer = rest[buyerAmountField || 'Total_Invoice_Amount__c'];
-      const supplierBase = rest[supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'] ?? 0;
+      const invoicedSupplier = rest[supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'] ?? 0;
+      const supplierBase = invoicedSupplier || (supplierLineBuyByStem[rest.Id] || 0);
       const extraCostBuy = extraCostBuyByStem[rest.Id] || 0;
       const supplier = supplierBase + extraCostBuy;
-      const netPnl = buyer && supplier ? buyer - supplier - suppCommPerUnit - buyerComm : null;
+      const netPnl = buyer != null ? buyer - supplier : null;
       return {
         ...rest,
         [supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c']: supplier || null,
@@ -225,11 +233,11 @@ Deno.serve(async (req) => {
 
     for (const stem of (allStemsRes.records || [])) {
       const buyer = stem[bf];
-      const supplier = (stem[sf2] ?? 0) + (extraCostBuyByStem[stem.Id] || 0);
-      if (!buyer || !supplier) continue; // skip if either is 0/null
+      const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
+      const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      if (buyer == null) continue;
       const costs = stem[cf] ?? 0;
-      const { buyerComm = 0, suppCommPerUnit = 0 } = brokerByStem[stem.Id] || {};
-      const stemPnl = buyer - supplier - suppCommPerUnit - buyerComm;
+      const stemPnl = buyer - supplier;
       totalProfit += stemPnl;
       totalBuyer += buyer;
       totalSupplier += supplier;
@@ -247,9 +255,8 @@ Deno.serve(async (req) => {
       const buyerName = stem[buyerNameField] || null;
       if (!buyerName) continue;
       const buyer = stem[bf];
-      const supplier = stem[sf2];
-      if (!buyer || !supplier) continue;
-      const stemPnl = buyer - supplier - (stem.__buyerCommCalc ?? 0) - (stem.__suppCommPerUnitCalc ?? 0);
+      const stemPnl = stem.__netPnlCalc;
+      if (buyer == null || stemPnl == null) continue;
       if (!buyerPnlMap[buyerName]) buyerPnlMap[buyerName] = 0;
       buyerPnlMap[buyerName] += stemPnl;
     }
@@ -262,12 +269,12 @@ Deno.serve(async (req) => {
     for (const stem of (monthlyStemsRes.records || [])) {
       if (!stem.Delivery_Date__c) continue;
       const buyer = stem[bf];
-      const supplier = (stem[sf2] ?? 0) + (extraCostBuyByStem[stem.Id] || 0);
-      if (!buyer || !supplier) continue;
+      const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
+      const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      if (buyer == null) continue;
       const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
       if (!month || month < 1 || month > 12) continue;
-      const { buyerComm = 0, suppCommPerUnit = 0 } = brokerByStem[stem.Id] || {};
-      monthlyTotals[month - 1].netPnl += buyer - supplier - suppCommPerUnit - buyerComm;
+      monthlyTotals[month - 1].netPnl += buyer - supplier;
     }
     const monthlyNetPnl = monthlyTotals.map(item => ({
       month: item.month,
@@ -279,14 +286,14 @@ Deno.serve(async (req) => {
     for (const stem of (monthlyStemsRes.records || [])) {
       if (!stem.Delivery_Date__c || !buyerNameField || !stem[buyerNameField]) continue;
       const buyer = stem[bf];
-      const supplier = (stem[sf2] ?? 0) + (extraCostBuyByStem[stem.Id] || 0);
-      if (!buyer || !supplier) continue;
+      const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
+      const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      if (buyer == null) continue;
       const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
       if (!month || month < 1 || month > 12) continue;
-      const { buyerComm = 0, suppCommPerUnit = 0 } = brokerByStem[stem.Id] || {};
       const buyerName = stem[buyerNameField];
       if (!buyerMonthTotals[buyerName]) buyerMonthTotals[buyerName] = Array(12).fill(0);
-      buyerMonthTotals[buyerName][month - 1] += buyer - supplier - suppCommPerUnit - buyerComm;
+      buyerMonthTotals[buyerName][month - 1] += buyer - supplier;
     }
     const monthlyBuyerNames = Object.entries(buyerMonthTotals)
       .map(([name, months]) => ({ name, total: months.reduce((sum, value) => sum + value, 0) }))

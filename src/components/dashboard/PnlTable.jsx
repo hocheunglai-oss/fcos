@@ -102,11 +102,8 @@ export default function PnlTable({ records = [], onRowClick }) {
           {records.map((row, i) => {
             const buyer = row[BUYER_FIELD] ?? null;
             const supplier = row[SUPPLIER_FIELD] ?? null;
-            const hasDelivery = !!row[DELIVERY_FIELD];
-            const buyerCommCalc = row.__buyerCommCalc ?? 0;
-            const suppCommPerUnitCalc = row.__suppCommPerUnitCalc ?? 0;
-            const pnl = showPnl && hasDelivery
-              ? (row.__netPnlCalc != null ? row.__netPnlCalc : (!buyer || !supplier ? 0 : buyer - supplier - suppCommPerUnitCalc - buyerCommCalc))
+            const pnl = showPnl
+              ? (row.__netPnlCalc != null ? row.__netPnlCalc : (buyer == null || supplier == null ? null : buyer - supplier))
               : null;
             const pnlPositive = pnl != null && pnl >= 0;
 
@@ -122,9 +119,7 @@ export default function PnlTable({ records = [], onRowClick }) {
                       <td key="__pnl__" className={`py-2.5 px-3 text-right font-semibold whitespace-nowrap ${
                         pnl == null ? 'text-muted-foreground' : pnlPositive ? 'text-emerald-600' : 'text-red-500'
                       }`}>
-                        {pnl == null
-                           ? (showPnl && !hasDelivery ? <span className="text-muted-foreground/50 text-xs">no delivery</span> : '—')
-                           : fmtMoney(pnl)}
+                        {pnl == null ? '—' : fmtMoney(pnl)}
                       </td>
                     );
                   }
