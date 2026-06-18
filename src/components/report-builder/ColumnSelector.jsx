@@ -209,6 +209,21 @@ export default function ColumnSelector({
   const addField = (rawName) => onChange([...selectedFields, makeKey(rawName)]);
   const removeField = (key) => onChange(selectedFields.filter(f => f !== key));
 
+  const getSampleTarget = (key) => {
+    const p = parseField(key);
+    if (p.kind === 'child') {
+      const childObj = childRelationships.find(r => r.relationshipName === p.rel);
+      return { objectName: childObj?.childSObject || p.rel, fieldName: p.field };
+    }
+    if (p.kind === 'nested_child') {
+      const parentRelMeta = childRelationships.find(r => r.relationshipName === p.parentRel);
+      const parentObjName = parentRelMeta?.childSObject || p.parentRel;
+      const nestedRelMeta = (childRelFieldsCache[parentObjName] || []).find(r => r.relationshipName === p.childRel);
+      return { objectName: nestedRelMeta?.childSObject || p.childRel, fieldName: p.field };
+    }
+    return { fieldName: key };
+  };
+
   const showFieldInfo = (field, fieldKey = null) => {
     const key = fieldKey || makeKey(field.name);
     const baseInfo = {
@@ -218,8 +233,10 @@ export default function ColumnSelector({
       loading: Boolean(onSampleField),
     };
     setHoverInfo(baseInfo);
-    onSampleField?.(key).then(sample => {
+    onSampleField?.(key, getSampleTarget(key)).then(sample => {
       setHoverInfo(current => current?.fieldName === key ? { ...baseInfo, ...sample, loading: false } : current);
+    }).catch(() => {
+      setHoverInfo(current => current?.fieldName === key ? { ...baseInfo, sampleValue: 'No sample found', loading: false } : current);
     });
   };
 

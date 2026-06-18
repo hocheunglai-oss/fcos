@@ -502,13 +502,15 @@ export default function ReportBuilder() {
     a.click();
   };
 
-  const fetchSampleField = async (fieldKey) => {
-    if (!fieldKey || fieldKey.startsWith('__child__:') || fieldKey.startsWith('__nested_child__:')) return { sampleValue: 'Run the report to preview child-record values' };
-    const field = fieldKey;
-    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${selectedObject} WHERE ${field} != null LIMIT 1` });
-    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${selectedObject} LIMIT 1` });
+  const fetchSampleField = async (fieldKey, target = {}) => {
+    const objectName = target.objectName || selectedObject;
+    const field = target.fieldName || fieldKey;
+    if (!field || field.startsWith('__child__:') || field.startsWith('__nested_child__:')) return { sampleValue: '—' };
+    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} WHERE ${field} != null LIMIT 1` });
+    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} LIMIT 1` });
     const row = res.data?.records?.[0];
-    return { recordId: row?.Id || '—', sampleValue: row ? String(fieldKey.split('.').reduce((obj, part) => obj?.[part], row) ?? row[fieldKey] ?? '—') : '—' };
+    const value = field.split('.').reduce((obj, part) => obj?.[part], row) ?? row?.[field];
+    return { recordId: row?.Id || '—', sampleValue: row ? String(value ?? '—') : '—' };
   };
 
   const soql = buildSoql();
