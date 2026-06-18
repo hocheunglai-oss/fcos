@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertCircle, Loader2, Download, Play, TrendingUp, TrendingDown, DollarSign, BarChart2 } from 'lucide-react';
 import { format } from 'date-fns';
+import StemDetailModal from '@/components/dashboard/StemDetailModal';
 
 const fmt = (v, isPercent = false) => {
   if (v == null) return '—';
@@ -68,6 +69,7 @@ export default function StemPnlReport() {
   const [sortKey, setSortKey] = useState('Delivery_Date');
   const [sortDir, setSortDir] = useState(-1);
   const [search, setSearch] = useState('');
+  const [selectedStemId, setSelectedStemId] = useState(null);
 
   const buildWhere = useCallback(() => {
     const parts = [];
@@ -254,7 +256,7 @@ export default function StemPnlReport() {
                 <tbody>
                   {filtered.map((row, i) => {
                     return (
-                      <tr key={row.Id || i} className="border-b border-border/40 hover:bg-muted/20 transition-colors">
+                      <tr key={row.Id || i} onClick={() => setSelectedStemId(row.Id)} className="border-b border-border/40 hover:bg-muted/20 transition-colors cursor-pointer">
                         {COLUMNS.map(col => {
                           const v = row[col.key];
                           let display;
@@ -308,6 +310,12 @@ export default function StemPnlReport() {
           </div>
         ) : null}
       </div>
+      <StemDetailModal
+        stemId={selectedStemId}
+        open={!!selectedStemId}
+        onClose={() => setSelectedStemId(null)}
+        onUpdated={run}
+      />
     </div>
   );
 }
