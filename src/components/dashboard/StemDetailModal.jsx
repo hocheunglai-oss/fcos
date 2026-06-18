@@ -96,9 +96,10 @@ function SectionHeader({ title }) {
   );
 }
 
-function PnlBanner({ record, lineItems, buyerBrokers }) {
+function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
-  const supplier = record.Total_Invoiced_Amount_From_Suppliers__c;
+  const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const supplier = (record.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + supplierExtraCosts;
   if (!buyer || !supplier) return null;
 
   // Supplier broker: per_unit × BDN qty when available, otherwise ordered qty (negative = profit)
@@ -253,7 +254,7 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
               </div>
             </div>
 
-            {record && <PnlBanner record={record} lineItems={lineItems} buyerBrokers={buyerBrokers} />}
+            {record && <PnlBanner record={record} lineItems={lineItems} extraCosts={extraCosts} buyerBrokers={buyerBrokers} />}
 
             {record?.Dispute__c && (
               <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">

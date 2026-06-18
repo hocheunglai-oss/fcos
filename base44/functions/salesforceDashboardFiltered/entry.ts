@@ -139,8 +139,9 @@ Deno.serve(async (req) => {
     };
     let lineItemsRes = { records: [] };
     let buyerBrokersRes = { records: [] };
+    let extraCostsRes = { records: [] };
     if (allStemIds.length > 0) {
-      const [lineItemChunks, buyerBrokerChunks] = await Promise.all([
+      const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
           return sfQuery(accessToken, `SELECT STEM__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
@@ -149,9 +150,21 @@ Deno.serve(async (req) => {
           const inList = chunk.map(id => `'${id}'`).join(',');
           return sfQuery(accessToken, `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
         })),
+        Promise.all(chunkIds(allStemIds).map(chunk => {
+          const inList = chunk.map(id => `'${id}'`).join(',');
+          return sfQuery(accessToken, `SELECT STEM__c, Line_Total_Buy__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) AND Supplier_Invoice__c = null LIMIT 2000`);
+        })),
       ]);
       lineItemsRes = { records: lineItemChunks.flatMap(c => c.records || []) };
       buyerBrokersRes = { records: buyerBrokerChunks.flatMap(c => c.records || []) };
+      extraCostsRes = { records: extraCostChunks.flatMap(c => c.records || []) };
+    }
+
+    const extraCostBuyByStem = {};
+    for (const ec of (extraCostsRes.records || [])) {
+      const id = ec.STEM__c;
+      if (!id) continue;
+      extraCostBuyByStem[id] = (extraCostBuyByStem[id] || 0) + (ec.Line_Total_Buy__c ?? 0);
     }
 
     // Build per-stem broker commission maps from line items + buyer broker lumpsums
@@ -181,10 +194,13 @@ Deno.serve(async (req) => {
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => {
       const { buyerComm = 0, suppCommPerUnit = 0, suppBrokerName = null, buyerBrokerName = null } = brokerByStem[rest.Id] || {};
       const buyer = rest[buyerAmountField || 'Total_Invoice_Amount__c'];
-      const supplier = rest[supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'];
+      const supplierBase = rest[supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'] ?? 0;
+      const extraCostBuy = extraCostBuyByStem[rest.Id] || 0;
+      const supplier = supplierBase + extraCostBuy;
       const netPnl = buyer && supplier ? buyer - supplier - suppCommPerUnit - buyerComm : null;
       return {
         ...rest,
+        [supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c']: supplier || null,
         _buyerBrokerName: buyerBrokerName,
         _buyerBrokerComm: buyerComm || null,
         _suppBrokerName: suppBrokerName,
@@ -192,6 +208,7 @@ Deno.serve(async (req) => {
         // hidden fields for P&L calc
         __buyerCommCalc: buyerComm,
         __suppCommPerUnitCalc: suppCommPerUnit,
+        __extraCostBuyCalc: extraCostBuy,
         __netPnlCalc: netPnl,
       };
     });
@@ -208,7 +225,7 @@ Deno.serve(async (req) => {
 
     for (const stem of (allStemsRes.records || [])) {
       const buyer = stem[bf];
-      const supplier = stem[sf2];
+      const supplier = (stem[sf2] ?? 0) + (extraCostBuyByStem[stem.Id] || 0);
       if (!buyer || !supplier) continue; // skip if either is 0/null
       const costs = stem[cf] ?? 0;
       const { buyerComm = 0, suppCommPerUnit = 0 } = brokerByStem[stem.Id] || {};
@@ -245,7 +262,7 @@ Deno.serve(async (req) => {
     for (const stem of (monthlyStemsRes.records || [])) {
       if (!stem.Delivery_Date__c) continue;
       const buyer = stem[bf];
-      const supplier = stem[sf2];
+      const supplier = (stem[sf2] ?? 0) + (extraCostBuyByStem[stem.Id] || 0);
       if (!buyer || !supplier) continue;
       const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
       if (!month || month < 1 || month > 12) continue;
