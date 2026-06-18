@@ -26,10 +26,9 @@ const COLUMNS = [
   { key: 'Supplier_Invoice',   label: 'Supplier Invoice',  num: true },
   { key: 'Supplier_Broker_Comm', label: 'Supp. Broker',   num: true },
   { key: 'Buyer_Broker_Comm',  label: 'Buyer Broker',      num: true },
-  { key: 'Net_Profit',         label: 'P&L Report Net',    num: true },
   { key: 'Dashboard_Net_PnL',  label: 'Dashboard Net',     num: true },
-  { key: 'Pnl_Difference',     label: 'Difference',        num: true },
   { key: 'Qlik_Total_Profit',  label: 'Qlik Net',          num: true },
+  { key: 'Pnl_Difference',     label: 'Difference',        num: true },
 ];
 
 const YEAR_OPTIONS = ['2026', '2025', '2024', '2023'];
@@ -97,11 +96,11 @@ export default function StemPnlReport() {
       const dashboardById = new Map((dashboardRes.data.recentStems || []).map(stem => [stem.Id, stem.__netPnlCalc]));
       const mergedRows = (reportRes.data.rows || []).map(row => {
         const dashboardNet = dashboardById.get(row.Id);
-        const reportNet = row.Net_Profit;
+        const qlikNet = row.Qlik_Total_Profit;
         return {
           ...row,
           Dashboard_Net_PnL: dashboardNet ?? null,
-          Pnl_Difference: dashboardNet != null && reportNet != null ? dashboardNet - reportNet : null,
+          Pnl_Difference: dashboardNet != null && qlikNet != null ? dashboardNet - qlikNet : null,
         };
       });
       setRows(mergedRows);
@@ -155,7 +154,7 @@ export default function StemPnlReport() {
               <span>Stem P&L Report</span>
             </div>
             <h1 className="text-2xl font-bold font-dm text-foreground">Stem Profit & Loss</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Compares each stem’s P&L report Net P&L against the dashboard Net P&L</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Compares each stem’s dashboard Net P&L against Qlik Net P&L</p>
           </div>
           {rows.length > 0 && (
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
@@ -212,10 +211,10 @@ export default function StemPnlReport() {
             <StatCard label="Supplier Invoices" value={fmt(totals.Supplier_Invoice)} color="amber" />
             <StatCard label="Broker Commissions" value={fmt(totals.Total_Broker_Comm)} color="amber" />
             <StatCard
-              label="P&L Report Net"
-              value={fmt(totals.Net_Profit)}
-              sub={totals.Buyer_Invoice ? `${((totals.Net_Profit / totals.Buyer_Invoice) * 100).toFixed(1)}% margin` : null}
-              color={(totals.Net_Profit ?? 0) >= 0 ? 'green' : 'red'}
+              label="Qlik Net"
+              value={fmt(totals.Qlik_Net_Profit)}
+              sub={totals.Buyer_Invoice ? `${((totals.Qlik_Net_Profit / totals.Buyer_Invoice) * 100).toFixed(1)}% margin` : null}
+              color={(totals.Qlik_Net_Profit ?? 0) >= 0 ? 'green' : 'red'}
             />
             <StatCard
               label="Dashboard Net"
@@ -264,7 +263,7 @@ export default function StemPnlReport() {
                           else if (col.num) display = fmt(v);
                           else display = v ?? '—';
 
-                          const isProfit = ['Net_Profit', 'Dashboard_Net_PnL', 'Qlik_Total_Profit'].includes(col.key);
+                          const isProfit = ['Dashboard_Net_PnL', 'Qlik_Total_Profit'].includes(col.key);
                           const isDifference = col.key === 'Pnl_Difference';
                           const isMargin = col.key === 'Margin_Pct';
                           let cellColor = '';
