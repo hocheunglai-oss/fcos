@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { format } from 'date-fns';
 import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import FieldHoverInfo from '@/components/common/FieldHoverInfo';
 
 const isMoneyKey = (key) =>
   key.toLowerCase().includes('amount') ||
@@ -37,6 +38,7 @@ export default function ExplorerResultsTable({ records = [] }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState(1);
   const [search, setSearch] = useState('');
+  const [hoverInfo, setHoverInfo] = useState(null);
 
   const columns = records.length > 0 ? Object.keys(records[0]).filter(k => k !== 'Id') : [];
 
@@ -65,6 +67,16 @@ export default function ExplorerResultsTable({ records = [] }) {
     return rows;
   }, [records, search, sortKey, sortDir]);
 
+  const showColumnInfo = (col) => {
+    const sample = filtered.find(r => r[col] !== null && r[col] !== undefined && r[col] !== '') || records[0];
+    setHoverInfo({
+      label: colLabel(col),
+      fieldName: col,
+      recordId: sample?.Id || sample?.id || '—',
+      sampleValue: sample ? fmtVal(col, sample[col]) : '—',
+    });
+  };
+
   if (!records.length) return (
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
   );
@@ -87,6 +99,8 @@ export default function ExplorerResultsTable({ records = [] }) {
                 <th
                   key={col}
                   onClick={() => handleSort(col)}
+                  onMouseEnter={() => showColumnInfo(col)}
+                  onMouseLeave={() => setHoverInfo(null)}
                   className={`py-2.5 px-3 text-left font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap cursor-pointer select-none hover:text-foreground transition-colors ${sortKey === col ? 'text-foreground' : ''}`}
                 >
                   <span className="flex items-center gap-1">
@@ -115,6 +129,7 @@ export default function ExplorerResultsTable({ records = [] }) {
           <div className="text-center py-6 text-muted-foreground text-sm">No matching records</div>
         )}
       </div>
+      <FieldHoverInfo info={hoverInfo} />
     </div>
   );
 }

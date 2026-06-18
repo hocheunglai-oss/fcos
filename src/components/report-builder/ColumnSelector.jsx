@@ -3,6 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { GripVertical, X, Search, Loader2, ChevronRight, ChevronDown, Plus, Columns } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import FieldHoverInfo from '@/components/common/FieldHoverInfo';
 
 // ── Key encoding ─────────────────────────────────────────────────────────────
 // Formats:
@@ -55,6 +56,7 @@ export default function ColumnSelector({
   const [relFieldsCache, setRelFieldsCache] = useState({});
   const [childRelFieldsCache, setChildRelFieldsCache] = useState({}); // childRels for child objects
   const [loadingRel, setLoadingRel] = useState(false);
+  const [hoverInfo, setHoverInfo] = useState(null);
 
   // activeNestedChild: when browsing a child source, the child's own child relationship to drill into
   const [activeNestedChild, setActiveNestedChild] = useState(null); // null = not drilling; string = child rel name
@@ -205,6 +207,14 @@ export default function ColumnSelector({
 
   const addField = (rawName) => onChange([...selectedFields, makeKey(rawName)]);
   const removeField = (key) => onChange(selectedFields.filter(f => f !== key));
+
+  const showFieldInfo = (field, fieldKey = null) => {
+    setHoverInfo({
+      label: field?.label || resolveLabel(fieldKey),
+      fieldName: fieldKey || makeKey(field.name),
+      type: field?.type,
+    });
+  };
 
   const onDragEnd = (result) => {
     if (!result.destination) return;
@@ -373,6 +383,8 @@ export default function ColumnSelector({
                             {...provided.draggableProps}
                             {...provided.dragHandleProps}
                             onClick={() => addField(f.name)}
+                            onMouseEnter={() => showFieldInfo(f)}
+                            onMouseLeave={() => setHoverInfo(null)}
                             className="group flex items-center justify-between px-3 py-2 text-xs border-b border-border/40 last:border-b-0 hover:bg-accent/50 transition-colors cursor-pointer"
                           >
                             <div className="flex items-center gap-2 min-w-0">
@@ -447,7 +459,11 @@ export default function ColumnSelector({
                             {idx + 1}
                           </span>
                           {/* Label */}
-                          <span className={`flex-1 min-w-0 font-medium break-words ${snapshot.isDragging ? 'text-primary-foreground' : 'text-foreground'}`}>
+                          <span
+                            onMouseEnter={() => showFieldInfo(null, fieldKey)}
+                            onMouseLeave={() => setHoverInfo(null)}
+                            className={`flex-1 min-w-0 font-medium break-words ${snapshot.isDragging ? 'text-primary-foreground' : 'text-foreground'}`}
+                          >
                             {resolveLabel(fieldKey)}
                           </span>
                           {/* Kind badge */}
@@ -480,6 +496,7 @@ export default function ColumnSelector({
         </div>
 
       </div>
+      <FieldHoverInfo info={hoverInfo} />
     </DragDropContext>
   );
 }

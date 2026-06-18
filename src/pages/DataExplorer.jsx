@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Search, Download, AlertCircle, Loader2, Database, Copy, Check } from 'lucide-react';
 import ExplorerResultsTable from '@/components/data-explorer/ExplorerResultsTable';
+import FieldHoverInfo from '@/components/common/FieldHoverInfo';
 
 export default function DataExplorer() {
   const [objects, setObjects] = useState([]);
@@ -22,6 +23,7 @@ export default function DataExplorer() {
   const [loadingObjects, setLoadingObjects] = useState(true);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [hoverInfo, setHoverInfo] = useState(null);
 
   useEffect(() => {
     base44.functions.invoke('salesforceSchema', {}).then(res => {
@@ -148,7 +150,12 @@ export default function DataExplorer() {
             ) : (
               <div className="max-h-64 overflow-y-auto space-y-0.5">
                 {fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name)).map(f => (
-                  <label key={f.name} className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted/50 text-sm">
+                  <label
+                    key={f.name}
+                    onMouseEnter={() => setHoverInfo({ label: f.label, fieldName: f.name, type: f.type })}
+                    onMouseLeave={() => setHoverInfo(null)}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted/50 text-sm"
+                  >
                     <input
                       type="checkbox"
                       checked={selectedFields.includes(f.name)}
@@ -271,6 +278,7 @@ export default function DataExplorer() {
           </div>
         </div>
       </div>
+      <FieldHoverInfo info={hoverInfo} />
     </div>
   );
 }

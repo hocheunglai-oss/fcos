@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronRight, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { format } from 'date-fns';
+import FieldHoverInfo from '@/components/common/FieldHoverInfo';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ function colLabel(key) {
 
 function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
   const [expandedSubRows, setExpandedSubRows] = useState(new Set());
+  const [hoverInfo, setHoverInfo] = useState(null);
   if (!subqueryResult?.records?.length) {
     return <p className="text-xs text-muted-foreground italic px-2 py-1">No {label} records</p>;
   }
@@ -68,6 +70,16 @@ function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
     s.has(i) ? s.delete(i) : s.add(i);
     return s;
   });
+
+  const showColumnInfo = (col) => {
+    const sample = rows.find(r => r[col] !== null && r[col] !== undefined && r[col] !== '') || rows[0];
+    setHoverInfo({
+      label: colLabel(col),
+      fieldName: col,
+      recordId: sample?.Id || sample?.id || '—',
+      sampleValue: sample ? fmtVal(col, sample[col]) : '—',
+    });
+  };
 
   // Build flat array of <tr> elements to avoid Fragment prop issues
   const bodyRows = [];
@@ -127,7 +139,12 @@ function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
           <tr className={`${colors.bg} border-b ${colors.border}`}>
             {hasNested && <th className="py-1.5 px-2 w-6" />}
             {mainCols.map(c => (
-              <th key={c} className={`py-1.5 px-2.5 text-left font-semibold ${colors.th} whitespace-nowrap`}>
+              <th
+                key={c}
+                onMouseEnter={() => showColumnInfo(c)}
+                onMouseLeave={() => setHoverInfo(null)}
+                className={`py-1.5 px-2.5 text-left font-semibold ${colors.th} whitespace-nowrap`}
+              >
                 {colLabel(c)}
               </th>
             ))}
@@ -135,6 +152,7 @@ function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
         </thead>
         <tbody>{bodyRows}</tbody>
       </table>
+      <FieldHoverInfo info={hoverInfo} />
     </div>
   );
 }
@@ -144,6 +162,7 @@ function SubTable({ subqueryResult, label, depth = 0, knownNestedCols = [] }) {
 export default function ExpandableResultsTable({ records }) {
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
+  const [hoverInfo, setHoverInfo] = useState(null);
 
   if (!records?.length) return (
     <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
@@ -171,6 +190,16 @@ export default function ExpandableResultsTable({ records }) {
       setExpandedRows(new Set(records.map((_, i) => i)));
       setAllExpanded(true);
     }
+  };
+
+  const showColumnInfo = (col) => {
+    const sample = records.find(r => r[col] !== null && r[col] !== undefined && r[col] !== '') || records[0];
+    setHoverInfo({
+      label: colLabel(col),
+      fieldName: col,
+      recordId: sample?.Id || sample?.id || '—',
+      sampleValue: sample ? fmtVal(col, sample[col]) : '—',
+    });
   };
 
   // Compute totals for numeric columns
@@ -264,7 +293,12 @@ export default function ExpandableResultsTable({ records }) {
             {mainCols.map(c => {
               const isNum = records.some(r => typeof r[c] === 'number');
               return (
-                <th key={c} className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${isNum ? 'text-right' : 'text-left'}`}>
+                <th
+                  key={c}
+                  onMouseEnter={() => showColumnInfo(c)}
+                  onMouseLeave={() => setHoverInfo(null)}
+                  className={`py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${isNum ? 'text-right' : 'text-left'}`}
+                >
                   {colLabel(c)}
                 </th>
               );
@@ -288,6 +322,7 @@ export default function ExpandableResultsTable({ records }) {
           )}
         </tbody>
       </table>
+      <FieldHoverInfo info={hoverInfo} />
     </div>
   );
 }
