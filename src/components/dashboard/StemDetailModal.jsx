@@ -96,15 +96,24 @@ function SectionHeader({ title }) {
   );
 }
 
-function PnlBanner({ record, lineItems, extraCosts }) {
+function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
   const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const supplierLineTotal = lineItems.reduce((sum, li) => sum + (li.Total_Cost__c ?? 0), 0);
   const supplierBase = (record.Total_Invoiced_Amount_From_Suppliers__c ?? 0) || supplierLineTotal;
+  const supplierBrokerComm = lineItems.reduce((sum, li) => {
+    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    return sum + ((li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty);
+  }, 0);
+  const buyerBrokerPerUnitComm = lineItems.reduce((sum, li) => {
+    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    return sum + ((li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty);
+  }, 0);
+  const buyerBrokerLumpsum = buyerBrokers.reduce((sum, bb) => sum + (bb.Commission_Lumpsum__c ?? 0), 0);
+  const buyerBrokerComm = buyerBrokerPerUnitComm + buyerBrokerLumpsum;
   if (buyer == null) return null;
 
-  const grossProfit = buyer - supplierBase - supplierExtraCosts;
-  const netProfit = grossProfit;
+  const netProfit = buyer - supplierBase - supplierExtraCosts - buyerBrokerComm - supplierBrokerComm;
   const isPositive = netProfit >= 0;
 
   return (
@@ -125,6 +134,24 @@ function PnlBanner({ record, lineItems, extraCosts }) {
             <div className="flex flex-col">
               <span className="text-xs text-muted-foreground mb-0.5">Extra Costs</span>
               <span className="font-semibold text-foreground">{fmtMoney(supplierExtraCosts)}</span>
+            </div>
+          </>
+        )}
+        {buyerBrokerComm !== 0 && (
+          <>
+            <div className="text-muted-foreground self-end pb-0.5">−</div>
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground mb-0.5">Buyer Broker</span>
+              <span className="font-semibold text-foreground">{fmtMoney(buyerBrokerComm)}</span>
+            </div>
+          </>
+        )}
+        {supplierBrokerComm !== 0 && (
+          <>
+            <div className="text-muted-foreground self-end pb-0.5">−</div>
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground mb-0.5">Supplier Broker</span>
+              <span className="font-semibold text-foreground">{fmtMoney(supplierBrokerComm)}</span>
             </div>
           </>
         )}
@@ -225,7 +252,7 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
               </div>
             </div>
 
-            {record && <PnlBanner record={record} lineItems={lineItems} extraCosts={extraCosts} />}
+            {record && <PnlBanner record={record} lineItems={lineItems} extraCosts={extraCosts} buyerBrokers={buyerBrokers} />}
 
             {record?.Dispute__c && (
               <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">

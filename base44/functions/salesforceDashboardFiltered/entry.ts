@@ -205,7 +205,8 @@ Deno.serve(async (req) => {
       const supplierBase = invoicedSupplier || (supplierLineBuyByStem[rest.Id] || 0);
       const extraCostBuy = extraCostBuyByStem[rest.Id] || 0;
       const supplier = supplierBase + extraCostBuy;
-      const netPnl = buyer != null ? buyer - supplier : null;
+      const brokerCommissions = buyerComm + suppCommPerUnit;
+      const netPnl = buyer != null ? buyer - supplier - brokerCommissions : null;
       return {
         ...rest,
         [supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c']: supplier || null,
@@ -230,17 +231,20 @@ Deno.serve(async (req) => {
     let totalBuyer = 0;
     let totalSupplier = 0;
     let totalCosts = 0;
+    let totalBrokerCommissions = 0;
 
     for (const stem of (allStemsRes.records || [])) {
       const buyer = stem[bf];
       const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
       const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      const brokerCommissions = (brokerByStem[stem.Id]?.buyerComm || 0) + (brokerByStem[stem.Id]?.suppCommPerUnit || 0);
       if (buyer == null) continue;
       const costs = stem[cf] ?? 0;
-      const stemPnl = buyer - supplier;
+      const stemPnl = buyer - supplier - brokerCommissions;
       totalProfit += stemPnl;
       totalBuyer += buyer;
       totalSupplier += supplier;
+      totalBrokerCommissions += brokerCommissions;
       totalCosts += costs;
     }
 
@@ -271,10 +275,11 @@ Deno.serve(async (req) => {
       const buyer = stem[bf];
       const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
       const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      const brokerCommissions = (brokerByStem[stem.Id]?.buyerComm || 0) + (brokerByStem[stem.Id]?.suppCommPerUnit || 0);
       if (buyer == null) continue;
       const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
       if (!month || month < 1 || month > 12) continue;
-      monthlyTotals[month - 1].netPnl += buyer - supplier;
+      monthlyTotals[month - 1].netPnl += buyer - supplier - brokerCommissions;
     }
     const monthlyNetPnl = monthlyTotals.map(item => ({
       month: item.month,
@@ -288,12 +293,13 @@ Deno.serve(async (req) => {
       const buyer = stem[bf];
       const supplierBase = (stem[sf2] ?? 0) || (supplierLineBuyByStem[stem.Id] || 0);
       const supplier = supplierBase + (extraCostBuyByStem[stem.Id] || 0);
+      const brokerCommissions = (brokerByStem[stem.Id]?.buyerComm || 0) + (brokerByStem[stem.Id]?.suppCommPerUnit || 0);
       if (buyer == null) continue;
       const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
       if (!month || month < 1 || month > 12) continue;
       const buyerName = stem[buyerNameField];
       if (!buyerMonthTotals[buyerName]) buyerMonthTotals[buyerName] = Array(12).fill(0);
-      buyerMonthTotals[buyerName][month - 1] += buyer - supplier;
+      buyerMonthTotals[buyerName][month - 1] += buyer - supplier - brokerCommissions;
     }
     const monthlyBuyerNames = Object.entries(buyerMonthTotals)
       .map(([name, months]) => ({ name, total: months.reduce((sum, value) => sum + value, 0) }))
@@ -311,6 +317,7 @@ Deno.serve(async (req) => {
       accountCount,
       totalBuyer,
       totalSupplier,
+      totalBrokerCommissions,
       totalProfit,
       disputedCount: disputedRes.records?.[0]?.total ?? null,
       stemByStatus: (statusRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
