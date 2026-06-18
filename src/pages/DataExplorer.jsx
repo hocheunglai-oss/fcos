@@ -102,6 +102,20 @@ export default function DataExplorer() {
     );
   };
 
+  const showFieldInfo = async (field) => {
+    const baseInfo = { label: field.label, fieldName: field.name, type: field.type, loading: true };
+    setHoverInfo(baseInfo);
+    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} WHERE ${field.name} != null LIMIT 1` });
+    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} LIMIT 1` });
+    const row = res.data?.records?.[0];
+    setHoverInfo(current => current?.fieldName === field.name ? {
+      ...baseInfo,
+      loading: false,
+      recordId: row?.Id || '—',
+      sampleValue: row ? String(row[field.name] ?? '—') : '—',
+    } : current);
+  };
+
   const sortableFields = fields.filter(f => f.sortable);
 
   return (
@@ -152,7 +166,7 @@ export default function DataExplorer() {
                 {fields.filter(f => !['IsDeleted', 'SystemModstamp'].includes(f.name)).map(f => (
                   <label
                     key={f.name}
-                    onMouseEnter={() => setHoverInfo({ label: f.label, fieldName: f.name, type: f.type })}
+                    onMouseEnter={() => showFieldInfo(f)}
                     onMouseLeave={() => setHoverInfo(null)}
                     className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted/50 text-sm"
                   >

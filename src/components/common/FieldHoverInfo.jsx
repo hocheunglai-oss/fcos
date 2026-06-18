@@ -24,12 +24,10 @@ export default function FieldHoverInfo({ info }) {
             <span className="font-mono text-foreground break-all">{info.recordId}</span>
           </div>
         )}
-        {info.sampleValue !== undefined && (
-          <div>
-            <span className="block text-muted-foreground">Sample value</span>
-            <span className="text-foreground break-words">{info.sampleValue || '—'}</span>
-          </div>
-        )}
+        <div>
+          <span className="block text-muted-foreground">Sample value</span>
+          <span className="text-foreground break-words">{info.loading ? 'Loading sample…' : (info.sampleValue || '—')}</span>
+        </div>
       </div>
     </div>
   );

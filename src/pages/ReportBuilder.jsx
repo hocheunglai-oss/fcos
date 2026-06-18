@@ -502,6 +502,15 @@ export default function ReportBuilder() {
     a.click();
   };
 
+  const fetchSampleField = async (fieldKey) => {
+    if (!fieldKey || fieldKey.startsWith('__child__:') || fieldKey.startsWith('__nested_child__:')) return { sampleValue: 'Run the report to preview child-record values' };
+    const field = fieldKey;
+    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${selectedObject} WHERE ${field} != null LIMIT 1` });
+    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${selectedObject} LIMIT 1` });
+    const row = res.data?.records?.[0];
+    return { recordId: row?.Id || '—', sampleValue: row ? String(fieldKey.split('.').reduce((obj, part) => obj?.[part], row) ?? row[fieldKey] ?? '—') : '—' };
+  };
+
   const soql = buildSoql();
 
   // Stable derived arrays — prevent child components from re-mounting on every render
@@ -727,6 +736,7 @@ export default function ReportBuilder() {
                 loading={loadingFields}
                 relatedObjects={relatedObjects}
                 childRelationships={childRelationships}
+                onSampleField={fetchSampleField}
               />
             </div>
 

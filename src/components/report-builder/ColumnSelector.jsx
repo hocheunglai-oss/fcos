@@ -49,6 +49,7 @@ export default function ColumnSelector({
   loading,
   relatedObjects = [],
   childRelationships = [],
+  onSampleField,
 }) {
   const [search, setSearch] = useState('');
   const [activeSource, setActiveSource] = useState('__main__');
@@ -209,10 +210,16 @@ export default function ColumnSelector({
   const removeField = (key) => onChange(selectedFields.filter(f => f !== key));
 
   const showFieldInfo = (field, fieldKey = null) => {
-    setHoverInfo({
+    const key = fieldKey || makeKey(field.name);
+    const baseInfo = {
       label: field?.label || resolveLabel(fieldKey),
-      fieldName: fieldKey || makeKey(field.name),
+      fieldName: key,
       type: field?.type,
+      loading: Boolean(onSampleField),
+    };
+    setHoverInfo(baseInfo);
+    onSampleField?.(key).then(sample => {
+      setHoverInfo(current => current?.fieldName === key ? { ...baseInfo, ...sample, loading: false } : current);
     });
   };
 
