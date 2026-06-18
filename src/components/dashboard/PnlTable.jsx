@@ -76,8 +76,9 @@ export default function PnlTable({ records = [], onRowClick }) {
   // Build ordered display cols
   const colSet = new Set(rawCols);
   const displayCols = [
-    ...COL_ORDER.filter(c => c === '__pnl__' ? showPnl : colSet.has(c)),
+    ...COL_ORDER.filter(c => c !== '__pnl__' && colSet.has(c)),
     ...rawCols.filter(c => !COL_ORDER.includes(c)), // any extras not in order list
+    ...(showPnl ? ['__pnl__'] : []),
   ];
 
   return (
