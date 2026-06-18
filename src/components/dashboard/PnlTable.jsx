@@ -9,7 +9,7 @@ const DELIVERY_FIELD = 'Delivery_Date__c';
 const FIELD_LABELS = {
   [BUYER_FIELD]: 'Buyer Invoice',
   [SUPPLIER_FIELD]: 'Supplier Invoice',
-  'Costs_Total__c': 'Total Costs',
+  '__extraCostBuyCalc': 'EXTRA COSTS',
   '_buyerBrokerName': 'Buyer Broker',
   '_buyerBrokerComm': 'Buyer Broker Comm',
   '_suppBrokerName': 'Supplier Broker',
@@ -17,10 +17,10 @@ const FIELD_LABELS = {
 };
 
 // Columns to completely hide (used only for internal P&L calc)
-const HIDDEN_COLS = new Set(['__buyerCommCalc', '__suppCommPerUnitCalc', '__netPnlCalc', 'Buyer_Name__c', 'Buyer__c', 'KeyStem__c', '_buyerBrokerName', '_buyerBrokerComm', '_suppBrokerName', '_suppBrokerComm']);
+const HIDDEN_COLS = new Set(['__buyerCommCalc', '__suppCommPerUnitCalc', '__netPnlCalc', 'Buyer_Name__c', 'Buyer__c', 'KeyStem__c', COSTS_FIELD, '_buyerBrokerName', '_buyerBrokerComm', '_suppBrokerName', '_suppBrokerComm']);
 
 // Columns that are right-aligned (money)
-const MONEY_COLS = new Set([BUYER_FIELD, SUPPLIER_FIELD, COSTS_FIELD, '_buyerBrokerComm', '_suppBrokerComm', '__pnl__']);
+const MONEY_COLS = new Set([BUYER_FIELD, SUPPLIER_FIELD, COSTS_FIELD, '__extraCostBuyCalc', '_buyerBrokerComm', '_suppBrokerComm', '__pnl__']);
 
 const fmtMoney = (val) => {
   if (val == null) return '—';
@@ -55,7 +55,6 @@ const COL_ORDER = [
   'CreatedDate',
   BUYER_FIELD,
   SUPPLIER_FIELD,
-  COSTS_FIELD,
   '_buyerBrokerName',
   '_buyerBrokerComm',
   '_suppBrokerName',
