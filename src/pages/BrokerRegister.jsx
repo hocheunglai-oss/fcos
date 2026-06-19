@@ -14,6 +14,7 @@ export default function BrokerRegister() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedTypes, setSelectedTypes] = useState([]);
+  const [selectedBrokerNames, setSelectedBrokerNames] = useState([]);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
@@ -29,15 +30,18 @@ export default function BrokerRegister() {
 
   useEffect(() => { loadRows(); }, []);
 
+  const brokerNames = useMemo(() => [...new Set(rows.map(row => row.brokerName).filter(Boolean))].sort(), [rows]);
+
   const filteredRows = useMemo(() => rows.filter(row => {
     const q = search.trim().toLowerCase();
     const textMatch = !q || `${row.stemName || ''} ${row.brokerName || ''}`.toLowerCase().includes(q);
     const typeMatch = !selectedTypes.length || selectedTypes.includes(row.brokerType);
+    const brokerMatch = !selectedBrokerNames.length || selectedBrokerNames.includes(row.brokerName);
     const date = row.paymentDate || '';
     const fromMatch = !fromDate || date >= fromDate;
     const toMatch = !toDate || date <= toDate;
-    return textMatch && typeMatch && fromMatch && toMatch;
-  }), [rows, search, selectedTypes, fromDate, toDate]);
+    return textMatch && typeMatch && brokerMatch && fromMatch && toMatch;
+  }), [rows, search, selectedTypes, selectedBrokerNames, fromDate, toDate]);
 
   const total = filteredRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
 
@@ -53,7 +57,7 @@ export default function BrokerRegister() {
         </Button>
       </div>
 
-      <BrokerFilters search={search} setSearch={setSearch} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes} fromDate={fromDate} setFromDate={setFromDate} toDate={toDate} setToDate={setToDate} />
+      <BrokerFilters search={search} setSearch={setSearch} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes} brokerNames={brokerNames} selectedBrokerNames={selectedBrokerNames} setSelectedBrokerNames={setSelectedBrokerNames} fromDate={fromDate} setFromDate={setFromDate} toDate={toDate} setToDate={setToDate} />
 
       <div className="rounded-xl border border-border bg-card px-5 py-4 flex flex-wrap gap-6">
         <div><div className="text-xs text-muted-foreground uppercase tracking-wide">Rows</div><div className="text-xl font-bold">{filteredRows.length.toLocaleString()}</div></div>

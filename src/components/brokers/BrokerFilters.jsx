@@ -3,11 +3,17 @@ import { Button } from '@/components/ui/button';
 
 const TYPES = ['Supplier Broker', 'Buyer Broker', 'Secondary Buyer Broker'];
 
-export default function BrokerFilters({ search, setSearch, selectedTypes, setSelectedTypes, fromDate, setFromDate, toDate, setToDate }) {
+export default function BrokerFilters({ search, setSearch, selectedTypes, setSelectedTypes, brokerNames, selectedBrokerNames, setSelectedBrokerNames, fromDate, setFromDate, toDate, setToDate }) {
   const toggleType = (type) => {
     setSelectedTypes(selectedTypes.includes(type)
       ? selectedTypes.filter(item => item !== type)
       : [...selectedTypes, type]);
+  };
+
+  const toggleBroker = (name) => {
+    setSelectedBrokerNames(selectedBrokerNames.includes(name)
+      ? selectedBrokerNames.filter(item => item !== name)
+      : [...selectedBrokerNames, name]);
   };
 
   return (
@@ -20,6 +26,25 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
           </Button>
         ))}
       </div>
+      {brokerNames.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Broker names</p>
+            {selectedBrokerNames.length > 0 && (
+              <button type="button" className="text-xs text-primary hover:underline" onClick={() => setSelectedBrokerNames([])}>
+                Clear selection
+              </button>
+            )}
+          </div>
+          <div className="max-h-36 overflow-y-auto rounded-lg border border-border p-2 flex flex-wrap gap-2">
+            {brokerNames.map(name => (
+              <Button key={name} type="button" size="sm" variant={selectedBrokerNames.includes(name) ? 'default' : 'outline'} onClick={() => toggleBroker(name)}>
+                {name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
         <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
