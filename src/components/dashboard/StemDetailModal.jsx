@@ -260,10 +260,10 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
 
             {record && <PnlBanner record={record} lineItems={lineItems} extraCosts={extraCosts} buyerBrokers={buyerBrokers} />}
 
-            {record?.Dispute__c && (
+            {record?.Dispute__c && record.Dispute__c !== 'No dispute' && (
               <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                <span>Disputed — {record.Dispute_Type__c || ''}{record.Dispute_Status__c ? ` · ${record.Dispute_Status__c}` : ''}</span>
+                <span>Disputed — {record.Dispute__c}{record.Dispute_Status__c ? ` · ${record.Dispute_Status__c}` : ''}</span>
               </div>
             )}
           </DialogHeader>

@@ -86,9 +86,9 @@ Deno.serve(async (req) => {
         : Promise.resolve({ records: [] }),
       // 3: recent records (with P&L fields)
       sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC LIMIT 3000`),
-      // 4: disputed count
+      // 4: disputed count — only "No dispute" means not disputed
       hasDispute
-        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${where ? ` AND (${where})` : ''}`)
+        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c != 'No dispute' AND Dispute__c != null${where ? ` AND (${where})` : ''}`)
         : Promise.resolve({ records: [] }),
       // 5: count distinct accounts (via GROUP BY)
       accountField
