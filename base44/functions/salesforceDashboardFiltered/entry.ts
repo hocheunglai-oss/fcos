@@ -41,6 +41,7 @@ Deno.serve(async (req) => {
     const hasStatus = fieldNames.includes('Status__c');
     const hasType = fieldNames.includes('Type__c');
     const hasDispute = fieldNames.includes('Dispute__c');
+    const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
 
     // Detect account field
     const accountField = fieldNames.includes('Account__c') ? 'Account__c'
@@ -86,10 +87,12 @@ Deno.serve(async (req) => {
         : Promise.resolve({ records: [] }),
       // 3: recent records (with P&L fields)
       sfQuery(accessToken, `SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC LIMIT 3000`),
-      // 4: disputed count — only "No dispute" means not disputed
-      hasDispute
-        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c != 'No dispute' AND Dispute__c != null${where ? ` AND (${where})` : ''}`)
-        : Promise.resolve({ records: [] }),
+      // 4: disputed count — only "No Dispute" status means not disputed
+      hasDisputeStatus
+        ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${where ? ` AND (${where})` : ''}`)
+        : hasDispute
+          ? sfQuery(accessToken, `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${where ? ` AND (${where})` : ''}`)
+          : Promise.resolve({ records: [] }),
       // 5: count distinct accounts (via GROUP BY)
       accountField
         ? sfQuery(accessToken, `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`)
@@ -321,7 +324,7 @@ Deno.serve(async (req) => {
       totalSupplier,
       totalBrokerCommissions,
       totalProfit,
-      disputedCount: disputedRes.records?.[0]?.total ?? null,
+      disputedCount: disputedRes.records?.[0]?.total ?? 0,
       stemByStatus: (statusRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       stemByType: (typeRes.records || []).map(r => ({ label: r.val || 'Unknown', value: r.total })),
       recentStems,
