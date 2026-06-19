@@ -123,6 +123,13 @@ Deno.serve(async (req) => {
       if (item.STEM__c) buyerStatusByStem[item.STEM__c] = status;
     }
 
+    const buyerBrokersByStem = {};
+    for (const broker of buyerBrokers) {
+      if (!broker.STEM__c) continue;
+      if (!buyerBrokersByStem[broker.STEM__c]) buyerBrokersByStem[broker.STEM__c] = [];
+      buyerBrokersByStem[broker.STEM__c].push(broker);
+    }
+
     const rows = [];
     for (const item of lineItems) {
       const stem = stemMap[item.STEM__c];
@@ -149,7 +156,8 @@ Deno.serve(async (req) => {
       const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
       const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
       const buyerPerUnitAmount = brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
-      const buyerAmount = hasSupplierBrokerUnit ? buyerPerUnitAmount : (item.Commission_Cost__c ?? buyerPerUnitAmount);
+      const buyerLumpsumAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0);
+      const buyerAmount = buyerLumpsumAmount || buyerPerUnitAmount;
       if (buyerBrokerId && buyerAmount !== 0) {
         rows.push({
           id: `buyer-${item.Id}`,
@@ -165,6 +173,33 @@ Deno.serve(async (req) => {
           paymentDateLabel: 'Received Date',
           paymentStatus: buyerStatusByStemBroker[`${item.STEM__c}:${buyerBrokerId}`] || buyerStatusByStem[item.STEM__c] || 'Pending',
         });
+      }
+
+      const secondaryAmount = !hasSupplierBrokerUnit && item.Commission_Cost__c != null
+        ? Number(item.Commission_Cost__c || 0) - buyerPerUnitAmount
+        : 0;
+      const secondaryBrokers = (buyerBrokersByStem[item.STEM__c] || []).filter(broker => {
+        if (!broker.Buyer_Broker__c) return true;
+        if (!buyerBrokerId) return true;
+        return String(broker.Buyer_Broker__c).slice(0, 15) !== String(buyerBrokerId).slice(0, 15);
+      });
+      if (secondaryAmount > 0 && secondaryBrokers.length > 0) {
+        for (const broker of secondaryBrokers) {
+          rows.push({
+            id: `secondary-${item.Id}-${broker.Id}`,
+            stemId: item.STEM__c,
+            stemName: stem.Name,
+            productName: item['Product__r']?.Name || item.Name || '—',
+            deliveryDate: stem.Delivery_Date__c,
+            brokerType: 'Secondary Buyer Broker',
+            brokerName: accountMap[broker.Buyer_Broker__c] || broker.Buyer_Broker__c || 'Secondary Buyer Broker',
+            commissionUnitPrice: qty ? secondaryAmount / qty : null,
+            commissionAmount: secondaryAmount,
+            paymentDate: stem.Buyer_Pay_Term_Date__c,
+            paymentDateLabel: 'Received Date',
+            paymentStatus: buyerStatusByStemBroker[`${item.STEM__c}:${broker.Buyer_Broker__c}`] || 'Pending',
+          });
+        }
       }
 
     }

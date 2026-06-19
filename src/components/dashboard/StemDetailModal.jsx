@@ -222,6 +222,17 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
     )
   );
 
+  const getSecondaryBuyerBrokerUnit = (li) => {
+    const suppBrokerPerUnit = Number(li.Suppliers_Brokers_Commission_Per_Unit__c || 0);
+    if (suppBrokerPerUnit !== 0 || li.Commission_Cost__c == null) return null;
+    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    if (!qty) return null;
+    const primaryUnit = Number(li.Buyers_Brokers_Commission_Per_Unit__c || 0);
+    const secondaryUnit = (Number(li.Commission_Cost__c || 0) / qty) - primaryUnit;
+    return secondaryUnit > 0 ? secondaryUnit : null;
+  };
+  const showSecondaryBuyerBrokerUnit = lineItems.some(li => getSecondaryBuyerBrokerUnit(li) != null);
+
   return (
     <>
       <Dialog open={open} onOpenChange={onClose}>
@@ -332,6 +343,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Buy</th>
                             <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker/Unit</th>
+                            {showSecondaryBuyerBrokerUnit && (
+                              <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker (Secondary)/Unit</th>
+                            )}
                             <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground">Supp Broker</th>
                             <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground">Supp Broker/Unit</th>
 
@@ -368,6 +382,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                                 <td className="py-2.5 px-3 text-right font-semibold text-foreground">{li.Total_Cost__c != null ? fmtMoney(li.Total_Cost__c) : '—'}</td>
                                 <td className="py-2.5 px-3 text-left text-muted-foreground">{bbName || '—'}</td>
                                 <td className="py-2.5 px-3 text-right text-foreground">{li.Buyers_Brokers_Commission_Per_Unit__c != null ? fmtMoney(li.Buyers_Brokers_Commission_Per_Unit__c) : '—'}</td>
+                                {showSecondaryBuyerBrokerUnit && (
+                                  <td className="py-2.5 px-3 text-right text-foreground">{getSecondaryBuyerBrokerUnit(li) != null ? fmtMoney(getSecondaryBuyerBrokerUnit(li)) : '—'}</td>
+                                )}
                                 <td className="py-2.5 px-3 text-left text-muted-foreground">{li._Supplier_Broker_Name || '—'}</td>
                                 <td className="py-2.5 px-3 text-right text-foreground">{li.Suppliers_Brokers_Commission_Per_Unit__c != null ? fmtMoney(li.Suppliers_Brokers_Commission_Per_Unit__c) : '—'}</td>
 
