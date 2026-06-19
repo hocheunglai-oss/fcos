@@ -29,6 +29,7 @@ const COLUMNS = [
   { key: 'Buyer_Broker_Comm',  label: 'Buyer Broker',      num: true },
   { key: 'Net_Profit',         label: 'Net P&L',           num: true },
   { key: 'Qlik_Total_Profit',  label: 'Qlik Net',          num: true },
+  { key: 'Diff',               label: 'DIFF',              num: true },
 ];
 
 const YEAR_OPTIONS = ['2026', '2025', '2024', '2023'];
@@ -91,8 +92,16 @@ export default function StemPnlReport() {
     if (reportRes.data?.error) {
       setError(reportRes.data.error);
     } else {
-      setRows(reportRes.data.rows || []);
-      setTotals(reportRes.data.totals || null);
+      const reportRows = (reportRes.data.rows || []).map(row => ({
+        ...row,
+        Diff: row.Net_Profit != null && row.Qlik_Total_Profit != null ? row.Net_Profit - row.Qlik_Total_Profit : null,
+      }));
+      const reportTotals = reportRes.data.totals || null;
+      setRows(reportRows);
+      setTotals(reportTotals ? {
+        ...reportTotals,
+        Diff: reportTotals.Net_Profit != null && reportTotals.Qlik_Net_Profit != null ? reportTotals.Net_Profit - reportTotals.Qlik_Net_Profit : null,
+      } : null);
     }
     setLoading(false);
   };
@@ -248,9 +257,12 @@ export default function StemPnlReport() {
                           else display = v ?? '—';
 
                           const isProfit = ['Net_Profit', 'Qlik_Total_Profit'].includes(col.key);
+                          const isDifference = col.key === 'Diff';
                           const isMargin = col.key === 'Margin_Pct';
                           let cellColor = '';
-                          if ((isProfit || isMargin) && v != null) {
+                          if (isDifference && v != null) {
+                            cellColor = Math.abs(v) < 0.01 ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold';
+                          } else if ((isProfit || isMargin) && v != null) {
                             cellColor = v >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold';
                           }
 
@@ -271,7 +283,7 @@ export default function StemPnlReport() {
                       {COLUMNS.map((col, i) => {
                         const isNum = col.num && totals[col.key] != null;
                         return (
-                          <td key={col.key} className={`py-2.5 px-3 whitespace-nowrap ${col.num ? 'text-right font-mono' : ''} ${['Net_Profit', 'Qlik_Total_Profit'].includes(col.key) ? (((col.key === 'Qlik_Total_Profit' ? totals.Qlik_Net_Profit : totals.Net_Profit) ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
+                          <td key={col.key} className={`py-2.5 px-3 whitespace-nowrap ${col.num ? 'text-right font-mono' : ''} ${['Net_Profit', 'Qlik_Total_Profit'].includes(col.key) ? (((col.key === 'Qlik_Total_Profit' ? totals.Qlik_Net_Profit : totals.Net_Profit) ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500') : col.key === 'Diff' ? (Math.abs(totals.Diff ?? 0) < 0.01 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
                             {i === 0 ? 'TOTAL' : isNum ? (col.isPercent ? fmt(totals.Buyer_Invoice ? (totals.Net_Profit / totals.Buyer_Invoice) * 100 : null, true) : fmt(col.key === 'Qlik_Total_Profit' ? totals.Qlik_Net_Profit : totals[col.key])) : ''}
                           </td>
                         );
