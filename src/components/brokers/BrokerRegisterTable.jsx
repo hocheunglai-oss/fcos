@@ -3,6 +3,7 @@ import { BrokerTypeBadge, PaymentStatusBadge } from './BrokerBadges';
 
 const fmtDate = (value) => { try { return value ? format(new Date(value), 'dd MMM yyyy') : '—'; } catch { return value || '—'; } };
 const fmtMoney = (value) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtUnit = (value) => value != null ? `${fmtMoney(value)} / MT` : '—';
 
 export default function BrokerRegisterTable({ rows, onRowClick }) {
   return (
@@ -15,6 +16,7 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
               <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Delivery Date</th>
               <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Broker Type</th>
               <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Broker Name</th>
+              <th className="text-right py-3 px-4 font-semibold text-muted-foreground">Commission / Unit</th>
               <th className="text-right py-3 px-4 font-semibold text-muted-foreground">Commission Amount</th>
               <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Payment Date</th>
               <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Payment Status</th>
@@ -27,12 +29,13 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={row.brokerType} /></td>
                 <td className="py-3 px-4 text-foreground">{row.brokerName || '—'}</td>
+                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtUnit(row.commissionUnitPrice)}</td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{fmtMoney(row.commissionAmount)}</td>
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><PaymentStatusBadge status={row.paymentStatus} /></td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan="7" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
+            {!rows.length && <tr><td colSpan="8" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
           </tbody>
         </table>
       </div>
