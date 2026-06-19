@@ -1,0 +1,174 @@
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+
+const SF_API_VERSION = 'v60.0';
+const FALLBACK_INSTANCE = 'https://fratellicosulich.my.salesforce.com';
+
+async function sfQuery(instanceUrl, accessToken, soql) {
+  const encoded = encodeURIComponent(soql);
+  let res = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/query/?q=${encoded}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  let data = await res.json();
+  if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
+    throw new Error(data.message || data[0]?.message || 'Salesforce query failed');
+  }
+
+  let records = data.records || [];
+  while (data.nextRecordsUrl) {
+    res = await fetch(`${instanceUrl}${data.nextRecordsUrl}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    data = await res.json();
+    if (!res.ok) throw new Error(data.message || data[0]?.message || 'Salesforce pagination failed');
+    records = records.concat(data.records || []);
+  }
+  return records.map(({ attributes, ...rest }) => rest);
+}
+
+function chunkIds(ids, size = 200) {
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
+  return chunks;
+}
+
+function brokerAmount(value, qty) {
+  const unit = Number(value || 0);
+  const quantity = Number(qty || 0);
+  return unit * quantity;
+}
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await req.json().catch(() => ({}));
+    const limit = Math.min(Number(body.limit) || 2000, 3000);
+
+    const { accessToken, connectionConfig } = await base44.asServiceRole.connectors.getConnection('salesforce');
+    const instanceUrl = connectionConfig?.instance_url || FALLBACK_INSTANCE;
+
+    const stems = await sfQuery(instanceUrl, accessToken, `
+      SELECT Id, Name, Delivery_Date__c, Payment_Date__c, Buyer_Pay_Term_Date__c
+      FROM stem__c
+      ORDER BY Delivery_Date__c DESC NULLS LAST
+      LIMIT ${limit}
+    `);
+
+    const stemMap = Object.fromEntries(stems.map(stem => [stem.Id, stem]));
+    const stemIds = stems.map(stem => stem.Id);
+    if (!stemIds.length) return Response.json({ rows: [] });
+
+    const [lineItemChunks, buyerBrokerChunks] = await Promise.all([
+      Promise.all(chunkIds(stemIds).map(chunk => {
+        const ids = chunk.map(id => `'${id}'`).join(',');
+        return sfQuery(instanceUrl, accessToken, `
+          SELECT Id, Name, STEM__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
+                 Quantity_Delivered_Per_BDN__c, Quantity__c, Commission_Cost__c,
+                 Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
+                 Buyers_Brokers_Commission_Lumpsum__c
+          FROM STEM_Line_Item__c
+          WHERE STEM__c IN (${ids})
+          LIMIT 5000
+        `);
+      })),
+      Promise.all(chunkIds(stemIds).map(chunk => {
+        const ids = chunk.map(id => `'${id}'`).join(',');
+        return sfQuery(instanceUrl, accessToken, `
+          SELECT Id, Name, STEM__c, Buyer_Broker__c, Exported__c
+          FROM STEM_Buyer_Broker__c
+          WHERE STEM__c IN (${ids})
+          LIMIT 5000
+        `);
+      })),
+    ]);
+
+    const lineItems = lineItemChunks.flat();
+    const buyerBrokers = buyerBrokerChunks.flat();
+    const accountIds = [...new Set([
+      ...lineItems.map(item => item.Supplier_Broker__c).filter(Boolean),
+      ...lineItems.map(item => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
+      ...buyerBrokers.map(item => item.Buyer_Broker__c).filter(Boolean),
+    ])];
+
+    const accountChunks = await Promise.all(chunkIds(accountIds).map(chunk => {
+      const ids = chunk.map(id => `'${id}'`).join(',');
+      return sfQuery(instanceUrl, accessToken, `SELECT Id, Name FROM Account WHERE Id IN (${ids})`);
+    }));
+    const accountMap = {};
+    for (const account of accountChunks.flat()) {
+      accountMap[account.Id] = account.Name;
+      accountMap[String(account.Id).slice(0, 15)] = account.Name;
+    }
+
+    const buyerStatusByStemBroker = {};
+    const buyerStatusByStem = {};
+    for (const item of buyerBrokers) {
+      const status = item.Exported__c ? 'Exported' : 'Pending';
+      if (item.STEM__c && item.Buyer_Broker__c) buyerStatusByStemBroker[`${item.STEM__c}:${item.Buyer_Broker__c}`] = status;
+      if (item.STEM__c) buyerStatusByStem[item.STEM__c] = status;
+    }
+
+    const rows = [];
+    for (const item of lineItems) {
+      const stem = stemMap[item.STEM__c];
+      if (!stem) continue;
+      const qty = item.Quantity_Delivered_Per_BDN__c ?? item.Quantity__c;
+      const supplierAmount = brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
+      if (item.Supplier_Broker__c && supplierAmount !== 0) {
+        rows.push({
+          id: `supplier-${item.Id}`,
+          stemId: item.STEM__c,
+          stemName: stem.Name,
+          deliveryDate: stem.Delivery_Date__c,
+          brokerType: 'Supplier Broker',
+          brokerName: accountMap[item.Supplier_Broker__c] || item.Supplier_Broker__c,
+          commissionAmount: supplierAmount,
+          paymentDate: stem.Payment_Date__c,
+          paymentDateLabel: 'Paid Date',
+          paymentStatus: null,
+        });
+      }
+
+      const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
+      const buyerAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0) || brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
+      if (buyerBrokerId && buyerAmount !== 0) {
+        rows.push({
+          id: `buyer-${item.Id}`,
+          stemId: item.STEM__c,
+          stemName: stem.Name,
+          deliveryDate: stem.Delivery_Date__c,
+          brokerType: 'Buyer Broker',
+          brokerName: accountMap[buyerBrokerId] || buyerBrokerId,
+          commissionAmount: buyerAmount,
+          paymentDate: stem.Buyer_Pay_Term_Date__c,
+          paymentDateLabel: 'Received Date',
+          paymentStatus: buyerStatusByStemBroker[`${item.STEM__c}:${buyerBrokerId}`] || buyerStatusByStem[item.STEM__c] || 'Pending',
+        });
+      }
+
+      const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
+      const secondaryAmount = Number(item.Commission_Cost__c || 0);
+      if (!hasSupplierBrokerUnit && secondaryAmount > 0) {
+        rows.push({
+          id: `secondary-${item.Id}`,
+          stemId: item.STEM__c,
+          stemName: stem.Name,
+          deliveryDate: stem.Delivery_Date__c,
+          brokerType: 'Secondary Buyer Broker',
+          brokerName: accountMap[buyerBrokerId] || 'Secondary Buyer Broker',
+          commissionAmount: secondaryAmount,
+          paymentDate: stem.Buyer_Pay_Term_Date__c,
+          paymentDateLabel: 'Received Date',
+          paymentStatus: null,
+        });
+      }
+    }
+
+    rows.sort((a, b) => String(b.deliveryDate || '').localeCompare(String(a.deliveryDate || '')));
+    return Response.json({ rows });
+  } catch (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+});
