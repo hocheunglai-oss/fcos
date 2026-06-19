@@ -31,7 +31,12 @@ export default function BrokerRegister() {
 
   useEffect(() => { loadRows(); }, []);
 
-  const brokerNames = useMemo(() => [...new Set(rows.map(row => row.brokerName).filter(Boolean))].sort(), [rows]);
+  const brokerNames = useMemo(() => {
+    const visibleRows = selectedHiddenBrokerFlags.length
+      ? rows.filter(row => selectedHiddenBrokerFlags.some(flag => flag === 'individual' ? row.hiddenBrokerIndividual : row.hiddenBrokerCompany))
+      : rows;
+    return [...new Set(visibleRows.map(row => row.brokerName).filter(Boolean))].sort();
+  }, [rows, selectedHiddenBrokerFlags]);
 
   const filteredRows = useMemo(() => rows.filter(row => {
     const q = search.trim().toLowerCase();
