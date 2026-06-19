@@ -108,7 +108,7 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   }, 0);
   const buyerBrokerPerUnitComm = lineItems.reduce((sum, li) => {
     const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
-    return sum + (li.Commission_Cost__c ?? ((li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty));
+    return sum + ((li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty);
   }, 0);
   const buyerBrokerLumpsum = buyerBrokers.reduce((sum, bb) => sum + (bb.Commission_Lumpsum__c ?? 0), 0);
   const buyerBrokerComm = buyerBrokerPerUnitComm + buyerBrokerLumpsum;

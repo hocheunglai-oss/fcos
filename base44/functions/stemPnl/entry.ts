@@ -70,7 +70,6 @@ Deno.serve(async (req) => {
         return sfQuery(accessToken, `
           SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Total_Cost__c, Supplier_Invoice__c,
                  Buyers_Brokers_Commission_Per_Unit__c,
-                 Commission_Cost__c,
                  Suppliers_Brokers_Commission_Per_Unit__c,
                  Supplier_Broker__r.Name
           FROM STEM_Line_Item__c
@@ -117,8 +116,8 @@ Deno.serve(async (req) => {
       if (li.Supplier_Invoice__c) byId[id].hasSupplierInvoice = true;
       // Supplier broker: per_unit * BDN qty when available (negative value = profit when subtracted)
       byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
-      // Buyer broker: use Salesforce's total commission cost when present, because it includes secondary per-MT commissions.
-      byId[id].buyerBrokerComm += li.Commission_Cost__c ?? ((li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty);
+      // Buyer broker: per_unit * BDN qty when available
+      byId[id].buyerBrokerComm += (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
       if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
