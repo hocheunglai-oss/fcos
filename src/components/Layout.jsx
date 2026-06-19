@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { LayoutDashboard, FileBarChart2, Database, GitBranch, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -15,6 +15,12 @@ const navItems = [
 
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(true);
+  const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
+
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+    localStorage.setItem('table-density', density);
+  }, [density]);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -60,7 +66,17 @@ export default function Layout() {
         </nav>
 
         {/* Footer */}
-        <div className={cn('py-4 border-t border-sidebar-border', collapsed ? 'flex justify-center px-2' : 'px-4')}>
+        <div className={cn('py-4 border-t border-sidebar-border space-y-3', collapsed ? 'flex flex-col items-center px-2' : 'px-4')}>
+          <button
+            onClick={() => setDensity(d => d === 'compact' ? 'comfort' : 'compact')}
+            className={cn(
+              'rounded-md border border-sidebar-border text-xs font-medium text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors',
+              collapsed ? 'w-8 h-8' : 'w-full px-3 py-2'
+            )}
+            title={`Table view: ${density === 'compact' ? 'Compact' : 'Comfort'}`}
+          >
+            {collapsed ? (density === 'compact' ? 'C' : 'Co') : `${density === 'compact' ? 'Compact' : 'Comfort'} view`}
+          </button>
           {collapsed ? (
             <span className="inline-block w-2 h-2 rounded-full bg-green-400" title="Connected to Salesforce" />
           ) : (
