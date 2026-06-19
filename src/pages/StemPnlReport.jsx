@@ -27,9 +27,8 @@ const COLUMNS = [
   { key: 'Supplier_Invoice',   label: 'Supplier Invoice',  num: true },
   { key: 'Supplier_Broker_Comm', label: 'Supp. Broker',   num: true },
   { key: 'Buyer_Broker_Comm',  label: 'Buyer Broker',      num: true },
-  { key: 'Dashboard_Net_PnL',  label: 'Dashboard Net',     num: true },
+  { key: 'Net_Profit',         label: 'Net P&L',           num: true },
   { key: 'Qlik_Total_Profit',  label: 'Qlik Net',          num: true },
-  { key: 'Pnl_Difference',     label: 'Difference',        num: true },
 ];
 
 const YEAR_OPTIONS = ['2026', '2025', '2024', '2023'];
@@ -88,29 +87,12 @@ export default function StemPnlReport() {
     setLoading(true);
     setError(null);
     const where = buildWhere();
-    const [reportRes, dashboardRes] = await Promise.all([
-      base44.functions.invoke('stemPnl', { where, limit: 1000 }),
-      base44.functions.invoke('salesforceDashboardFiltered', { where, trendYear: Number(year) }),
-    ]);
-    if (reportRes.data?.error || dashboardRes.data?.error) {
-      setError(reportRes.data?.error || dashboardRes.data?.error);
+    const reportRes = await base44.functions.invoke('stemPnl', { where, limit: 1000 });
+    if (reportRes.data?.error) {
+      setError(reportRes.data.error);
     } else {
-      const dashboardById = new Map((dashboardRes.data.recentStems || []).map(stem => [stem.Id, stem.__netPnlCalc]));
-      const mergedRows = (reportRes.data.rows || []).map(row => {
-        const dashboardNet = dashboardById.get(row.Id);
-        const qlikNet = row.Qlik_Total_Profit;
-        return {
-          ...row,
-          Dashboard_Net_PnL: dashboardNet ?? null,
-          Pnl_Difference: dashboardNet != null && qlikNet != null ? dashboardNet - qlikNet : null,
-        };
-      });
-      setRows(mergedRows);
-      setTotals({
-        ...(reportRes.data.totals || null),
-        Dashboard_Net_PnL: mergedRows.reduce((sum, row) => sum + (row.Dashboard_Net_PnL ?? 0), 0),
-        Pnl_Difference: mergedRows.reduce((sum, row) => sum + (row.Pnl_Difference ?? 0), 0),
-      });
+      setRows(reportRes.data.rows || []);
+      setTotals(reportRes.data.totals || null);
     }
     setLoading(false);
   };
@@ -156,7 +138,7 @@ export default function StemPnlReport() {
               <span>Stem P&L Report</span>
             </div>
             <h1 className="text-2xl font-bold font-dm text-foreground">Stem Profit & Loss</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Compares each stem’s dashboard Net P&L against Qlik Net P&L</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Shows calculated stem Net P&L with Qlik Net reference</p>
           </div>
           {rows.length > 0 && (
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
@@ -213,16 +195,16 @@ export default function StemPnlReport() {
             <StatCard label="Supplier Invoices" value={fmt(totals.Supplier_Invoice)} color="amber" />
             <StatCard label="Broker Commissions" value={fmt(totals.Total_Broker_Comm)} color="amber" />
             <StatCard
+              label="Net P&L"
+              value={fmt(totals.Net_Profit)}
+              sub={totals.Buyer_Invoice ? `${((totals.Net_Profit / totals.Buyer_Invoice) * 100).toFixed(1)}% margin` : null}
+              color={(totals.Net_Profit ?? 0) >= 0 ? 'green' : 'red'}
+            />
+            <StatCard
               label="Qlik Net"
               value={fmt(totals.Qlik_Net_Profit)}
               sub={totals.Buyer_Invoice ? `${((totals.Qlik_Net_Profit / totals.Buyer_Invoice) * 100).toFixed(1)}% margin` : null}
               color={(totals.Qlik_Net_Profit ?? 0) >= 0 ? 'green' : 'red'}
-            />
-            <StatCard
-              label="Dashboard Net"
-              value={fmt(totals.Dashboard_Net_PnL)}
-              sub={`Difference ${fmt(totals.Pnl_Difference)}`}
-              color={(totals.Pnl_Difference ?? 0) === 0 ? 'green' : 'red'}
             />
           </div>
         )}
@@ -265,13 +247,10 @@ export default function StemPnlReport() {
                           else if (col.num) display = fmt(v);
                           else display = v ?? '—';
 
-                          const isProfit = ['Dashboard_Net_PnL', 'Qlik_Total_Profit'].includes(col.key);
-                          const isDifference = col.key === 'Pnl_Difference';
+                          const isProfit = ['Net_Profit', 'Qlik_Total_Profit'].includes(col.key);
                           const isMargin = col.key === 'Margin_Pct';
                           let cellColor = '';
-                          if (isDifference && v != null) {
-                            cellColor = Math.abs(v) < 0.01 ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold';
-                          } else if ((isProfit || isMargin) && v != null) {
+                          if ((isProfit || isMargin) && v != null) {
                             cellColor = v >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold';
                           }
 
@@ -292,7 +271,7 @@ export default function StemPnlReport() {
                       {COLUMNS.map((col, i) => {
                         const isNum = col.num && totals[col.key] != null;
                         return (
-                          <td key={col.key} className={`py-2.5 px-3 whitespace-nowrap ${col.num ? 'text-right font-mono' : ''} ${col.key === 'Qlik_Total_Profit' ? ((totals.Qlik_Net_Profit ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
+                          <td key={col.key} className={`py-2.5 px-3 whitespace-nowrap ${col.num ? 'text-right font-mono' : ''} ${['Net_Profit', 'Qlik_Total_Profit'].includes(col.key) ? (((col.key === 'Qlik_Total_Profit' ? totals.Qlik_Net_Profit : totals.Net_Profit) ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
                             {i === 0 ? 'TOTAL' : isNum ? (col.isPercent ? fmt(totals.Buyer_Invoice ? (totals.Net_Profit / totals.Buyer_Invoice) * 100 : null, true) : fmt(col.key === 'Qlik_Total_Profit' ? totals.Qlik_Net_Profit : totals[col.key])) : ''}
                           </td>
                         );
