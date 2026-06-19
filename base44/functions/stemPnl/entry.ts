@@ -118,13 +118,14 @@ Deno.serve(async (req) => {
       if (li.Supplier_Invoice__c) byId[id].hasSupplierInvoice = true;
       // Supplier broker: per_unit * BDN qty when available (negative value = profit when subtracted)
       byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
-      // Buyer broker: keep the old per-unit calculation, adding only the clear extra amount from Salesforce commission cost
-      const baseBuyerBrokerComm = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
-      const visibleLumpsum = li.Buyers_Brokers_Commission_Lumpsum__c;
-      const commissionCost = li.Commission_Cost__c;
-      const hasExtraLumpsum = visibleLumpsum != null && commissionCost != null && commissionCost > visibleLumpsum + 0.01;
-      const extraBuyerBrokerComm = hasExtraLumpsum ? commissionCost - baseBuyerBrokerComm : 0;
-      byId[id].buyerBrokerComm += baseBuyerBrokerComm + extraBuyerBrokerComm;
+      // Buyer broker: when supplier broker per-unit exists, Commission_Cost__c belongs to supplier broker;
+      // otherwise Commission_Cost__c is the buyer broker total, including secondary broker amounts.
+      const buyerBrokerPerUnitTotal = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
+      const suppBrokerPerUnit = li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0;
+      const buyerBrokerCommForLine = suppBrokerPerUnit !== 0
+        ? buyerBrokerPerUnitTotal
+        : (li.Commission_Cost__c ?? buyerBrokerPerUnitTotal);
+      byId[id].buyerBrokerComm += buyerBrokerCommForLine;
       if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
