@@ -147,7 +147,9 @@ Deno.serve(async (req) => {
       }
 
       const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
-      const buyerAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0) || brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
+      const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
+      const buyerPerUnitAmount = brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
+      const buyerAmount = hasSupplierBrokerUnit ? buyerPerUnitAmount : (item.Commission_Cost__c ?? buyerPerUnitAmount);
       if (buyerBrokerId && buyerAmount !== 0) {
         rows.push({
           id: `buyer-${item.Id}`,
@@ -165,24 +167,6 @@ Deno.serve(async (req) => {
         });
       }
 
-      const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
-      const secondaryAmount = Number(item.Commission_Cost__c || 0);
-      if (!hasSupplierBrokerUnit && secondaryAmount > 0) {
-        rows.push({
-          id: `secondary-${item.Id}`,
-          stemId: item.STEM__c,
-          stemName: stem.Name,
-          productName: item['Product__r']?.Name || item.Name || '—',
-          deliveryDate: stem.Delivery_Date__c,
-          brokerType: 'Secondary Buyer Broker',
-          brokerName: accountMap[buyerBrokerId] || 'Secondary Buyer Broker',
-          commissionUnitPrice: item.Buyers_Brokers_Commission_Per_Unit__c ?? (qty ? secondaryAmount / qty : null),
-          commissionAmount: secondaryAmount,
-          paymentDate: stem.Buyer_Pay_Term_Date__c,
-          paymentDateLabel: 'Received Date',
-          paymentStatus: null,
-        });
-      }
     }
 
     rows.sort((a, b) => String(b.deliveryDate || '').localeCompare(String(a.deliveryDate || '')));
