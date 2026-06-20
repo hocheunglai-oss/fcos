@@ -1,5 +1,6 @@
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import DateInput from '@/components/common/DateInput';
 
 const TYPES = ['Supplier Broker', 'Buyer Broker', 'Secondary Buyer Broker'];
 const HIDDEN_BROKER_FLAGS = [
@@ -63,8 +64,8 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
-        <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
-        <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
+        <DateInput value={fromDate} onChange={setFromDate} aria-label="From date" />
+        <DateInput value={toDate} onChange={setToDate} aria-label="To date" />
       </div>
     </div>
   );

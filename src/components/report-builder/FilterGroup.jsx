@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import DateInput from '@/components/common/DateInput';
 import { Plus, Trash2, GitBranch, Loader2, ChevronDown } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
@@ -321,11 +322,10 @@ function FilterRow({ condition, fields, relatedObjects, childRelationships, onCh
             </SelectContent>
           </Select>
           {!DATE_LITERALS.includes(condition.value) && (
-            <Input
+            <DateInput
               className="w-32 h-8 text-xs font-mono"
-              placeholder="YYYY-MM-DD"
               value={condition.value || ''}
-              onChange={e => onChange({ ...condition, value: e.target.value })}
+              onChange={value => onChange({ ...condition, value })}
             />
           )}
         </div>

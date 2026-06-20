@@ -656,7 +656,7 @@ export default function ReportBuilder() {
                             {r.last_run_at && (
                               <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
                                 <Clock className="w-2 h-2" />
-                                {format(new Date(r.last_run_at), 'dd MMM')}
+                                {format(new Date(r.last_run_at), 'dd MMM yyyy')}
                               </span>
                             )}
                           </div>
