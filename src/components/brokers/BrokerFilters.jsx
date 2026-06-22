@@ -1,3 +1,4 @@
+import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import DateInput from '@/components/common/DateInput';
@@ -6,6 +7,13 @@ const TYPES = ['Supplier Broker', 'Buyer Broker', 'Secondary Buyer Broker'];
 const HIDDEN_BROKER_FLAGS = [
   { key: 'individual', label: 'Hidden Broker Individual' },
   { key: 'company', label: 'Hidden Broker Company' },
+];
+const ISO_FORMAT = 'yyyy-MM-dd';
+const RANGE_OPTIONS = [
+  { key: 'all', label: 'All dates' },
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_month', label: 'Last month' },
+  { key: 'this_year', label: 'This year' },
 ];
 
 export default function BrokerFilters({ search, setSearch, selectedTypes, setSelectedTypes, brokerNames, selectedBrokerNames, setSelectedBrokerNames, selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags, fromDate, setFromDate, toDate, setToDate }) {
@@ -25,6 +33,24 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
     setSelectedHiddenBrokerFlags(selectedHiddenBrokerFlags.includes(flag)
       ? selectedHiddenBrokerFlags.filter(item => item !== flag)
       : [...selectedHiddenBrokerFlags, flag]);
+  };
+
+  const applyDateRange = (rangeKey) => {
+    const today = new Date();
+    if (rangeKey === 'all') {
+      setFromDate('');
+      setToDate('');
+    } else if (rangeKey === 'this_month') {
+      setFromDate(format(startOfMonth(today), ISO_FORMAT));
+      setToDate(format(endOfMonth(today), ISO_FORMAT));
+    } else if (rangeKey === 'last_month') {
+      const lastMonth = subMonths(today, 1);
+      setFromDate(format(startOfMonth(lastMonth), ISO_FORMAT));
+      setToDate(format(endOfMonth(lastMonth), ISO_FORMAT));
+    } else if (rangeKey === 'this_year') {
+      setFromDate(format(startOfYear(today), ISO_FORMAT));
+      setToDate(format(endOfYear(today), ISO_FORMAT));
+    }
   };
 
   return (
@@ -63,9 +89,19 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
           </div>
         </div>
       )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <DateInput value={fromDate} onChange={setFromDate} aria-label="From date" />
-        <DateInput value={toDate} onChange={setToDate} aria-label="To date" />
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date range</p>
+        <div className="flex flex-wrap gap-2">
+          {RANGE_OPTIONS.map(option => (
+            <Button key={option.key} type="button" size="sm" variant="outline" onClick={() => applyDateRange(option.key)}>
+              {option.label}
+            </Button>
+          ))}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <DateInput value={fromDate} onChange={setFromDate} aria-label="From date" />
+          <DateInput value={toDate} onChange={setToDate} aria-label="To date" />
+        </div>
       </div>
     </div>
   );
