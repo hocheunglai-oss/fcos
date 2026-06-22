@@ -37,11 +37,16 @@ export default function BrokerRegister() {
   useEffect(() => { loadRows(); }, []);
 
   const brokerNames = useMemo(() => {
-    const visibleRows = selectedHiddenBrokerFlags.length
-      ? rows.filter(row => selectedHiddenBrokerFlags.some(flag => flag === 'individual' ? row.hiddenBrokerIndividual : row.hiddenBrokerCompany))
-      : rows;
+    const visibleRows = rows.filter(row => {
+      const typeMatch = !selectedTypes.length || selectedTypes.includes(row.brokerType);
+      const hiddenBrokerMatch = !selectedHiddenBrokerFlags.length || selectedHiddenBrokerFlags.some(flag => flag === 'individual' ? row.hiddenBrokerIndividual : row.hiddenBrokerCompany);
+      const date = row.paymentDate || '';
+      const fromMatch = !fromDate || date >= fromDate;
+      const toMatch = !toDate || date <= toDate;
+      return typeMatch && hiddenBrokerMatch && fromMatch && toMatch;
+    });
     return [...new Set(visibleRows.map(row => row.brokerName).filter(Boolean))].sort();
-  }, [rows, selectedHiddenBrokerFlags]);
+  }, [rows, selectedTypes, selectedHiddenBrokerFlags, fromDate, toDate]);
 
   const filteredRows = useMemo(() => rows.filter(row => {
     const q = search.trim().toLowerCase();
