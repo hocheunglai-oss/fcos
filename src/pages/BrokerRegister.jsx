@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { Download, Loader2, RefreshCw } from 'lucide-react';
+import { format } from 'date-fns';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import BrokerFilters from '@/components/brokers/BrokerFilters';
@@ -7,6 +8,9 @@ import BrokerRegisterTable from '@/components/brokers/BrokerRegisterTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 
 const fmtMoney = (value) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtDate = (value) => { try { return value ? format(new Date(value), 'dd MMM yyyy') : ''; } catch { return value || ''; } };
+const fmtUnit = (value) => value != null ? `${fmtMoney(value)} / MT` : '';
+const csvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
 export default function BrokerRegister() {
   const [rows, setRows] = useState([]);
@@ -52,6 +56,31 @@ export default function BrokerRegister() {
 
   const total = filteredRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
 
+  const exportCsv = () => {
+    const headers = ['Stem Name', 'Product', 'Delivery Date', 'Broker Type', 'Broker Name', 'Commission / Unit', 'Payable Balance', 'Receivable Balance', 'Payment Date Label', 'Payment Date', 'Payment Status'];
+    const csvRows = filteredRows.map(row => [
+      row.stemName,
+      row.productName,
+      fmtDate(row.deliveryDate),
+      row.brokerType,
+      row.brokerName,
+      fmtUnit(row.commissionUnitPrice),
+      row.brokerType === 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '',
+      row.brokerType !== 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '',
+      row.paymentDateLabel,
+      fmtDate(row.paymentDate),
+      row.paymentStatus || '',
+    ]);
+    const csv = [headers, ...csvRows].map(row => row.map(csvValue).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `broker-register-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -59,9 +88,14 @@ export default function BrokerRegister() {
           <p className="text-sm text-muted-foreground">Salesforce broker commissions</p>
           <h1 className="text-2xl font-bold font-dm text-foreground">Broker Register</h1>
         </div>
-        <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2 w-fit">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={exportCsv} disabled={loading || !filteredRows.length} className="gap-2 w-fit">
+            <Download className="w-4 h-4" /> Export CSV
+          </Button>
+          <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2 w-fit">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
+        </div>
       </div>
 
       <BrokerFilters search={search} setSearch={setSearch} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes} brokerNames={brokerNames} selectedBrokerNames={selectedBrokerNames} setSelectedBrokerNames={setSelectedBrokerNames} selectedHiddenBrokerFlags={selectedHiddenBrokerFlags} setSelectedHiddenBrokerFlags={setSelectedHiddenBrokerFlags} fromDate={fromDate} setFromDate={setFromDate} toDate={toDate} setToDate={setToDate} />
