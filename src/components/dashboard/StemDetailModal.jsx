@@ -98,8 +98,8 @@ function SectionHeader({ title }) {
 
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
-  const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
-  const supplierLineTotal = lineItems.reduce((sum, li) => sum + (li.Total_Cost__c ?? 0), 0);
+  const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const supplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
   const supplierInvoiceTotal = record.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
   const supplierBase = supplierInvoiceTotal || supplierLineTotal;
   const supplierBrokerComm = lineItems.reduce((sum, li) => {
@@ -108,6 +108,7 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
     return sum + ((li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty);
   }, 0);
   const buyerBrokerLineComm = lineItems.reduce((sum, li) => {
+    if (li.Cancelled__c) return sum;
     const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
     const buyerPerUnitTotal = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
     const suppBrokerPerUnit = li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0;
@@ -423,9 +424,15 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                             const productName = ec._Product_Name || (ec['Product2Id__r']?.Name) || ec.Description__c || '—';
                             const net = (ec.Line_Total__c ?? 0) - (ec.Line_Total_Buy__c ?? 0);
                             const isNegative = net < 0 && ((ec.Line_Total__c != null && ec.Line_Total_Buy__c != null) || ec.Line_Total__c != null || ec.Line_Total_Buy__c != null);
+                            const isCancelled = ec.Cancelled__c === true;
                             return (
-                            <tr key={ec.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${isNegative ? 'bg-red-50 border-red-200' : idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
-                              <td className="py-2.5 px-3 font-medium text-foreground">{ec.Name || '—'}</td>
+                            <tr key={ec.Id} className={`border-b transition-colors ${isCancelled ? 'bg-red-100 border-red-300 hover:bg-red-100' : isNegative ? 'bg-red-50 border-red-200 hover:bg-red-50' : `border-border/40 hover:bg-muted/20 ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}`}>
+                              <td className="py-2.5 px-3 font-medium text-foreground">
+                                <div className="flex items-center gap-2">
+                                  <span>{ec.Name || '—'}</span>
+                                  {isCancelled && <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">Cancelled</span>}
+                                </div>
+                              </td>
                               <td className="py-2.5 px-3 text-muted-foreground">{productName}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{ec.Supplier_Name__c || '—'}</td>
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Quantity__c != null ? ec.Quantity__c.toLocaleString() : '—'}</td>

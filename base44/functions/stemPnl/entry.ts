@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       Promise.all(idChunks.map(chunk => {
         const inList = chunk.map(id => `'${id}'`).join(',');
         return sfQuery(accessToken, `
-          SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Total_Cost__c, Supplier_Invoice__c,
+          SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
                  Buyers_Brokers_Commission_Per_Unit__c,
                  Buyers_Brokers_Commission_Lumpsum__c,
                  Commission_Cost__c,
@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
       Promise.all(idChunks.map(chunk => {
         const inList = chunk.map(id => `'${id}'`).join(',');
         return sfQuery(accessToken, `
-          SELECT STEM__c, Line_Total_Buy__c
+          SELECT STEM__c, Line_Total_Buy__c, Cancelled__c
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList}) AND Supplier_Invoice__c = null
           LIMIT 5000
@@ -112,6 +112,7 @@ Deno.serve(async (req) => {
       const id = li.STEM__c;
       if (!id) continue;
       initStem(id);
+      if (li.Cancelled__c) continue;
       const qty = li.Quantity__c ?? 0;
       const brokerQty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : qty;
       byId[id].supplierLineBuy += (li.Total_Cost__c ?? 0);
@@ -142,6 +143,7 @@ Deno.serve(async (req) => {
       const id = ec.STEM__c;
       if (!id) continue;
       initStem(id);
+      if (ec.Cancelled__c) continue;
       byId[id].extraCostBuy += (ec.Line_Total_Buy__c ?? 0);
     }
 
