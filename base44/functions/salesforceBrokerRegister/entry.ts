@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
         return sfQuery(instanceUrl, accessToken, `
           SELECT Id, Name, STEM__c, Product__r.Name, Supplier_Invoice__c,
                  Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
-                 Quantity_Delivered_Per_BDN__c, Quantity__c, Commission_Cost__c,
+                 Quantity_Delivered_Per_BDN__c, Quantity__c, Commission_Cost__c, Cancelled__c,
                  Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
                  Buyers_Brokers_Commission_Lumpsum__c
           FROM STEM_Line_Item__c
@@ -186,7 +186,7 @@ Deno.serve(async (req) => {
       const stem = stemMap[item.STEM__c];
       if (!stem) continue;
       const qty = item.Quantity_Delivered_Per_BDN__c ?? item.Quantity__c;
-      const supplierAmount = brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
+      const supplierAmount = item.Cancelled__c ? 0 : brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
       if (item.Supplier_Broker__c && supplierAmount !== 0) {
         rows.push({
           id: `supplier-${item.Id}`,
