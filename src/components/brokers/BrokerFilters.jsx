@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import DateInput from '@/components/common/DateInput';
+import BrokerDatePicker from '@/components/brokers/BrokerDatePicker';
 
 const TYPES = ['Supplier Broker', 'Buyer Broker', 'Secondary Buyer Broker'];
 const HIDDEN_BROKER_FLAGS = [
@@ -126,8 +126,8 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
           ))}
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <DateInput value={fromDate} onChange={setFromDate} aria-label="From date" />
-          <DateInput value={toDate} onChange={setToDate} aria-label="To date" />
+          <BrokerDatePicker value={fromDate} onChange={setFromDate} placeholder="dd/mm/yyyy" aria-label="From date" />
+          <BrokerDatePicker value={toDate} onChange={setToDate} placeholder="dd/mm/yyyy" aria-label="To date" />
         </div>
       </div>
     </div>
