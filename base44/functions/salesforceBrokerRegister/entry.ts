@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     const stemIds = stems.map(stem => stem.Id);
     if (!stemIds.length) return Response.json({ rows: [] });
 
-    const [lineItemChunks, buyerBrokerChunks] = await Promise.all([
+    const [lineItemChunks, buyerBrokerChunks, buyerPaymentChunks, buyerInvoiceChunks] = await Promise.all([
       Promise.all(chunkIds(stemIds).map(chunk => {
         const ids = chunk.map(id => `'${id}'`).join(',');
         return sfQuery(instanceUrl, accessToken, `
@@ -91,10 +91,32 @@ Deno.serve(async (req) => {
           LIMIT 5000
         `);
       })),
+      Promise.all(chunkIds(stemIds).map(chunk => {
+        const ids = chunk.map(id => `'${id}'`).join(',');
+        return sfQuery(instanceUrl, accessToken, `
+          SELECT STEM__c, Date__c
+          FROM Payment__c
+          WHERE STEM__c IN (${ids}) AND Supplier_Invoice__c = null
+          ORDER BY Date__c DESC
+          LIMIT 5000
+        `);
+      })),
+      Promise.all(chunkIds(stemIds).map(chunk => {
+        const ids = chunk.map(id => `'${id}'`).join(',');
+        return sfQuery(instanceUrl, accessToken, `
+          SELECT STEM__c, Invoice_Due_Date__c
+          FROM Invoice__c
+          WHERE STEM__c IN (${ids})
+          ORDER BY Invoice_Due_Date__c DESC
+          LIMIT 5000
+        `);
+      })),
     ]);
 
     const lineItems = lineItemChunks.flat();
     const buyerBrokers = buyerBrokerChunks.flat();
+    const buyerPayments = buyerPaymentChunks.flat();
+    const buyerInvoices = buyerInvoiceChunks.flat();
     const accountIds = [...new Set([
       ...lineItems.map(item => item.Supplier_Broker__c).filter(Boolean),
       ...lineItems.map(item => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
@@ -127,6 +149,20 @@ Deno.serve(async (req) => {
     for (const payment of paymentChunks.flat()) {
       if (payment.Supplier_Invoice__c && !paymentDateByInvoice[payment.Supplier_Invoice__c]) {
         paymentDateByInvoice[payment.Supplier_Invoice__c] = payment.Date__c;
+      }
+    }
+
+    const buyerPaymentDateByStem = {};
+    for (const payment of buyerPayments) {
+      if (payment.STEM__c && !buyerPaymentDateByStem[payment.STEM__c]) {
+        buyerPaymentDateByStem[payment.STEM__c] = payment.Date__c;
+      }
+    }
+
+    const buyerInvoiceDueDateByStem = {};
+    for (const invoice of buyerInvoices) {
+      if (invoice.STEM__c && !buyerInvoiceDueDateByStem[invoice.STEM__c]) {
+        buyerInvoiceDueDateByStem[invoice.STEM__c] = invoice.Invoice_Due_Date__c;
       }
     }
 
@@ -188,9 +224,9 @@ Deno.serve(async (req) => {
           hiddenBrokerCompany: accountFlagMap[buyerBrokerId]?.hiddenBrokerCompany || false,
           commissionUnitPrice: item.Buyers_Brokers_Commission_Per_Unit__c ?? (qty ? buyerAmount / qty : null),
           commissionAmount: buyerAmount,
-          paymentDate: stem.Payment_Date__c,
+          paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
           paymentDateLabel: 'Received Date',
-          paymentDelay: paymentDelayDays(stem.Payment_Date__c, stem.Buyer_Pay_Term_Date__c),
+          paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
           paymentStatus: buyerStatusByStemBroker[`${item.STEM__c}:${buyerBrokerId}`] || buyerStatusByStem[item.STEM__c] || 'Pending',
         });
       }
@@ -217,9 +253,9 @@ Deno.serve(async (req) => {
             hiddenBrokerCompany: accountFlagMap[broker.Buyer_Broker__c]?.hiddenBrokerCompany || false,
             commissionUnitPrice: qty ? secondaryAmount / qty : null,
             commissionAmount: secondaryAmount,
-            paymentDate: stem.Payment_Date__c,
+            paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
             paymentDateLabel: 'Received Date',
-            paymentDelay: paymentDelayDays(stem.Payment_Date__c, stem.Buyer_Pay_Term_Date__c),
+            paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
             paymentStatus: buyerStatusByStemBroker[`${item.STEM__c}:${broker.Buyer_Broker__c}`] || 'Pending',
           });
         }
