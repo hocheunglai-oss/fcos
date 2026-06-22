@@ -147,7 +147,7 @@ Deno.serve(async (req) => {
       const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
-          return sfQuery(accessToken, `SELECT STEM__c, Total_Cost__c, Supplier_Invoice__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
+          return sfQuery(accessToken, `SELECT STEM__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Commission_Cost__c, Suppliers_Brokers_Commission_Per_Unit__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`);
         })),
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
@@ -155,7 +155,7 @@ Deno.serve(async (req) => {
         })),
         Promise.all(chunkIds(allStemIds).map(chunk => {
           const inList = chunk.map(id => `'${id}'`).join(',');
-          return sfQuery(accessToken, `SELECT STEM__c, Line_Total_Buy__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) AND Supplier_Invoice__c = null LIMIT 2000`);
+          return sfQuery(accessToken, `SELECT STEM__c, Line_Total_Buy__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) AND Supplier_Invoice__c = null LIMIT 2000`);
         })),
       ]);
       lineItemsRes = { records: lineItemChunks.flatMap(c => c.records || []) };
@@ -166,7 +166,7 @@ Deno.serve(async (req) => {
     const extraCostBuyByStem = {};
     for (const ec of (extraCostsRes.records || [])) {
       const id = ec.STEM__c;
-      if (!id) continue;
+      if (!id || ec.Cancelled__c) continue;
       extraCostBuyByStem[id] = (extraCostBuyByStem[id] || 0) + (ec.Line_Total_Buy__c ?? 0);
     }
 
@@ -174,33 +174,31 @@ Deno.serve(async (req) => {
     const hasSupplierInvoiceByStem = {};
     for (const li of (lineItemsRes.records || [])) {
       const id = li.STEM__c;
-      if (!id) continue;
+      if (!id || li.Cancelled__c) continue;
       supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + (li.Total_Cost__c ?? 0);
       if (li.Supplier_Invoice__c) hasSupplierInvoiceByStem[id] = true;
     }
 
-    // Build per-stem broker commission maps from line items + buyer broker lumpsums
+    // Build per-stem broker commission maps using the same rules as the STEM P&L report
     const brokerByStem = {};
     for (const li of (lineItemsRes.records || [])) {
       const id = li.STEM__c;
-      if (!id) continue;
+      if (!id || li.Cancelled__c) continue;
       if (!brokerByStem[id]) brokerByStem[id] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
       const brokerQty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
-      brokerByStem[id].buyerComm += (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
-      brokerByStem[id].suppCommPerUnit += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
+      const buyerBrokerPerUnitTotal = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
+      const suppBrokerPerUnit = li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0;
+      const buyerBrokerCommForLine = suppBrokerPerUnit !== 0
+        ? buyerBrokerPerUnitTotal
+        : (li.Commission_Cost__c ?? buyerBrokerPerUnitTotal);
+      brokerByStem[id].buyerComm += buyerBrokerCommForLine;
+      brokerByStem[id].suppCommPerUnit += suppBrokerPerUnit * brokerQty;
       if (!brokerByStem[id].suppBrokerName && li['Supplier_Broker__r']?.Name) {
         brokerByStem[id].suppBrokerName = li['Supplier_Broker__r'].Name;
       }
       if (!brokerByStem[id].buyerBrokerName && li['Buyer_Broker__r']?.Name) {
         brokerByStem[id].buyerBrokerName = li['Buyer_Broker__r'].Name;
       }
-    }
-    // Add buyer broker lumpsums
-    for (const bb of (buyerBrokersRes.records || [])) {
-      const id = bb.STEM__c;
-      if (!id) continue;
-      if (!brokerByStem[id]) brokerByStem[id] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
-      brokerByStem[id].buyerComm += (bb.Commission_Lumpsum__c ?? 0);
     }
 
     const recentStems = (recentRes.records || []).map(({ attributes, ...rest }) => {
