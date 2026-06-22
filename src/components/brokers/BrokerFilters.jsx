@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -15,8 +16,17 @@ const RANGE_OPTIONS = [
   { key: 'last_month', label: 'Last month' },
   { key: 'this_year', label: 'This year' },
 ];
+const QUARTER_OPTIONS = [
+  { key: 'q1', label: 'Q1', startMonth: 0, endMonth: 2 },
+  { key: 'q2', label: 'Q2', startMonth: 3, endMonth: 5 },
+  { key: 'q3', label: 'Q3', startMonth: 6, endMonth: 8 },
+  { key: 'q4', label: 'Q4', startMonth: 9, endMonth: 11 },
+];
+const YEAR_OPTIONS = Array.from({ length: 8 }, (_, index) => new Date().getFullYear() - index);
 
 export default function BrokerFilters({ search, setSearch, selectedTypes, setSelectedTypes, brokerNames, selectedBrokerNames, setSelectedBrokerNames, selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags, fromDate, setFromDate, toDate, setToDate }) {
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+
   const toggleType = (type) => {
     setSelectedTypes(selectedTypes.includes(type)
       ? selectedTypes.filter(item => item !== type)
@@ -51,6 +61,11 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
       setFromDate(format(startOfYear(today), ISO_FORMAT));
       setToDate(format(endOfYear(today), ISO_FORMAT));
     }
+  };
+
+  const applyQuarterRange = (quarter) => {
+    setFromDate(format(new Date(selectedYear, quarter.startMonth, 1), ISO_FORMAT));
+    setToDate(format(new Date(selectedYear, quarter.endMonth + 1, 0), ISO_FORMAT));
   };
 
   return (
@@ -91,9 +106,21 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
       )}
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date range</p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {RANGE_OPTIONS.map(option => (
             <Button key={option.key} type="button" size="sm" variant="outline" onClick={() => applyDateRange(option.key)}>
+              {option.label}
+            </Button>
+          ))}
+          <select
+            value={selectedYear}
+            onChange={event => setSelectedYear(Number(event.target.value))}
+            className="h-8 rounded-md border border-input bg-transparent px-3 text-xs font-medium text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            {YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}
+          </select>
+          {QUARTER_OPTIONS.map(option => (
+            <Button key={option.key} type="button" size="sm" variant="outline" onClick={() => applyQuarterRange(option)}>
               {option.label}
             </Button>
           ))}
