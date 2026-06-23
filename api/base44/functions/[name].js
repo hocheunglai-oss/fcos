@@ -130,9 +130,34 @@ async function salesforceDashboardFiltered(body) {
 
   const bf = buyerAmountField || 'Total_Invoice_Amount__c';
   const sf = supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c';
-  const recentStems = recentRes.records || [];
+  const recentRows = recentRes.records || [];
+  const recentStemIds = recentRows.map((stem) => stem.Id).filter(Boolean);
+  const supplierLineTotalByStem = {};
+
+  for (const chunk of chunkIds(recentStemIds)) {
+    const ids = chunk.map((id) => `'${id}'`).join(',');
+    const lineItems = await sfQuery(
+      `SELECT STEM__c, Total_Cost__c, Cancelled__c FROM STEM_Line_Item__c WHERE STEM__c IN (${ids}) LIMIT 5000`,
+      { clean: true, limit: 5000, softFail: true }
+    );
+
+    for (const item of lineItems.records || []) {
+      if (!item.STEM__c || item.Cancelled__c) continue;
+      supplierLineTotalByStem[item.STEM__c] = (supplierLineTotalByStem[item.STEM__c] || 0) + (item.Total_Cost__c || 0);
+    }
+  }
+
+  const supplierBaseForStem = (stem) => {
+    const invoiceTotal = stem[sf] ?? 0;
+    return invoiceTotal || supplierLineTotalByStem[stem.Id] || null;
+  };
+
+  const recentStems = recentRows.map((stem) => ({
+    ...stem,
+    [sf]: supplierBaseForStem(stem),
+  }));
   const totalBuyer = buyerRes.records?.[0]?.total ?? 0;
-  const totalSupplier = supplierRes.records?.[0]?.total ?? 0;
+  const totalSupplier = recentStems.reduce((sum, stem) => sum + (stem[sf] || 0), 0);
   const totalCosts = costsRes.records?.[0]?.total ?? 0;
   const totalProfit = totalBuyer - totalSupplier;
   const monthlyNetPnl = Array.from({ length: 12 }, (_, idx) => ({ month: idx + 1, label: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][idx], netPnl: 0 }));
