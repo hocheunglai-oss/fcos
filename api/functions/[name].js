@@ -356,6 +356,8 @@ async function salesforceDashboardFilteredFull(body) {
   if (buyerAmountField) plFields.push(buyerAmountField);
   if (supplierAmountField) plFields.push(supplierAmountField);
   if (totalCostsField) plFields.push(totalCostsField);
+  if (fieldNames.includes('QLIK_STEM_Line_Item_Total_Cost__c')) plFields.push('QLIK_STEM_Line_Item_Total_Cost__c');
+  if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
   if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
 
   const queries = [
