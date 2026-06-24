@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -152,7 +152,7 @@ export default function ReportBuilder() {
     setLookups([]);
     setFilterGroup(defaultFilterGroup());
     setSelectedFields([]);
-    base44.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
       if (res.data?.error) throw new Error(res.data.error);
       const f = res.data?.fields || [];
       setFields(f);
@@ -176,7 +176,7 @@ export default function ReportBuilder() {
   }, [selectedObject, fieldsRetry]);
 
   const loadSavedReports = async () => {
-    const reports = await base44.entities.SavedReport.list('-updated_date', 50);
+    const reports = await appClient.entities.SavedReport.list('-updated_date', 50);
     setSavedReports(reports);
   };
 
@@ -391,7 +391,7 @@ export default function ReportBuilder() {
     setError(null);
     const soql = rawSoqlMode ? rawSoql.trim() : buildSoql();
     if (!soql) { setError('Please enter a SOQL query.'); setLoading(false); return; }
-    const res = await base44.functions.invoke('salesforceQuery', { soql });
+    const res = await appClient.functions.invoke('salesforceQuery', { soql });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -425,9 +425,9 @@ export default function ReportBuilder() {
       last_run_count: records.length,
     };
     if (selectedSavedReport) {
-      await base44.entities.SavedReport.update(selectedSavedReport.id, payload);
+      await appClient.entities.SavedReport.update(selectedSavedReport.id, payload);
     } else {
-      await base44.entities.SavedReport.create(payload);
+      await appClient.entities.SavedReport.create(payload);
     }
     await loadSavedReports();
     setSaving(false);
@@ -460,7 +460,7 @@ export default function ReportBuilder() {
 
   const deleteReport = async (id, e) => {
     e.stopPropagation();
-    await base44.entities.SavedReport.delete(id);
+    await appClient.entities.SavedReport.delete(id);
     if (selectedSavedReport?.id === id) setSelectedSavedReport(null);
     await loadSavedReports();
   };
@@ -506,8 +506,8 @@ export default function ReportBuilder() {
     const objectName = target.objectName || selectedObject;
     const field = target.fieldName || fieldKey;
     if (!field || field.startsWith('__child__:') || field.startsWith('__nested_child__:')) return { sampleValue: '—' };
-    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} WHERE ${field} != null LIMIT 1` });
-    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} LIMIT 1` });
+    let res = await appClient.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} WHERE ${field} != null LIMIT 1` });
+    if (res.data?.error) res = await appClient.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field} FROM ${objectName} LIMIT 1` });
     const row = res.data?.records?.[0];
     const value = field.split('.').reduce((obj, part) => obj?.[part], row) ?? row?.[field];
     return { recordId: row?.Id || '—', sampleValue: row ? String(value ?? '—') : '—' };

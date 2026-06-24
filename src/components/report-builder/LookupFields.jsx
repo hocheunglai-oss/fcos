@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { useState } from 'react';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Trash2, Link2, Loader2 } from 'lucide-react';
@@ -15,7 +15,7 @@ export default function LookupFields({ lookups, onChange, fields, selectedObject
   const loadRelatedFields = async (relationshipName, relObjectName) => {
     if (relatedFieldsCache[relObjectName]) return;
     setLoadingRel(prev => ({ ...prev, [relObjectName]: true }));
-    const res = await base44.functions.invoke('salesforceObjectFields', { objectName: relObjectName });
+    const res = await appClient.functions.invoke('salesforceObjectFields', { objectName: relObjectName });
     setRelatedFieldsCache(prev => ({
       ...prev,
       [relObjectName]: (res.data?.fields || []).filter(f =>

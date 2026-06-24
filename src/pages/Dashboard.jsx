@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import StatCard from '@/components/dashboard/StatCard';
 import RecentStemsTable from '@/components/dashboard/RecentStemsTable';
@@ -18,7 +18,7 @@ export default function Dashboard() {
   const load = async () => {
     setLoading(true);
     setError(null);
-    const res = await base44.functions.invoke('salesforceDashboard', {});
+    const res = await appClient.functions.invoke('salesforceDashboard', {});
     setData(res.data);
     setLastRefresh(new Date());
     setLoading(false);

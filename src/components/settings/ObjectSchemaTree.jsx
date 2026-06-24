@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
-import { ChevronRight, ChevronDown, Loader2, Check, Minus } from 'lucide-react';
+import { appClient } from '@/api/appClient';
+import { ChevronRight, Loader2, Check, Minus } from 'lucide-react';
 
 /**
  * allowedMap shape:
@@ -70,7 +70,7 @@ function SchemaNode({ objectName, label, nodeValue, onChange, depth = 0, isChild
   const loadMeta = () => {
     if (meta || loading) return;
     setLoading(true);
-    base44.functions.invoke('salesforceObjectFields', { objectName }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName }).then(res => {
       setMeta({
         fields: (res.data?.fields || []).filter(f => !['IsDeleted', 'SystemModstamp', 'attributes'].includes(f.name)),
         childRelationships: res.data?.childRelationships || [],

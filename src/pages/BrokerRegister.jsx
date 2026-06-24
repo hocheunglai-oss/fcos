@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import BrokerFilters from '@/components/brokers/BrokerFilters';
 import BrokerRegisterTable from '@/components/brokers/BrokerRegisterTable';
@@ -28,7 +28,7 @@ export default function BrokerRegister() {
   const loadRows = async () => {
     setLoading(true);
     setError(null);
-    const res = await base44.functions.invoke('salesforceBrokerRegister', { limit: 2000 });
+    const res = await appClient.functions.invoke('salesforceBrokerRegister', { limit: 2000 });
     if (res.data?.error) setError(res.data.error);
     setRows(res.data?.rows || []);
     setLoading(false);

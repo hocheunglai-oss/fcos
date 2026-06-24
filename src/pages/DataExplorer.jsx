@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -26,7 +26,7 @@ export default function DataExplorer() {
   const [hoverInfo, setHoverInfo] = useState(null);
 
   useEffect(() => {
-    base44.functions.invoke('salesforceSchema', {}).then(res => {
+    appClient.functions.invoke('salesforceSchema', {}).then(res => {
       setObjects(res.data?.objects || []);
       setLoadingObjects(false);
     });
@@ -38,7 +38,7 @@ export default function DataExplorer() {
     setFields([]);
     setSelectedFields([]);
     setRecords([]);
-    base44.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
       const f = res.data?.fields || [];
       setFields(f);
       const defaults = f.filter(x => !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp').slice(0, 8).map(x => x.name);
@@ -61,7 +61,7 @@ export default function DataExplorer() {
   const runQuery = async () => {
     setLoading(true);
     setError(null);
-    const res = await base44.functions.invoke('salesforceQuery', { soql });
+    const res = await appClient.functions.invoke('salesforceQuery', { soql });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -105,8 +105,8 @@ export default function DataExplorer() {
   const showFieldInfo = async (field) => {
     const baseInfo = { label: field.label, fieldName: field.name, type: field.type, loading: true };
     setHoverInfo(baseInfo);
-    let res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} WHERE ${field.name} != null LIMIT 1` });
-    if (res.data?.error) res = await base44.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} LIMIT 1` });
+    let res = await appClient.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} WHERE ${field.name} != null LIMIT 1` });
+    if (res.data?.error) res = await appClient.functions.invoke('salesforceQuery', { soql: `SELECT Id, ${field.name} FROM ${selectedObject} LIMIT 1` });
     const row = res.data?.records?.[0];
     setHoverInfo(current => current?.fieldName === field.name ? {
       ...baseInfo,

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Settings, Search, Loader2, Check } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import ObjectSchemaTree from '@/components/settings/ObjectSchemaTree';
 const SETTINGS_KEY = 'report_builder_config';
 
 async function loadSettingsRecord() {
-  const records = await base44.entities.AppSettings.filter({ key: SETTINGS_KEY });
+  const records = await appClient.entities.AppSettings.filter({ key: SETTINGS_KEY });
   return records[0] || null;
 }
 
@@ -34,7 +34,7 @@ export default function SettingsPage() {
   // Load schema + settings from DB in parallel
   useEffect(() => {
     Promise.all([
-      base44.functions.invoke('salesforceSchema', {}).then(res => res.data?.objects || []),
+      appClient.functions.invoke('salesforceSchema', {}).then(res => res.data?.objects || []),
       loadSettingsRecord(),
     ]).then(([objects, record]) => {
       setAllObjects(objects);
@@ -53,7 +53,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!defaultObject) return;
     setRbFieldsLoading(true);
-    base44.functions.invoke('salesforceObjectFields', { objectName: defaultObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: defaultObject }).then(res => {
       setRbFields((res.data?.fields || []).filter(f => f.sortable));
       setRbFieldsLoading(false);
     });
@@ -68,9 +68,9 @@ export default function SettingsPage() {
       defaultLimit: Number(defaultLimit),
     };
     if (settingsRecord) {
-      await base44.entities.AppSettings.update(settingsRecord.id, { key: SETTINGS_KEY, value });
+      await appClient.entities.AppSettings.update(settingsRecord.id, { key: SETTINGS_KEY, value });
     } else {
-      const created = await base44.entities.AppSettings.create({ key: SETTINGS_KEY, value });
+      const created = await appClient.entities.AppSettings.create({ key: SETTINGS_KEY, value });
       setSettingsRecord(created);
     }
     setSaving(false);

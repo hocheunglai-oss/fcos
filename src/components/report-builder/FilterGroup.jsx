@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import DateInput from '@/components/common/DateInput';
 import { Plus, Trash2, GitBranch, Loader2, ChevronDown } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 
 // ── Operators ─────────────────────────────────────────────────────────────────
 const OPERATORS_BY_TYPE = {
@@ -34,7 +34,7 @@ function getOperators(t) { return OPERATORS_BY_TYPE[t] || OPERATORS_BY_TYPE.stri
 const metaCache = {};
 async function fetchMeta(objectName) {
   if (metaCache[objectName]) return metaCache[objectName];
-  const res = await base44.functions.invoke('salesforceObjectFields', { objectName });
+  const res = await appClient.functions.invoke('salesforceObjectFields', { objectName });
   if (res.data?.error) throw new Error(res.data.error);
   const fields = (res.data?.fields || [])
     .filter(f => f.filterable !== false)

@@ -1,38 +1,19 @@
-**Welcome to your Base44 project** 
+# Salesforce Extension
 
-**About**
+Salesforce Extension is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
 
-View and Edit  your app on [Base44.com](http://Base44.com) 
+## Local Development
 
-This project contains everything you need to run your app locally.
-
-**Edit the code in your local development environment**
-
-Any change pushed to the repo will also be reflected in the Base44 Builder.
-
-**Prerequisites:** 
-
-1. Clone the repository using the project's Git URL 
-2. Navigate to the project directory
-3. Install dependencies: `npm install`
-4. Create an `.env.local` file and set the right environment variables
-
-```
-VITE_BASE44_APP_ID=your_app_id
-VITE_BASE44_APP_BASE_URL=your_backend_url
-
-e.g.
-VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
-VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+```bash
+pnpm install
+pnpm dev
 ```
 
-Run the app: `npm run dev`
+## Vercel Environment Variables
 
-**Vercel Salesforce connection**
+Set these in Vercel for Production and Preview:
 
-This app can call Salesforce directly from Vercel serverless functions. Add these Environment Variables in Vercel before deploying:
-
-```
+```bash
 SALESFORCE_CLIENT_ID=your_connected_app_client_id
 SALESFORCE_CLIENT_SECRET=your_connected_app_client_secret
 SALESFORCE_REFRESH_TOKEN=your_salesforce_refresh_token
@@ -41,14 +22,12 @@ SALESFORCE_LOGIN_URL=https://login.salesforce.com
 SALESFORCE_API_VERSION=v59.0
 ```
 
-For a temporary test, `SALESFORCE_ACCESS_TOKEN` can be used instead of the OAuth refresh-token variables, but it will expire.
+For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used instead of the OAuth refresh-token variables, but it will expire.
 
-**Publish your changes**
+## Deployment
 
-Open [Base44.com](http://Base44.com) and click on Publish.
+Production deploys are handled by Vercel:
 
-**Docs & Support**
-
-Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
-
-Support: [https://app.base44.com/support](https://app.base44.com/support)
+```bash
+pnpm dlx vercel@latest --prod
+```

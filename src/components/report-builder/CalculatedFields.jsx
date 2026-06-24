@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Trash2, Calculator, ChevronDown, Loader2, Search } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 
 const AGGREGATE_FNS = ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'COUNT_DISTINCT'];
 
@@ -12,7 +12,7 @@ const AGGREGATE_FNS = ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'COUNT_DISTINCT'];
 const fieldCache = {};
 async function fetchFields(objectName) {
   if (fieldCache[objectName]) return fieldCache[objectName];
-  const res = await base44.functions.invoke('salesforceObjectFields', { objectName });
+  const res = await appClient.functions.invoke('salesforceObjectFields', { objectName });
   const fields = res.data?.fields || [];
   fieldCache[objectName] = fields;
   return fields;

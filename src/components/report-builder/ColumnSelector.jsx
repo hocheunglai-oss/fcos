@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { GripVertical, X, Search, Loader2, ChevronRight, ChevronDown, Plus, Columns } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -73,7 +73,7 @@ export default function ColumnSelector({
   const ensureFieldsLoaded = (objectName) => {
     if (!objectName || relFieldsCache[objectName]) return;
     setLoadingRel(true);
-    base44.functions.invoke('salesforceObjectFields', { objectName }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName }).then(res => {
       const f = (res.data?.fields || []).filter(x => !['IsDeleted', 'SystemModstamp'].includes(x.name));
       const cr = res.data?.childRelationships || [];
       setRelFieldsCache(prev => ({ ...prev, [objectName]: f }));

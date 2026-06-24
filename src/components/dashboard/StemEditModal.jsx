@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,7 +49,7 @@ export default function StemEditModal({ open, onClose, record, onSaved }) {
       }
     });
 
-    const res = await base44.functions.invoke('salesforceStemDetail', { stemId: record.Id, updates });
+    const res = await appClient.functions.invoke('salesforceStemDetail', { stemId: record.Id, updates });
     if (res.data?.error) {
       setError(res.data.error);
       setSaving(false);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AlertCircle, Loader2, RefreshCw, Search, X, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
@@ -51,7 +51,7 @@ export default function SchemaExplorer() {
   const load = async () => {
     setLoading(true);
     setError(null);
-    const res = await base44.functions.invoke('salesforceFullSchema', {});
+    const res = await appClient.functions.invoke('salesforceFullSchema', {});
     if (res.data?.error) {
       setError(res.data.error);
     } else {

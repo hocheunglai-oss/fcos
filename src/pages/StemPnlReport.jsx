@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AlertCircle, Loader2, Download, Play, TrendingUp, TrendingDown, DollarSign, BarChart2 } from 'lucide-react';
+import { AlertCircle, Loader2, Download, Play, TrendingUp, BarChart2 } from 'lucide-react';
 import { format } from 'date-fns';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 
@@ -88,7 +88,7 @@ export default function StemPnlReport() {
     setLoading(true);
     setError(null);
     const where = buildWhere();
-    const reportRes = await base44.functions.invoke('stemPnl', { where, limit: 1000 });
+    const reportRes = await appClient.functions.invoke('stemPnl', { where, limit: 1000 });
     if (reportRes.data?.error) {
       setError(reportRes.data.error);
     } else {

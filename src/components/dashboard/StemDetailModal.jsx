@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
@@ -187,7 +187,7 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
     setBuyerBrokers([]);
     setError(null);
     setLoading(true);
-    base44.functions.invoke('salesforceStemDetail', { stemId }).then(res => {
+    appClient.functions.invoke('salesforceStemDetail', { stemId }).then(res => {
       if (res.data?.error) setError(res.data.error);
       else {
         setRecord(res.data.record);

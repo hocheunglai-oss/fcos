@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -77,7 +77,7 @@ export default function DashboardSettings() {
     setLoading(true);
     setError(null);
     const where = buildWhereClause(yrs, mos);
-    const res = await base44.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR });
+    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
