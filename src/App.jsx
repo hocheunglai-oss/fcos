@@ -13,6 +13,7 @@ import SchemaExplorer from '@/pages/SchemaExplorer';
 import SettingsPage from '@/pages/Settings';
 import StemPnlReport from '@/pages/StemPnlReport';
 import BrokerRegister from '@/pages/BrokerRegister';
+import ReviewQueue from '@/pages/ReviewQueue';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -43,6 +44,7 @@ const AuthenticatedApp = () => {
         <Route path="/schema" element={<SchemaExplorer />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/pnl" element={<StemPnlReport />} />
+        <Route path="/review" element={<ReviewQueue />} />
         <Route path="/brokers" element={<BrokerRegister />} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
