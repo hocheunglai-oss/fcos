@@ -16,8 +16,25 @@ const FIELD_LABELS = {
   '_suppBrokerComm': 'Supplier Broker Comm',
 };
 
-// Columns to completely hide (used only for internal P&L calc)
-const HIDDEN_COLS = new Set(['__buyerCommCalc', '__suppCommPerUnitCalc', '__netPnlCalc', 'Buyer_Name__c', 'Buyer__c', 'KeyStem__c', COSTS_FIELD, '_buyerBrokerName', '_buyerBrokerComm', '_suppBrokerName', '_suppBrokerComm']);
+// Columns to completely hide (some are still used behind the scenes for Gross Profit)
+const HIDDEN_COLS = new Set([
+  BUYER_FIELD,
+  SUPPLIER_FIELD,
+  COSTS_FIELD,
+  'QLIK_STEM_Line_Item_Total_Cost__c',
+  'QLIK_Costs_Total_Cost__c',
+  '__extraCostBuyCalc',
+  '__buyerCommCalc',
+  '__suppCommPerUnitCalc',
+  '__netPnlCalc',
+  'Buyer_Name__c',
+  'Buyer__c',
+  'KeyStem__c',
+  '_buyerBrokerName',
+  '_buyerBrokerComm',
+  '_suppBrokerName',
+  '_suppBrokerComm',
+]);
 
 // Columns that are right-aligned (money)
 const MONEY_COLS = new Set([BUYER_FIELD, SUPPLIER_FIELD, COSTS_FIELD, '__extraCostBuyCalc', '_buyerBrokerComm', '_suppBrokerComm', '__pnl__']);
@@ -69,8 +86,8 @@ export default function PnlTable({ records = [], onRowClick }) {
 
   const rawCols = Object.keys(records[0]).filter(k => k !== 'Id' && !HIDDEN_COLS.has(k));
 
-  const hasBuyer = rawCols.includes(BUYER_FIELD);
-  const hasSupplier = rawCols.includes(SUPPLIER_FIELD);
+  const hasBuyer = Object.prototype.hasOwnProperty.call(records[0], BUYER_FIELD);
+  const hasSupplier = Object.prototype.hasOwnProperty.call(records[0], SUPPLIER_FIELD);
   const showPnl = hasBuyer && hasSupplier;
 
   // Build ordered display cols
