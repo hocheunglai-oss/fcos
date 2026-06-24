@@ -25,20 +25,25 @@ const THIS_YEAR = now.getFullYear();
 const THIS_MONTH = now.getMonth() + 1; // 1-based
 const YEARS = [THIS_YEAR, THIS_YEAR - 1, THIS_YEAR - 2];
 
-// Build WHERE clause from selected years + months using Delivery_Date__c
+// Build WHERE clause from selected years + months using Delivery_Date__c,
+// falling back to Expected_Delivery_Date__c only when Delivery_Date__c is blank.
+function buildEffectiveDateRange(startDate, endDate) {
+  return `((Delivery_Date__c >= ${startDate} AND Delivery_Date__c <= ${endDate}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${startDate} AND Expected_Delivery_Date__c <= ${endDate}))`;
+}
+
 function buildDeliveryWhere(years, months) {
   if (!years.length) return '';
   const conditions = [];
   for (const yr of years) {
     if (!months.length || months.length === 12) {
       // Whole year
-      conditions.push(`(Delivery_Date__c >= ${yr}-01-01 AND Delivery_Date__c <= ${yr}-12-31)`);
+      conditions.push(buildEffectiveDateRange(`${yr}-01-01`, `${yr}-12-31`));
     } else {
       // Specific months within this year
       for (const mo of months) {
         const mm = String(mo).padStart(2, '0');
         const lastDay = new Date(yr, mo, 0).getDate();
-        conditions.push(`(Delivery_Date__c >= ${yr}-${mm}-01 AND Delivery_Date__c <= ${yr}-${mm}-${lastDay})`);
+        conditions.push(buildEffectiveDateRange(`${yr}-${mm}-01`, `${yr}-${mm}-${lastDay}`));
       }
     }
   }
@@ -101,10 +106,12 @@ export default function DashboardSettings() {
     if (!data?.recentStems?.length) return data?.recentStems || [];
     const yearsSet = new Set(selectedYears);
     const monthsSet = new Set(selectedMonths);
-    // Parse date string directly (e.g. "2026-04-30") to avoid any timezone issues
+    // Parse date string directly (e.g. "2026-04-30") to avoid any timezone issues.
+    // If Delivery Date is blank, Expected Delivery Date controls filter inclusion.
     let stems = data.recentStems.filter(row => {
-      if (!row.Delivery_Date__c) return false;
-      const parts = row.Delivery_Date__c.split('-');
+      const effectiveDate = row.Delivery_Date__c || row.Expected_Delivery_Date__c;
+      if (!effectiveDate) return false;
+      const parts = effectiveDate.split('-');
       const yr = Number(parts[0]);
       const mo = Number(parts[1]);
       return yearsSet.has(yr) && monthsSet.has(mo);

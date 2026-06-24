@@ -111,8 +111,10 @@ async function salesforceDashboardFiltered(body) {
   const buyerAmountField = fieldNames.includes('Total_Invoice_Amount__c') ? 'Total_Invoice_Amount__c' : null;
   const supplierAmountField = fieldNames.includes('Total_Invoiced_Amount_From_Suppliers__c') ? 'Total_Invoiced_Amount_From_Suppliers__c' : null;
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
+  const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
+  if (expectedDeliveryField) plFields.push(expectedDeliveryField);
   if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerField) plFields.push(buyerField);
   if (buyerAmountField) plFields.push(buyerAmountField);
@@ -124,11 +126,11 @@ async function salesforceDashboardFiltered(body) {
 
   const [totalRes, recentRes, buyerRes, supplierRes, costsRes, monthlyRes] = await Promise.all([
     sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
-    sfQuery(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC LIMIT 3000`, { clean: true, limit: 3000, softFail: true }),
+    sfQuery(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, { clean: true, limit: 3000, softFail: true }),
     buyerAmountField ? sfQuery(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
     supplierAmountField ? sfQuery(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
     totalCostsField ? sfQuery(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
-    sfQuery(`SELECT Id, Delivery_Date__c${buyerField ? `, ${buyerField}` : ''}${buyerAmountField ? `, ${buyerAmountField}` : ''}${supplierAmountField ? `, ${supplierAmountField}` : ''} FROM stem__c WHERE Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31 LIMIT 3000`, { clean: true, limit: 3000, softFail: true }),
+    sfQuery(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}${buyerField ? `, ${buyerField}` : ''}${buyerAmountField ? `, ${buyerAmountField}` : ''}${supplierAmountField ? `, ${supplierAmountField}` : ''} FROM stem__c WHERE (Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''} LIMIT 3000`, { clean: true, limit: 3000, softFail: true }),
   ]);
 
   const bf = buyerAmountField || 'Total_Invoice_Amount__c';
@@ -165,7 +167,7 @@ async function salesforceDashboardFiltered(body) {
   const totalProfit = totalBuyer - totalSupplier;
   const monthlyNetPnl = Array.from({ length: 12 }, (_, idx) => ({ month: idx + 1, label: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][idx], netPnl: 0 }));
   for (const stem of monthlyRes.records || []) {
-    const month = Number(String(stem.Delivery_Date__c || '').split('-')[1]);
+    const month = Number(String(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || '').split('-')[1]);
     if (month >= 1 && month <= 12) monthlyNetPnl[month - 1].netPnl += (stem[bf] || 0) - (stem[sf] || 0);
   }
 
@@ -349,10 +351,12 @@ async function salesforceDashboardFilteredFull(body) {
   const supplierAmountField = fieldNames.includes('Total_Invoiced_Amount_From_Suppliers__c') ? 'Total_Invoiced_Amount_From_Suppliers__c' : null;
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
   const buyerNameField = fieldNames.includes('Buyer_Name__c') ? 'Buyer_Name__c' : fieldNames.includes('Buyer__c') ? 'Buyer__c' : null;
+  const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
   const whereClause = where ? `WHERE ${where}` : '';
 
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
+  if (expectedDeliveryField) plFields.push(expectedDeliveryField);
   if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerNameField) plFields.push(buyerNameField);
   if (buyerAmountField) plFields.push(buyerAmountField);
@@ -366,7 +370,7 @@ async function salesforceDashboardFilteredFull(body) {
     queryResult(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
     hasStatus ? queryResult(`SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, { softFail: true }) : Promise.resolve({ records: [] }),
     hasType ? queryResult(`SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, { softFail: true }) : Promise.resolve({ records: [] }),
-    queryResult(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, { limit: 3000, softFail: true }),
     hasDisputeStatus
       ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${where ? ` AND (${where})` : ''}`, { softFail: true })
       : hasDispute
@@ -377,7 +381,7 @@ async function salesforceDashboardFilteredFull(body) {
     supplierAmountField ? queryResult(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     totalCostsField ? queryResult(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     queryResult(`SELECT Id, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
-    queryResult(`SELECT Id, Delivery_Date__c, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c WHERE Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31 LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c WHERE (Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''} LIMIT 3000`, { limit: 3000, softFail: true }),
   ];
 
   const results = await Promise.allSettled(queries);
@@ -527,10 +531,11 @@ async function salesforceDashboardFilteredFull(body) {
   const monthlyTotals = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, netPnl: 0 }));
   const buyerMonthTotals = {};
   for (const stem of monthlyStemsRes.records || []) {
-    if (!stem.Delivery_Date__c) continue;
+    const effectiveDate = stem.Delivery_Date__c || stem.Expected_Delivery_Date__c;
+    if (!effectiveDate) continue;
     const calc = calculateStem(stem);
     if (calc.buyer == null) continue;
-    const month = Number(String(stem.Delivery_Date__c).split('-')[1]);
+    const month = Number(String(effectiveDate).split('-')[1]);
     if (!month || month < 1 || month > 12) continue;
     monthlyTotals[month - 1].netPnl += calc.netPnl || 0;
     if (buyerNameField && stem[buyerNameField]) {
