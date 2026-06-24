@@ -32,6 +32,8 @@ const HIDDEN_COLS = new Set([
   '__netPnlCalc',
   'Buyer__c',
   'KeyStem__c',
+  'ETA_Start_Date__c',
+  'Expected_Delivery_Date__c',
   '_buyerBrokerName',
   '_buyerBrokerComm',
   '_suppBrokerName',
@@ -72,7 +74,6 @@ const COL_ORDER = [
   'Name',
   'Buyer_Name__c',
   'CreatedDate',
-  'ETA_Start_Date__c',
   DELIVERY_FIELD,
   BUYER_FIELD,
   SUPPLIER_FIELD,
@@ -141,6 +142,18 @@ export default function PnlTable({ records = [], onRowClick }) {
                         pnl == null ? 'text-muted-foreground' : pnlPositive ? 'text-emerald-600' : 'text-red-500'
                       }`}>
                         {pnl == null ? '—' : fmtMoney(pnl)}
+                      </td>
+                    );
+                  }
+                  if (col === DELIVERY_FIELD) {
+                    return (
+                      <td key={col} className="py-2.5 px-3 whitespace-nowrap text-foreground">
+                        <div className="flex flex-col">
+                          <span>{fmtVal(col, row[col])}</span>
+                          {!row[col] && row.Expected_Delivery_Date__c && (
+                            <span className="text-[11px] text-amber-600">Expected: {fmtVal('Expected_Delivery_Date__c', row.Expected_Delivery_Date__c)}</span>
+                          )}
+                        </div>
                       </td>
                     );
                   }

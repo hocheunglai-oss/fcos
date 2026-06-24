@@ -15,8 +15,6 @@ import { cn } from '@/lib/utils';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
-const QLIK_STEM_COST = 'QLIK_STEM_Line_Item_Total_Cost__c';
-const QLIK_EXTRA_COST = 'QLIK_Costs_Total_Cost__c';
 const STORAGE_KEY = 'review_queue_filters_v1';
 
 const now = new Date();
@@ -36,8 +34,6 @@ const REVIEW_FILTERS = [
   { key: 'missing-buyer', label: 'Missing buyer invoice' },
   { key: 'missing-supplier', label: 'Missing supplier invoice' },
   { key: 'negative-gross', label: 'Negative gross profit' },
-  { key: 'qlik-variance', label: 'Qlik variance' },
-  { key: 'broker-review', label: 'Broker review' },
 ];
 
 const fmtMoney = (value) => {
@@ -82,10 +78,6 @@ function classifyStem(row) {
     : buyer != null && supplier != null
       ? buyer - supplier - brokerTotal
       : null;
-  const qlikSupplier = row[QLIK_STEM_COST] != null || row[QLIK_EXTRA_COST] != null
-    ? (row[QLIK_STEM_COST] || 0) + (row[QLIK_EXTRA_COST] || 0)
-    : null;
-  const qlikVariance = qlikSupplier != null && supplier != null ? supplier - qlikSupplier : null;
   const reasons = [];
 
   if (!row.Delivery_Date__c && row.Expected_Delivery_Date__c) {
@@ -100,20 +92,12 @@ function classifyStem(row) {
   if (grossProfit != null && grossProfit < 0) {
     reasons.push({ key: 'negative-gross', label: 'Negative gross profit', severity: 'high' });
   }
-  if (qlikVariance != null && Math.abs(qlikVariance) > 1) {
-    reasons.push({ key: 'qlik-variance', label: `Qlik variance ${fmtMoney(qlikVariance)}`, severity: Math.abs(qlikVariance) > 1000 ? 'high' : 'medium' });
-  }
-  if (brokerTotal > 0 && !row.Delivery_Date__c) {
-    reasons.push({ key: 'broker-review', label: 'Broker on fallback stem', severity: 'medium' });
-  }
-
   const severity = reasons.some(r => r.severity === 'high') ? 'high' : reasons.length ? 'medium' : 'clear';
   return {
     ...row,
     reviewReasons: reasons,
     reviewSeverity: severity,
     grossProfit,
-    qlikVariance,
     effectiveDate: row.Delivery_Date__c || row.Expected_Delivery_Date__c,
     usesFallbackDate: !row.Delivery_Date__c && !!row.Expected_Delivery_Date__c,
   };
@@ -136,7 +120,9 @@ export default function ReviewQueue() {
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
-  const [activeReviewType, setActiveReviewType] = useState(savedFilters.activeReviewType ?? 'all');
+  const [activeReviewType, setActiveReviewType] = useState(
+    REVIEW_FILTERS.some(filter => filter.key === savedFilters.activeReviewType) ? savedFilters.activeReviewType : 'all'
+  );
   const [search, setSearch] = useState('');
   const [data, setData] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
@@ -202,24 +188,21 @@ export default function ReviewQueue() {
   const classifiedRows = useMemo(() => (data?.recentStems || []).map(classifyStem), [data?.recentStems]);
   const highPriorityCount = classifiedRows.filter(row => row.reviewSeverity === 'high').length;
   const fallbackCount = classifiedRows.filter(row => row.usesFallbackDate).length;
-  const qlikVarianceCount = classifiedRows.filter(row => row.reviewReasons.some(reason => reason.key === 'qlik-variance')).length;
   const clearCount = classifiedRows.filter(row => row.reviewReasons.length === 0).length;
 
   const exportCsv = () => {
     if (!reviewRows.length) return;
-    const headers = ['Priority', 'Review Reasons', 'Name', 'Buyer Name', 'ETA', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit', 'Qlik Variance'];
+    const headers = ['Priority', 'Review Reasons', 'Name', 'Buyer Name', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
     const rows = reviewRows.map(row => [
       row.reviewSeverity,
       row.reviewReasons.map(reason => reason.label).join('; '),
       row.Name || '',
       row.Buyer_Name__c || row.Buyer__c || '',
-      row.ETA_Start_Date__c || '',
       row.Delivery_Date__c || '',
       row.Expected_Delivery_Date__c || '',
       row[BUYER_FIELD] ?? '',
       row[SUPPLIER_FIELD] ?? '',
       row.grossProfit ?? '',
-      row.qlikVariance ?? '',
     ]);
     const csv = [headers, ...rows]
       .map(row => row.map(value => {
@@ -339,7 +322,7 @@ export default function ReviewQueue() {
           <StatCard label="Review Items" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
           <StatCard label="High Priority" value={highPriorityCount.toLocaleString()} sub="Missing invoice/date or negative profit" icon={AlertTriangle} color="red" />
           <StatCard label="Fallback Date" value={fallbackCount.toLocaleString()} sub="Expected Delivery used" icon={RefreshCw} color="amber" />
-          <StatCard label="Clear" value={clearCount.toLocaleString()} sub={qlikVarianceCount ? `${qlikVarianceCount} Qlik variance items` : 'No review reason'} icon={CheckCircle2} color="green" />
+          <StatCard label="Clear" value={clearCount.toLocaleString()} sub="No review reason" icon={CheckCircle2} color="green" />
         </div>
       )}
 
@@ -379,7 +362,6 @@ export default function ReviewQueue() {
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Review Reason</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Name</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">ETA</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery Date</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
@@ -404,7 +386,6 @@ export default function ReviewQueue() {
                     </td>
                     <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{row.Name || '-'}</td>
                     <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{row.Buyer_Name__c || row.Buyer__c || '-'}</td>
-                    <td className="py-2.5 px-3 text-foreground whitespace-nowrap">{fmtDate(row.ETA_Start_Date__c)}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-foreground">{fmtDate(row.Delivery_Date__c)}</span>
