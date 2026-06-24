@@ -113,6 +113,7 @@ async function salesforceDashboardFiltered(body) {
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
+  if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerField) plFields.push(buyerField);
   if (buyerAmountField) plFields.push(buyerAmountField);
   if (supplierAmountField) plFields.push(supplierAmountField);
@@ -352,6 +353,7 @@ async function salesforceDashboardFilteredFull(body) {
 
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
+  if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerNameField) plFields.push(buyerNameField);
   if (buyerAmountField) plFields.push(buyerAmountField);
   if (supplierAmountField) plFields.push(supplierAmountField);
@@ -776,6 +778,7 @@ async function salesforceStemDetailFull(body) {
 
   const record = {
     ...recordRaw,
+    _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
     _Vessel_Name: vesselName,
     _Port_Name: portName,
     _Agent_Name: agentName,

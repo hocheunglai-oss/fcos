@@ -17,6 +17,7 @@ const SECTIONS = [
     title: 'Overview',
     fields: [
       { key: 'Name', label: 'Stem Name' },
+      { key: '_Buyer_Name', label: 'Buyer Name' },
       { key: 'Office__c', label: 'Office' },
       { key: 'Year__c', label: 'Year' },
       { key: 'F_STEM_Invoice__c', label: 'Invoice Type' },
