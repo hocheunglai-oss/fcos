@@ -707,6 +707,7 @@ async function stemPnlFull(body) {
       Key: s.KeyStem__c,
       Name: s.Name,
       Delivery_Date: s.Delivery_Date__c,
+      Expected_Delivery_Date: s.Expected_Delivery_Date__c,
       Buyer: s['Account__r']?.Name ?? null,
       Buyer_Invoice: buyer || null,
       Supplier_Invoice: supplier || null,

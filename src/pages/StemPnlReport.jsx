@@ -36,6 +36,13 @@ const COLUMNS = [
   { key: 'Diff',               label: 'DIFF',              num: true },
 ];
 
+const getEffectiveDate = (row) => row.Delivery_Date || row.Expected_Delivery_Date || null;
+
+const getSortValue = (row, key) => {
+  if (key === 'Delivery_Date') return getEffectiveDate(row);
+  return row[key];
+};
+
 const YEAR_OPTIONS = ['2026', '2025', '2024', '2023'];
 const MONTH_OPTIONS = [
   { value: '01', label: 'January' }, { value: '02', label: 'February' },
@@ -112,16 +119,21 @@ export default function StemPnlReport() {
 
   const handleSort = (key) => {
     if (sortKey === key) setSortDir(d => d * -1);
-    else { setSortKey(key); setSortDir(-1); }
+    else { setSortKey(key); setSortDir(1); }
   };
 
   const filtered = rows
     .filter(r => !search || [r.Key, r.Buyer, r.Status, r.Name].some(v => v && String(v).toLowerCase().includes(search.toLowerCase())))
     .sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
+      const av = getSortValue(a, sortKey), bv = getSortValue(b, sortKey);
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
+      const an = Number(av);
+      const bn = Number(bv);
+      if (!isNaN(an) && !isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== '') {
+        return (an - bn) * sortDir;
+      }
       return av < bv ? -sortDir : sortDir;
     });
 
@@ -255,7 +267,16 @@ export default function StemPnlReport() {
                         {COLUMNS.map(col => {
                           const v = row[col.key];
                           let display;
-                          if (col.isDate) display = fmtDate(v);
+                          if (col.key === 'Delivery_Date') {
+                            display = (
+                              <div className="flex flex-col">
+                                <span>{fmtDate(v)}</span>
+                                {!v && row.Expected_Delivery_Date && (
+                                  <span className="text-[11px] text-amber-600">Expected: {fmtDate(row.Expected_Delivery_Date)}</span>
+                                )}
+                              </div>
+                            );
+                          } else if (col.isDate) display = fmtDate(v);
                           else if (col.isPercent) display = fmt(v, true);
                           else if (col.num) display = fmt(v);
                           else display = v ?? '—';

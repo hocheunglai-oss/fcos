@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { format } from 'date-fns';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
@@ -63,6 +64,34 @@ const fmtVal = (key, val) => {
   return s.length > 50 ? s.slice(0, 48) + '…' : s;
 };
 
+const getPnl = (row) => {
+  const buyer = row[BUYER_FIELD] ?? null;
+  const supplier = row[SUPPLIER_FIELD] ?? null;
+  if (row.__netPnlCalc != null) return row.__netPnlCalc;
+  if (buyer == null || supplier == null) return null;
+  return buyer - supplier;
+};
+
+const getSortValue = (row, key) => {
+  if (key === '__pnl__') return getPnl(row);
+  if (key === DELIVERY_FIELD) return row.Delivery_Date__c || row.Expected_Delivery_Date__c || null;
+  return row[key];
+};
+
+const compareValues = (a, b, key, direction) => {
+  const av = getSortValue(a, key);
+  const bv = getSortValue(b, key);
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+  const an = Number(av);
+  const bn = Number(bv);
+  if (!isNaN(an) && !isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== '') {
+    return (an - bn) * direction;
+  }
+  return String(av).localeCompare(String(bv)) * direction;
+};
+
 const colLabel = (key) => {
   if (FIELD_LABELS[key]) return FIELD_LABELS[key];
   return key.replace(/__c$/i, '').replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
@@ -85,14 +114,12 @@ const COL_ORDER = [
 ];
 
 export default function PnlTable({ records = [], onRowClick }) {
-  if (!records.length) return (
-    <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
-  );
-
-  const rawCols = Object.keys(records[0]).filter(k => k !== 'Id' && !HIDDEN_COLS.has(k));
-
-  const hasBuyer = Object.prototype.hasOwnProperty.call(records[0], BUYER_FIELD);
-  const hasSupplier = Object.prototype.hasOwnProperty.call(records[0], SUPPLIER_FIELD);
+  const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
+  const [sortDir, setSortDir] = useState(-1);
+  const firstRecord = records[0] || {};
+  const rawCols = Object.keys(firstRecord).filter(k => k !== 'Id' && !HIDDEN_COLS.has(k));
+  const hasBuyer = Object.prototype.hasOwnProperty.call(firstRecord, BUYER_FIELD);
+  const hasSupplier = Object.prototype.hasOwnProperty.call(firstRecord, SUPPLIER_FIELD);
   const showPnl = hasBuyer && hasSupplier;
 
   // Build ordered display cols
@@ -103,6 +130,22 @@ export default function PnlTable({ records = [], onRowClick }) {
     ...(showPnl ? ['__pnl__'] : []),
   ];
 
+  const sortedRecords = useMemo(() => {
+    return records.slice().sort((a, b) => compareValues(a, b, sortKey, sortDir));
+  }, [records, sortKey, sortDir]);
+
+  const handleSort = (key) => {
+    if (sortKey === key) setSortDir(current => current * -1);
+    else {
+      setSortKey(key);
+      setSortDir(1);
+    }
+  };
+
+  if (!records.length) return (
+    <div className="text-center py-8 text-muted-foreground text-sm">No records</div>
+  );
+
   return (
     <div className="max-h-[520px] overflow-auto rounded-lg">
       <table className="w-full text-sm">
@@ -111,22 +154,21 @@ export default function PnlTable({ records = [], onRowClick }) {
             {displayCols.map(col => (
               <th
                  key={col}
-                 className={`sticky top-0 z-10 bg-card py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap ${
+                 onClick={() => handleSort(col)}
+                 className={`sticky top-0 z-10 bg-card py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap cursor-pointer select-none hover:text-foreground transition-colors ${
                    MONEY_COLS.has(col) ? 'text-right' : 'text-left'
-                 }`}
+                 } ${sortKey === col ? 'text-foreground' : ''}`}
                >
-                 {col === '__pnl__' ? 'Gross Profit' : colLabel(col)}
+                 {col === '__pnl__' ? 'Gross Profit' : colLabel(col)} {sortKey === col ? (sortDir === -1 ? '↓' : '↑') : ''}
                </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {records.map((row, i) => {
+          {sortedRecords.map((row, i) => {
             const buyer = row[BUYER_FIELD] ?? null;
             const supplier = row[SUPPLIER_FIELD] ?? null;
-            const pnl = showPnl
-              ? (row.__netPnlCalc != null ? row.__netPnlCalc : (buyer == null || supplier == null ? null : buyer - supplier))
-              : null;
+            const pnl = showPnl ? getPnl(row) : null;
             const pnlPositive = pnl != null && pnl >= 0;
 
             return (
