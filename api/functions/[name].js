@@ -407,7 +407,7 @@ async function salesforceDashboardFilteredFull(body) {
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Commission_Cost__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__r.Name, Buyers_Broker__r.Name FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return queryRows(`SELECT STEM__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Commission_Cost__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__r.Name, Buyers_Broker__r.Name FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
       })),
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
@@ -423,6 +423,8 @@ async function salesforceDashboardFilteredFull(body) {
     extraCosts = extraCostChunks.flat();
   }
 
+  const lineItemSellByStem = {};
+  const extraCostSellByStem = {};
   const extraCostBuyByStem = {};
   const invoicedExtraCostBuyByStem = {};
   const sellOnlyExtraSellByStem = {};
@@ -430,6 +432,7 @@ async function salesforceDashboardFilteredFull(body) {
     if (!ec.STEM__c || ec.Cancelled__c) continue;
     const buy = ec.Line_Total_Buy__c ?? 0;
     const sell = ec.Line_Total__c ?? 0;
+    extraCostSellByStem[ec.STEM__c] = (extraCostSellByStem[ec.STEM__c] || 0) + sell;
     if (ec.Supplier_Invoice__c) invoicedExtraCostBuyByStem[ec.STEM__c] = (invoicedExtraCostBuyByStem[ec.STEM__c] || 0) + buy;
     if (!ec.Supplier_Invoice__c) extraCostBuyByStem[ec.STEM__c] = (extraCostBuyByStem[ec.STEM__c] || 0) + buy;
     if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) sellOnlyExtraSellByStem[ec.STEM__c] = (sellOnlyExtraSellByStem[ec.STEM__c] || 0) + sell;
@@ -441,6 +444,7 @@ async function salesforceDashboardFilteredFull(body) {
   for (const li of lineItems) {
     const id = li.STEM__c;
     if (!id || li.Cancelled__c) continue;
+    lineItemSellByStem[id] = (lineItemSellByStem[id] || 0) + (li.Total_Price__c ?? 0);
     supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + (li.Total_Cost__c ?? 0);
     if (li.Supplier_Invoice__c) hasSupplierInvoiceByStem[id] = true;
 
@@ -464,7 +468,8 @@ async function salesforceDashboardFilteredFull(body) {
   const cf = totalCostsField || 'Costs_Total__c';
 
   const calculateStem = (stem) => {
-    const buyer = stem[bf];
+    const calculatedBuyer = (lineItemSellByStem[stem.Id] || 0) + (extraCostSellByStem[stem.Id] || 0);
+    const buyer = !stem.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : stem[bf];
     const invoicedSupplier = stem[sf2] ?? 0;
     const supplierLineBuy = supplierLineBuyByStem[stem.Id] || 0;
     const supplierBase = hasSupplierInvoiceByStem[stem.Id] ? invoicedSupplier : (supplierLineBuy + invoicedSupplier);
@@ -490,6 +495,7 @@ async function salesforceDashboardFilteredFull(body) {
     const calc = calculateStem(stem);
     return {
       ...stem,
+      [bf]: calc.buyer ?? null,
       [sf2]: calc.supplier || null,
       _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,
       _buyerBrokerComm: calc.buyerComm || null,
