@@ -98,10 +98,15 @@ function SectionHeader({ title }) {
 
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
-  const supplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const uninvoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const allSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const supplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
   const supplierInvoiceTotal = record.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
-  const supplierBase = supplierInvoiceTotal || supplierLineTotal;
+  const hasSupplierInvoiceLines = lineItems.some(li => !li.Cancelled__c && li.Supplier_Invoice__c);
+  const hasChildSupplierCosts = supplierLineTotal !== 0 || allSupplierExtraCosts !== 0;
+  const useChildSupplierCosts = hasSupplierInvoiceLines && hasChildSupplierCosts;
+  const supplierBase = useChildSupplierCosts ? supplierLineTotal : (supplierInvoiceTotal || supplierLineTotal);
+  const supplierExtraCosts = useChildSupplierCosts ? allSupplierExtraCosts : uninvoicedSupplierExtraCosts;
   const supplierBrokerComm = lineItems.reduce((sum, li) => {
     if (li.Cancelled__c) return sum;
     const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
