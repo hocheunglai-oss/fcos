@@ -99,14 +99,19 @@ function SectionHeader({ title }) {
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
   const uninvoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
-  const allSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const invoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => !ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
+  const sellOnlySupplierExtraCosts = extraCosts.reduce((sum, ec) => {
+    if (ec.Supplier_Invoice__c || ec.Cancelled__c) return sum;
+    const buy = ec.Line_Total_Buy__c ?? 0;
+    const sell = ec.Line_Total__c ?? 0;
+    return buy === 0 && sell > 0 ? sum + sell : sum;
+  }, 0);
   const supplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
   const supplierInvoiceTotal = record.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
   const hasSupplierInvoiceLines = lineItems.some(li => !li.Cancelled__c && li.Supplier_Invoice__c);
-  const hasChildSupplierCosts = supplierLineTotal !== 0 || allSupplierExtraCosts !== 0;
-  const useChildSupplierCosts = hasSupplierInvoiceLines && hasChildSupplierCosts;
-  const supplierBase = useChildSupplierCosts ? supplierLineTotal : (supplierInvoiceTotal || supplierLineTotal);
-  const supplierExtraCosts = useChildSupplierCosts ? allSupplierExtraCosts : uninvoicedSupplierExtraCosts;
+  const unmatchedSellOnlyExtra = hasSupplierInvoiceLines ? Math.max(0, sellOnlySupplierExtraCosts - invoicedSupplierExtraCosts) : 0;
+  const supplierBase = (supplierInvoiceTotal || supplierLineTotal) - unmatchedSellOnlyExtra;
+  const supplierExtraCosts = uninvoicedSupplierExtraCosts;
   const supplierBrokerComm = lineItems.reduce((sum, li) => {
     if (li.Cancelled__c) return sum;
     const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);

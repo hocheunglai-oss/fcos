@@ -405,7 +405,7 @@ async function salesforceDashboardFilteredFull(body) {
       })),
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return queryRows(`SELECT STEM__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
       })),
     ]);
     lineItems = lineItemChunks.flat();
@@ -414,13 +414,15 @@ async function salesforceDashboardFilteredFull(body) {
   }
 
   const extraCostBuyByStem = {};
-  const allExtraCostBuyByStem = {};
+  const invoicedExtraCostBuyByStem = {};
+  const sellOnlyExtraSellByStem = {};
   for (const ec of extraCosts) {
     if (!ec.STEM__c || ec.Cancelled__c) continue;
-    allExtraCostBuyByStem[ec.STEM__c] = (allExtraCostBuyByStem[ec.STEM__c] || 0) + (ec.Line_Total_Buy__c ?? 0);
-    if (!ec.Supplier_Invoice__c) {
-      extraCostBuyByStem[ec.STEM__c] = (extraCostBuyByStem[ec.STEM__c] || 0) + (ec.Line_Total_Buy__c ?? 0);
-    }
+    const buy = ec.Line_Total_Buy__c ?? 0;
+    const sell = ec.Line_Total__c ?? 0;
+    if (ec.Supplier_Invoice__c) invoicedExtraCostBuyByStem[ec.STEM__c] = (invoicedExtraCostBuyByStem[ec.STEM__c] || 0) + buy;
+    if (!ec.Supplier_Invoice__c) extraCostBuyByStem[ec.STEM__c] = (extraCostBuyByStem[ec.STEM__c] || 0) + buy;
+    if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) sellOnlyExtraSellByStem[ec.STEM__c] = (sellOnlyExtraSellByStem[ec.STEM__c] || 0) + sell;
   }
 
   const supplierLineBuyByStem = {};
@@ -455,12 +457,12 @@ async function salesforceDashboardFilteredFull(body) {
     const buyer = stem[bf];
     const invoicedSupplier = stem[sf2] ?? 0;
     const supplierLineBuy = supplierLineBuyByStem[stem.Id] || 0;
-    const allExtraCostBuy = allExtraCostBuyByStem[stem.Id] || 0;
-    const hasChildSupplierCosts = supplierLineBuy !== 0 || allExtraCostBuy !== 0;
-    const useChildSupplierCosts = hasSupplierInvoiceByStem[stem.Id] && hasChildSupplierCosts;
-    const supplierBase = useChildSupplierCosts ? supplierLineBuy : (hasSupplierInvoiceByStem[stem.Id] ? invoicedSupplier : supplierLineBuy + invoicedSupplier);
-    const extraCostBuy = useChildSupplierCosts ? allExtraCostBuy : (extraCostBuyByStem[stem.Id] || 0);
-    const supplier = supplierBase + extraCostBuy;
+    const supplierBase = hasSupplierInvoiceByStem[stem.Id] ? invoicedSupplier : (supplierLineBuy + invoicedSupplier);
+    const extraCostBuy = extraCostBuyByStem[stem.Id] || 0;
+    const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id]
+      ? Math.max(0, (sellOnlyExtraSellByStem[stem.Id] || 0) - (invoicedExtraCostBuyByStem[stem.Id] || 0))
+      : 0;
+    const supplier = supplierBase + extraCostBuy - unmatchedSellOnlyExtra;
     const buyerComm = brokerByStem[stem.Id]?.buyerComm || 0;
     const suppCommPerUnit = brokerByStem[stem.Id]?.suppCommPerUnit || 0;
     const brokerCommissions = buyerComm + suppCommPerUnit;
@@ -604,7 +606,7 @@ async function stemPnlFull(body) {
     Promise.all(idChunks.map((chunk) => {
       const inList = chunk.map((id) => `'${id}'`).join(',');
       return queryRows(`
-        SELECT STEM__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c
+        SELECT STEM__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c
         FROM STEM_Extra_Cost__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
@@ -617,7 +619,7 @@ async function stemPnlFull(body) {
   const extraCosts = extraCostArrays.flat();
   const byId = {};
   const initStem = (id) => {
-    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostBuy: 0, allExtraCostBuy: 0, supplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
+    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, supplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
   };
 
   for (const li of lineItems) {
@@ -643,17 +645,19 @@ async function stemPnlFull(body) {
   for (const ec of extraCosts) {
     if (!ec.STEM__c || ec.Cancelled__c) continue;
     initStem(ec.STEM__c);
-    byId[ec.STEM__c].allExtraCostBuy += ec.Line_Total_Buy__c ?? 0;
-    if (!ec.Supplier_Invoice__c) byId[ec.STEM__c].extraCostBuy += ec.Line_Total_Buy__c ?? 0;
+    const buy = ec.Line_Total_Buy__c ?? 0;
+    const sell = ec.Line_Total__c ?? 0;
+    if (ec.Supplier_Invoice__c) byId[ec.STEM__c].invoicedExtraCostBuy += buy;
+    if (!ec.Supplier_Invoice__c) byId[ec.STEM__c].extraCostBuy += buy;
+    if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) byId[ec.STEM__c].sellOnlyExtraSell += sell;
   }
 
   const rows = stems.map((s) => {
     const buyer = s.Total_Invoice_Amount__c ?? 0;
     const agg = byId[s.Id] || {};
-    const hasChildSupplierCosts = (agg.supplierLineBuy ?? 0) !== 0 || (agg.allExtraCostBuy ?? 0) !== 0;
-    const useChildSupplierCosts = agg.hasSupplierInvoice && hasChildSupplierCosts;
-    const supplierBase = useChildSupplierCosts ? (agg.supplierLineBuy ?? 0) : (agg.hasSupplierInvoice ? (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) : ((agg.supplierLineBuy ?? 0) + (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0)));
-    const supplier = supplierBase + (useChildSupplierCosts ? (agg.allExtraCostBuy ?? 0) : (agg.extraCostBuy ?? 0));
+    const supplierBase = agg.hasSupplierInvoice ? (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) : ((agg.supplierLineBuy ?? 0) + (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0));
+    const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
+    const supplier = supplierBase + (agg.extraCostBuy ?? 0) - unmatchedSellOnlyExtra;
     const suppBrokerComm = agg.suppBrokerComm ?? 0;
     const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
     const totalBroker = suppBrokerComm + buyerBrokerComm;
