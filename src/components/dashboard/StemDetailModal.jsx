@@ -109,8 +109,15 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const supplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
   const supplierInvoiceTotal = record.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
   const hasSupplierInvoiceLines = lineItems.some(li => !li.Cancelled__c && li.Supplier_Invoice__c);
+  const rawSupplierBase = supplierInvoiceTotal || supplierLineTotal;
   const unmatchedSellOnlyExtra = hasSupplierInvoiceLines ? Math.max(0, sellOnlySupplierExtraCosts - invoicedSupplierExtraCosts) : 0;
-  const supplierBase = (supplierInvoiceTotal || supplierLineTotal) - unmatchedSellOnlyExtra;
+  const qlikSupplierCost = record.QLIK_STEM_Line_Item_Total_Cost__c != null || record.QLIK_Costs_Total_Cost__c != null
+    ? (record.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (record.QLIK_Costs_Total_Cost__c || 0)
+    : null;
+  const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplierBase + uninvoicedSupplierExtraCosts - qlikSupplierCost;
+  const supplierBase = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
+    ? qlikSupplierCost - uninvoicedSupplierExtraCosts
+    : rawSupplierBase;
   const supplierExtraCosts = uninvoicedSupplierExtraCosts;
   const supplierBrokerComm = lineItems.reduce((sum, li) => {
     if (li.Cancelled__c) return sum;

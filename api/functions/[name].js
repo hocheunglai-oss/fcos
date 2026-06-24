@@ -117,6 +117,8 @@ async function salesforceDashboardFiltered(body) {
   if (buyerAmountField) plFields.push(buyerAmountField);
   if (supplierAmountField) plFields.push(supplierAmountField);
   if (totalCostsField) plFields.push(totalCostsField);
+  if (fieldNames.includes('QLIK_STEM_Line_Item_Total_Cost__c')) plFields.push('QLIK_STEM_Line_Item_Total_Cost__c');
+  if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
   if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
 
   const [totalRes, recentRes, buyerRes, supplierRes, costsRes, monthlyRes] = await Promise.all([
@@ -370,8 +372,8 @@ async function salesforceDashboardFilteredFull(body) {
     buyerAmountField ? queryResult(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     supplierAmountField ? queryResult(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     totalCostsField ? queryResult(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    queryResult(`SELECT Id, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'} FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
-    queryResult(`SELECT Id, Delivery_Date__c, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'} FROM stem__c WHERE Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31 LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT Id, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT Id, Delivery_Date__c, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c WHERE Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31 LIMIT 3000`, { limit: 3000, softFail: true }),
   ];
 
   const results = await Promise.allSettled(queries);
@@ -459,10 +461,17 @@ async function salesforceDashboardFilteredFull(body) {
     const supplierLineBuy = supplierLineBuyByStem[stem.Id] || 0;
     const supplierBase = hasSupplierInvoiceByStem[stem.Id] ? invoicedSupplier : (supplierLineBuy + invoicedSupplier);
     const extraCostBuy = extraCostBuyByStem[stem.Id] || 0;
+    const rawSupplier = supplierBase + extraCostBuy;
     const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id]
       ? Math.max(0, (sellOnlyExtraSellByStem[stem.Id] || 0) - (invoicedExtraCostBuyByStem[stem.Id] || 0))
       : 0;
-    const supplier = supplierBase + extraCostBuy - unmatchedSellOnlyExtra;
+    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
+      ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0)
+      : null;
+    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
+    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
+      ? qlikSupplierCost
+      : rawSupplier;
     const buyerComm = brokerByStem[stem.Id]?.buyerComm || 0;
     const suppCommPerUnit = brokerByStem[stem.Id]?.suppCommPerUnit || 0;
     const brokerCommissions = buyerComm + suppCommPerUnit;
@@ -574,6 +583,8 @@ async function stemPnlFull(body) {
            Account__r.Name,
            Total_Invoice_Amount__c,
            Total_Invoiced_Amount_From_Suppliers__c,
+           QLIK_STEM_Line_Item_Total_Cost__c,
+           QLIK_Costs_Total_Cost__c,
            QLIK_Total_Profit__c
     FROM stem__c
     ${whereClause}
@@ -656,8 +667,15 @@ async function stemPnlFull(body) {
     const buyer = s.Total_Invoice_Amount__c ?? 0;
     const agg = byId[s.Id] || {};
     const supplierBase = agg.hasSupplierInvoice ? (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) : ((agg.supplierLineBuy ?? 0) + (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0));
+    const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
     const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
-    const supplier = supplierBase + (agg.extraCostBuy ?? 0) - unmatchedSellOnlyExtra;
+    const qlikSupplierCost = s.QLIK_STEM_Line_Item_Total_Cost__c != null || s.QLIK_Costs_Total_Cost__c != null
+      ? (s.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (s.QLIK_Costs_Total_Cost__c || 0)
+      : null;
+    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
+    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
+      ? qlikSupplierCost
+      : rawSupplier;
     const suppBrokerComm = agg.suppBrokerComm ?? 0;
     const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
     const totalBroker = suppBrokerComm + buyerBrokerComm;
