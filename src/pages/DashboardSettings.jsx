@@ -237,8 +237,9 @@ export default function DashboardSettings() {
               color="green"
             />
             <StatCard
-              label="Gross Profit Total (Invoiced)"
-              value={data.totalInvoicedProfit != null ? `$${data.totalInvoicedProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              label="Gross Profit Total"
+              value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              sub={data.totalInvoicedProfit != null ? `Gross Profit Total (Invoiced) $${data.totalInvoicedProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : undefined}
               icon={DollarSign}
               color="amber"
             />
