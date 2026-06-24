@@ -27,7 +27,7 @@ const COLUMNS = [
   { key: 'Supplier_Invoice',   label: 'Supplier Invoice',  num: true },
   { key: 'Supplier_Broker_Comm', label: 'Supp. Broker',   num: true },
   { key: 'Buyer_Broker_Comm',  label: 'Buyer Broker',      num: true },
-  { key: 'Net_Profit',         label: 'Net P&L',           num: true },
+  { key: 'Net_Profit',         label: 'Gross Profit',      num: true },
   { key: 'Qlik_Total_Profit',  label: 'Qlik Net',          num: true },
   { key: 'Diff',               label: 'DIFF',              num: true },
 ];
@@ -147,7 +147,7 @@ export default function StemPnlReport() {
               <span>Stem P&L Report</span>
             </div>
             <h1 className="text-2xl font-bold font-dm text-foreground">Stem Profit & Loss</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Shows calculated stem Net P&L with Qlik Net reference</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Shows calculated stem Gross Profit with Qlik reference</p>
           </div>
           {rows.length > 0 && (
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
@@ -204,7 +204,7 @@ export default function StemPnlReport() {
             <StatCard label="Supplier Invoices" value={fmt(totals.Supplier_Invoice)} color="amber" />
             <StatCard label="Broker Commissions" value={fmt(totals.Total_Broker_Comm)} color="amber" />
             <StatCard
-              label="Net P&L"
+              label="Gross Profit"
               value={fmt(totals.Net_Profit)}
               sub={totals.Buyer_Invoice ? `${((totals.Net_Profit / totals.Buyer_Invoice) * 100).toFixed(1)}% margin` : null}
               color={(totals.Net_Profit ?? 0) >= 0 ? 'green' : 'red'}

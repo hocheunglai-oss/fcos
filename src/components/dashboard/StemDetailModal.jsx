@@ -179,7 +179,7 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
           </>
         )}
         <div className="ml-auto flex flex-col items-end">
-          <span className="text-xs text-muted-foreground mb-0.5">Net P&amp;L</span>
+          <span className="text-xs text-muted-foreground mb-0.5">Gross Profit</span>
           <span className={`text-base font-bold ${isPositive ? 'text-emerald-700' : 'text-red-600'}`}>{fmtMoney(netProfit)}</span>
         </div>
       </div>

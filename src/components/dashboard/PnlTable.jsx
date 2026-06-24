@@ -93,7 +93,7 @@ export default function PnlTable({ records = [], onRowClick }) {
                    MONEY_COLS.has(col) ? 'text-right' : 'text-left'
                  }`}
                >
-                 {col === '__pnl__' ? 'Net P&L' : colLabel(col)}
+                 {col === '__pnl__' ? 'Gross Profit' : colLabel(col)}
                </th>
             ))}
           </tr>

@@ -118,12 +118,8 @@ export default function DashboardSettings() {
   }, [data?.recentStems, tableSearch, selectedYears, selectedMonths]);
 
   const kpiMetrics = useMemo(() => {
-    const buyerField = data?.buyerAmountField || 'Total_Invoice_Amount__c';
-    const supplierField = data?.supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c';
-    const completeStems = (data?.recentStems || []).filter(row => row[buyerField] != null && row[supplierField] != null);
-    const netMarginPct = data?.totalBuyer ? (data.totalProfit / data.totalBuyer) * 100 : null;
-    const avgNetPnl = completeStems.length && data?.totalProfit != null ? data.totalProfit / completeStems.length : null;
-    return { completeStemCount: completeStems.length, netMarginPct, avgNetPnl };
+    const grossMarginPct = data?.totalBuyer ? (data.totalProfit / data.totalBuyer) * 100 : null;
+    return { grossMarginPct };
   }, [data]);
 
   return (
@@ -216,15 +212,15 @@ export default function DashboardSettings() {
 
 
       {loading && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
-          {[...Array(6)].map((_, i) => <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+          {[...Array(5)].map((_, i) => <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
         </div>
       )}
 
       {data && !loading && (
         <>
           {/* KPI Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
             <StatCard label="Matching STEMs" value={data.stemTotal?.toLocaleString() ?? '—'} icon={Package} color="blue" />
             <StatCard
               label="Accounts"
@@ -234,25 +230,18 @@ export default function DashboardSettings() {
               color="green"
             />
             <StatCard
-              label="Total Net Profit"
+              label="Gross Profit Total"
               value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
               sub={data.totalProfit == null ? (data.buyerAmountField ? 'Supplier field not found' : 'Buyer/supplier fields not found') : `Buyer $${(data.totalBuyer ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Supplier $${(data.totalSupplier ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Brokers $${(data.totalBrokerCommissions ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
               icon={DollarSign}
               color="amber"
             />
             <StatCard
-              label="Net Margin %"
-              value={kpiMetrics.netMarginPct != null ? `${kpiMetrics.netMarginPct.toFixed(1)}%` : '—'}
-              sub="Net P&L ÷ Buyer Invoice"
+              label="Gross Margin %"
+              value={kpiMetrics.grossMarginPct != null ? `${kpiMetrics.grossMarginPct.toFixed(1)}%` : '—'}
+              sub="Gross Profit ÷ Buyer Invoice"
               icon={Percent}
               color="purple"
-            />
-            <StatCard
-              label="Avg Net P&L / STEM"
-              value={kpiMetrics.avgNetPnl != null ? `$${kpiMetrics.avgNetPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-              sub={`Across ${kpiMetrics.completeStemCount.toLocaleString()} stems with full invoices`}
-              icon={DollarSign}
-              color="teal"
             />
             <StatCard
               label="Disputed"
@@ -265,16 +254,16 @@ export default function DashboardSettings() {
             />
           </div>
 
-          {/* Monthly Net P&L Trend */}
+          {/* Monthly Gross Profit Trend */}
           {data.monthlyNetPnl?.length > 0 && (
             <div className="bg-card rounded-xl border border-border p-5 mb-8">
-              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Net P&amp;L Trend</h3>
-              <p className="text-xs text-muted-foreground mb-4">Total Net P&amp;L by month for {data.monthlyNetPnlYear || THIS_YEAR}</p>
+              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Gross Profit Trend</h3>
+              <p className="text-xs text-muted-foreground mb-4">Total Gross Profit by month for {data.monthlyNetPnlYear || THIS_YEAR}</p>
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={data.monthlyNetPnl} barSize={44}>
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Math.round(v / 1000)}k`} />
-                  <Tooltip formatter={(v) => [`$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 'Net P&L']} />
+                  <Tooltip formatter={(v) => [`$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 'Gross Profit']} />
                   <Bar dataKey="netPnl" radius={[4, 4, 0, 0]}>
                     {data.monthlyNetPnl.map((item, idx) => (
                       <Cell key={idx} fill={item.netPnl >= 0 ? '#10b981' : '#ef4444'} />
@@ -285,11 +274,11 @@ export default function DashboardSettings() {
             </div>
           )}
 
-          {/* Monthly Buyer Net P&L Trend */}
+          {/* Monthly Buyer Gross Profit Trend */}
           {data.monthlyBuyerNetPnl?.length > 0 && data.monthlyBuyerNames?.length > 0 && (
             <div className="bg-card rounded-xl border border-border p-5 mb-8">
-              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Net P&amp;L by Buyer</h3>
-              <p className="text-xs text-muted-foreground mb-4">Top buyer accounts by Net P&amp;L for {data.monthlyNetPnlYear || THIS_YEAR}</p>
+              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Gross Profit by Buyer</h3>
+              <p className="text-xs text-muted-foreground mb-4">Top buyer accounts by Gross Profit for {data.monthlyNetPnlYear || THIS_YEAR}</p>
               <ResponsiveContainer width="100%" height={320}>
                 <BarChart data={data.monthlyBuyerNetPnl} barSize={44}>
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
@@ -339,11 +328,11 @@ export default function DashboardSettings() {
             </div>
           )}
 
-          {/* Top 10 Buyers by Net P&L */}
+          {/* Top 10 Buyers by Gross Profit */}
           {data.topBuyersByNetPnl && data.topBuyersByNetPnl.length > 0 && (
           <div className="bg-card rounded-xl border border-border p-5 mb-8">
             <h3 className="text-sm font-semibold text-foreground mb-1">
-              Top 10 Buyers by Net P&amp;L
+              Top 10 Buyers by Gross Profit
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 ({selectedYears.sort((a,b) => a-b).join(', ')} · {selectedMonths.length === 12 ? 'All months' : selectedMonths.map(m => MONTHS.find(x => x.value === m)?.label).join(', ')})
               </span>
