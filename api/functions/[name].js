@@ -380,7 +380,7 @@ async function salesforceDashboardFilteredFull(body) {
     buyerAmountField ? queryResult(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     supplierAmountField ? queryResult(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     totalCostsField ? queryResult(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    queryResult(`SELECT Id, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
     queryResult(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c WHERE (Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''} LIMIT 3000`, { limit: 3000, softFail: true }),
   ];
 
@@ -509,6 +509,7 @@ async function salesforceDashboardFilteredFull(body) {
   });
 
   let totalProfit = 0;
+  let totalInvoicedProfit = 0;
   let totalBuyer = 0;
   let totalSupplier = 0;
   let totalCosts = 0;
@@ -517,6 +518,7 @@ async function salesforceDashboardFilteredFull(body) {
     const calc = calculateStem(stem);
     if (calc.buyer == null) continue;
     totalProfit += calc.netPnl || 0;
+    if (stem.Delivery_Date__c) totalInvoicedProfit += calc.netPnl || 0;
     totalBuyer += calc.buyer;
     totalSupplier += calc.supplier;
     totalBrokerCommissions += calc.brokerCommissions;
@@ -573,6 +575,7 @@ async function salesforceDashboardFilteredFull(body) {
     totalSupplier,
     totalBrokerCommissions,
     totalProfit,
+    totalInvoicedProfit,
     disputedCount: disputedRes.records?.[0]?.total ?? 0,
     stemByStatus: (statusRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
     stemByType: (typeRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
@@ -594,7 +597,7 @@ async function stemPnlFull(body) {
   const { where, limit = 500 } = body;
   const whereClause = where ? `WHERE ${where}` : '';
   const stems = await queryRows(`
-    SELECT Id, KeyStem__c, Name, Delivery_Date__c,
+    SELECT Id, KeyStem__c, Name, Delivery_Date__c, Expected_Delivery_Date__c,
            Account__r.Name,
            Total_Invoice_Amount__c,
            Total_Invoiced_Amount_From_Suppliers__c,
@@ -603,7 +606,7 @@ async function stemPnlFull(body) {
            QLIK_Total_Profit__c
     FROM stem__c
     ${whereClause}
-    ORDER BY Delivery_Date__c DESC
+    ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC
     LIMIT ${Number(limit) || 500}
   `, { limit: Math.max(Number(limit) || 500, 500) });
 
@@ -617,7 +620,7 @@ async function stemPnlFull(body) {
     Promise.all(idChunks.map((chunk) => {
       const inList = chunk.map((id) => `'${id}'`).join(',');
       return queryRows(`
-        SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
+        SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
                Buyers_Brokers_Commission_Per_Unit__c,
                Buyers_Brokers_Commission_Lumpsum__c,
                Commission_Cost__c,
@@ -645,7 +648,7 @@ async function stemPnlFull(body) {
   const extraCosts = extraCostArrays.flat();
   const byId = {};
   const initStem = (id) => {
-    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, supplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
+    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostSell: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, buyerLineSell: 0, supplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
   };
 
   for (const li of lineItems) {
@@ -655,6 +658,7 @@ async function stemPnlFull(body) {
     if (li.Cancelled__c) continue;
     const qty = li.Quantity__c ?? 0;
     const brokerQty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : qty;
+    byId[id].buyerLineSell += li.Total_Price__c ?? 0;
     byId[id].supplierLineBuy += li.Total_Cost__c ?? 0;
     if (li.Supplier_Invoice__c) byId[id].hasSupplierInvoice = true;
     byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
@@ -673,14 +677,16 @@ async function stemPnlFull(body) {
     initStem(ec.STEM__c);
     const buy = ec.Line_Total_Buy__c ?? 0;
     const sell = ec.Line_Total__c ?? 0;
+    byId[ec.STEM__c].extraCostSell += sell;
     if (ec.Supplier_Invoice__c) byId[ec.STEM__c].invoicedExtraCostBuy += buy;
     if (!ec.Supplier_Invoice__c) byId[ec.STEM__c].extraCostBuy += buy;
     if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) byId[ec.STEM__c].sellOnlyExtraSell += sell;
   }
 
   const rows = stems.map((s) => {
-    const buyer = s.Total_Invoice_Amount__c ?? 0;
     const agg = byId[s.Id] || {};
+    const calculatedBuyer = (agg.buyerLineSell ?? 0) + (agg.extraCostSell ?? 0);
+    const buyer = !s.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : (s.Total_Invoice_Amount__c ?? 0);
     const supplierBase = agg.hasSupplierInvoice ? (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) : ((agg.supplierLineBuy ?? 0) + (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0));
     const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
     const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;

@@ -77,9 +77,9 @@ export default function StemPnlReport() {
       const from = `${year}-${month}-01`;
       const lastDay = new Date(Number(year), Number(month), 0).getDate();
       const to = `${year}-${month}-${String(lastDay).padStart(2, '0')}`;
-      parts.push(`Delivery_Date__c >= ${from} AND Delivery_Date__c <= ${to}`);
+      parts.push(`((Delivery_Date__c >= ${from} AND Delivery_Date__c <= ${to}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${from} AND Expected_Delivery_Date__c <= ${to}))`);
     } else {
-      parts.push(`Delivery_Date__c >= ${year}-01-01 AND Delivery_Date__c <= ${year}-12-31`);
+      parts.push(`((Delivery_Date__c >= ${year}-01-01 AND Delivery_Date__c <= ${year}-12-31) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${year}-01-01 AND Expected_Delivery_Date__c <= ${year}-12-31))`);
     }
     return parts.join(' AND ');
   }, [year, month]);

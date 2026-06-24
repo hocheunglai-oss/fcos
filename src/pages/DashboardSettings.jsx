@@ -237,9 +237,8 @@ export default function DashboardSettings() {
               color="green"
             />
             <StatCard
-              label="Gross Profit Total"
-              value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-              sub={data.totalProfit == null ? (data.buyerAmountField ? 'Supplier field not found' : 'Buyer/supplier fields not found') : `Buyer $${(data.totalBuyer ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Supplier $${(data.totalSupplier ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} − Brokers $${(data.totalBrokerCommissions ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+              label="Gross Profit Total (Invoiced)"
+              value={data.totalInvoicedProfit != null ? `$${data.totalInvoicedProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
               icon={DollarSign}
               color="amber"
             />
