@@ -19,18 +19,11 @@ export function getApiVersion() {
   return process.env.SALESFORCE_API_VERSION || DEFAULT_API_VERSION;
 }
 
-export async function getAccessToken() {
-  if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
-  if (cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
-
+async function refreshAccessToken() {
   const clientId = process.env.SALESFORCE_CLIENT_ID;
   const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
   const refreshToken = process.env.SALESFORCE_REFRESH_TOKEN;
   const loginUrl = process.env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com';
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Missing Salesforce env vars. Set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
-  }
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -52,6 +45,21 @@ export async function getAccessToken() {
   return cachedToken;
 }
 
+export async function getAccessToken({ forceRefresh = false } = {}) {
+  const clientId = process.env.SALESFORCE_CLIENT_ID;
+  const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
+  const refreshToken = process.env.SALESFORCE_REFRESH_TOKEN;
+
+  if (clientId && clientSecret && refreshToken) {
+    if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
+    return refreshAccessToken();
+  }
+
+  if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
+
+  throw new Error('Missing Salesforce env vars. Set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
+}
+
 export function cleanRecord(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   if (Array.isArray(obj)) return obj.map(cleanRecord);
@@ -59,7 +67,7 @@ export function cleanRecord(obj) {
   return Object.fromEntries(Object.entries(rest).map(([key, value]) => [key, cleanRecord(value)]));
 }
 
-export async function sfRequest(path, { method = 'GET', body } = {}) {
+export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSession = true } = {}) {
   const accessToken = await getAccessToken();
   const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
   const res = await fetch(url, {
@@ -73,6 +81,12 @@ export async function sfRequest(path, { method = 'GET', body } = {}) {
 
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
+  const errorCode = data.errorCode || data[0]?.errorCode;
+  if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
+    cachedToken = null;
+    cachedTokenExpiresAt = 0;
+    return sfRequest(path, { method, body, retryOnExpiredSession: false });
+  }
   if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
     throw new Error(data.message || data[0]?.message || `${method} ${path} failed`);
   }
