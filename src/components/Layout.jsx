@@ -31,8 +31,8 @@ export default function Layout() {
         <div className={cn('flex items-center border-b border-sidebar-border', collapsed ? 'px-2 py-4 justify-center' : 'px-5 py-5 justify-between')}>
           {!collapsed && (
             <div>
-              <div className="text-sm font-semibold text-sidebar-foreground font-dm">Cosulich</div>
-              <div className="text-xs text-sidebar-foreground/50">Analytics Hub</div>
+              <div className="text-sm font-semibold text-sidebar-foreground font-dm">FCBHK</div>
+              <div className="text-xs text-sidebar-foreground/50">Salesforce Extension</div>
             </div>
           )}
           <button
