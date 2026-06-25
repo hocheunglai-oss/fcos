@@ -20,7 +20,7 @@ const STORAGE_KEY = 'review_queue_filters_v1';
 const YEARS = getRecentYears();
 
 const REVIEW_FILTERS = [
-  { key: 'all', label: 'All review items' },
+  { key: 'all', label: 'All exceptions' },
   { key: 'missing-delivery', label: 'Missing delivery date' },
   { key: 'missing-buyer', label: 'Missing buyer invoice' },
   { key: 'missing-supplier', label: 'Missing supplier invoice' },
@@ -160,7 +160,7 @@ export default function ReviewQueue() {
 
   const exportCsv = () => {
     if (!reviewRows.length) return;
-    const headers = ['Priority', 'Review Reasons', 'Name', 'Buyer Name', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
+    const headers = ['Priority', 'Exception Reason', 'Name', 'Buyer Name', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
     const rows = reviewRows.map(row => [
       row.reviewSeverity,
       row.reviewReasons.map(reason => reason.label).join('; '),
@@ -182,7 +182,7 @@ export default function ReviewQueue() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `review_queue_${selectedYearLabel.replace(/\s/g, '')}_${selectedMonthLabel.replace(/\s/g, '')}.csv`;
+    link.download = `exception_review_${selectedYearLabel.replace(/\s/g, '')}_${selectedMonthLabel.replace(/\s/g, '')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -191,9 +191,9 @@ export default function ReviewQueue() {
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       <PageHeader
         icon={ClipboardCheck}
-        eyebrow="Financial Review"
-        title="Review Queue"
-        description="Focus on STEMs that need human validation before finance, broker, or management reporting."
+        eyebrow="Finance Exceptions"
+        title="Exception Review"
+        description="Focus on STEMs that need validation before finance, broker, or management reporting."
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce'}
         actions={(
           <>
@@ -252,7 +252,7 @@ export default function ReviewQueue() {
           </div>
 
           <div>
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Review Type</h2>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Exception Type</h2>
             <div className="flex flex-wrap gap-2">
               {REVIEW_FILTERS.map(filter => (
                 <Button
@@ -287,15 +287,15 @@ export default function ReviewQueue() {
         </div>
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <StatCard label="Review Items" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
-          <StatCard label="High Priority" value={highPriorityCount.toLocaleString()} sub="Missing invoice/date or negative profit" icon={AlertTriangle} color="red" />
-          <StatCard label="Fallback Date" value={fallbackCount.toLocaleString()} sub="Expected Delivery used" icon={RefreshCw} color="amber" />
-          <StatCard label="Clear" value={clearCount.toLocaleString()} sub="No review reason" icon={CheckCircle2} color="green" />
+          <StatCard label="Open Exceptions" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
+          <StatCard label="Urgent Exceptions" value={highPriorityCount.toLocaleString()} sub="Missing invoice/date or negative profit" icon={AlertTriangle} color="red" />
+          <StatCard label="Expected-Date STEMs" value={fallbackCount.toLocaleString()} sub="Expected Delivery used" icon={RefreshCw} color="amber" />
+          <StatCard label="No Exceptions" value={clearCount.toLocaleString()} sub="No exception reason" icon={CheckCircle2} color="green" />
         </div>
       )}
 
       <TableShell
-        title="Review Queue"
+        title="Exception List"
         meta={`${reviewRows.length.toLocaleString()} matching items`}
         actions={(
           <div className="relative w-full sm:w-80">
@@ -318,8 +318,8 @@ export default function ReviewQueue() {
         {loading ? (
           <StateBlock
             icon={Loader2}
-            title={data ? 'Refreshing review queue...' : 'Loading review queue...'}
-            description="Updating the review classifications from Salesforce."
+            title={data ? 'Refreshing exceptions...' : 'Loading exceptions...'}
+            description="Updating exception classifications from Salesforce."
           />
         ) : reviewRows.length > 0 ? (
           <div className="max-h-[640px] overflow-auto">
@@ -327,7 +327,7 @@ export default function ReviewQueue() {
               <thead>
                 <tr className="border-b border-border">
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Priority</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Review Reason</th>
+                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Exception Reason</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Name</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery Date</th>
@@ -374,7 +374,7 @@ export default function ReviewQueue() {
             </table>
           </div>
         ) : (
-          <StateBlock icon={CheckCircle2} title="No review items found" description="This period has no STEMs matching the selected review criteria." />
+          <StateBlock icon={CheckCircle2} title="No exceptions found" description="This period has no STEMs matching the selected exception criteria." />
         )}
       </TableShell>
 

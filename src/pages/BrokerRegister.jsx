@@ -86,7 +86,7 @@ export default function BrokerRegister() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `broker-register-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `brokers-commission-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -95,7 +95,7 @@ export default function BrokerRegister() {
     <div className="p-6 lg:p-8 space-y-6">
       <PageHeader
         eyebrow="Salesforce broker commissions"
-        title="Broker Register"
+        title="Broker's Commission"
         description="Review supplier, buyer, and secondary buyer broker commissions with payment status and hidden broker flags."
         meta={`${filteredRows.length.toLocaleString()} rows · ${fmtMoney(total)} filtered commission total`}
         actions={(
@@ -117,7 +117,7 @@ export default function BrokerRegister() {
         <div><div className="text-xs text-muted-foreground uppercase tracking-wide">Commission Total</div><div className="text-xl font-bold">{fmtMoney(total)}</div></div>
       </div>
 
-      {loading && <StateBlock icon={Loader2} title="Loading broker register..." description="Fetching commissions, payment status, and broker flags from Salesforce." />}
+      {loading && <StateBlock icon={Loader2} title="Loading broker commissions..." description="Fetching commissions, payment status, and broker flags from Salesforce." />}
       {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
       {!loading && !error && (
         <TableShell title="Broker Commission Rows" meta={`${filteredRows.length.toLocaleString()} matching rows`} bodyClassName="p-0">

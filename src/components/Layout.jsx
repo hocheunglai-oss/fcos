@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, FileBarChart2, Database, GitBranch, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/review', label: 'Review Queue', icon: ClipboardCheck },
+  { to: '/review', label: 'Exception Review', icon: ClipboardCheck },
   { to: '/reports', label: 'Report Builder', icon: FileBarChart2 },
   { to: '/pnl', label: 'Stem P&L', icon: TrendingUp },
-  { to: '/brokers', label: 'Broker Register', icon: DollarSign },
+  { to: '/brokers', label: "Broker's Commission", icon: DollarSign },
   { to: '/explorer', label: 'Data Explorer', icon: Database },
-  { to: '/schema', label: 'Schema Explorer', icon: GitBranch },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
