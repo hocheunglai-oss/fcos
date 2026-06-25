@@ -58,6 +58,7 @@ export default function DashboardSettings() {
 
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
+  const [disputeOnly, setDisputeOnly] = useState(savedFilters.disputeOnly ?? false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -81,11 +82,11 @@ export default function DashboardSettings() {
   const buildWhereClause = (yrs = selectedYears, mos = selectedMonths) =>
     buildDeliveryWhere(yrs, mos);
 
-  const load = async (yrs = selectedYears, mos = selectedMonths) => {
+  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly) => {
     setLoading(true);
     setError(null);
     const where = buildWhereClause(yrs, mos);
-    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR });
+    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR, disputeOnly: onlyDisputes });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -96,13 +97,13 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load(selectedYears, selectedMonths);
+      load(selectedYears, selectedMonths, disputeOnly);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths]);
+  }, [selectedYears, selectedMonths, disputeOnly]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -160,7 +161,7 @@ export default function DashboardSettings() {
 
       {/* Filter panel */}
       <div className="bg-card rounded-xl border border-border p-5 mb-6">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Filters — Delivery Date</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Filters</h2>
 
         {/* Year selector */}
         <div className="mb-4">
@@ -210,9 +211,36 @@ export default function DashboardSettings() {
           </div>
         </div>
 
+        <div className="mt-4">
+          <Label className="text-xs font-medium text-muted-foreground mb-2 block">Dispute</Label>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setDisputeOnly(false)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                !disputeOnly
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+              }`}
+            >
+              All STEMs
+            </button>
+            <button
+              onClick={() => setDisputeOnly(true)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                disputeOnly
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+              }`}
+            >
+              Disputed only
+            </button>
+          </div>
+        </div>
+
         <FilterSummary className="mt-4" title="Active Delivery Filter">
           <FilterChip label="Year" value={selectedYearLabel || 'None'} tone="active" />
           <FilterChip label="Month" value={selectedMonthLabel || 'None'} tone="active" />
+          <FilterChip label="Dispute" value={disputeOnly ? 'Disputed only' : 'All STEMs'} tone={disputeOnly ? 'active' : 'default'} />
           <FilterChip label="Fallback" value="Expected Delivery when Delivery Date is blank" />
         </FilterSummary>
       </div>
@@ -407,7 +435,7 @@ export default function DashboardSettings() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths)}
+        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly)}
       />
     </div>
   );

@@ -35,6 +35,8 @@ const HIDDEN_COLS = new Set([
   'KeyStem__c',
   'ETA_Start_Date__c',
   'Expected_Delivery_Date__c',
+  'Dispute_Status__c',
+  'Dispute__c',
   '_buyerBrokerName',
   '_buyerBrokerComm',
   '_suppBrokerName',

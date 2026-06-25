@@ -337,7 +337,7 @@ async function resolveViaQuery(objectType, id, nameField = 'Name') {
 }
 
 async function salesforceDashboardFilteredFull(body) {
-  const { where, trendYear } = body;
+  const { where, trendYear, disputeOnly } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
@@ -352,13 +352,23 @@ async function salesforceDashboardFilteredFull(body) {
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
   const buyerNameField = fieldNames.includes('Buyer_Name__c') ? 'Buyer_Name__c' : fieldNames.includes('Buyer__c') ? 'Buyer__c' : null;
   const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
-  const whereClause = where ? `WHERE ${where}` : '';
+  const disputeCondition = disputeOnly
+    ? hasDisputeStatus
+      ? "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null"
+      : hasDispute
+        ? 'Dispute__c = true'
+        : ''
+    : '';
+  const combinedWhere = [where, disputeCondition].filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
+  const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
 
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
   if (expectedDeliveryField) plFields.push(expectedDeliveryField);
   if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerNameField) plFields.push(buyerNameField);
+  if (hasDisputeStatus) plFields.push('Dispute_Status__c');
+  if (hasDispute) plFields.push('Dispute__c');
   if (buyerAmountField) plFields.push(buyerAmountField);
   if (supplierAmountField) plFields.push(supplierAmountField);
   if (totalCostsField) plFields.push(totalCostsField);
