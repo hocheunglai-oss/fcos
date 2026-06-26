@@ -55,7 +55,7 @@ const SECTIONS = [
     title: 'Financials',
     fields: [
       { key: 'Total_Invoice_Amount__c', label: 'Buyer Invoice Amount', fmt: fmtMoney },
-      { key: 'Total_Invoiced_Amount_From_Suppliers__c', label: 'Supplier Invoice Amount', fmt: fmtMoney },
+      { key: '_Supplier_Invoice_Amount', label: 'Supplier Invoice Amount', fmt: fmtMoney },
       { key: 'Costs_Total__c', label: 'Total Costs', fmt: fmtMoney },
       { key: 'Invoice_Amount__c', label: 'Invoice Amount', fmt: fmtMoney },
       { key: 'Payment_Amount__c', label: 'Payment Amount', fmt: fmtMoney },
@@ -108,9 +108,10 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
     return buy === 0 && sell > 0 ? sum + sell : sum;
   }, 0);
   const supplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
+  const uninvoicedSupplierLineTotal = lineItems.reduce((sum, li) => li.Cancelled__c || li.Supplier_Invoice__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
   const supplierInvoiceTotal = record.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
   const hasSupplierInvoiceLines = lineItems.some(li => !li.Cancelled__c && li.Supplier_Invoice__c);
-  const rawSupplierBase = supplierInvoiceTotal || supplierLineTotal;
+  const rawSupplierBase = supplierInvoiceTotal + (hasSupplierInvoiceLines ? uninvoicedSupplierLineTotal : supplierLineTotal);
   const unmatchedSellOnlyExtra = hasSupplierInvoiceLines ? Math.max(0, sellOnlySupplierExtraCosts - invoicedSupplierExtraCosts) : 0;
   const qlikSupplierCost = record.QLIK_STEM_Line_Item_Total_Cost__c != null || record.QLIK_Costs_Total_Cost__c != null
     ? (record.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (record.QLIK_Costs_Total_Cost__c || 0)

@@ -326,6 +326,29 @@ function escapeSoql(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+function dateOnly(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(dateString, days) {
+  const date = new Date(`${dateString}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateOnly(date);
+}
+
+function daysBetween(fromDate, toDate) {
+  const from = new Date(`${fromDate}T00:00:00.000Z`);
+  const to = new Date(`${toDate}T00:00:00.000Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
+  return Math.round((to - from) / 86400000);
+}
+
+function earliestDate(values) {
+  return values.filter(Boolean).sort()[0] || null;
+}
+
 async function resolveViaQuery(objectType, id, nameField = 'Name') {
   if (!id) return null;
   try {
@@ -449,6 +472,7 @@ async function salesforceDashboardFilteredFull(body) {
   }
 
   const supplierLineBuyByStem = {};
+  const uninvoicedSupplierLineBuyByStem = {};
   const hasSupplierInvoiceByStem = {};
   const brokerByStem = {};
   for (const li of lineItems) {
@@ -456,6 +480,9 @@ async function salesforceDashboardFilteredFull(body) {
     if (!id || li.Cancelled__c) continue;
     lineItemSellByStem[id] = (lineItemSellByStem[id] || 0) + (li.Total_Price__c ?? 0);
     supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + (li.Total_Cost__c ?? 0);
+    if (!li.Supplier_Invoice__c) {
+      uninvoicedSupplierLineBuyByStem[id] = (uninvoicedSupplierLineBuyByStem[id] || 0) + (li.Total_Cost__c ?? 0);
+    }
     if (li.Supplier_Invoice__c) hasSupplierInvoiceByStem[id] = true;
 
     if (!brokerByStem[id]) brokerByStem[id] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
@@ -482,7 +509,8 @@ async function salesforceDashboardFilteredFull(body) {
     const buyer = !stem.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : stem[bf];
     const invoicedSupplier = stem[sf2] ?? 0;
     const supplierLineBuy = supplierLineBuyByStem[stem.Id] || 0;
-    const supplierBase = hasSupplierInvoiceByStem[stem.Id] ? invoicedSupplier : (supplierLineBuy + invoicedSupplier);
+    const uninvoicedSupplierLineBuy = uninvoicedSupplierLineBuyByStem[stem.Id] || 0;
+    const supplierBase = invoicedSupplier + (hasSupplierInvoiceByStem[stem.Id] ? uninvoicedSupplierLineBuy : supplierLineBuy);
     const extraCostBuy = extraCostBuyByStem[stem.Id] || 0;
     const rawSupplier = supplierBase + extraCostBuy;
     const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id]
@@ -658,7 +686,7 @@ async function stemPnlFull(body) {
   const extraCosts = extraCostArrays.flat();
   const byId = {};
   const initStem = (id) => {
-    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostSell: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, buyerLineSell: 0, supplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
+    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostSell: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, buyerLineSell: 0, supplierLineBuy: 0, uninvoicedSupplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
   };
 
   for (const li of lineItems) {
@@ -670,6 +698,7 @@ async function stemPnlFull(body) {
     const brokerQty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : qty;
     byId[id].buyerLineSell += li.Total_Price__c ?? 0;
     byId[id].supplierLineBuy += li.Total_Cost__c ?? 0;
+    if (!li.Supplier_Invoice__c) byId[id].uninvoicedSupplierLineBuy += li.Total_Cost__c ?? 0;
     if (li.Supplier_Invoice__c) byId[id].hasSupplierInvoice = true;
     byId[id].suppBrokerComm += (li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
     const buyerBrokerPerUnitTotal = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * brokerQty;
@@ -697,7 +726,7 @@ async function stemPnlFull(body) {
     const agg = byId[s.Id] || {};
     const calculatedBuyer = (agg.buyerLineSell ?? 0) + (agg.extraCostSell ?? 0);
     const buyer = !s.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : (s.Total_Invoice_Amount__c ?? 0);
-    const supplierBase = agg.hasSupplierInvoice ? (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) : ((agg.supplierLineBuy ?? 0) + (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0));
+    const supplierBase = (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + (agg.hasSupplierInvoice ? (agg.uninvoicedSupplierLineBuy ?? 0) : (agg.supplierLineBuy ?? 0));
     const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
     const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
     const qlikSupplierCost = s.QLIK_STEM_Line_Item_Total_Cost__c != null || s.QLIK_Costs_Total_Cost__c != null
@@ -745,6 +774,76 @@ async function stemPnlFull(body) {
       Qlik_Net_Profit: rows.reduce((sum, r) => sum + (r.Qlik_Total_Profit ?? 0), 0),
     },
   };
+}
+
+async function salesforceBuyerInvoicesDue(body) {
+  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 30, 365));
+  const today = dateOnly(new Date());
+  const dueThrough = addDays(today, daysAhead);
+  const describe = await salesforceObjectFields({ objectName: 'stem__c' });
+  const fieldNames = describe.fields.map((f) => f.name);
+
+  const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
+  if (!dueFields.length) return { rows: [], today, dueThrough, daysAhead };
+
+  const fields = ['Id', 'Name'];
+  for (const field of dueFields) fields.push(field);
+  if (fieldNames.includes('Buyer_Name__c')) fields.push('Buyer_Name__c');
+  if (fieldNames.includes('Buyer__c')) fields.push('Buyer__c');
+  if (fieldNames.includes('Total_Invoice_Amount__c')) fields.push('Total_Invoice_Amount__c');
+  if (fieldNames.includes('Account__c')) fields.push('Account__c');
+  if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
+
+  const dueCondition = dueFields
+    .map((field) => `(${field} != null AND ${field} <= ${dueThrough})`)
+    .join(' OR ');
+  const outstandingConditions = [];
+  if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
+  const whereParts = [`(${dueCondition})`, ...outstandingConditions];
+
+  const stems = await queryRows(`
+    SELECT ${[...new Set(fields)].join(', ')}
+    FROM stem__c
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY ${dueFields[0]} ASC NULLS LAST, Name ASC
+    LIMIT 3000
+  `, { limit: 3000, softFail: true });
+
+  const accountIds = [...new Set(stems.map((stem) => stem.Account__c).filter(Boolean))];
+  const accountMap = {};
+  if (accountIds.length) {
+    const accountArrays = await Promise.all(chunkIds(accountIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`SELECT Id, Name, Account_Manager__c FROM Account WHERE Id IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+    }));
+    for (const account of accountArrays.flat()) accountMap[account.Id] = account;
+  }
+
+  const rows = stems
+    .map((stem) => {
+      const dueDate = earliestDate(dueFields.map((field) => stem[field]));
+      if (!dueDate || dueDate > dueThrough) return null;
+      const daysUntilDue = daysBetween(today, dueDate);
+      const account = accountMap[stem.Account__c] || {};
+      return {
+        id: stem.Id,
+        stemId: stem.Id,
+        stemName: stem.Name,
+        buyerName: stem.Buyer_Name__c || account.Name || stem.Buyer__c || null,
+        invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
+        buyerInvoiceDueDate: dueDate,
+        buyerTraderInCharge: account.Account_Manager__c || null,
+        daysUntilDue,
+        status: daysUntilDue == null ? 'Due' : daysUntilDue < 0 ? 'Overdue' : 'Due Soon',
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.buyerInvoiceDueDate !== b.buyerInvoiceDueDate) return a.buyerInvoiceDueDate.localeCompare(b.buyerInvoiceDueDate);
+      return String(a.stemName || '').localeCompare(String(b.stemName || ''));
+    });
+
+  return { rows, today, dueThrough, daysAhead };
 }
 
 async function salesforceStemDetailFull(body) {
@@ -815,12 +914,19 @@ async function salesforceStemDetailFull(body) {
   const shouldUseCalculatedBuyerInvoice = !recordRaw.Delivery_Date__c
     && calculatedUndatedBuyerInvoice > 0
     && !recordRaw.Total_Invoice_Amount__c;
+  const activeLineItems = lineItems.filter((li) => !li.Cancelled__c);
+  const supplierInvoiceTotal = recordRaw.Total_Invoiced_Amount_From_Suppliers__c ?? 0;
+  const supplierLineBuyTotal = activeLineItems.reduce((sum, li) => sum + (li.Total_Cost__c ?? 0), 0);
+  const uninvoicedSupplierLineBuyTotal = activeLineItems.reduce((sum, li) => li.Supplier_Invoice__c ? sum : sum + (li.Total_Cost__c ?? 0), 0);
+  const hasSupplierInvoiceLines = activeLineItems.some((li) => li.Supplier_Invoice__c);
+  const calculatedSupplierInvoice = supplierInvoiceTotal + (hasSupplierInvoiceLines ? uninvoicedSupplierLineBuyTotal : supplierLineBuyTotal);
 
   const record = {
     ...recordRaw,
     Total_Invoice_Amount__c: shouldUseCalculatedBuyerInvoice
       ? calculatedUndatedBuyerInvoice
       : recordRaw.Total_Invoice_Amount__c,
+    _Supplier_Invoice_Amount: calculatedSupplierInvoice,
     _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
     _Vessel_Name: vesselName,
     _Port_Name: portName,
@@ -1042,6 +1148,7 @@ const handlers = {
   salesforceDescribeChildren,
   salesforceTopBuyers,
   salesforceBrokerRegister: salesforceBrokerRegisterFull,
+  salesforceBuyerInvoicesDue,
   stemPnl: stemPnlFull,
 };
 
