@@ -45,7 +45,7 @@ function statusPill(status) {
 }
 
 export default function BuyerInvoices() {
-  const [daysAhead, setDaysAhead] = useState(30);
+  const [daysAhead, setDaysAhead] = useState(7);
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -80,15 +80,17 @@ export default function BuyerInvoices() {
       dueSoonCount: dueSoon.length,
       dueSoonAmount: dueSoon.reduce((sum, row) => sum + Number(row.invoiceAmount || 0), 0),
       totalAmount: rows.reduce((sum, row) => sum + Number(row.invoiceAmount || 0), 0),
+      totalReceivable: rows.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
     };
   }, [rows]);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Buyer Invoice Due Date', "Buyer's Trader in Charge", 'Status', 'Days Until Due'];
+    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', "Buyer's Trader in Charge", 'Status', 'Days Until Due'];
     const csvRows = rows.map((row) => [
       row.stemName,
       row.buyerName,
       row.invoiceAmount,
+      row.receivableBalance,
       row.buyerInvoiceDueDate,
       row.buyerTraderInCharge,
       row.status,
@@ -109,7 +111,7 @@ export default function BuyerInvoices() {
       <PageHeader
         icon={ReceiptText}
         eyebrow="Buyer invoice follow-up"
-        title="Buyer Invoices"
+        title="Outstanding Buyer Invoices"
         description="Manage overdue buyer invoices and invoices due within the selected number of days."
         meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${rows.length.toLocaleString()} invoices` : undefined}
         actions={(
@@ -151,7 +153,7 @@ export default function BuyerInvoices() {
       <div className="grid gap-3 md:grid-cols-3">
         <SummaryCard label="Overdue" value={totals.overdueCount.toLocaleString()} sub={fmtMoney(totals.overdueAmount)} tone="red" />
         <SummaryCard label="Due Soon" value={totals.dueSoonCount.toLocaleString()} sub={fmtMoney(totals.dueSoonAmount)} tone="blue" />
-        <SummaryCard label="Total Invoice Amount" value={fmtMoney(totals.totalAmount)} sub={`${rows.length.toLocaleString()} matching invoices`} tone="green" />
+        <SummaryCard label="Total Invoice Amount" value={fmtMoney(totals.totalAmount)} sub={`${fmtMoney(totals.totalReceivable)} receivable balance`} tone="green" />
       </div>
 
       {error && (
@@ -174,6 +176,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer's Trader in Charge</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
@@ -190,6 +193,7 @@ export default function BuyerInvoices() {
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '—'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '—'}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
                       <td className="px-4 py-3 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerTraderInCharge || '—'}</td>
                       <td className="px-4 py-3">

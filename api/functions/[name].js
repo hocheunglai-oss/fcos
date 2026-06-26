@@ -349,6 +349,28 @@ function earliestDate(values) {
   return values.filter(Boolean).sort()[0] || null;
 }
 
+const TRADER_CODE_NAMES = {
+  KZ: 'Kelvin Zeng',
+  OL: 'Oleh Kulyk',
+  SC: 'Stanley Chui',
+  VL: 'Vincent Lee',
+};
+
+function formatStemName(stem) {
+  const parts = [stem.KeyStem__c, stem['Vessel__r']?.Name, stem['Port__r']?.Name].filter(Boolean);
+  return parts.length ? parts.join(' - ') : stem.Name;
+}
+
+function formatTraderInCharge(accountManager, ownerName) {
+  const codes = String(accountManager || '')
+    .split(/[\/,;&\s]+/)
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+  const names = codes.map((code) => TRADER_CODE_NAMES[code] || code);
+  if (names.length) return names.join(', ');
+  return ownerName && ownerName !== 'Production Support' ? ownerName : null;
+}
+
 async function resolveViaQuery(objectType, id, nameField = 'Name') {
   if (!id) return null;
   try {
@@ -777,7 +799,7 @@ async function stemPnlFull(body) {
 }
 
 async function salesforceBuyerInvoicesDue(body) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 30, 365));
+  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
   const rowLimit = 10000;
   const today = dateOnly(new Date());
   const dueThrough = addDays(today, daysAhead);
@@ -789,10 +811,16 @@ async function salesforceBuyerInvoicesDue(body) {
 
   const fields = ['Id', 'Name'];
   for (const field of dueFields) fields.push(field);
+  if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
+  if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
+  if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
   if (fieldNames.includes('Buyer_Name__c')) fields.push('Buyer_Name__c');
   if (fieldNames.includes('Buyer__c')) fields.push('Buyer__c');
   if (fieldNames.includes('Total_Invoice_Amount__c')) fields.push('Total_Invoice_Amount__c');
-  if (fieldNames.includes('Account__c')) fields.push('Account__c');
+  if (fieldNames.includes('Receivable_Balance__c')) fields.push('Receivable_Balance__c');
+  if (fieldNames.includes('Account__c')) {
+    fields.push('Account__c', 'Account__r.Name', 'Account__r.Account_Manager__c', 'Account__r.Owner.Name');
+  }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
 
   const dueCondition = dueFields
@@ -800,6 +828,8 @@ async function salesforceBuyerInvoicesDue(body) {
     .join(' OR ');
   const outstandingConditions = [];
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
+  if (fieldNames.includes('Receivable_Balance__c')) outstandingConditions.push('Receivable_Balance__c >= 50');
+  if (fieldNames.includes('KeyStem__c')) outstandingConditions.push("(KeyStem__c = null OR KeyStem__c NOT LIKE 'T%')");
   const whereParts = [`(${dueCondition})`, ...outstandingConditions];
 
   const stems = await queryRows(`
@@ -810,30 +840,24 @@ async function salesforceBuyerInvoicesDue(body) {
     LIMIT ${rowLimit}
   `, { limit: rowLimit, softFail: true });
 
-  const accountIds = [...new Set(stems.map((stem) => stem.Account__c).filter(Boolean))];
-  const accountMap = {};
-  if (accountIds.length) {
-    const accountArrays = await Promise.all(chunkIds(accountIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return queryRows(`SELECT Id, Name, Account_Manager__c FROM Account WHERE Id IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
-    }));
-    for (const account of accountArrays.flat()) accountMap[account.Id] = account;
-  }
-
   const rows = stems
     .map((stem) => {
       const dueDate = earliestDate(dueFields.map((field) => stem[field]));
       if (!dueDate || dueDate > dueThrough) return null;
+      if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
+      if (stem.Receivable_Balance__c != null && Number(stem.Receivable_Balance__c) < 50) return null;
       const daysUntilDue = daysBetween(today, dueDate);
-      const account = accountMap[stem.Account__c] || {};
+      const account = stem['Account__r'] || {};
       return {
         id: stem.Id,
         stemId: stem.Id,
-        stemName: stem.Name,
+        stemName: formatStemName(stem),
+        keyStem: stem.KeyStem__c || null,
         buyerName: stem.Buyer_Name__c || account.Name || stem.Buyer__c || null,
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
+        receivableBalance: stem.Receivable_Balance__c ?? null,
         buyerInvoiceDueDate: dueDate,
-        buyerTraderInCharge: account.Account_Manager__c || null,
+        buyerTraderInCharge: formatTraderInCharge(account.Account_Manager__c, account.Owner?.Name),
         daysUntilDue,
         status: daysUntilDue == null ? 'Due' : daysUntilDue < 0 ? 'Overdue' : 'Due Soon',
       };

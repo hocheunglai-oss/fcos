@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/review', label: 'Exception Review', icon: ClipboardCheck },
-  { to: '/buyer-invoices', label: 'Buyer Invoices', icon: ReceiptText },
+  { to: '/buyer-invoices', label: 'Outstanding Buyer Invoices', icon: ReceiptText },
   { to: '/reports', label: 'Report Builder', icon: FileBarChart2 },
   { to: '/pnl', label: 'Stem P&L', icon: TrendingUp },
   { to: '/brokers', label: "Broker's Commission", icon: DollarSign },
