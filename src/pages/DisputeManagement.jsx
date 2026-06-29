@@ -70,7 +70,6 @@ export default function DisputeManagement() {
 
   useEffect(() => { loadRows(); }, []);
 
-  const statuses = ACTIVE_DISPUTE_STATUSES;
   const types = useMemo(() => [...new Set(rows.map(row => row.Dispute_Type__c).filter(Boolean))].sort(), [rows]);
 
   const filteredRows = useMemo(() => {
@@ -148,7 +147,7 @@ export default function DisputeManagement() {
       </div>
 
       <div className="rounded-xl border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-start gap-3">
           <div className="relative w-full md:w-80">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input placeholder="Search dispute, stem, buyer..." value={search} onChange={event => setSearch(event.target.value)} className="h-9 pl-8 text-xs" />
@@ -158,17 +157,35 @@ export default function DisputeManagement() {
               </button>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</Label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-9 w-[210px] text-xs">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="text-xs">All active disputes</SelectItem>
-                {statuses.map(status => <SelectItem key={status} value={status} className="text-xs">{status}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setStatusFilter('all')}
+                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  statusFilter === 'all'
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50'
+                }`}
+              >
+                All active
+              </button>
+              {ACTIVE_DISPUTE_STATUSES.map(status => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setStatusFilter(status)}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    normalizeStatus(statusFilter) === normalizeStatus(status)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50'
+                  }`}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type</Label>
