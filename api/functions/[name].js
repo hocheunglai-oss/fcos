@@ -352,6 +352,7 @@ function earliestDate(values) {
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
 
 function numericValue(value) {
+  if (value == null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
