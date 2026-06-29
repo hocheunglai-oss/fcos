@@ -123,12 +123,16 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const supplierExtraCosts = uninvoicedSupplierExtraCosts;
   const supplierBrokerComm = lineItems.reduce((sum, li) => {
     if (li.Cancelled__c) return sum;
-    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    const qty = li._Financial_Quantity != null
+      ? li._Financial_Quantity
+      : (li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0));
     return sum + ((li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * qty);
   }, 0);
   const buyerBrokerLineComm = lineItems.reduce((sum, li) => {
     if (li.Cancelled__c) return sum;
-    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    const qty = li._Financial_Quantity != null
+      ? li._Financial_Quantity
+      : (li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0));
     const buyerPerUnitTotal = (li.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
     const suppBrokerPerUnit = li.Suppliers_Brokers_Commission_Per_Unit__c ?? 0;
     const buyerComm = suppBrokerPerUnit !== 0 ? buyerPerUnitTotal : (li.Commission_Cost__c ?? buyerPerUnitTotal);
@@ -246,7 +250,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
   const getSecondaryBuyerBrokerUnit = (li) => {
     const suppBrokerPerUnit = Number(li.Suppliers_Brokers_Commission_Per_Unit__c || 0);
     if (suppBrokerPerUnit !== 0 || li.Commission_Cost__c == null) return null;
-    const qty = li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0);
+    const qty = li._Financial_Quantity != null
+      ? li._Financial_Quantity
+      : (li.Quantity_Delivered_Per_BDN__c != null ? li.Quantity_Delivered_Per_BDN__c : (li.Quantity__c ?? 0));
     if (!qty) return null;
     const primaryUnit = Number(li.Buyers_Brokers_Commission_Per_Unit__c || 0);
     const secondaryUnit = (Number(li.Commission_Cost__c || 0) / qty) - primaryUnit;
@@ -387,17 +393,33 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                                   <td className="py-2.5 px-3 text-muted-foreground">{li.BDN_Company__c || '—'}</td>
                                 )}
                                 <td className="py-2.5 px-3 text-right text-foreground">
-                                  {li.Quantity_Delivered_Per_BDN__c != null
+                                  {li._Financial_Quantity != null
+                                    ? li._Financial_Quantity.toLocaleString()
+                                    : li.Quantity_Delivered_Per_BDN__c != null
                                     ? li.Quantity_Delivered_Per_BDN__c.toLocaleString()
                                     : (li.Is_Quantity_Range__c && li.Quantity_Max__c
                                       ? `${li.Quantity__c ?? '—'}–${li.Quantity_Max__c}`
                                       : (li.Quantity_in_MT__c > 0 ? li.Quantity_in_MT__c.toLocaleString() : (li.Quantity__c != null ? li.Quantity__c.toLocaleString() : '—')))}
                                 </td>
                                 <td className="py-2.5 px-3 text-right text-foreground">
-                                  {li['Offer_Line_Item__r']?.UnitPrice != null ? fmtMoney(li['Offer_Line_Item__r'].UnitPrice) : '—'}
+                                  {li.Price_Per_Unit__c != null
+                                    ? fmtMoney(li.Price_Per_Unit__c)
+                                    : li.Unit_Sell_At__c != null
+                                      ? fmtMoney(li.Unit_Sell_At__c)
+                                      : li['Offer_Line_Item__r']?.UnitPrice != null
+                                        ? fmtMoney(li['Offer_Line_Item__r'].UnitPrice)
+                                        : '—'}
                                 </td>
                                 <td className="py-2.5 px-3 text-right text-foreground">
-                                  {li['Offer_Line_Item__r']?.Supplier_Unit_Price__c != null ? fmtMoney(li['Offer_Line_Item__r'].Supplier_Unit_Price__c) : '—'}
+                                  {li.Cost_Per_Unit__c != null
+                                    ? fmtMoney(li.Cost_Per_Unit__c)
+                                    : li.Unit_Cost__c != null
+                                      ? fmtMoney(li.Unit_Cost__c)
+                                      : li.Unit_Buy_At__c != null
+                                        ? fmtMoney(li.Unit_Buy_At__c)
+                                        : li['Offer_Line_Item__r']?.Supplier_Unit_Price__c != null
+                                          ? fmtMoney(li['Offer_Line_Item__r'].Supplier_Unit_Price__c)
+                                          : '—'}
                                 </td>
                                 <td className="py-2.5 px-3 text-right font-semibold text-foreground">{li.Total_Price__c != null ? fmtMoney(li.Total_Price__c) : '—'}</td>
                                 <td className="py-2.5 px-3 text-right font-semibold text-foreground">{li.Total_Cost__c != null ? fmtMoney(li.Total_Cost__c) : '—'}</td>
@@ -454,7 +476,9 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                               </td>
                               <td className="py-2.5 px-3 text-muted-foreground">{productName}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{ec.Supplier_Name__c || '—'}</td>
-                              <td className="py-2.5 px-3 text-right text-foreground">{ec.Quantity__c != null ? ec.Quantity__c.toLocaleString() : '—'}</td>
+                              <td className="py-2.5 px-3 text-right text-foreground">
+                                {ec._Financial_Quantity != null ? ec._Financial_Quantity.toLocaleString() : (ec.Quantity__c != null ? ec.Quantity__c.toLocaleString() : '—')}
+                              </td>
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Unit_Price__c != null ? fmtMoney(ec.Unit_Price__c) : '—'}</td>
                               <td className="py-2.5 px-3 text-right text-foreground">{ec.Unit_Cost__c != null ? fmtMoney(ec.Unit_Cost__c) : '—'}</td>
                               <td className="py-2.5 px-3 text-right font-semibold text-foreground">{ec.Line_Total__c != null ? fmtMoney(ec.Line_Total__c) : '—'}</td>
