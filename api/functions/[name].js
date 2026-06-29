@@ -993,24 +993,27 @@ async function salesforceDisputeStems(body) {
   if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
   if (fieldNames.includes('Account__c')) fields.push('Account__r.Name');
 
-  const disputeConditions = [];
-  if (hasDisputeStatus) disputeConditions.push("(Dispute_Status__c != null AND Dispute_Status__c != 'No Dispute')");
-  if (hasDispute) disputeConditions.push('Dispute__c = true');
+  const activeDisputeStatusCondition = "(Dispute_Status__c != null AND Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != 'no dispute')";
+  const disputeCondition = hasDisputeStatus
+    ? activeDisputeStatusCondition
+    : 'Dispute__c = true';
   const rows = await queryRows(`
     SELECT ${[...new Set(fields)].join(', ')}
     FROM stem__c
-    WHERE ${disputeConditions.join(' OR ')}
+    WHERE ${disputeCondition}
     ORDER BY LastModifiedDate DESC
     LIMIT ${limit}
   `, { limit, softFail: true });
 
   return {
-    rows: rows.map((stem) => ({
-      ...stem,
-      _Display_Name: formatStemName(stem),
-      _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
-      _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
-    })),
+    rows: rows
+      .filter((stem) => !hasDisputeStatus || String(stem.Dispute_Status__c || '').toLowerCase() !== 'no dispute')
+      .map((stem) => ({
+        ...stem,
+        _Display_Name: formatStemName(stem),
+        _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
+        _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
+      })),
   };
 }
 

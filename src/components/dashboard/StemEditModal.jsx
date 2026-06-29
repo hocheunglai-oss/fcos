@@ -4,7 +4,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Save } from 'lucide-react';
+
+const DISPUTE_STATUS_OPTIONS = [
+  'No Dispute',
+  'Opened',
+  'Closed with Supplier only',
+  'Closed with Buyer only',
+  'Closed',
+];
 
 // Fields that are editable
 const EDITABLE_FIELDS = [
@@ -70,12 +79,26 @@ export default function StemEditModal({ open, onClose, record, onSaved }) {
           {EDITABLE_FIELDS.map(f => (
             <div key={f.key}>
               <Label className="text-xs text-muted-foreground mb-1 block">{f.label}</Label>
-              <Input
-                type={f.type}
-                value={form[f.key] ?? ''}
-                onChange={e => handleChange(f.key, e.target.value)}
-                className="h-8 text-sm"
-              />
+              {f.key === 'Dispute_Status__c' ? (
+                <Select value={form[f.key] || '__blank__'} onValueChange={value => handleChange(f.key, value === '__blank__' ? '' : value)}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__blank__">Blank</SelectItem>
+                    {DISPUTE_STATUS_OPTIONS.map(status => (
+                      <SelectItem key={status} value={status}>{status}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  type={f.type}
+                  value={form[f.key] ?? ''}
+                  onChange={e => handleChange(f.key, e.target.value)}
+                  className="h-8 text-sm"
+                />
+              )}
             </div>
           ))}
         </div>

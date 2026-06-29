@@ -8,6 +8,15 @@ import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+const ACTIVE_DISPUTE_STATUSES = [
+  'Opened',
+  'Closed with Supplier only',
+  'Closed with Buyer only',
+  'Closed',
+];
 
 const fmtMoney = (value) => {
   if (value == null || value === '') return '—';
@@ -57,12 +66,16 @@ export default function DisputeManagement() {
 
   useEffect(() => { loadRows(); }, []);
 
-  const statuses = useMemo(() => [...new Set(rows.map(row => row.Dispute_Status__c).filter(Boolean))].sort(), [rows]);
+  const statuses = useMemo(() => {
+    const available = new Set(rows.map(row => row.Dispute_Status__c).filter(Boolean));
+    return ACTIVE_DISPUTE_STATUSES.filter(status => available.has(status));
+  }, [rows]);
   const types = useMemo(() => [...new Set(rows.map(row => row.Dispute_Type__c).filter(Boolean))].sort(), [rows]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(row => {
+      const isActiveDispute = String(row.Dispute_Status__c || '').toLowerCase() !== 'no dispute';
       const statusMatch = statusFilter === 'all' || row.Dispute_Status__c === statusFilter;
       const typeMatch = typeFilter === 'all' || row.Dispute_Type__c === typeFilter;
       const textMatch = !q || [
@@ -72,7 +85,7 @@ export default function DisputeManagement() {
         row.Dispute_Type__c,
         row.Dispute_Particular__c,
       ].some(value => value != null && String(value).toLowerCase().includes(q));
-      return statusMatch && typeMatch && textMatch;
+      return isActiveDispute && statusMatch && typeMatch && textMatch;
     });
   }, [rows, search, statusFilter, typeFilter]);
 
@@ -144,14 +157,30 @@ export default function DisputeManagement() {
               </button>
             )}
           </div>
-          <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
-            <option value="all">All statuses</option>
-            {statuses.map(status => <option key={status} value={status}>{status}</option>)}
-          </select>
-          <select value={typeFilter} onChange={event => setTypeFilter(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
-            <option value="all">All types</option>
-            {types.map(type => <option key={type} value={type}>{type}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</Label>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-9 w-[210px] text-xs">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All active disputes</SelectItem>
+                {statuses.map(status => <SelectItem key={status} value={status} className="text-xs">{status}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type</Label>
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="h-9 w-[190px] text-xs">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All types</SelectItem>
+                {types.map(type => <SelectItem key={type} value={type} className="text-xs">{type}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
