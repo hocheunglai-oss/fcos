@@ -18,6 +18,10 @@ const ACTIVE_DISPUTE_STATUSES = [
   'Closed',
 ];
 
+const normalizeStatus = (value) => String(value || '').toLowerCase();
+const displayStatus = (value) =>
+  ACTIVE_DISPUTE_STATUSES.find(status => normalizeStatus(status) === normalizeStatus(value)) || value;
+
 const fmtMoney = (value) => {
   if (value == null || value === '') return '—';
   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -66,22 +70,19 @@ export default function DisputeManagement() {
 
   useEffect(() => { loadRows(); }, []);
 
-  const statuses = useMemo(() => {
-    const available = new Set(rows.map(row => row.Dispute_Status__c).filter(Boolean));
-    return ACTIVE_DISPUTE_STATUSES.filter(status => available.has(status));
-  }, [rows]);
+  const statuses = ACTIVE_DISPUTE_STATUSES;
   const types = useMemo(() => [...new Set(rows.map(row => row.Dispute_Type__c).filter(Boolean))].sort(), [rows]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(row => {
-      const isActiveDispute = String(row.Dispute_Status__c || '').toLowerCase() !== 'no dispute';
-      const statusMatch = statusFilter === 'all' || row.Dispute_Status__c === statusFilter;
+      const isActiveDispute = normalizeStatus(row.Dispute_Status__c) !== 'no dispute';
+      const statusMatch = statusFilter === 'all' || normalizeStatus(row.Dispute_Status__c) === normalizeStatus(statusFilter);
       const typeMatch = typeFilter === 'all' || row.Dispute_Type__c === typeFilter;
       const textMatch = !q || [
         row._Display_Name,
         row._Buyer_Name,
-        row.Dispute_Status__c,
+        displayStatus(row.Dispute_Status__c),
         row.Dispute_Type__c,
         row.Dispute_Particular__c,
       ].some(value => value != null && String(value).toLowerCase().includes(q));
@@ -100,7 +101,7 @@ export default function DisputeManagement() {
     const csvRows = filteredRows.map(row => [
       row._Display_Name,
       row._Buyer_Name,
-      row.Dispute_Status__c,
+      displayStatus(row.Dispute_Status__c),
       row.Dispute_Type__c,
       row.Dispute_Particular__c,
       row.Delivery_Date__c,
@@ -214,7 +215,7 @@ export default function DisputeManagement() {
                   <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
                     <td className="px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
                     <td className="px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
-                    <td className="px-3 py-2.5">{row.Dispute_Status__c || '—'}</td>
+                    <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
                     <td className="px-3 py-2.5">{row.Dispute_Type__c || '—'}</td>
                     <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row.Dispute_Particular__c || ''}>{row.Dispute_Particular__c || '—'}</td>
                     <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
