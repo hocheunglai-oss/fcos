@@ -1085,6 +1085,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
   const rows = report.rows || [];
   const overdue = rows.filter((row) => row.status === 'Overdue');
   const dueSoon = rows.filter((row) => row.status !== 'Overdue');
+  const dueSoonLabel = `Due in ${Number(settings.daysAhead || report.daysAhead || 7).toLocaleString()} Days`;
   const totals = {
     overdueCount: overdue.length,
     overdueReceivable: overdue.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
@@ -1100,7 +1101,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
           <div style="font-size:20px;font-weight:700;color:#dc2626">${money(totals.overdueReceivable)} (${totals.overdueCount})</div>
         </td>
         <td style="border:1px solid #d9e2ef;border-left:0;border-radius:0 8px 8px 0;padding:12px;background:#f7fbff">
-          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Due Soon</div>
+          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">${escapeHtml(dueSoonLabel)}</div>
           <div style="font-size:20px;font-weight:700;color:#2563eb">${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})</div>
         </td>
       </tr>
@@ -1153,7 +1154,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     settings.intro,
     `Report window: ${prettyDate(report.today)} to ${prettyDate(report.dueThrough)}`,
     `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
-    `Due Soon: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
+    `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
     '',
     ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Trader ${row.buyerTraderInCharge || '-'}`),
   ];

@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
-import { Settings, Search, Loader2, Check } from 'lucide-react';
+import { Settings, Search, Loader2, Check, Mail } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ObjectSchemaTree from '@/components/settings/ObjectSchemaTree';
 import PageHeader from '@/components/common/PageHeader';
+import { readSmtpSettings, saveSmtpSettings } from '@/lib/smtpSettings';
 
 const SETTINGS_KEY = 'report_builder_config';
 
@@ -31,6 +33,7 @@ export default function SettingsPage() {
   const [defaultLimit, setDefaultLimit] = useState('100');
   const [rbFields, setRbFields] = useState([]);
   const [rbFieldsLoading, setRbFieldsLoading] = useState(false);
+  const [smtpSettings, setSmtpSettings] = useState(readSmtpSettings);
 
   // Load schema + settings from DB in parallel
   useEffect(() => {
@@ -68,6 +71,7 @@ export default function SettingsPage() {
       defaultOrderBy,
       defaultLimit: Number(defaultLimit),
     };
+    saveSmtpSettings(smtpSettings);
     if (settingsRecord) {
       await appClient.entities.AppSettings.update(settingsRecord.id, { key: SETTINGS_KEY, value });
     } else {
@@ -152,6 +156,74 @@ export default function SettingsPage() {
             onChange={setAllowedMap}
           />
         )}
+      </div>
+
+      {/* ── Email Sending Account ── */}
+      <div className="bg-card rounded-xl border border-border p-5 mb-6">
+        <div className="mb-4 flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
+            <Mail className="h-4 w-4" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Email Sending Account</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Saved SMTP credentials are used by Send Now on the Outstanding Buyer Invoices page. The password is saved in this browser's app settings.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground md:col-span-4">
+            <input
+              type="checkbox"
+              checked={smtpSettings.enabled}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, enabled: event.target.checked }))}
+            />
+            Use this SMTP account for Send Now
+          </label>
+          <div className="space-y-1.5 md:col-span-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">SMTP Host</Label>
+            <Input
+              value={smtpSettings.host}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, host: event.target.value }))}
+              placeholder="smtp.office365.com"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Port</Label>
+            <Input
+              type="number"
+              value={smtpSettings.port}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, port: event.target.value }))}
+              placeholder="587"
+            />
+          </div>
+          <label className="flex items-end gap-2 pb-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={smtpSettings.secure}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, secure: event.target.checked }))}
+            />
+            SSL/TLS immediately
+          </label>
+          <div className="space-y-1.5 md:col-span-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email Username</Label>
+            <Input
+              value={smtpSettings.user}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, user: event.target.value }))}
+              placeholder="info@cosulich.com.hk"
+            />
+          </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Password / App Password</Label>
+            <Input
+              type="password"
+              value={smtpSettings.password}
+              onChange={(event) => setSmtpSettings((prev) => ({ ...prev, password: event.target.value }))}
+              placeholder="Saved when you click Save All Settings"
+            />
+          </div>
+        </div>
       </div>
 
       {/* ── Report Builder Defaults ── */}

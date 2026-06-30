@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { hasUsableSmtpSettings, readSmtpSettings } from '@/lib/smtpSettings';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
 const DEFAULT_EMAIL_SETTINGS = {
@@ -88,7 +89,8 @@ function statusPill(status, daysUntilDue) {
 
 function overdueDisplayValue(daysUntilDue) {
   if (daysUntilDue == null) return '—';
-  return (-Number(daysUntilDue)).toLocaleString();
+  const overdue = -Number(daysUntilDue);
+  return Object.is(overdue, -0) ? '0' : overdue.toLocaleString();
 }
 
 function readEmailSettings() {
@@ -116,14 +118,6 @@ export default function BuyerInvoices() {
   const [showEmailSchedule, setShowEmailSchedule] = useState(false);
   const [savedEmailSettings, setSavedEmailSettings] = useState(readEmailSettings);
   const [emailSettings, setEmailSettings] = useState(savedEmailSettings);
-  const [useSmtpCredentials, setUseSmtpCredentials] = useState(false);
-  const [smtpCredentials, setSmtpCredentials] = useState({
-    host: 'smtp.office365.com',
-    port: '587',
-    user: 'info@cosulich.com.hk',
-    password: '',
-    secure: false,
-  });
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
@@ -243,8 +237,9 @@ export default function BuyerInvoices() {
       ...emailSettings,
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
     };
-    const credentials = useSmtpCredentials && !preview
-      ? { method: 'smtp', smtp: { ...smtpCredentials, port: Number(smtpCredentials.port || 587) } }
+    const smtpSettings = readSmtpSettings();
+    const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
+      ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587) } }
       : undefined;
     const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings, credentials, preview, force: !preview });
     if (res.data?.error) {
@@ -390,38 +385,8 @@ export default function BuyerInvoices() {
               Include invoice table
             </label>
           </div>
-          <div className="space-y-3 rounded-xl border border-border/70 bg-muted/20 p-3 lg:col-span-3">
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input type="checkbox" checked={useSmtpCredentials} onChange={(event) => setUseSmtpCredentials(event.target.checked)} />
-              Use SMTP email account credentials for Send Now
-            </label>
-            <p className="text-xs text-muted-foreground">
-              These credentials are sent only with the Send Now request and are not saved. Scheduled reports use server-side email credentials.
-            </p>
-            {useSmtpCredentials && (
-              <div className="grid gap-3 lg:grid-cols-4">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">SMTP host</Label>
-                  <Input value={smtpCredentials.host} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, host: event.target.value }))} placeholder="smtp.office365.com" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Port</Label>
-                  <Input type="number" value={smtpCredentials.port} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, port: event.target.value }))} placeholder="587" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Email username</Label>
-                  <Input value={smtpCredentials.user} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, user: event.target.value }))} placeholder="info@cosulich.com.hk" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Password / app password</Label>
-                  <Input type="password" value={smtpCredentials.password} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, password: event.target.value }))} placeholder="Not saved" />
-                </div>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground lg:col-span-4">
-                  <input type="checkbox" checked={smtpCredentials.secure} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, secure: event.target.checked }))} />
-                  Use SSL/TLS immediately, usually port 465. Leave unchecked for STARTTLS on port 587.
-                </label>
-              </div>
-            )}
+          <div className="rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground lg:col-span-3">
+            Send Now uses the saved SMTP email account from Settings when it is enabled. If no saved SMTP account is enabled, the server-side email provider is used.
           </div>
         </div>
 
@@ -432,7 +397,7 @@ export default function BuyerInvoices() {
 
       <div className="grid gap-3 md:grid-cols-2">
         <SummaryCard label="Overdue" value={`${fmtMoney(totals.overdueReceivable)} (${totals.overdueCount.toLocaleString()})`} tone="red" />
-        <SummaryCard label="Due Soon" value={`${fmtMoney(totals.dueSoonReceivable)} (${totals.dueSoonCount.toLocaleString()})`} tone="blue" />
+        <SummaryCard label={`Due in ${Number(meta?.daysAhead ?? daysAhead ?? 7).toLocaleString()} Days`} value={`${fmtMoney(totals.dueSoonReceivable)} (${totals.dueSoonCount.toLocaleString()})`} tone="blue" />
       </div>
 
       {error && (
