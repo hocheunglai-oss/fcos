@@ -352,7 +352,7 @@ function earliestDate(values) {
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
-  from: 'FC Uno Admin <admin@fcuno.com>',
+  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: ['bt@cosulich.com.hk'],
   cc: ['lousia@cosulich.com.hk', 'laureen@cosulich.com.hk'],
   daysAhead: 7,

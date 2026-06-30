@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
 const DEFAULT_EMAIL_SETTINGS = {
-  from: 'FC Uno Admin <admin@fcuno.com>',
+  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: 'bt@cosulich.com.hk',
   cc: 'lousia@cosulich.com.hk, laureen@cosulich.com.hk',
   daysAhead: 7,
