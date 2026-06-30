@@ -986,6 +986,7 @@ async function salesforceBuyerInvoicesDue(body) {
     }
   }
 
+  const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(body, 'buyerTraders');
   const selectedBuyerTradersInput = Array.isArray(body.buyerTraders)
     ? body.buyerTraders
     : splitBuyerTraderNames(body.buyerTraders);
@@ -1024,16 +1025,19 @@ async function salesforceBuyerInvoicesDue(body) {
   const selectedBuyerTraders = selectedBuyerTradersInput
     .map((name) => String(name || '').trim())
     .filter((name) => buyerTraderOptions.includes(name));
-  const activeBuyerTraders = selectedBuyerTraders.length ? selectedBuyerTraders : buyerTraderOptions;
+  const activeBuyerTraders = hasBuyerTraderFilter ? selectedBuyerTraders : buyerTraderOptions;
   const activeBuyerTraderSet = new Set(activeBuyerTraders);
-  const rows = activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length
+  const rows = hasBuyerTraderFilter && !activeBuyerTraderSet.size
+    ? []
+    : activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length
     ? allRows.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name)))
     : allRows;
 
-  return { rows, today, dueThrough, daysAhead, buyerTraderOptions, selectedBuyerTraders: activeBuyerTraders };
+  return { rows, today, dueThrough, daysAhead, buyerTraderOptions, selectedBuyerTraders: activeBuyerTraders, hasBuyerTraderFilter };
 }
 
 function buyerInvoiceEmailSettings(input = {}) {
+  const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(input, 'buyerTraders');
   const defaults = {
     ...DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS,
     from: process.env.BUYER_INVOICE_REPORT_FROM || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.from,
@@ -1054,6 +1058,7 @@ function buyerInvoiceEmailSettings(input = {}) {
     includeSummary: input.includeSummary ?? defaults.includeSummary,
     includeTable: input.includeTable ?? defaults.includeTable,
     buyerTraders: parseStringList(input.buyerTraders, defaults.buyerTraders),
+    hasBuyerTraderFilter,
     weekdays: parseStringList(input.weekdays, defaults.weekdays),
     sendTimes: parseStringList(input.sendTimes, defaults.sendTimes),
   };
@@ -1124,7 +1129,7 @@ function emailContentHtml(content) {
 function buyerTraderFilterHtml(report) {
   const options = report.buyerTraderOptions || [];
   if (!options.length) return '';
-  const selected = new Set(report.selectedBuyerTraders?.length ? report.selectedBuyerTraders : options);
+  const selected = new Set(report.hasBuyerTraderFilter ? (report.selectedBuyerTraders || []) : options);
   const chips = options.map((name) => {
     const active = selected.has(name);
     return `<span style="display:inline-block;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#667085'}">${escapeHtml(name)}</span>`;
@@ -1266,7 +1271,9 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
       schedule: { weekdays: settings.weekdays, sendTimes: settings.sendTimes, now: hongKongScheduleParts() },
     };
   }
-  const report = await salesforceBuyerInvoicesDue({ daysAhead: settings.daysAhead, buyerTraders: settings.buyerTraders });
+  const reportPayload = { daysAhead: settings.daysAhead };
+  if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
+  const report = await salesforceBuyerInvoicesDue(reportPayload);
   const email = buildBuyerInvoiceReportEmail(report, settings);
   if (body.preview || body.dryRun) {
     return {
@@ -1280,6 +1287,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
         daysAhead: report.daysAhead,
         buyerTraderOptions: report.buyerTraderOptions,
         selectedBuyerTraders: report.selectedBuyerTraders,
+        hasBuyerTraderFilter: report.hasBuyerTraderFilter,
       },
       email: { subject: email.subject, html: email.html, text: email.text, totals: email.totals },
     };

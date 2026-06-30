@@ -256,6 +256,12 @@ export default function BuyerInvoices() {
     });
   };
 
+  const toggleAllBuyerTraders = () => {
+    setSelectedBuyerTraders((prev) => (
+      prev.length === buyerTraderOptions.length ? [] : buyerTraderOptions
+    ));
+  };
+
   const saveEmailSettings = () => {
     localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(emailSettings));
     setSavedEmailSettings(emailSettings);
@@ -364,10 +370,10 @@ export default function BuyerInvoices() {
             </div>
             <button
               type="button"
-              onClick={() => setSelectedBuyerTraders(buyerTraderOptions)}
+              onClick={toggleAllBuyerTraders}
               className="text-xs text-primary hover:underline"
             >
-              Select all
+              {selectedBuyerTraders.length === buyerTraderOptions.length ? 'Clear all' : 'Select all'}
             </button>
           </div>
         )}
