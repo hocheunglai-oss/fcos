@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -16,13 +16,37 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(true);
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
+  const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
 
   useEffect(() => {
     document.documentElement.dataset.density = density;
     localStorage.setItem('table-density', density);
   }, [density]);
+
+  useEffect(() => {
+    const onDirtyState = (event) => {
+      setDirtyState((prev) => ({
+        ...prev,
+        [event.detail?.key || 'default']: event.detail || {},
+      }));
+    };
+    window.addEventListener('salesforce-extension:dirty-state', onDirtyState);
+    return () => window.removeEventListener('salesforce-extension:dirty-state', onDirtyState);
+  }, []);
+
+  const unsaved = Object.values(dirtyState).find((state) => state?.dirty);
+  const confirmLeaveWithUnsavedChanges = () => {
+    if (!unsaved) return true;
+    return window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
+  };
+  const handleSidebarNavigation = (event, to) => {
+    if (to === location.pathname || !unsaved) return;
+    const leave = window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
+    if (!leave) event.preventDefault();
+  };
 
   return (
     <div className="app-shell flex h-screen overflow-hidden">
@@ -37,7 +61,10 @@ export default function Layout() {
             </div>
           )}
           <button
-            onClick={() => setCollapsed(c => !c)}
+            onClick={() => {
+              if (!confirmLeaveWithUnsavedChanges()) return;
+              setCollapsed(c => !c);
+            }}
             className="text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
@@ -53,6 +80,7 @@ export default function Layout() {
               to={to}
               end={to === '/'}
               title={collapsed ? label : undefined}
+              onClick={(event) => handleSidebarNavigation(event, to)}
               className={({ isActive }) => cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
                 collapsed ? 'justify-center px-2' : '',
@@ -70,7 +98,10 @@ export default function Layout() {
         {/* Footer */}
         <div className={cn('py-4 border-t border-sidebar-border space-y-3', collapsed ? 'flex flex-col items-center px-2' : 'px-4')}>
           <button
-            onClick={() => setDensity(d => d === 'compact' ? 'comfort' : 'compact')}
+            onClick={() => {
+              if (!confirmLeaveWithUnsavedChanges()) return;
+              setDensity(d => d === 'compact' ? 'comfort' : 'compact');
+            }}
             className={cn(
               'rounded-md border border-white/10 bg-white/5 text-xs font-medium text-sidebar-foreground/70 shadow-sm transition-colors hover:bg-white/10 hover:text-sidebar-foreground',
               collapsed ? 'w-8 h-8' : 'w-full px-3 py-2'

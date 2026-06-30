@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarClock, Download, Loader2, Mail, RefreshCw, ReceiptText, Send } from 'lucide-react';
+import { AlertCircle, CalendarClock, Download, Eye, Loader2, Mail, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -61,10 +61,16 @@ function statusPill(status) {
 function readEmailSettings() {
   try {
     const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
-    return raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+    const saved = raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+    if (String(saved.from || '').includes('admin@fcuno.com')) saved.from = DEFAULT_EMAIL_SETTINGS.from;
+    return saved;
   } catch {
     return DEFAULT_EMAIL_SETTINGS;
   }
+}
+
+function sameSettings(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export default function BuyerInvoices() {
@@ -74,10 +80,22 @@ export default function BuyerInvoices() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
-  const [emailSettings, setEmailSettings] = useState(readEmailSettings);
+  const [showEmailSchedule, setShowEmailSchedule] = useState(false);
+  const [savedEmailSettings, setSavedEmailSettings] = useState(readEmailSettings);
+  const [emailSettings, setEmailSettings] = useState(savedEmailSettings);
+  const [useSmtpCredentials, setUseSmtpCredentials] = useState(false);
+  const [smtpCredentials, setSmtpCredentials] = useState({
+    host: 'smtp.office365.com',
+    port: '587',
+    user: 'info@cosulich.com.hk',
+    password: '',
+    secure: false,
+  });
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
+
+  const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
 
   const loadRows = async () => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
@@ -97,6 +115,28 @@ export default function BuyerInvoices() {
   useEffect(() => {
     loadRows();
   }, []);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', {
+      detail: {
+        key: 'buyer-invoice-email-settings',
+        dirty: emailDirty,
+        message: 'Save changes to the email report schedule before leaving?',
+      },
+    }));
+    const beforeUnload = (event) => {
+      if (!emailDirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', {
+        detail: { key: 'buyer-invoice-email-settings', dirty: false },
+      }));
+    };
+  }, [emailDirty]);
 
   const totals = useMemo(() => {
     const overdue = rows.filter((row) => row.status === 'Overdue');
@@ -132,11 +172,7 @@ export default function BuyerInvoices() {
   };
 
   const updateEmailSetting = (key, value) => {
-    setEmailSettings((prev) => {
-      const next = { ...prev, [key]: value };
-      localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(next));
-      return next;
-    });
+    setEmailSettings((prev) => ({ ...prev, [key]: value }));
   };
 
   const toggleEmailWeekday = (day) => {
@@ -144,10 +180,26 @@ export default function BuyerInvoices() {
       const set = new Set(prev.weekdays || []);
       if (set.has(day)) set.delete(day);
       else set.add(day);
-      const next = { ...prev, weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].filter((item) => set.has(item)) };
-      localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(next));
-      return next;
+      return { ...prev, weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].filter((item) => set.has(item)) };
     });
+  };
+
+  const saveEmailSettings = () => {
+    localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(emailSettings));
+    setSavedEmailSettings(emailSettings);
+    setEmailMessage('Email report schedule saved.');
+    setEmailError(null);
+  };
+
+  const cancelEmailSettings = () => {
+    setEmailSettings(savedEmailSettings);
+    setEmailMessage(null);
+    setEmailError(null);
+  };
+
+  const toggleEmailSchedule = () => {
+    if (showEmailSchedule && emailDirty && !window.confirm('Discard unsaved email schedule changes?')) return;
+    setShowEmailSchedule((value) => !value);
   };
 
   const sendEmailReport = async (preview = false) => {
@@ -158,7 +210,10 @@ export default function BuyerInvoices() {
       ...emailSettings,
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
     };
-    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings, preview, force: !preview });
+    const credentials = useSmtpCredentials && !preview
+      ? { method: 'smtp', smtp: { ...smtpCredentials, port: Number(smtpCredentials.port || 587) } }
+      : undefined;
+    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings, credentials, preview, force: !preview });
     if (res.data?.error) {
       setEmailError(res.data.error);
     } else if (preview) {
@@ -179,6 +234,9 @@ export default function BuyerInvoices() {
         meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${rows.length.toLocaleString()} invoices` : undefined}
         actions={(
           <>
+            <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
+              <Mail className="h-4 w-4" /> Email Schedule
+            </Button>
             <Button variant="outline" onClick={exportCsv} disabled={loading || !rows.length} className="gap-2 w-fit">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
@@ -213,6 +271,7 @@ export default function BuyerInvoices() {
         </div>
       </div>
 
+      {showEmailSchedule && (
       <div className="rounded-xl border border-border bg-card p-4">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -221,12 +280,18 @@ export default function BuyerInvoices() {
               <h3 className="text-sm font-semibold text-foreground">Email Report Schedule</h3>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Default production schedule is weekdays at 08:00 and 14:00 Hong Kong time. Saved values customize previews and manual sends on this browser.
+              Default production schedule is weekdays at 08:00 and 14:00 Hong Kong time. Save changes before leaving this page.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={cancelEmailSettings} disabled={!emailDirty || emailBusy} className="gap-2">
+              <X className="h-4 w-4" /> Cancel
+            </Button>
+            <Button variant="outline" onClick={saveEmailSettings} disabled={!emailDirty || emailBusy} className="gap-2">
+              <Save className="h-4 w-4" /> Save
+            </Button>
             <Button variant="outline" onClick={() => sendEmailReport(true)} disabled={emailBusy} className="gap-2">
-              {emailBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              {emailBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
               Preview
             </Button>
             <Button onClick={() => sendEmailReport(false)} disabled={emailBusy} className="gap-2">
@@ -292,11 +357,45 @@ export default function BuyerInvoices() {
               Include invoice table
             </label>
           </div>
+          <div className="space-y-3 rounded-xl border border-border/70 bg-muted/20 p-3 lg:col-span-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input type="checkbox" checked={useSmtpCredentials} onChange={(event) => setUseSmtpCredentials(event.target.checked)} />
+              Use SMTP email account credentials for Send Now
+            </label>
+            <p className="text-xs text-muted-foreground">
+              These credentials are sent only with the Send Now request and are not saved. Scheduled reports use server-side email credentials.
+            </p>
+            {useSmtpCredentials && (
+              <div className="grid gap-3 lg:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">SMTP host</Label>
+                  <Input value={smtpCredentials.host} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, host: event.target.value }))} placeholder="smtp.office365.com" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Port</Label>
+                  <Input type="number" value={smtpCredentials.port} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, port: event.target.value }))} placeholder="587" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Email username</Label>
+                  <Input value={smtpCredentials.user} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, user: event.target.value }))} placeholder="info@cosulich.com.hk" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Password / app password</Label>
+                  <Input type="password" value={smtpCredentials.password} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, password: event.target.value }))} placeholder="Not saved" />
+                </div>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground lg:col-span-4">
+                  <input type="checkbox" checked={smtpCredentials.secure} onChange={(event) => setSmtpCredentials(prev => ({ ...prev, secure: event.target.checked }))} />
+                  Use SSL/TLS immediately, usually port 465. Leave unchecked for STARTTLS on port 587.
+                </label>
+              </div>
+            )}
+          </div>
         </div>
 
         {emailMessage && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{emailMessage}</div>}
         {emailError && <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{emailError}</div>}
       </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         <SummaryCard label="Overdue" value={`${fmtMoney(totals.overdueReceivable)} (${totals.overdueCount.toLocaleString()})`} tone="red" />

@@ -1167,6 +1167,38 @@ async function sendWithResend({ from, to, cc, subject, html, text, csv }) {
   return data;
 }
 
+async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text, csv }) {
+  const host = smtp.host || process.env.SMTP_HOST;
+  const port = Number(smtp.port || process.env.SMTP_PORT || 587);
+  const user = smtp.user || process.env.SMTP_USER;
+  const pass = smtp.password || smtp.pass || process.env.SMTP_PASSWORD;
+  const secure = smtp.secure != null
+    ? smtp.secure === true || smtp.secure === 'true'
+    : process.env.SMTP_SECURE != null
+      ? process.env.SMTP_SECURE === 'true'
+      : port === 465;
+  if (!host || !user || !pass) {
+    throw new Error('Missing SMTP credentials. Enter SMTP host, username, and password, or configure SMTP_HOST, SMTP_USER, and SMTP_PASSWORD in Vercel.');
+  }
+  const nodemailer = await import('nodemailer');
+  const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
+  if (!createTransport) throw new Error('SMTP email library failed to load.');
+  const transporter = createTransport({
+    host,
+    port,
+    secure: Boolean(secure),
+    auth: { user, pass },
+  });
+  const attachments = csv
+    ? [{
+        filename: `outstanding-buyer-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
+        content: csv,
+      }]
+    : undefined;
+  const result = await transporter.sendMail({ from, to, cc, subject, html, text, attachments });
+  return { id: result.messageId, accepted: result.accepted, rejected: result.rejected };
+}
+
 async function outstandingBuyerInvoicesEmailReport(body = {}) {
   const settings = buyerInvoiceEmailSettings(body.settings || body);
   if (!body.preview && !body.dryRun && !body.force && !isBuyerInvoiceReportDue(settings)) {
@@ -1188,15 +1220,28 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
       email: { subject: email.subject, html: email.html, text: email.text, totals: email.totals },
     };
   }
-  const result = await sendWithResend({
-    from: settings.from,
-    to: settings.to,
-    cc: settings.cc,
-    subject: email.subject,
-    html: email.html,
-    text: email.text,
-    csv: email.csv,
-  });
+  const credentials = body.credentials || {};
+  const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
+  const result = useSmtp
+    ? await sendWithSmtp({
+        smtp: credentials.smtp || credentials,
+        from: settings.from,
+        to: settings.to,
+        cc: settings.cc,
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+        csv: email.csv,
+      })
+    : await sendWithResend({
+        from: settings.from,
+        to: settings.to,
+        cc: settings.cc,
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+        csv: email.csv,
+      });
   return {
     sent: true,
     id: result.id,
