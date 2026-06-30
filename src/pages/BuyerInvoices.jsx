@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CalendarClock, Download, Eye, Loader2, Mail, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
@@ -38,6 +38,13 @@ const fmtDate = (value) => {
 };
 
 const csvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+
+function splitBuyerTraderNames(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 function SummaryCard({ label, value, tone = 'default' }) {
   const toneClass = {
@@ -123,8 +130,37 @@ export default function BuyerInvoices() {
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
+  const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
+  const traderFilterInitialized = useRef(false);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
+
+  const buyerTraderOptions = useMemo(() => (
+    [...new Set(rows.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))]
+      .sort((a, b) => a.localeCompare(b))
+  ), [rows]);
+
+  useEffect(() => {
+    if (!buyerTraderOptions.length) {
+      setSelectedBuyerTraders([]);
+      return;
+    }
+    if (!traderFilterInitialized.current) {
+      traderFilterInitialized.current = true;
+      setSelectedBuyerTraders(buyerTraderOptions);
+      return;
+    }
+    setSelectedBuyerTraders((prev) => {
+      const next = prev.filter((name) => buyerTraderOptions.includes(name));
+      return next.length ? next : buyerTraderOptions;
+    });
+  }, [buyerTraderOptions]);
+
+  const filteredRows = useMemo(() => {
+    if (!buyerTraderOptions.length || selectedBuyerTraders.length === buyerTraderOptions.length) return rows;
+    const selected = new Set(selectedBuyerTraders);
+    return rows.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => selected.has(name)));
+  }, [buyerTraderOptions, rows, selectedBuyerTraders]);
 
   const loadRows = async () => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
@@ -168,19 +204,19 @@ export default function BuyerInvoices() {
   }, [emailDirty]);
 
   const totals = useMemo(() => {
-    const overdue = rows.filter((row) => row.status === 'Overdue');
-    const dueSoon = rows.filter((row) => row.status !== 'Overdue');
+    const overdue = filteredRows.filter((row) => row.status === 'Overdue');
+    const dueSoon = filteredRows.filter((row) => row.status !== 'Overdue');
     return {
       overdueCount: overdue.length,
       overdueReceivable: overdue.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
       dueSoonCount: dueSoon.length,
       dueSoonReceivable: dueSoon.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
     };
-  }, [rows]);
+  }, [filteredRows]);
 
   const exportCsv = () => {
     const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', "Buyer's Trader in Charge", 'Status', 'Overdue'];
-    const csvRows = rows.map((row) => [
+    const csvRows = filteredRows.map((row) => [
       row.stemName,
       row.buyerName,
       row.invoiceAmount,
@@ -213,6 +249,13 @@ export default function BuyerInvoices() {
     });
   };
 
+  const toggleBuyerTrader = (name) => {
+    setSelectedBuyerTraders((prev) => {
+      if (prev.includes(name)) return prev.length > 1 ? prev.filter((item) => item !== name) : prev;
+      return [...prev, name].sort((a, b) => a.localeCompare(b));
+    });
+  };
+
   const saveEmailSettings = () => {
     localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(emailSettings));
     setSavedEmailSettings(emailSettings);
@@ -238,6 +281,7 @@ export default function BuyerInvoices() {
     const settings = {
       ...emailSettings,
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
+      buyerTraders: selectedBuyerTraders,
     };
     const smtpSettings = readSmtpSettings();
     const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
@@ -261,13 +305,13 @@ export default function BuyerInvoices() {
         eyebrow="Buyer invoice follow-up"
         title="Outstanding Buyer Invoices"
         description="Manage overdue buyer invoices and invoices due within the selected number of days."
-        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${rows.length.toLocaleString()} invoices` : undefined}
+        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} invoices` : undefined}
         actions={(
           <>
             <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
               <Mail className="h-4 w-4" /> Email Schedule
             </Button>
-            <Button variant="outline" onClick={exportCsv} disabled={loading || !rows.length} className="gap-2 w-fit">
+            <Button variant="outline" onClick={exportCsv} disabled={loading || !filteredRows.length} className="gap-2 w-fit">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
             <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2 w-fit">
@@ -299,6 +343,34 @@ export default function BuyerInvoices() {
             Overdue invoices are always included.
           </p>
         </div>
+        {buyerTraderOptions.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+            <Label className="w-44 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {buyerTraderOptions.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => toggleBuyerTrader(name)}
+                  className={`rounded-md border px-3 py-1 text-xs font-medium transition-colors ${
+                    selectedBuyerTraders.includes(name)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedBuyerTraders(buyerTraderOptions)}
+              className="text-xs text-primary hover:underline"
+            >
+              Select all
+            </button>
+          </div>
+        )}
       </div>
 
       {showEmailSchedule && (
@@ -416,8 +488,8 @@ export default function BuyerInvoices() {
       )}
 
       {!loading && !error && (
-        <TableShell title="Buyer Invoice Due List" meta={`${rows.length.toLocaleString()} rows`} bodyClassName="p-0">
-          {rows.length ? (
+        <TableShell title="Buyer Invoice Due List" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
+          {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
               <table className="w-full min-w-[980px] text-sm">
                 <thead>
@@ -433,7 +505,7 @@ export default function BuyerInvoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, idx) => (
+                  {filteredRows.map((row, idx) => (
                     <tr
                       key={row.id}
                       onClick={() => setSelectedStemId(row.stemId)}

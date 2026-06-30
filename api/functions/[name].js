@@ -349,6 +349,13 @@ function earliestDate(values) {
   return values.filter(Boolean).sort()[0] || null;
 }
 
+function splitBuyerTraderNames(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
@@ -360,6 +367,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   intro: 'Outstanding Buyer Invoices\n\nPlease find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.\n\nReport window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.',
   includeSummary: true,
   includeTable: true,
+  buyerTraders: [],
   weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
   sendTimes: ['08:00', '14:00'],
 };
@@ -978,7 +986,11 @@ async function salesforceBuyerInvoicesDue(body) {
     }
   }
 
-  const rows = stems
+  const selectedBuyerTradersInput = Array.isArray(body.buyerTraders)
+    ? body.buyerTraders
+    : splitBuyerTraderNames(body.buyerTraders);
+
+  const allRows = stems
     .map((stem) => {
       const dueDate = earliestDate(dueFields.map((field) => stem[field]));
       if (!dueDate || dueDate > dueThrough) return null;
@@ -1008,7 +1020,17 @@ async function salesforceBuyerInvoicesDue(body) {
       return String(a.stemName || '').localeCompare(String(b.stemName || ''));
     });
 
-  return { rows, today, dueThrough, daysAhead };
+  const buyerTraderOptions = [...new Set(allRows.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))].sort((a, b) => a.localeCompare(b));
+  const selectedBuyerTraders = selectedBuyerTradersInput
+    .map((name) => String(name || '').trim())
+    .filter((name) => buyerTraderOptions.includes(name));
+  const activeBuyerTraders = selectedBuyerTraders.length ? selectedBuyerTraders : buyerTraderOptions;
+  const activeBuyerTraderSet = new Set(activeBuyerTraders);
+  const rows = activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length
+    ? allRows.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name)))
+    : allRows;
+
+  return { rows, today, dueThrough, daysAhead, buyerTraderOptions, selectedBuyerTraders: activeBuyerTraders };
 }
 
 function buyerInvoiceEmailSettings(input = {}) {
@@ -1031,6 +1053,7 @@ function buyerInvoiceEmailSettings(input = {}) {
     daysAhead: Math.max(0, Math.min(Number(input.daysAhead ?? defaults.daysAhead) || defaults.daysAhead, 365)),
     includeSummary: input.includeSummary ?? defaults.includeSummary,
     includeTable: input.includeTable ?? defaults.includeTable,
+    buyerTraders: parseStringList(input.buyerTraders, defaults.buyerTraders),
     weekdays: parseStringList(input.weekdays, defaults.weekdays),
     sendTimes: parseStringList(input.sendTimes, defaults.sendTimes),
   };
@@ -1098,6 +1121,21 @@ function emailContentHtml(content) {
   }).join('');
 }
 
+function buyerTraderFilterHtml(report) {
+  const options = report.buyerTraderOptions || [];
+  if (!options.length) return '';
+  const selected = new Set(report.selectedBuyerTraders?.length ? report.selectedBuyerTraders : options);
+  const chips = options.map((name) => {
+    const active = selected.has(name);
+    return `<span style="display:inline-block;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#667085'}">${escapeHtml(name)}</span>`;
+  }).join('');
+  return `
+    <div style="margin:0 0 12px">
+      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Buyer Trader in Charge</div>
+      <div>${chips}</div>
+    </div>`;
+}
+
 function buildBuyerInvoiceReportEmail(report, settings) {
   const rows = report.rows || [];
   const overdue = rows.filter((row) => row.status === 'Overdue');
@@ -1142,6 +1180,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     </tr>`;
   }).join('');
   const tableHtml = settings.includeTable ? `
+    ${buyerTraderFilterHtml(report)}
     <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
       <table style="border-collapse:collapse;width:100%;min-width:980px;font-size:13px">
         <thead>
@@ -1227,14 +1266,21 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
       schedule: { weekdays: settings.weekdays, sendTimes: settings.sendTimes, now: hongKongScheduleParts() },
     };
   }
-  const report = await salesforceBuyerInvoicesDue({ daysAhead: settings.daysAhead });
+  const report = await salesforceBuyerInvoicesDue({ daysAhead: settings.daysAhead, buyerTraders: settings.buyerTraders });
   const email = buildBuyerInvoiceReportEmail(report, settings);
   if (body.preview || body.dryRun) {
     return {
       sent: false,
       preview: true,
       settings: { ...settings, to: settings.to, cc: settings.cc },
-      report: { rows: report.rows, today: report.today, dueThrough: report.dueThrough, daysAhead: report.daysAhead },
+      report: {
+        rows: report.rows,
+        today: report.today,
+        dueThrough: report.dueThrough,
+        daysAhead: report.daysAhead,
+        buyerTraderOptions: report.buyerTraderOptions,
+        selectedBuyerTraders: report.selectedBuyerTraders,
+      },
       email: { subject: email.subject, html: email.html, text: email.text, totals: email.totals },
     };
   }
