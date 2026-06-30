@@ -1,4 +1,10 @@
 {
+  "crons": [
+    {
+      "path": "/api/functions/outstandingBuyerInvoicesEmailReport",
+      "schedule": "0 * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/((?!api/.*).*)",

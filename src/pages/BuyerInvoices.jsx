@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarClock, Download, Loader2, RefreshCw, ReceiptText } from 'lucide-react';
+import { AlertCircle, CalendarClock, Download, Loader2, Mail, RefreshCw, ReceiptText, Send } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -9,6 +9,21 @@ import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+
+const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
+const DEFAULT_EMAIL_SETTINGS = {
+  from: 'FC Uno Admin <admin@fcuno.com>',
+  to: 'bt@cosulich.com.hk',
+  cc: 'lousia@cosulich.com.hk, laureen@cosulich.com.hk',
+  daysAhead: 7,
+  subject: 'Outstanding Buyer Invoices Report',
+  intro: 'Please find below the latest overdue buyer invoices and buyer invoices due soon.',
+  includeSummary: true,
+  includeTable: true,
+  weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+  sendTimes: '08:00, 14:00',
+};
 
 const fmtMoney = (value) => {
   if (value == null || value === '') return '—';
@@ -43,6 +58,15 @@ function statusPill(status) {
   return 'bg-blue-50 text-blue-700 border-blue-200';
 }
 
+function readEmailSettings() {
+  try {
+    const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
+    return raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+  } catch {
+    return DEFAULT_EMAIL_SETTINGS;
+  }
+}
+
 export default function BuyerInvoices() {
   const [daysAhead, setDaysAhead] = useState(7);
   const [rows, setRows] = useState([]);
@@ -50,6 +74,10 @@ export default function BuyerInvoices() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [emailSettings, setEmailSettings] = useState(readEmailSettings);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailMessage, setEmailMessage] = useState(null);
+  const [emailError, setEmailError] = useState(null);
 
   const loadRows = async () => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
@@ -103,6 +131,44 @@ export default function BuyerInvoices() {
     URL.revokeObjectURL(url);
   };
 
+  const updateEmailSetting = (key, value) => {
+    setEmailSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const toggleEmailWeekday = (day) => {
+    setEmailSettings((prev) => {
+      const set = new Set(prev.weekdays || []);
+      if (set.has(day)) set.delete(day);
+      else set.add(day);
+      const next = { ...prev, weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].filter((item) => set.has(item)) };
+      localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const sendEmailReport = async (preview = false) => {
+    setEmailBusy(true);
+    setEmailError(null);
+    setEmailMessage(null);
+    const settings = {
+      ...emailSettings,
+      daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
+    };
+    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings, preview, force: !preview });
+    if (res.data?.error) {
+      setEmailError(res.data.error);
+    } else if (preview) {
+      setEmailMessage(`Preview ready: ${res.data.report?.rows?.length ?? 0} invoice rows. Subject: ${res.data.email?.subject}`);
+    } else {
+      setEmailMessage(`Sent ${res.data.rows ?? 0} invoice rows to ${res.data.to?.join(', ') || emailSettings.to}.`);
+    }
+    setEmailBusy(false);
+  };
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       <PageHeader
@@ -145,6 +211,91 @@ export default function BuyerInvoices() {
             Overdue invoices are always included.
           </p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold text-foreground">Email Report Schedule</h3>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Default production schedule is weekdays at 08:00 and 14:00 Hong Kong time. Saved values customize previews and manual sends on this browser.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => sendEmailReport(true)} disabled={emailBusy} className="gap-2">
+              {emailBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Preview
+            </Button>
+            <Button onClick={() => sendEmailReport(false)} disabled={emailBusy} className="gap-2">
+              {emailBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Send Now
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">From</Label>
+            <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">To</Label>
+            <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">CC</Label>
+            <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Subject</Label>
+            <Input value={emailSettings.subject} onChange={(event) => updateEmailSetting('subject', event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Due in next days</Label>
+            <Input type="number" min="0" max="365" value={emailSettings.daysAhead} onChange={(event) => updateEmailSetting('daysAhead', event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Send times</Label>
+            <Input value={emailSettings.sendTimes} onChange={(event) => updateEmailSetting('sendTimes', event.target.value)} placeholder="08:00, 14:00" />
+          </div>
+          <div className="space-y-1.5 lg:col-span-2">
+            <Label className="text-xs text-muted-foreground">Email intro</Label>
+            <Textarea value={emailSettings.intro} onChange={(event) => updateEmailSetting('intro', event.target.value)} className="min-h-20" />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Weekdays</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((day) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleEmailWeekday(day)}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    emailSettings.weekdays?.includes(day)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50'
+                  }`}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={emailSettings.includeSummary} onChange={(event) => updateEmailSetting('includeSummary', event.target.checked)} />
+              Include KPI summary
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={emailSettings.includeTable} onChange={(event) => updateEmailSetting('includeTable', event.target.checked)} />
+              Include invoice table
+            </label>
+          </div>
+        </div>
+
+        {emailMessage && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{emailMessage}</div>}
+        {emailError && <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{emailError}</div>}
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">

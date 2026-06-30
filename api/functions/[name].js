@@ -350,6 +350,19 @@ function earliestDate(values) {
 }
 
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
+const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
+  enabled: true,
+  from: 'FC Uno Admin <admin@fcuno.com>',
+  to: ['bt@cosulich.com.hk'],
+  cc: ['lousia@cosulich.com.hk', 'laureen@cosulich.com.hk'],
+  daysAhead: 7,
+  subject: 'Outstanding Buyer Invoices Report',
+  intro: 'Please find below the latest overdue buyer invoices and buyer invoices due soon.',
+  includeSummary: true,
+  includeTable: true,
+  weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+  sendTimes: ['08:00', '14:00'],
+};
 
 function numericValue(value) {
   if (value == null || value === '') return null;
@@ -418,6 +431,45 @@ function buyerBrokerCommission(item, stemHasDelivery) {
 function formatStemName(stem) {
   const parts = [stem.KeyStem__c, stem['Vessel__r']?.Name, stem['Port__r']?.Name].filter(Boolean);
   return parts.length ? parts.join(' - ') : stem.Name;
+}
+
+function parseEmailList(value, fallback = []) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value !== 'string') return fallback;
+  const parsed = value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+  return parsed.length ? parsed : fallback;
+}
+
+function parseStringList(value, fallback = []) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value !== 'string') return fallback;
+  const parsed = value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+  return parsed.length ? parsed : fallback;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function money(value) {
+  if (value == null || value === '') return '-';
+  return `$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function prettyDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function csvCell(value) {
+  return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
 
 async function resolveViaQuery(objectType, id, nameField = 'Name') {
@@ -963,6 +1015,199 @@ async function salesforceBuyerInvoicesDue(body) {
   return { rows, today, dueThrough, daysAhead };
 }
 
+function buyerInvoiceEmailSettings(input = {}) {
+  const defaults = {
+    ...DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS,
+    from: process.env.BUYER_INVOICE_REPORT_FROM || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.from,
+    to: parseEmailList(process.env.BUYER_INVOICE_REPORT_TO, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.to),
+    cc: parseEmailList(process.env.BUYER_INVOICE_REPORT_CC, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.cc),
+    daysAhead: Number(process.env.BUYER_INVOICE_REPORT_DAYS_AHEAD || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead),
+    subject: process.env.BUYER_INVOICE_REPORT_SUBJECT || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.subject,
+    intro: process.env.BUYER_INVOICE_REPORT_INTRO || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.intro,
+    weekdays: parseStringList(process.env.BUYER_INVOICE_REPORT_WEEKDAYS, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.weekdays),
+    sendTimes: parseStringList(process.env.BUYER_INVOICE_REPORT_SEND_TIMES, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.sendTimes),
+  };
+  return {
+    ...defaults,
+    ...input,
+    to: parseEmailList(input.to, defaults.to),
+    cc: parseEmailList(input.cc, defaults.cc),
+    daysAhead: Math.max(0, Math.min(Number(input.daysAhead ?? defaults.daysAhead) || defaults.daysAhead, 365)),
+    includeSummary: input.includeSummary ?? defaults.includeSummary,
+    includeTable: input.includeTable ?? defaults.includeTable,
+    weekdays: parseStringList(input.weekdays, defaults.weekdays),
+    sendTimes: parseStringList(input.sendTimes, defaults.sendTimes),
+  };
+}
+
+function hongKongScheduleParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Hong_Kong',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const value = (type) => parts.find((part) => part.type === type)?.value;
+  return {
+    weekday: value('weekday'),
+    time: `${value('hour')}:${value('minute')}`,
+  };
+}
+
+function isBuyerInvoiceReportDue(settings, date = new Date()) {
+  const now = hongKongScheduleParts(date);
+  const weekdays = new Set((settings.weekdays || []).map((day) => String(day).slice(0, 3).toLowerCase()));
+  const sendTimes = new Set((settings.sendTimes || []).map((time) => String(time).trim()));
+  return weekdays.has(String(now.weekday).slice(0, 3).toLowerCase()) && sendTimes.has(now.time);
+}
+
+function buildBuyerInvoiceReportEmail(report, settings) {
+  const rows = report.rows || [];
+  const overdue = rows.filter((row) => row.status === 'Overdue');
+  const dueSoon = rows.filter((row) => row.status !== 'Overdue');
+  const totals = {
+    overdueCount: overdue.length,
+    overdueReceivable: overdue.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
+    dueSoonCount: dueSoon.length,
+    dueSoonReceivable: dueSoon.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
+  };
+  const subject = `${settings.subject} - ${prettyDate(report.today)}`;
+  const summaryHtml = settings.includeSummary ? `
+    <table role="presentation" style="border-collapse:collapse;margin:18px 0;width:100%;max-width:620px">
+      <tr>
+        <td style="border:1px solid #d9e2ef;border-radius:8px 0 0 8px;padding:12px;background:#fff7f7">
+          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Overdue</div>
+          <div style="font-size:20px;font-weight:700;color:#dc2626">${money(totals.overdueReceivable)} (${totals.overdueCount})</div>
+        </td>
+        <td style="border:1px solid #d9e2ef;border-left:0;border-radius:0 8px 8px 0;padding:12px;background:#f7fbff">
+          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Due Soon</div>
+          <div style="font-size:20px;font-weight:700;color:#2563eb">${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})</div>
+        </td>
+      </tr>
+    </table>` : '';
+  const tableRows = rows.map((row) => `
+    <tr>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;font-weight:600">${escapeHtml(row.stemName)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${escapeHtml(row.buyerName || '-')}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right">${money(row.invoiceAmount)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${prettyDate(row.buyerInvoiceDueDate)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;color:${row.status === 'Overdue' ? '#dc2626' : '#2563eb'}">${escapeHtml(row.status)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right">${row.daysUntilDue == null ? '-' : row.daysUntilDue}</td>
+    </tr>`).join('');
+  const tableHtml = settings.includeTable ? `
+    <table style="border-collapse:collapse;width:100%;font-size:13px">
+      <thead>
+        <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Stem Name</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Name</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Invoice Amount</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Receivable Balance</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Due Date</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Trader</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Status</th>
+          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Days</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows || '<tr><td colspan="8" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
+    </table>` : '';
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
+      <h2 style="margin:0 0 6px;font-size:20px">Outstanding Buyer Invoices</h2>
+      <p style="margin:0 0 14px;color:#667085">${escapeHtml(settings.intro)}</p>
+      <p style="margin:0 0 14px;color:#667085">Report window: ${prettyDate(report.today)} to ${prettyDate(report.dueThrough)}. Overdue invoices are always included.</p>
+      ${summaryHtml}
+      ${tableHtml}
+    </div>`;
+  const textLines = [
+    'Outstanding Buyer Invoices',
+    settings.intro,
+    `Report window: ${prettyDate(report.today)} to ${prettyDate(report.dueThrough)}`,
+    `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
+    `Due Soon: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
+    '',
+    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Trader ${row.buyerTraderInCharge || '-'}`),
+  ];
+  const csvHeaders = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', "Buyer's Trader in Charge", 'Status', 'Days Until Due'];
+  const csvRows = rows.map((row) => [
+    row.stemName,
+    row.buyerName,
+    row.invoiceAmount,
+    row.receivableBalance,
+    row.buyerInvoiceDueDate,
+    row.buyerTraderInCharge,
+    row.status,
+    row.daysUntilDue,
+  ]);
+  const csv = [csvHeaders, ...csvRows].map((row) => row.map(csvCell).join(',')).join('\n');
+  return { subject, html, text: textLines.join('\n'), csv, totals };
+}
+
+async function sendWithResend({ from, to, cc, subject, html, text, csv }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('Missing RESEND_API_KEY in Vercel. Add it before sending email reports.');
+  const attachments = csv
+    ? [{
+        filename: `outstanding-buyer-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
+        content: Buffer.from(csv, 'utf8').toString('base64'),
+      }]
+    : undefined;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ from, to, cc, subject, html, text, attachments }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.error || `Resend request failed: ${res.status}`);
+  return data;
+}
+
+async function outstandingBuyerInvoicesEmailReport(body = {}) {
+  const settings = buyerInvoiceEmailSettings(body.settings || body);
+  if (!body.preview && !body.dryRun && !body.force && !isBuyerInvoiceReportDue(settings)) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'Current Hong Kong time is outside the configured report schedule.',
+      schedule: { weekdays: settings.weekdays, sendTimes: settings.sendTimes, now: hongKongScheduleParts() },
+    };
+  }
+  const report = await salesforceBuyerInvoicesDue({ daysAhead: settings.daysAhead });
+  const email = buildBuyerInvoiceReportEmail(report, settings);
+  if (body.preview || body.dryRun) {
+    return {
+      sent: false,
+      preview: true,
+      settings: { ...settings, to: settings.to, cc: settings.cc },
+      report: { rows: report.rows, today: report.today, dueThrough: report.dueThrough, daysAhead: report.daysAhead },
+      email: { subject: email.subject, html: email.html, text: email.text, totals: email.totals },
+    };
+  }
+  const result = await sendWithResend({
+    from: settings.from,
+    to: settings.to,
+    cc: settings.cc,
+    subject: email.subject,
+    html: email.html,
+    text: email.text,
+    csv: email.csv,
+  });
+  return {
+    sent: true,
+    id: result.id,
+    to: settings.to,
+    cc: settings.cc,
+    subject: email.subject,
+    rows: report.rows.length,
+    totals: email.totals,
+  };
+}
+
 async function salesforceDisputeStems(body) {
   const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
@@ -1340,6 +1585,7 @@ const handlers = {
   salesforceTopBuyers,
   salesforceBrokerRegister: salesforceBrokerRegisterFull,
   salesforceBuyerInvoicesDue,
+  outstandingBuyerInvoicesEmailReport,
   salesforceDisputeStems,
   stemPnl: stemPnlFull,
 };
