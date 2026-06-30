@@ -53,7 +53,35 @@ function SummaryCard({ label, value, tone = 'default' }) {
   );
 }
 
-function statusPill(status) {
+function overdueSeverity(daysUntilDue) {
+  if (daysUntilDue == null || Number(daysUntilDue) > 0) return null;
+  const overdueDays = Math.abs(Number(daysUntilDue));
+  if (overdueDays >= 14) return 'red';
+  if (overdueDays >= 7) return 'orange';
+  return 'yellow';
+}
+
+function rowSeverityClass(daysUntilDue, idx) {
+  const severity = overdueSeverity(daysUntilDue);
+  if (severity === 'red') return 'bg-red-50 hover:bg-red-100/80';
+  if (severity === 'orange') return 'bg-orange-50 hover:bg-orange-100/80';
+  if (severity === 'yellow') return 'bg-yellow-50 hover:bg-yellow-100/80';
+  return `${idx % 2 ? 'bg-muted/10' : ''} hover:bg-muted/30`;
+}
+
+function dueTextClass(daysUntilDue) {
+  const severity = overdueSeverity(daysUntilDue);
+  if (severity === 'red') return 'text-red-700';
+  if (severity === 'orange') return 'text-orange-700';
+  if (severity === 'yellow') return 'text-yellow-700';
+  return 'text-foreground';
+}
+
+function statusPill(status, daysUntilDue) {
+  const severity = overdueSeverity(daysUntilDue);
+  if (severity === 'red') return 'bg-red-100 text-red-800 border-red-200';
+  if (severity === 'orange') return 'bg-orange-100 text-orange-800 border-orange-200';
+  if (severity === 'yellow') return 'bg-yellow-100 text-yellow-800 border-yellow-200';
   if (status === 'Overdue') return 'bg-red-50 text-red-700 border-red-200';
   return 'bg-blue-50 text-blue-700 border-blue-200';
 }
@@ -434,7 +462,7 @@ export default function BuyerInvoices() {
                     <tr
                       key={row.id}
                       onClick={() => setSelectedStemId(row.stemId)}
-                      className={`cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}
+                      className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row.daysUntilDue, idx)}`}
                     >
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '—'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '—'}</td>
@@ -443,11 +471,11 @@ export default function BuyerInvoices() {
                       <td className="px-4 py-3 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerTraderInCharge || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status)}`}>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`}>
                           {row.status}
                         </span>
                       </td>
-                      <td className={`px-4 py-3 text-right font-medium ${row.daysUntilDue < 0 ? 'text-red-600' : 'text-foreground'}`}>
+                      <td className={`px-4 py-3 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
                         {row.daysUntilDue == null ? '—' : row.daysUntilDue.toLocaleString()}
                       </td>
                     </tr>

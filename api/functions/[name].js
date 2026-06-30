@@ -468,10 +468,6 @@ function prettyDate(value) {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function csvCell(value) {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`;
-}
-
 async function resolveViaQuery(objectType, id, nameField = 'Name') {
   if (!id) return null;
   try {
@@ -1062,6 +1058,24 @@ function isBuyerInvoiceReportDue(settings, date = new Date()) {
   return weekdays.has(String(now.weekday).slice(0, 3).toLowerCase()) && sendTimes.has(now.time);
 }
 
+function overdueSeverity(daysUntilDue) {
+  if (daysUntilDue == null || Number(daysUntilDue) > 0) return null;
+  const overdueDays = Math.abs(Number(daysUntilDue));
+  if (overdueDays >= 14) return 'red';
+  if (overdueDays >= 7) return 'orange';
+  return 'yellow';
+}
+
+function overdueEmailStyles(daysUntilDue) {
+  const severity = overdueSeverity(daysUntilDue);
+  const styles = {
+    red: { row: 'background:#fef2f2', border: '#fecaca', text: '#b91c1c', pill: 'background:#fee2e2;border-color:#fecaca;color:#991b1b' },
+    orange: { row: 'background:#fff7ed', border: '#fed7aa', text: '#c2410c', pill: 'background:#ffedd5;border-color:#fed7aa;color:#9a3412' },
+    yellow: { row: 'background:#fefce8', border: '#fde68a', text: '#a16207', pill: 'background:#fef3c7;border-color:#fde68a;color:#854d0e' },
+  };
+  return styles[severity] || { row: '', border: '#e5e7eb', text: '#2563eb', pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8' };
+}
+
 function buildBuyerInvoiceReportEmail(report, settings) {
   const rows = report.rows || [];
   const overdue = rows.filter((row) => row.status === 'Overdue');
@@ -1086,33 +1100,41 @@ function buildBuyerInvoiceReportEmail(report, settings) {
         </td>
       </tr>
     </table>` : '';
-  const tableRows = rows.map((row) => `
-    <tr>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;font-weight:600">${escapeHtml(row.stemName)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${escapeHtml(row.buyerName || '-')}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right">${money(row.invoiceAmount)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${prettyDate(row.buyerInvoiceDueDate)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;color:${row.status === 'Overdue' ? '#dc2626' : '#2563eb'}">${escapeHtml(row.status)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right">${row.daysUntilDue == null ? '-' : row.daysUntilDue}</td>
-    </tr>`).join('');
+  const tableRows = rows.map((row) => {
+    const severity = overdueEmailStyles(row.daysUntilDue);
+    const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
+    return `
+    <tr style="${severity.row}">
+      <td style="${cellStyle};font-weight:600;white-space:nowrap">${escapeHtml(row.stemName)}</td>
+      <td style="${cellStyle};min-width:180px">${escapeHtml(row.buyerName || '-')}</td>
+      <td style="${cellStyle};text-align:right;white-space:nowrap">${money(row.invoiceAmount)}</td>
+      <td style="${cellStyle};text-align:right;font-weight:600;white-space:nowrap">${money(row.receivableBalance)}</td>
+      <td style="${cellStyle};white-space:nowrap">${prettyDate(row.buyerInvoiceDueDate)}</td>
+      <td style="${cellStyle};min-width:140px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
+      <td style="${cellStyle}">
+        <span style="display:inline-block;border:1px solid;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;${severity.pill}">${escapeHtml(row.status)}</span>
+      </td>
+      <td style="${cellStyle};text-align:right;font-weight:600;color:${severity.text};white-space:nowrap">${row.daysUntilDue == null ? '-' : row.daysUntilDue}</td>
+    </tr>`;
+  }).join('');
   const tableHtml = settings.includeTable ? `
-    <table style="border-collapse:collapse;width:100%;font-size:13px">
-      <thead>
-        <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Stem Name</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Name</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Invoice Amount</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Receivable Balance</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Due Date</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Trader</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Status</th>
-          <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Days</th>
-        </tr>
-      </thead>
-      <tbody>${tableRows || '<tr><td colspan="8" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
-    </table>` : '';
+    <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
+      <table style="border-collapse:collapse;width:100%;min-width:980px;font-size:13px">
+        <thead>
+          <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Stem Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Invoice Amount</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Receivable Balance</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Due Date</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Trader</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Status</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Days</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows || '<tr><td colspan="8" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
+      </table>
+    </div>` : '';
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       <h2 style="margin:0 0 6px;font-size:20px">Outstanding Buyer Invoices</h2>
@@ -1130,44 +1152,26 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     '',
     ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Trader ${row.buyerTraderInCharge || '-'}`),
   ];
-  const csvHeaders = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', "Buyer's Trader in Charge", 'Status', 'Days Until Due'];
-  const csvRows = rows.map((row) => [
-    row.stemName,
-    row.buyerName,
-    row.invoiceAmount,
-    row.receivableBalance,
-    row.buyerInvoiceDueDate,
-    row.buyerTraderInCharge,
-    row.status,
-    row.daysUntilDue,
-  ]);
-  const csv = [csvHeaders, ...csvRows].map((row) => row.map(csvCell).join(',')).join('\n');
-  return { subject, html, text: textLines.join('\n'), csv, totals };
+  return { subject, html, text: textLines.join('\n'), totals };
 }
 
-async function sendWithResend({ from, to, cc, subject, html, text, csv }) {
+async function sendWithResend({ from, to, cc, subject, html, text }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error('Missing RESEND_API_KEY in Vercel. Add it before sending email reports.');
-  const attachments = csv
-    ? [{
-        filename: `outstanding-buyer-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
-        content: Buffer.from(csv, 'utf8').toString('base64'),
-      }]
-    : undefined;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       authorization: `Bearer ${apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ from, to, cc, subject, html, text, attachments }),
+    body: JSON.stringify({ from, to, cc, subject, html, text }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || `Resend request failed: ${res.status}`);
   return data;
 }
 
-async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text, csv }) {
+async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text }) {
   const host = smtp.host || process.env.SMTP_HOST;
   const port = Number(smtp.port || process.env.SMTP_PORT || 587);
   const user = smtp.user || process.env.SMTP_USER;
@@ -1189,13 +1193,7 @@ async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text, csv 
     secure: Boolean(secure),
     auth: { user, pass },
   });
-  const attachments = csv
-    ? [{
-        filename: `outstanding-buyer-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
-        content: csv,
-      }]
-    : undefined;
-  const result = await transporter.sendMail({ from, to, cc, subject, html, text, attachments });
+  const result = await transporter.sendMail({ from, to, cc, subject, html, text });
   return { id: result.messageId, accepted: result.accepted, rejected: result.rejected };
 }
 
@@ -1231,7 +1229,6 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
         subject: email.subject,
         html: email.html,
         text: email.text,
-        csv: email.csv,
       })
     : await sendWithResend({
         from: settings.from,
@@ -1240,7 +1237,6 @@ async function outstandingBuyerInvoicesEmailReport(body = {}) {
         subject: email.subject,
         html: email.html,
         text: email.text,
-        csv: email.csv,
       });
   return {
     sent: true,
