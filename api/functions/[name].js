@@ -372,6 +372,28 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   sendTimes: ['08:00', '14:00'],
 };
 
+function normalizedUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return withProtocol.replace(/\/+$/, '');
+}
+
+function buyerInvoiceAppUrl(settings = {}) {
+  return normalizedUrl(settings.appUrl)
+    || normalizedUrl(process.env.BUYER_INVOICE_REPORT_APP_URL)
+    || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
+    || normalizedUrl(process.env.VERCEL_URL)
+    || 'https://salesforce-extension-murex.vercel.app';
+}
+
+function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
+  const url = new URL('/buyer-invoices', buyerInvoiceAppUrl(settings));
+  url.searchParams.set('daysAhead', String(settings.daysAhead ?? report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead));
+  if (buyerTrader) url.searchParams.set('buyerTrader', buyerTrader);
+  return url.toString();
+}
+
 function numericValue(value) {
   if (value == null || value === '') return null;
   const number = Number(value);
@@ -1171,6 +1193,7 @@ function buyerInvoiceEmailSettings(input = {}) {
     from: process.env.BUYER_INVOICE_REPORT_FROM || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.from,
     to: parseEmailList(process.env.BUYER_INVOICE_REPORT_TO, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.to),
     cc: parseEmailList(process.env.BUYER_INVOICE_REPORT_CC, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.cc),
+    appUrl: buyerInvoiceAppUrl(),
     daysAhead: Number(process.env.BUYER_INVOICE_REPORT_DAYS_AHEAD || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead),
     subject: process.env.BUYER_INVOICE_REPORT_SUBJECT || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.subject,
     intro: process.env.BUYER_INVOICE_REPORT_INTRO || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.intro,
@@ -1183,6 +1206,7 @@ function buyerInvoiceEmailSettings(input = {}) {
     to: parseEmailList(input.to, defaults.to),
     cc: parseEmailList(input.cc, defaults.cc),
     daysAhead: Math.max(0, Math.min(Number(input.daysAhead ?? defaults.daysAhead) || defaults.daysAhead, 365)),
+    appUrl: input.appUrl || defaults.appUrl,
     includeSummary: input.includeSummary ?? defaults.includeSummary,
     includeTable: input.includeTable ?? defaults.includeTable,
     buyerTraders: parseStringList(input.buyerTraders, defaults.buyerTraders),
@@ -1254,18 +1278,22 @@ function emailContentHtml(content) {
   }).join('');
 }
 
-function buyerTraderFilterHtml(report) {
+function buyerTraderFilterHtml(report, settings) {
   const options = report.buyerTraderOptions || [];
   if (!options.length) return '';
   const selected = new Set(report.hasBuyerTraderFilter ? (report.selectedBuyerTraders || []) : options);
+  const allActive = selected.size === options.length;
+  const allUrl = buyerInvoiceFilterUrl(settings, report, null);
+  const allChip = `<a href="${escapeHtml(allUrl)}" style="display:inline-block;text-decoration:none;border:1px solid ${allActive ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${allActive ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">All</a>`;
   const chips = options.map((name) => {
     const active = selected.has(name);
-    return `<span style="display:inline-block;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#667085'}">${escapeHtml(name)}</span>`;
+    const url = buyerInvoiceFilterUrl(settings, report, name);
+    return `<a href="${escapeHtml(url)}" style="display:inline-block;text-decoration:none;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">${escapeHtml(name)}</a>`;
   }).join('');
   return `
     <div style="margin:0 0 12px">
-      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Buyer Trader in Charge</div>
-      <div>${chips}</div>
+      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Open filtered view by Buyer Trader in Charge</div>
+      <div>${allChip}${chips}</div>
     </div>`;
 }
 
@@ -1313,7 +1341,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     </tr>`;
   }).join('');
   const tableHtml = settings.includeTable ? `
-    ${buyerTraderFilterHtml(report)}
+    ${buyerTraderFilterHtml(report, settings)}
     <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
       <table style="border-collapse:collapse;width:100%;min-width:980px;font-size:13px">
         <thead>
@@ -1341,6 +1369,8 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     content,
     `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
     `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
+    `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`,
+    ...((report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`)),
     '',
     ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
   ];

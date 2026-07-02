@@ -101,6 +101,22 @@ function overdueDisplayValue(daysUntilDue) {
   return Object.is(overdue, -0) ? '0' : overdue.toLocaleString();
 }
 
+function readInitialFilters() {
+  if (typeof window === 'undefined') return { daysAhead: 7, buyerTraders: [], hasBuyerTraderFilter: false };
+  const params = new URLSearchParams(window.location.search);
+  const daysAhead = Math.max(0, Math.min(Number(params.get('daysAhead')) || 7, 365));
+  const buyerTraders = [
+    ...params.getAll('buyerTrader'),
+    ...params.getAll('buyerTraders'),
+    ...params.getAll('trader'),
+  ].flatMap((value) => splitBuyerTraderNames(value));
+  return {
+    daysAhead,
+    buyerTraders,
+    hasBuyerTraderFilter: buyerTraders.length > 0,
+  };
+}
+
 function readEmailSettings() {
   try {
     const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
@@ -118,7 +134,8 @@ function sameSettings(a, b) {
 }
 
 export default function BuyerInvoices() {
-  const [daysAhead, setDaysAhead] = useState(7);
+  const initialFilters = useMemo(() => readInitialFilters(), []);
+  const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -132,6 +149,7 @@ export default function BuyerInvoices() {
   const [emailError, setEmailError] = useState(null);
   const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
   const traderFilterInitialized = useRef(false);
+  const initialBuyerTraderFilter = useRef(initialFilters);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
 
@@ -147,12 +165,17 @@ export default function BuyerInvoices() {
     }
     if (!traderFilterInitialized.current) {
       traderFilterInitialized.current = true;
-      setSelectedBuyerTraders(buyerTraderOptions);
+      if (initialBuyerTraderFilter.current.hasBuyerTraderFilter) {
+        const selected = new Set(initialBuyerTraderFilter.current.buyerTraders);
+        setSelectedBuyerTraders(buyerTraderOptions.filter((name) => selected.has(name)));
+      } else {
+        setSelectedBuyerTraders(buyerTraderOptions);
+      }
       return;
     }
     setSelectedBuyerTraders((prev) => {
       const next = prev.filter((name) => buyerTraderOptions.includes(name));
-      return next.length ? next : buyerTraderOptions;
+      return next.length || prev.length === 0 ? next : buyerTraderOptions;
     });
   }, [buyerTraderOptions]);
 
@@ -288,6 +311,7 @@ export default function BuyerInvoices() {
       ...emailSettings,
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
       buyerTraders: selectedBuyerTraders,
+      appUrl: window.location.origin,
     };
     const smtpSettings = readSmtpSettings();
     const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
