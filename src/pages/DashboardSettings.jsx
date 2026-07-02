@@ -16,6 +16,7 @@ import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths
 const STORAGE_KEY = 'dashboard_filters_v2';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 const YEARS = getRecentYears();
+const PRODUCT_FAMILY_KPI_ORDER = ['HSFO', 'VLSFO', 'LSMGO'];
 const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const formatQuantity = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -127,6 +128,16 @@ export default function DashboardSettings() {
     const grossMarginPct = data?.totalBuyer ? (data.totalProfit / data.totalBuyer) * 100 : null;
     return { grossMarginPct };
   }, [data]);
+
+  const productFamilyKpis = useMemo(() => {
+    const quantityByFamily = new Map(
+      (data?.productFamilyQuantities || []).map((item) => [String(item.family || '').toUpperCase(), item.quantity || 0])
+    );
+    return PRODUCT_FAMILY_KPI_ORDER.map((family) => ({
+      family,
+      quantity: quantityByFamily.get(family) || 0,
+    }));
+  }, [data?.productFamilyQuantities]);
 
   const selectedYearLabel = selectedYears.slice().sort((a, b) => a - b).join(', ');
   const selectedMonthLabel = formatSelectedMonths(selectedMonths);
@@ -246,15 +257,15 @@ export default function DashboardSettings() {
 
 
       {loading && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4 mb-8">
-          {[...Array(7)].map((_, i) => <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {[...Array(8)].map((_, i) => <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
         </div>
       )}
 
       {data && !loading && (
         <>
           {/* KPI Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4 mb-8">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard label="Matching STEMs" value={data.stemTotal?.toLocaleString() ?? '—'} icon={Package} color="blue" />
             <StatCard
               label="Accounts"
@@ -286,7 +297,7 @@ export default function DashboardSettings() {
               icon={AlertCircle}
               color="red"
             />
-            {(data.productFamilyQuantities || []).slice(0, 2).map((item, index) => (
+            {productFamilyKpis.map((item, index) => (
               <StatCard
                 key={item.family}
                 label={item.family}
