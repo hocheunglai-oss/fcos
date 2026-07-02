@@ -580,7 +580,11 @@ async function salesforceDashboardFilteredFull(body) {
     ? companyMode === 'supplier'
       ? `Id IN (SELECT STEM__c FROM STEM_Line_Item__c WHERE Supplier_Name__c LIKE '${companyLike}' AND Cancelled__c = false)`
       : buyerNameField
-        ? `${buyerNameField} LIKE '${companyLike}'`
+        ? [
+            `${buyerNameField} LIKE '${companyLike}'`,
+            accountField ? `Account__r.Group_Name__c LIKE '${companyLike}'` : '',
+            accountField ? `Account__r.Parent.Name LIKE '${companyLike}'` : '',
+          ].filter(Boolean).join(' OR ')
         : ''
     : '';
   const baseWhereConditions = [where, companyCondition].filter(Boolean);
@@ -599,6 +603,7 @@ async function salesforceDashboardFilteredFull(body) {
   if (expectedDeliveryField) plFields.push(expectedDeliveryField);
   if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerNameField) plFields.push(buyerNameField);
+  if (accountField) plFields.push('Account__r.Group_Name__c', 'Account__r.Parent.Name');
   if (hasDisputeStatus) plFields.push('Dispute_Status__c');
   if (hasDispute) plFields.push('Dispute__c');
   if (hasDisputeType) plFields.push('Dispute_Type__c');
@@ -794,10 +799,13 @@ async function salesforceDashboardFilteredFull(body) {
     const calc = calculateStem(stem);
     const supplierNames = [...(supplierNamesByStem[stem.Id] || [])].sort();
     const productQuantities = productQuantitiesByStem[stem.Id] || [];
+    const buyerAccount = stem['Account__r'] || {};
+    const buyerGroup = buyerAccount.Group_Name__c || buyerAccount.Parent?.Name || null;
     return {
       ...stem,
       [bf]: calc.buyer ?? null,
       [sf2]: calc.supplier || null,
+      _Buyer_Group: buyerGroup,
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
       _Product_Quantity_List: productQuantities,

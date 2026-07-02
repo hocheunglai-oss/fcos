@@ -82,14 +82,21 @@ export default function DashboardSettings() {
       setCompanyOptions([]);
       const isSupplier = counterpartyMode === 'supplier';
       const field = isSupplier ? 'Supplier_Name__c' : 'Buyer_Name__c';
-      const objectName = isSupplier ? 'STEM_Line_Item__c' : 'stem__c';
+      const soql = isSupplier
+        ? `SELECT ${field}, COUNT(Id) total FROM STEM_Line_Item__c WHERE ${field} != null GROUP BY ${field} ORDER BY ${field} LIMIT 2000`
+        : `SELECT Buyer_Name__c, Account__r.Group_Name__c, Account__r.Parent.Name FROM stem__c WHERE Buyer_Name__c != null ORDER BY Delivery_Date__c DESC NULLS LAST LIMIT 2000`;
       const res = await appClient.functions.invoke('salesforceQuery', {
-        soql: `SELECT ${field}, COUNT(Id) total FROM ${objectName} WHERE ${field} != null GROUP BY ${field} ORDER BY ${field} LIMIT 2000`
+        soql
       });
       if (cancelled || res.data?.error) return;
-      const names = [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
-        .sort((a, b) => String(a).localeCompare(String(b)));
-      setCompanyOptions(names);
+      const names = isSupplier
+        ? [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
+        : [...new Set((res.data?.records || []).flatMap((row) => [
+            row.Buyer_Name__c,
+            row.Account__r?.Group_Name__c,
+            row.Account__r?.Parent?.Name,
+          ]).filter(Boolean))];
+      setCompanyOptions(names.sort((a, b) => String(a).localeCompare(String(b))));
     };
     loadCompanies();
     return () => { cancelled = true; };
@@ -161,8 +168,8 @@ export default function DashboardSettings() {
     if (!tableSearch.trim()) return stems;
     const q = tableSearch.toLowerCase();
     const SEARCH_FIELDS = counterpartyMode === 'supplier'
-      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Supplier_Names', '_Product_Quantities']
-      : ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Product_Quantities'];
+      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Buyer_Group', '_Supplier_Names', '_Product_Quantities']
+      : ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Buyer_Group', '_Product_Quantities'];
     return stems.filter(row =>
       SEARCH_FIELDS.some(f => row[f] != null && String(row[f]).toLowerCase().includes(q))
     );
