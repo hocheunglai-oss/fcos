@@ -27,6 +27,24 @@ function ProductQuantityCell({ row }) {
   );
 }
 
+function CommissionUnitCell({ row }) {
+  const items = row.commissionUnitPriceLines?.length
+    ? row.commissionUnitPriceLines
+    : row.commissionUnitPriceLabel
+      ? row.commissionUnitPriceLabel.split('; ').map((label) => ({ label }))
+      : [{ label: fmtUnit(row.commissionUnitPrice) }];
+
+  return (
+    <div className="space-y-1 text-right">
+      {items.map((item, index) => (
+        <div key={`${item.productName || item.label}-${index}`} className="text-foreground">
+          {item.label || fmtUnit(item.value)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function BrokerRegisterTable({ rows, onRowClick }) {
   const payableTotal = rows.reduce((sum, row) => sum + (row.brokerType === 'Supplier Broker' ? Number(row.commissionAmount || 0) : 0), 0);
   const receivableTotal = rows.reduce((sum, row) => sum + (row.brokerType !== 'Supplier Broker' ? Number(row.commissionAmount || 0) : 0), 0);
@@ -58,7 +76,7 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={row.brokerType} /></td>
                 <td className="py-3 px-4 text-foreground">{row.brokerName || '—'}</td>
-                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtUnit(row.commissionUnitPriceLabel || row.commissionUnitPrice)}</td>
+                <td className="py-3 px-4 whitespace-nowrap"><CommissionUnitCell row={row} /></td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType === 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType !== 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>

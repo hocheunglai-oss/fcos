@@ -1697,6 +1697,7 @@ function combineBrokerCommissionRows(rows) {
         commissionAmount: 0,
         _productMap: new Map(),
         _commissionUnitPrices: [],
+        _commissionUnitLines: [],
         _paymentDates: [],
         _paymentDateLabels: [],
         _paymentDelays: [],
@@ -1706,6 +1707,10 @@ function combineBrokerCommissionRows(rows) {
     const group = groups.get(key);
     group.commissionAmount += Number(row.commissionAmount || 0);
     if (row.commissionUnitPrice != null) group._commissionUnitPrices.push(Number(row.commissionUnitPrice));
+    group._commissionUnitLines.push({
+      productName: row.productName || '—',
+      value: numericValue(row.commissionUnitPrice),
+    });
     if (row.paymentDate) group._paymentDates.push(row.paymentDate);
     if (row.paymentDateLabel) group._paymentDateLabels.push(row.paymentDateLabel);
     if (row.paymentDelay != null) group._paymentDelays.push(Number(row.paymentDelay));
@@ -1717,6 +1722,11 @@ function combineBrokerCommissionRows(rows) {
     const unitPrices = uniquePresentValues(group._commissionUnitPrices);
     const paymentDates = uniquePresentValues(group._paymentDates);
     const paymentDelays = uniquePresentValues(group._paymentDelays);
+    const commissionUnitPriceLines = group._commissionUnitLines.map((item) => ({
+      productName: item.productName,
+      value: item.value,
+      label: item.value != null ? `${money(item.value)} / MT` : '—',
+    }));
     const productQuantities = [...group._productMap.values()].map((item) => ({
       productName: item.productName,
       quantity: item.hasQuantity ? item.quantity : null,
@@ -1731,7 +1741,8 @@ function combineBrokerCommissionRows(rows) {
       productQuantities,
       productQuantityLabel: productQuantities.map((item) => item.label).join('; '),
       commissionUnitPrice: unitPrices.length === 1 ? unitPrices[0] : null,
-      commissionUnitPriceLabel: unitPrices.length > 1 ? 'Mixed' : null,
+      commissionUnitPriceLines,
+      commissionUnitPriceLabel: commissionUnitPriceLines.map((item) => item.label).join('; '),
       paymentDate: paymentDates.length <= 1 ? paymentDates[0] || null : 'Mixed',
       paymentDateSort: latestIsoDate(paymentDates),
       paymentDateLabel: singleOrMixed(group._paymentDateLabels) || group.paymentDateLabel,
@@ -1740,6 +1751,7 @@ function combineBrokerCommissionRows(rows) {
       paymentStatus: singleOrMixed(group._paymentStatuses),
       _productMap: undefined,
       _commissionUnitPrices: undefined,
+      _commissionUnitLines: undefined,
       _paymentDates: undefined,
       _paymentDateLabels: undefined,
       _paymentDelays: undefined,
