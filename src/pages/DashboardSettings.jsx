@@ -169,7 +169,7 @@ export default function DashboardSettings() {
     if (!tableSearch.trim()) return stems;
     const q = tableSearch.toLowerCase();
     const SEARCH_FIELDS = counterpartyMode === 'supplier'
-      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Buyer_Group', '_Supplier_Names', '_Product_Quantities']
+      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Supplier_Names', '_Product_Quantities']
       : ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Buyer_Group', '_Product_Quantities'];
     return stems.filter(row =>
       SEARCH_FIELDS.some(f => row[f] != null && String(row[f]).toLowerCase().includes(q))

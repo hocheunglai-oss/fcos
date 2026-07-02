@@ -133,8 +133,12 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
   const firstRecord = records[0] || {};
   const hiddenCols = useMemo(() => {
     const cols = new Set(BASE_HIDDEN_COLS);
-    if (counterpartyMode === 'supplier') cols.add('Buyer_Name__c');
-    else cols.add('_Supplier_Names');
+    if (counterpartyMode === 'supplier') {
+      cols.add('Buyer_Name__c');
+      cols.add('_Buyer_Group');
+    } else {
+      cols.add('_Supplier_Names');
+    }
     return cols;
   }, [counterpartyMode]);
   const rawCols = Object.keys(firstRecord).filter(k => k !== 'Id' && !hiddenCols.has(k));
