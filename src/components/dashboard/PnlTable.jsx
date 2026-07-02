@@ -12,6 +12,7 @@ const FIELD_LABELS = {
   [SUPPLIER_FIELD]: 'Supplier Invoice',
   'Buyer_Name__c': 'Buyer Name',
   '_Supplier_Names': 'Supplier Names',
+  '_Product_Quantities': 'Products / Quantity',
   'ETA_Start_Date__c': 'ETA',
   [DELIVERY_FIELD]: 'Delivery Date',
   '__extraCostBuyCalc': 'EXTRA COSTS',
@@ -38,11 +39,14 @@ const BASE_HIDDEN_COLS = new Set([
   'Expected_Delivery_Date__c',
   'Dispute_Status__c',
   'Dispute__c',
+  'Dispute_Type__c',
+  'Dispute_Particular__c',
   '_buyerBrokerName',
   '_buyerBrokerComm',
   '_suppBrokerName',
   '_suppBrokerComm',
   '_Supplier_Name_List',
+  '_Product_Quantity_List',
 ]);
 
 // Columns that are right-aligned (money)
@@ -107,6 +111,7 @@ const COL_ORDER = [
   'Name',
   'Buyer_Name__c',
   '_Supplier_Names',
+  '_Product_Quantities',
   'CreatedDate',
   DELIVERY_FIELD,
   BUYER_FIELD,
@@ -228,6 +233,28 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                             {supplierNames.map((name) => (
                               <span key={name} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
                                 {name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === '_Product_Quantities') {
+                    const productQuantities = Array.isArray(row._Product_Quantity_List)
+                      ? row._Product_Quantity_List
+                      : String(row._Product_Quantities || '').split(',').map((value) => {
+                        const label = value.trim();
+                        return label ? { productName: label, quantityLabel: '' } : null;
+                      }).filter(Boolean);
+                    return (
+                      <td key={col} className="py-2.5 px-3 min-w-96 text-foreground">
+                        {productQuantities.length ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {productQuantities.map((item, index) => (
+                              <span key={`${item.productName}-${item.quantityLabel}-${index}`} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
+                                <span className="font-medium">{item.productName}</span>
+                                {item.quantityLabel && <span className="ml-1 text-muted-foreground">{item.quantityLabel}</span>}
                               </span>
                             ))}
                           </div>

@@ -417,6 +417,20 @@ function financialQuantity(item, stemHasDelivery, maxField = 'Quantity_Max__c') 
   return min || 0;
 }
 
+function formatQuantityLabel(value, unit = 'MT') {
+  return `${Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 3 })} ${unit}`;
+}
+
+function lineItemQuantityLabel(item, stemHasDelivery) {
+  if (stemHasDelivery) return formatQuantityLabel(financialQuantity(item, true));
+  const min = firstNumber(item.Quantity__c, item.Quantity_in_MT__c, item.Quantity_Delivered_Per_BDN__c);
+  const max = firstNumber(item.Quantity_Max__c);
+  if (item.Is_Quantity_Range__c && min != null && max != null) {
+    return `${Number(min).toLocaleString('en-US', { maximumFractionDigits: 3 })}-${Number(max).toLocaleString('en-US', { maximumFractionDigits: 3 })} MT`;
+  }
+  return formatQuantityLabel(financialQuantity(item, false));
+}
+
 function lineSellAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return item.Total_Price__c ?? 0;
   const unit = firstNumber(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item['Offer_Line_Item__r']?.UnitPrice);
@@ -643,12 +657,20 @@ async function salesforceDashboardFilteredFull(body) {
   const supplierNamesByStem = {};
   const supplierNamesInFilteredStems = new Set();
   const supplierWeightByStem = {};
+  const productQuantitiesByStem = {};
   for (const li of lineItems) {
     const id = li.STEM__c;
     if (!id || li.Cancelled__c) continue;
     const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
     const lineSell = lineSellAmount(li, stemHasDelivery);
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
+    const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
+    if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
+    productQuantitiesByStem[id].push({
+      productName,
+      quantityLabel: lineItemQuantityLabel(li, stemHasDelivery),
+      unitOfMeasure: 'MT',
+    });
     const supplierName = String(li.Supplier_Name__c || '').trim();
     if (supplierName) {
       if (!supplierNamesByStem[id]) supplierNamesByStem[id] = new Set();
@@ -729,12 +751,15 @@ async function salesforceDashboardFilteredFull(body) {
   const recentStems = (recentRes.records || []).map((stem) => {
     const calc = calculateStem(stem);
     const supplierNames = [...(supplierNamesByStem[stem.Id] || [])].sort();
+    const productQuantities = productQuantitiesByStem[stem.Id] || [];
     return {
       ...stem,
       [bf]: calc.buyer ?? null,
       [sf2]: calc.supplier || null,
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
+      _Product_Quantity_List: productQuantities,
+      _Product_Quantities: productQuantities.map((item) => `${item.productName} ${item.quantityLabel}`).join(', ') || null,
       _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,
       _buyerBrokerComm: calc.buyerComm || null,
       _suppBrokerName: brokerByStem[stem.Id]?.suppBrokerName || null,
