@@ -17,6 +17,10 @@ const STORAGE_KEY = 'dashboard_filters_v2';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 const YEARS = getRecentYears();
 const PRODUCT_FAMILY_KPI_ORDER = ['HSFO', 'VLSFO', 'LSMGO'];
+const COUNTERPARTY_MODES = [
+  { value: 'buyer', label: 'Buyer', plural: 'Buyers' },
+  { value: 'supplier', label: 'Supplier', plural: 'Suppliers' },
+];
 const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const formatQuantity = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -28,6 +32,7 @@ export default function DashboardSettings() {
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
   const [disputeOnly, setDisputeOnly] = useState(savedFilters.disputeOnly ?? false);
   const [portCountry, setPortCountry] = useState(savedPortCountry);
+  const [counterpartyMode, setCounterpartyMode] = useState(savedFilters.counterpartyMode === 'supplier' ? 'supplier' : 'buyer');
   const [portCountryOptions, setPortCountryOptions] = useState([]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -93,13 +98,13 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       load(selectedYears, selectedMonths, disputeOnly, portCountry);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths, disputeOnly, portCountry]);
+  }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -118,7 +123,7 @@ export default function DashboardSettings() {
     });
     if (!tableSearch.trim()) return stems;
     const q = tableSearch.toLowerCase();
-    const SEARCH_FIELDS = ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c'];
+    const SEARCH_FIELDS = ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Supplier_Names'];
     return stems.filter(row =>
       SEARCH_FIELDS.some(f => row[f] != null && String(row[f]).toLowerCase().includes(q))
     );
@@ -145,6 +150,19 @@ export default function DashboardSettings() {
 
   const selectedYearLabel = selectedYears.slice().sort((a, b) => a - b).join(', ');
   const selectedMonthLabel = formatSelectedMonths(selectedMonths);
+  const activeCounterparty = COUNTERPARTY_MODES.find((mode) => mode.value === counterpartyMode) || COUNTERPARTY_MODES[0];
+  const activeAccountCount = counterpartyMode === 'supplier'
+    ? data?.supplierAccountCount
+    : (data?.buyerAccountCount ?? data?.accountCount);
+  const monthlyCounterpartyNames = counterpartyMode === 'supplier'
+    ? (data?.monthlySupplierNames || [])
+    : (data?.monthlyBuyerNames || []);
+  const monthlyCounterpartyNetPnl = counterpartyMode === 'supplier'
+    ? (data?.monthlySupplierNetPnl || [])
+    : (data?.monthlyBuyerNetPnl || []);
+  const topCounterpartiesByNetPnl = counterpartyMode === 'supplier'
+    ? (data?.topSuppliersByNetPnl || [])
+    : (data?.topBuyersByNetPnl || []);
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
@@ -202,6 +220,24 @@ export default function DashboardSettings() {
             >
               Disputed only
             </button>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">View By</Label>
+              <div className="flex gap-1.5">
+                {COUNTERPARTY_MODES.map((mode) => (
+                  <button
+                    key={mode.value}
+                    onClick={() => setCounterpartyMode(mode.value)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                      counterpartyMode === mode.value
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="port-country-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Port Country
@@ -272,9 +308,9 @@ export default function DashboardSettings() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard label="Matching STEMs" value={data.stemTotal?.toLocaleString() ?? '—'} icon={Package} color="blue" />
             <StatCard
-              label="Accounts"
-              value={data.accountCount != null ? data.accountCount.toLocaleString() : '—'}
-              sub="Distinct accounts in filtered STEMs"
+              label={activeCounterparty.plural}
+              value={activeAccountCount != null ? activeAccountCount.toLocaleString() : '—'}
+              sub={`Distinct ${activeCounterparty.plural.toLowerCase()} in filtered STEMs`}
               icon={Building2}
               color="green"
             />
@@ -333,18 +369,18 @@ export default function DashboardSettings() {
             </div>
           )}
 
-          {/* Monthly Buyer Gross Profit Trend */}
-          {data.monthlyBuyerNetPnl?.length > 0 && data.monthlyBuyerNames?.length > 0 && (
+          {/* Monthly Counterparty Gross Profit Trend */}
+          {monthlyCounterpartyNetPnl.length > 0 && monthlyCounterpartyNames.length > 0 && (
             <div className="bg-card rounded-xl border border-border p-5 mb-8">
-              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Gross Profit by Buyer</h3>
-              <p className="text-xs text-muted-foreground mb-4">Top buyer accounts by Gross Profit for {data.monthlyNetPnlYear || THIS_YEAR}</p>
+              <h3 className="text-sm font-semibold text-foreground mb-1">Monthly Gross Profit by {activeCounterparty.label}</h3>
+              <p className="text-xs text-muted-foreground mb-4">Top {activeCounterparty.plural.toLowerCase()} by Gross Profit for {data.monthlyNetPnlYear || THIS_YEAR}</p>
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={data.monthlyBuyerNetPnl} barSize={44}>
+                <BarChart data={monthlyCounterpartyNetPnl} barSize={44}>
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Math.round(v / 1000)}k`} />
                   <Tooltip formatter={(v, name) => [`$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, name]} />
-                  {data.monthlyBuyerNames.map((buyer, idx) => (
-                    <Bar key={buyer} dataKey={buyer} stackId="buyers" fill={COLORS[idx % COLORS.length]} radius={idx === data.monthlyBuyerNames.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
+                  {monthlyCounterpartyNames.map((name, idx) => (
+                    <Bar key={name} dataKey={name} stackId="counterparties" fill={COLORS[idx % COLORS.length]} radius={idx === monthlyCounterpartyNames.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
                   ))}
                 </BarChart>
               </ResponsiveContainer>
@@ -387,19 +423,19 @@ export default function DashboardSettings() {
             </div>
           )}
 
-          {/* Top 10 Buyers by Gross Profit */}
-          {data.topBuyersByNetPnl && data.topBuyersByNetPnl.length > 0 && (
+          {/* Top 10 Counterparties by Gross Profit */}
+          {topCounterpartiesByNetPnl.length > 0 && (
           <div className="bg-card rounded-xl border border-border p-5 mb-8">
             <h3 className="text-sm font-semibold text-foreground mb-1">
-              Top 10 Buyers by Gross Profit
+              Top 10 {activeCounterparty.plural} by Gross Profit
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 ({selectedYearLabel} · {selectedMonthLabel})
               </span>
             </h3>
             <div className="mt-4 space-y-2">
               {(() => {
-                const maxAbs = Math.max(...data.topBuyersByNetPnl.map(b => Math.abs(b.netPnl)), 1);
-                return data.topBuyersByNetPnl.map((b, i) => {
+                const maxAbs = Math.max(...topCounterpartiesByNetPnl.map(b => Math.abs(b.netPnl)), 1);
+                return topCounterpartiesByNetPnl.map((b, i) => {
                   const pct = (Math.abs(b.netPnl) / maxAbs) * 100;
                   const isPos = b.netPnl >= 0;
                   return (
@@ -431,7 +467,7 @@ export default function DashboardSettings() {
               <div className="relative w-full sm:w-80">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search by vessel, stem name, or buyer…"
+                  placeholder="Search by vessel, stem name, buyer, or supplier…"
                   value={tableSearch}
                   onChange={e => setTableSearch(e.target.value)}
                   className="pl-8 h-8 text-xs"
