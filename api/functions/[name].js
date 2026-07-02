@@ -1650,6 +1650,104 @@ async function salesforceStemDetailFull(body) {
   return { record, lineItems: lineItemsWithNames, extraCosts: extraCostsWithNames, buyerBrokers: buyerBrokersWithNames };
 }
 
+function uniquePresentValues(values) {
+  return [...new Set(values.filter((value) => value != null && value !== ''))];
+}
+
+function singleOrMixed(values) {
+  const unique = uniquePresentValues(values);
+  if (!unique.length) return null;
+  return unique.length === 1 ? unique[0] : 'Mixed';
+}
+
+function latestIsoDate(values) {
+  const dates = uniquePresentValues(values).filter((value) => /^\d{4}-\d{2}-\d{2}/.test(String(value)));
+  return dates.sort().at(-1) || null;
+}
+
+function addBrokerProductQuantity(group, row) {
+  const productName = row.productName || '—';
+  const unit = row.quantityUnit || 'MT';
+  const key = `${productName}::${unit}`;
+  if (!group._productMap.has(key)) {
+    group._productMap.set(key, {
+      productName,
+      quantity: 0,
+      hasQuantity: false,
+      unit,
+    });
+  }
+  const item = group._productMap.get(key);
+  const qty = numericValue(row.bdnQuantity);
+  if (qty != null) {
+    item.quantity += qty;
+    item.hasQuantity = true;
+  }
+}
+
+function combineBrokerCommissionRows(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const brokerKey = row.brokerId || row.brokerName || '';
+    const key = [row.stemId, row.brokerType, brokerKey].join('::');
+    if (!groups.has(key)) {
+      groups.set(key, {
+        ...row,
+        id: `${row.brokerType}-${row.stemId}-${brokerKey}`.replace(/\s+/g, '-'),
+        commissionAmount: 0,
+        _productMap: new Map(),
+        _commissionUnitPrices: [],
+        _paymentDates: [],
+        _paymentDateLabels: [],
+        _paymentDelays: [],
+        _paymentStatuses: [],
+      });
+    }
+    const group = groups.get(key);
+    group.commissionAmount += Number(row.commissionAmount || 0);
+    if (row.commissionUnitPrice != null) group._commissionUnitPrices.push(Number(row.commissionUnitPrice));
+    if (row.paymentDate) group._paymentDates.push(row.paymentDate);
+    if (row.paymentDateLabel) group._paymentDateLabels.push(row.paymentDateLabel);
+    if (row.paymentDelay != null) group._paymentDelays.push(Number(row.paymentDelay));
+    if (row.paymentStatus) group._paymentStatuses.push(row.paymentStatus);
+    addBrokerProductQuantity(group, row);
+  }
+
+  return [...groups.values()].map((group) => {
+    const unitPrices = uniquePresentValues(group._commissionUnitPrices);
+    const paymentDates = uniquePresentValues(group._paymentDates);
+    const paymentDelays = uniquePresentValues(group._paymentDelays);
+    const productQuantities = [...group._productMap.values()].map((item) => ({
+      productName: item.productName,
+      quantity: item.hasQuantity ? item.quantity : null,
+      quantityUnit: item.unit,
+      label: item.hasQuantity ? `${item.productName} ${formatQuantityLabel(item.quantity, item.unit)}` : item.productName,
+    }));
+    return {
+      ...group,
+      productName: productQuantities.map((item) => item.productName).join('; '),
+      bdnQuantity: productQuantities.length === 1 ? productQuantities[0].quantity : null,
+      quantityUnit: productQuantities.length === 1 ? productQuantities[0].quantityUnit : 'MT',
+      productQuantities,
+      productQuantityLabel: productQuantities.map((item) => item.label).join('; '),
+      commissionUnitPrice: unitPrices.length === 1 ? unitPrices[0] : null,
+      commissionUnitPriceLabel: unitPrices.length > 1 ? 'Mixed' : null,
+      paymentDate: paymentDates.length <= 1 ? paymentDates[0] || null : 'Mixed',
+      paymentDateSort: latestIsoDate(paymentDates),
+      paymentDateLabel: singleOrMixed(group._paymentDateLabels) || group.paymentDateLabel,
+      paymentDelay: paymentDelays.length === 1 ? paymentDelays[0] : null,
+      paymentDelayLabel: paymentDelays.length > 1 ? 'Mixed' : null,
+      paymentStatus: singleOrMixed(group._paymentStatuses),
+      _productMap: undefined,
+      _commissionUnitPrices: undefined,
+      _paymentDates: undefined,
+      _paymentDateLabels: undefined,
+      _paymentDelays: undefined,
+      _paymentStatuses: undefined,
+    };
+  });
+}
+
 async function salesforceBrokerRegisterFull(body) {
   const limit = Math.min(Number(body.limit) || 2000, 3000);
   const stems = await queryRows(`
@@ -1765,17 +1863,18 @@ async function salesforceBrokerRegisterFull(body) {
     buyerBrokersByStem[item.STEM__c].push(item);
   }
 
-  const rows = [];
+  const rawRows = [];
   for (const item of lineItems) {
     const stem = stemMap[item.STEM__c];
     if (!stem) continue;
     const qty = financialQuantity(item, !!stem.Delivery_Date__c);
     const supplierAmount = item.Cancelled__c ? 0 : brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
     if (item.Supplier_Broker__c && supplierAmount !== 0) {
-      rows.push({
+      rawRows.push({
         id: `supplier-${item.Id}`,
         stemId: item.STEM__c,
         stemName: stem.Name,
+        brokerId: item.Supplier_Broker__c,
         productName: item['Product__r']?.Name || item.Name || '—',
         bdnQuantity: qty || null,
         quantityUnit: 'MT',
@@ -1798,10 +1897,11 @@ async function salesforceBrokerRegisterFull(body) {
     const buyerLumpsumAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0);
     const buyerAmount = buyerLumpsumAmount || buyerPerUnitAmount;
     if (buyerBrokerId && buyerAmount !== 0) {
-      rows.push({
+      rawRows.push({
         id: `buyer-${item.Id}`,
         stemId: item.STEM__c,
         stemName: stem.Name,
+        brokerId: buyerBrokerId,
         productName: item['Product__r']?.Name || item.Name || '—',
         bdnQuantity: qty || null,
         quantityUnit: 'MT',
@@ -1827,10 +1927,11 @@ async function salesforceBrokerRegisterFull(body) {
     });
     if (secondaryAmount > 0 && secondaryBrokers.length > 0) {
       for (const broker of secondaryBrokers) {
-        rows.push({
+        rawRows.push({
           id: `secondary-${item.Id}-${broker.Id}`,
           stemId: item.STEM__c,
           stemName: stem.Name,
+          brokerId: broker.Buyer_Broker__c || null,
           productName: item['Product__r']?.Name || item.Name || '—',
           bdnQuantity: qty || null,
           quantityUnit: 'MT',
@@ -1850,6 +1951,7 @@ async function salesforceBrokerRegisterFull(body) {
     }
   }
 
+  const rows = combineBrokerCommissionRows(rawRows);
   rows.sort((a, b) => String(b.deliveryDate || '').localeCompare(String(a.deliveryDate || '')));
   return { rows };
 }

@@ -3,9 +3,29 @@ import { BrokerTypeBadge, PaymentStatusBadge } from './BrokerBadges';
 
 const fmtDate = (value) => { try { return value ? format(new Date(value), 'dd MMM yyyy') : '—'; } catch { return value || '—'; } };
 const fmtMoney = (value) => `$${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const fmtUnit = (value) => value != null ? `${fmtMoney(value)} / MT` : '—';
-const fmtDelay = (value) => value != null ? `${Number(value).toLocaleString()} day${Math.abs(Number(value)) === 1 ? '' : 's'}` : '—';
-const fmtQty = (value, unit = 'MT') => value != null ? `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })} ${unit}` : '—';
+const fmtUnit = (value) => typeof value === 'string' ? value : value != null ? `${fmtMoney(value)} / MT` : '—';
+const fmtDelay = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toLocaleString()} day${Math.abs(number) === 1 ? '' : 's'}` : '—';
+};
+
+function ProductQuantityCell({ row }) {
+  const items = row.productQuantities?.length
+    ? row.productQuantities
+    : row.productQuantityLabel
+      ? row.productQuantityLabel.split('; ').map((label) => ({ label }))
+      : [{ label: row.productName || '—' }];
+
+  return (
+    <div className="min-w-56 space-y-1">
+      {items.map((item, index) => (
+        <div key={`${item.productName || item.label}-${index}`} className="text-muted-foreground">
+          {item.label || `${item.productName} ${item.quantity != null ? `${Number(item.quantity).toLocaleString(undefined, { maximumFractionDigits: 3 })} ${item.quantityUnit || 'MT'}` : ''}`}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function BrokerRegisterTable({ rows, onRowClick }) {
   const payableTotal = rows.reduce((sum, row) => sum + (row.brokerType === 'Supplier Broker' ? Number(row.commissionAmount || 0) : 0), 0);
@@ -18,8 +38,7 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
           <thead>
             <tr className="bg-muted/40 border-b border-border">
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Stem Name</th>
-              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Product</th>
-              <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">BDN Qty</th>
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Products / Quantity</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Delivery Date</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Type</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Name</th>
@@ -35,25 +54,24 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
             {rows.map((row, idx) => (
               <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer hover:bg-muted/30 transition-colors ${idx % 2 ? 'bg-muted/10' : ''}`}>
                 <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">{row.stemName}</td>
-                <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{row.productName || '—'}</td>
-                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtQty(row.bdnQuantity, row.quantityUnit || 'MT')}</td>
+                <td className="py-3 px-4"><ProductQuantityCell row={row} /></td>
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={row.brokerType} /></td>
                 <td className="py-3 px-4 text-foreground">{row.brokerName || '—'}</td>
-                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtUnit(row.commissionUnitPrice)}</td>
+                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtUnit(row.commissionUnitPriceLabel || row.commissionUnitPrice)}</td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType === 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType !== 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
-                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : '—'}</td>
+                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : '—')}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><PaymentStatusBadge status={row.paymentStatus} /></td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan="12" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
+            {!rows.length && <tr><td colSpan="11" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
           </tbody>
           {rows.length > 0 && (
             <tfoot>
               <tr className="border-t-2 border-border bg-muted/50 font-bold">
-                <td colSpan="7" className="py-3 px-4 text-right text-foreground">Summary</td>
+                <td colSpan="6" className="py-3 px-4 text-right text-foreground">Summary</td>
                 <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtMoney(payableTotal)}</td>
                 <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtMoney(receivableTotal)}</td>
                 <td colSpan="3" className="py-3 px-4" />
