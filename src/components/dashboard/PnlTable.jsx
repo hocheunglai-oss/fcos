@@ -49,6 +49,7 @@ const BASE_HIDDEN_COLS = new Set([
   '_suppBrokerName',
   '_suppBrokerComm',
   '_Supplier_Name_List',
+  '_Supplier_Invoice_Amount_List',
   '_Product_Quantity_List',
 ]);
 
@@ -250,6 +251,28 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                         ) : '—'}
                       </td>
                     );
+                  }
+                  if (col === SUPPLIER_FIELD && counterpartyMode === 'supplier') {
+                    const supplierAmounts = Array.isArray(row._Supplier_Invoice_Amount_List)
+                      ? row._Supplier_Invoice_Amount_List
+                      : [];
+                    if (supplierAmounts.length) {
+                      return (
+                        <td key={col} className="py-2.5 px-3 text-right text-foreground whitespace-nowrap">
+                          <div className="space-y-1">
+                            {supplierAmounts.map((item, index) => (
+                              <div
+                                key={`${item.supplierName || 'supplier'}-${index}`}
+                                title={item.supplierName || undefined}
+                                className="font-medium tabular-nums"
+                              >
+                                {fmtMoney(item.amount)}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      );
+                    }
                   }
                   if (col === '_Product_Quantities') {
                     const productQuantities = Array.isArray(row._Product_Quantity_List)

@@ -666,7 +666,7 @@ async function salesforceDashboardFilteredFull(body) {
       })),
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return queryRows(`SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
       })),
     ]);
     lineItems = lineItemChunks.flat();
@@ -699,7 +699,17 @@ async function salesforceDashboardFilteredFull(body) {
   const supplierNamesByStem = {};
   const supplierNamesInFilteredStems = new Set();
   const supplierWeightByStem = {};
+  const supplierInvoiceAmountByStem = {};
+  const unassignedExtraCostBuyByStem = {};
   const productQuantitiesByStem = {};
+  const addSupplierInvoiceAmount = (stemId, supplierName, amount) => {
+    if (!stemId) return;
+    const numericAmount = Number(amount || 0);
+    if (!Number.isFinite(numericAmount) || numericAmount === 0) return;
+    const name = String(supplierName || '').trim() || 'Unspecified Supplier';
+    if (!supplierInvoiceAmountByStem[stemId]) supplierInvoiceAmountByStem[stemId] = {};
+    supplierInvoiceAmountByStem[stemId][name] = (supplierInvoiceAmountByStem[stemId][name] || 0) + numericAmount;
+  };
   for (const li of lineItems) {
     const id = li.STEM__c;
     if (!id || li.Cancelled__c) continue;
@@ -708,6 +718,7 @@ async function salesforceDashboardFilteredFull(body) {
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
     const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
     const supplierName = String(li.Supplier_Name__c || '').trim();
+    addSupplierInvoiceAmount(id, supplierName, lineBuy);
     const supplierMatchesCompanyFilter = !supplierCompanyFilterActive || companyMatches(supplierName);
     if (supplierMatchesCompanyFilter) {
       if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
@@ -743,6 +754,14 @@ async function salesforceDashboardFilteredFull(body) {
     brokerByStem[id].suppCommPerUnit += supplierBrokerCommission(li, stemHasDelivery);
     if (!brokerByStem[id].suppBrokerName && li['Supplier_Broker__r']?.Name) brokerByStem[id].suppBrokerName = li['Supplier_Broker__r'].Name;
     if (!brokerByStem[id].buyerBrokerName && li['Buyers_Broker__r']?.Name) brokerByStem[id].buyerBrokerName = li['Buyers_Broker__r'].Name;
+  }
+  for (const ec of extraCosts) {
+    if (!ec.STEM__c || ec.Cancelled__c) continue;
+    const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
+    const buy = extraBuyAmount(ec, stemHasDelivery);
+    const supplierName = String(ec.Supplier_Name__c || '').trim();
+    if (supplierName) addSupplierInvoiceAmount(ec.STEM__c, supplierName, buy);
+    else unassignedExtraCostBuyByStem[ec.STEM__c] = (unassignedExtraCostBuyByStem[ec.STEM__c] || 0) + buy;
   }
   for (const bb of buyerBrokers) {
     if (!bb.STEM__c) continue;
@@ -801,6 +820,29 @@ async function salesforceDashboardFilteredFull(body) {
     const productQuantities = productQuantitiesByStem[stem.Id] || [];
     const buyerAccount = stem['Account__r'] || {};
     const buyerGroup = buyerAccount.Group_Name__c || buyerAccount.Parent?.Name || null;
+    const supplierAmountMap = { ...(supplierInvoiceAmountByStem[stem.Id] || {}) };
+    if (unassignedExtraCostBuyByStem[stem.Id]) {
+      supplierAmountMap['Unassigned Extra Costs'] = (supplierAmountMap['Unassigned Extra Costs'] || 0) + unassignedExtraCostBuyByStem[stem.Id];
+    }
+    let supplierInvoiceAmountList = Object.entries(supplierAmountMap)
+      .map(([supplierName, amount]) => ({ supplierName, amount: Number(amount || 0) }))
+      .filter((item) => item.amount !== 0)
+      .sort((a, b) => a.supplierName.localeCompare(b.supplierName));
+    const supplierListTotal = supplierInvoiceAmountList.reduce((sum, item) => sum + item.amount, 0);
+    const supplierDiff = Number(calc.supplier || 0) - supplierListTotal;
+    if (Math.abs(supplierDiff) > 0.05) {
+      if (!supplierInvoiceAmountList.length) {
+        supplierInvoiceAmountList = [{ supplierName: 'Supplier Invoice Amount', amount: Number(calc.supplier || 0) }];
+      } else {
+        const denominator = supplierInvoiceAmountList.reduce((sum, item) => sum + Math.abs(item.amount), 0) || supplierInvoiceAmountList.length;
+        supplierInvoiceAmountList = supplierInvoiceAmountList.map((item) => {
+          const ratio = denominator === supplierInvoiceAmountList.length
+            ? 1 / supplierInvoiceAmountList.length
+            : Math.abs(item.amount) / denominator;
+          return { ...item, amount: item.amount + supplierDiff * ratio };
+        });
+      }
+    }
     return {
       ...stem,
       [bf]: calc.buyer ?? null,
@@ -808,6 +850,7 @@ async function salesforceDashboardFilteredFull(body) {
       _Buyer_Group: buyerGroup,
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
+      _Supplier_Invoice_Amount_List: supplierInvoiceAmountList,
       _Product_Quantity_List: productQuantities,
       _Product_Quantities: productQuantities.map((item) => `${item.productName} ${item.quantityLabel}`).join(', ') || null,
       _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,
