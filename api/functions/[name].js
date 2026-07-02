@@ -487,7 +487,7 @@ async function resolveViaQuery(objectType, id, nameField = 'Name') {
 }
 
 async function salesforceDashboardFilteredFull(body) {
-  const { where, trendYear, disputeOnly } = body;
+  const { where, trendYear, disputeOnly, portCountry } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
@@ -511,8 +511,16 @@ async function salesforceDashboardFilteredFull(body) {
         ? 'Dispute__c = true'
         : ''
     : '';
+  const normalizedPortCountry = String(portCountry || '').trim();
+  const portCountryCondition = normalizedPortCountry ? `Port__r.Country__c = '${escapeSoql(normalizedPortCountry)}'` : '';
   const combinedWhere = [where, disputeCondition].filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
   const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
+  const monthlyDateCondition = `(Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''}`;
+  const monthlyWhere = [monthlyDateCondition, disputeCondition, portCountryCondition]
+    .filter(Boolean)
+    .map((condition) => `(${condition})`)
+    .join(' AND ');
+  const monthlyWhereClause = monthlyWhere ? `WHERE ${monthlyWhere}` : '';
 
   const plFields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
@@ -545,7 +553,7 @@ async function salesforceDashboardFilteredFull(body) {
     supplierAmountField ? queryResult(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     totalCostsField ? queryResult(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
     queryResult(`SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
-    queryResult(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c WHERE (Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''} LIMIT 3000`, { limit: 3000, softFail: true }),
+    queryResult(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
   ];
 
   const results = await Promise.allSettled(queries);

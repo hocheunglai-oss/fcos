@@ -16,14 +16,17 @@ import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths
 const STORAGE_KEY = 'dashboard_filters_v2';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 const YEARS = getRecentYears();
+const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 export default function DashboardSettings() {
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
+  const savedPortCountry = savedFilters.portCountry ?? (savedFilters.koreanPortOnly ? 'KOREA' : '');
 
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
   const [disputeOnly, setDisputeOnly] = useState(savedFilters.disputeOnly ?? false);
-  const [koreanPortOnly, setKoreanPortOnly] = useState(savedFilters.koreanPortOnly ?? false);
+  const [portCountry, setPortCountry] = useState(savedPortCountry);
+  const [portCountryOptions, setPortCountryOptions] = useState([]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -44,19 +47,40 @@ export default function DashboardSettings() {
     selectedMonths.length === 12 ? [THIS_MONTH] : MONTHS.map(m => m.value)
   );
 
-  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths, onlyKoreanPort = koreanPortOnly) => {
+  useEffect(() => {
+    let cancelled = false;
+    const loadPortCountries = async () => {
+      const res = await appClient.functions.invoke('salesforceQuery', {
+        soql: 'SELECT Country__c c, COUNT(Id) total FROM Port__c WHERE Country__c != null GROUP BY Country__c ORDER BY Country__c'
+      });
+      if (cancelled || res.data?.error) return;
+      const countries = [...new Set((res.data?.records || []).map((row) => row.c).filter(Boolean))];
+      setPortCountryOptions(countries);
+    };
+    loadPortCountries();
+    return () => { cancelled = true; };
+  }, []);
+
+  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths, country = portCountry) => {
+    const normalizedCountry = String(country || '').trim();
     const filters = [
       buildDeliveryWhere(yrs, mos),
-      onlyKoreanPort ? "Port__r.Country__c = 'KOREA'" : '',
+      normalizedCountry ? `Port__r.Country__c = '${escapeSoqlLiteral(normalizedCountry)}'` : '',
     ].filter(Boolean);
     return filters.map((condition) => `(${condition})`).join(' AND ');
   };
 
-  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly, onlyKoreanPort = koreanPortOnly) => {
+  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly, country = portCountry) => {
     setLoading(true);
     setError(null);
-    const where = buildWhereClause(yrs, mos, onlyKoreanPort);
-    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR, disputeOnly: onlyDisputes });
+    const normalizedCountry = String(country || '').trim();
+    const where = buildWhereClause(yrs, mos, normalizedCountry);
+    const res = await appClient.functions.invoke('salesforceDashboardFiltered', {
+      where,
+      trendYear: THIS_YEAR,
+      disputeOnly: onlyDisputes,
+      portCountry: normalizedCountry || null,
+    });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -67,13 +91,13 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, koreanPortOnly }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load(selectedYears, selectedMonths, disputeOnly, koreanPortOnly);
+      load(selectedYears, selectedMonths, disputeOnly, portCountry);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths, disputeOnly, koreanPortOnly]);
+  }, [selectedYears, selectedMonths, disputeOnly, portCountry]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -162,16 +186,29 @@ export default function DashboardSettings() {
             >
               Disputed only
             </button>
-            <button
-              onClick={() => setKoreanPortOnly(value => !value)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
-                koreanPortOnly
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
-              }`}
-            >
-              Korean Port
-            </button>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="port-country-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Port Country
+              </Label>
+              <Input
+                id="port-country-filter"
+                list="port-country-options"
+                value={portCountry}
+                onChange={(e) => setPortCountry(e.target.value)}
+                placeholder="All countries"
+                className="h-8 w-44 text-xs"
+              />
+              <datalist id="port-country-options">
+                {portCountryOptions.map((country) => (
+                  <option key={country} value={country} />
+                ))}
+              </datalist>
+              {portCountry && (
+                <button onClick={() => setPortCountry('')} className="text-xs text-primary hover:underline">
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -389,7 +426,7 @@ export default function DashboardSettings() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly)}
+        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry)}
       />
     </div>
   );
