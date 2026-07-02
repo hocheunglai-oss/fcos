@@ -1400,7 +1400,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`,
     ...((report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`)),
     '',
-    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
+    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
   ];
   return { subject, html, text: textLines.join('\n'), totals };
 }
