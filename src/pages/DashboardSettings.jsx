@@ -36,6 +36,7 @@ export default function DashboardSettings() {
   const [portCountryOptions, setPortCountryOptions] = useState([]);
   const [companyKeyword, setCompanyKeyword] = useState(savedFilters.companyKeyword ?? '');
   const [companyOptions, setCompanyOptions] = useState([]);
+  const [companySuggestionsOpen, setCompanySuggestionsOpen] = useState(false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -194,6 +195,18 @@ export default function DashboardSettings() {
     }));
   }, [data?.productFamilyQuantities]);
 
+  const companySuggestions = useMemo(() => {
+    const q = companyKeyword.trim().toLowerCase();
+    return companyOptions
+      .filter((name) => !q || String(name).toLowerCase().includes(q))
+      .slice(0, 12);
+  }, [companyKeyword, companyOptions]);
+
+  const selectCompanySuggestion = (name) => {
+    setCompanyKeyword(name);
+    setCompanySuggestionsOpen(false);
+  };
+
   const selectedYearLabel = selectedYears.slice().sort((a, b) => a - b).join(', ');
   const selectedMonthLabel = formatSelectedMonths(selectedMonths);
   const activeCounterparty = COUNTERPARTY_MODES.find((mode) => mode.value === counterpartyMode) || COUNTERPARTY_MODES[0];
@@ -288,19 +301,45 @@ export default function DashboardSettings() {
               <Label htmlFor="company-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {activeCounterparty.label} Company
               </Label>
-              <Input
-                id="company-filter"
-                list={`company-options-${counterpartyMode}`}
-                value={companyKeyword}
-                onChange={(e) => setCompanyKeyword(e.target.value)}
-                placeholder={`All ${activeCounterparty.plural.toLowerCase()}`}
-                className="h-8 w-56 text-xs"
-              />
-              <datalist id={`company-options-${counterpartyMode}`}>
-                {companyOptions.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              <div className="relative">
+                <Input
+                  id="company-filter"
+                  value={companyKeyword}
+                  onChange={(e) => {
+                    setCompanyKeyword(e.target.value);
+                    setCompanySuggestionsOpen(true);
+                  }}
+                  onFocus={() => setCompanySuggestionsOpen(true)}
+                  onBlur={() => setTimeout(() => setCompanySuggestionsOpen(false), 120)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setCompanySuggestionsOpen(false);
+                    if (e.key === 'Enter' && companySuggestions[0]) {
+                      e.preventDefault();
+                      selectCompanySuggestion(companySuggestions[0]);
+                    }
+                  }}
+                  placeholder={`All ${activeCounterparty.plural.toLowerCase()}`}
+                  className="h-8 w-56 text-xs"
+                  autoComplete="off"
+                />
+                {companySuggestionsOpen && companySuggestions.length > 0 && (
+                  <div className="absolute left-0 top-full z-30 mt-1 max-h-64 w-80 overflow-auto rounded-lg border border-border bg-card py-1 shadow-lg">
+                    {companySuggestions.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          selectCompanySuggestion(name);
+                        }}
+                        className="block w-full px-3 py-2 text-left text-xs text-foreground hover:bg-muted/60"
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {companyKeyword && (
                 <button onClick={() => setCompanyKeyword('')} className="text-xs text-primary hover:underline">
                   Clear
