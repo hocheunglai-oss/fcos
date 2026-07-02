@@ -9,8 +9,8 @@ const DELIVERY_FIELD = 'Delivery_Date__c';
 
 // Custom display labels
 const FIELD_LABELS = {
-  [BUYER_FIELD]: 'Buyer Invoice',
-  [SUPPLIER_FIELD]: 'Supplier Invoice',
+  [BUYER_FIELD]: 'Buyer Invoice Amount',
+  [SUPPLIER_FIELD]: 'Supplier Invoice Amount(s)',
   'Receivable_Balance__c': 'Receivable Balance',
   'Buyer_Name__c': 'Buyer Name',
   '_Buyer_Group': 'Buyer Group',
@@ -27,8 +27,6 @@ const FIELD_LABELS = {
 
 // Columns to completely hide (some are still used behind the scenes for Gross Profit)
 const BASE_HIDDEN_COLS = new Set([
-  BUYER_FIELD,
-  SUPPLIER_FIELD,
   COSTS_FIELD,
   'QLIK_STEM_Line_Item_Total_Cost__c',
   'QLIK_Costs_Total_Cost__c',
@@ -37,6 +35,8 @@ const BASE_HIDDEN_COLS = new Set([
   '__suppCommPerUnitCalc',
   '__netPnlCalc',
   'Buyer__c',
+  'Account__r',
+  'Account__c',
   'KeyStem__c',
   'ETA_Start_Date__c',
   'Expected_Delivery_Date__c',
@@ -137,8 +137,10 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
     if (counterpartyMode === 'supplier') {
       cols.add('Buyer_Name__c');
       cols.add('_Buyer_Group');
+      cols.add(BUYER_FIELD);
     } else {
       cols.add('_Supplier_Names');
+      cols.add(SUPPLIER_FIELD);
     }
     return cols;
   }, [counterpartyMode]);
