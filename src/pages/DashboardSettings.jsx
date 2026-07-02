@@ -23,6 +23,7 @@ export default function DashboardSettings() {
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
   const [disputeOnly, setDisputeOnly] = useState(savedFilters.disputeOnly ?? false);
+  const [koreanPortOnly, setKoreanPortOnly] = useState(savedFilters.koreanPortOnly ?? false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -43,13 +44,18 @@ export default function DashboardSettings() {
     selectedMonths.length === 12 ? [THIS_MONTH] : MONTHS.map(m => m.value)
   );
 
-  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths) =>
-    buildDeliveryWhere(yrs, mos);
+  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths, onlyKoreanPort = koreanPortOnly) => {
+    const filters = [
+      buildDeliveryWhere(yrs, mos),
+      onlyKoreanPort ? "Port__r.Country__c = 'KOREA'" : '',
+    ].filter(Boolean);
+    return filters.map((condition) => `(${condition})`).join(' AND ');
+  };
 
-  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly) => {
+  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly, onlyKoreanPort = koreanPortOnly) => {
     setLoading(true);
     setError(null);
-    const where = buildWhereClause(yrs, mos);
+    const where = buildWhereClause(yrs, mos, onlyKoreanPort);
     const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR, disputeOnly: onlyDisputes });
     if (res.data?.error) {
       setError(res.data.error);
@@ -61,13 +67,13 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, koreanPortOnly }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load(selectedYears, selectedMonths, disputeOnly);
+      load(selectedYears, selectedMonths, disputeOnly, koreanPortOnly);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths, disputeOnly]);
+  }, [selectedYears, selectedMonths, disputeOnly, koreanPortOnly]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -155,6 +161,16 @@ export default function DashboardSettings() {
               }`}
             >
               Disputed only
+            </button>
+            <button
+              onClick={() => setKoreanPortOnly(value => !value)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                koreanPortOnly
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
+              }`}
+            >
+              Korean Port
             </button>
           </div>
         </div>
