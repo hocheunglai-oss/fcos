@@ -215,7 +215,7 @@ export default function BuyerInvoices() {
   }, [filteredRows]);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', 'Supplier Trader in Charge', 'Status', 'Overdue'];
+    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', 'Buyer Trader in Charge', 'Status', 'Overdue'];
     const csvRows = filteredRows.map((row) => [
       row.stemName,
       row.buyerName,
@@ -351,7 +351,7 @@ export default function BuyerInvoices() {
         </div>
         {buyerTraderOptions.length > 0 && (
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-            <Label className="w-44 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier Trader in Charge</Label>
+            <Label className="w-44 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</Label>
             <div className="flex flex-wrap gap-1.5">
               {buyerTraderOptions.map((name) => (
                 <button
@@ -505,7 +505,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier Trader in Charge</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
                   </tr>

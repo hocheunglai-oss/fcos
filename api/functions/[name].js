@@ -1104,12 +1104,12 @@ async function salesforceBuyerInvoicesDue(body) {
 
     for (const nomination of nominationArrays.flat()) {
       if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { supplier: [], all: [] };
+      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [] };
       const name = String(nomination.Name || '');
       const value = nomination.Buyer_Supplier_Trader__c;
       if (!traderByStem[nomination.STEM__c].all.includes(value)) traderByStem[nomination.STEM__c].all.push(value);
-      if (name.startsWith('Nomination to ') && !traderByStem[nomination.STEM__c].supplier.includes(value)) {
-        traderByStem[nomination.STEM__c].supplier.push(value);
+      if (name.startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(value)) {
+        traderByStem[nomination.STEM__c].buyer.push(value);
       }
     }
   }
@@ -1138,7 +1138,7 @@ async function salesforceBuyerInvoicesDue(body) {
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
         receivableBalance: stem.Receivable_Balance__c ?? null,
         buyerInvoiceDueDate: dueDate,
-        buyerTraderInCharge: (traderInfo.supplier?.length ? traderInfo.supplier : traderInfo.all || []).join(', ') || null,
+        buyerTraderInCharge: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
         daysUntilDue,
         status: daysUntilDue == null ? 'Due' : daysUntilDue < 0 ? 'Overdue' : daysUntilDue === 0 ? 'Due Today' : 'Due Soon',
       };
@@ -1264,7 +1264,7 @@ function buyerTraderFilterHtml(report) {
   }).join('');
   return `
     <div style="margin:0 0 12px">
-      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Supplier Trader in Charge</div>
+      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Buyer Trader in Charge</div>
       <div>${chips}</div>
     </div>`;
 }
@@ -1323,7 +1323,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Invoice Amount</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Receivable Balance</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Due Date</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Supplier Trader</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Trader</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Status</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Overdue</th>
           </tr>
@@ -1342,7 +1342,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
     `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
     '',
-    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Supplier Trader ${row.buyerTraderInCharge || '-'}`),
+    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
   ];
   return { subject, html, text: textLines.join('\n'), totals };
 }
