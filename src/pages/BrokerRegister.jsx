@@ -14,6 +14,7 @@ const fmtMoney = (value) => `$${Number(value || 0).toLocaleString(undefined, { m
 const fmtDate = (value) => { try { return value ? format(new Date(value), 'dd MMM yyyy') : ''; } catch { return value || ''; } };
 const fmtUnit = (value) => value != null ? `${fmtMoney(value)} / MT` : '';
 const fmtDelay = (value) => value != null ? `${Number(value).toLocaleString()} day${Math.abs(Number(value)) === 1 ? '' : 's'}` : '';
+const fmtQty = (value) => value != null ? `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })} MT` : '';
 const csvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
 export default function BrokerRegister() {
@@ -66,10 +67,11 @@ export default function BrokerRegister() {
   const total = filteredRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Product', 'Delivery Date', 'Broker Type', 'Broker Name', 'Commission / Unit', 'Payable Balance', 'Receivable Balance', 'Payment Date Label', 'Payment Date', 'Payment Delay', 'Payment Status'];
+    const headers = ['Stem Name', 'Product', 'BDN Qty', 'Delivery Date', 'Broker Type', 'Broker Name', 'Commission / Unit', 'Payable Balance', 'Receivable Balance', 'Payment Date Label', 'Payment Date', 'Payment Delay', 'Payment Status'];
     const csvRows = filteredRows.map(row => [
       row.stemName,
       row.productName,
+      fmtQty(row.bdnQuantity),
       fmtDate(row.deliveryDate),
       row.brokerType,
       row.brokerName,
