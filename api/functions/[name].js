@@ -544,7 +544,7 @@ async function resolveViaQuery(objectType, id, nameField = 'Name') {
 }
 
 async function salesforceDashboardFilteredFull(body) {
-  const { where, trendYear, disputeOnly, portCountry } = body;
+  const { where, trendYear, disputeOnly, portCountry, companyKeyword, companyFilterMode } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
@@ -570,10 +570,25 @@ async function salesforceDashboardFilteredFull(body) {
     : '';
   const normalizedPortCountry = String(portCountry || '').trim();
   const portCountryCondition = normalizedPortCountry ? `Port__r.Country__c = '${escapeSoql(normalizedPortCountry)}'` : '';
-  const combinedWhere = [where, disputeCondition].filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
+  const normalizedCompanyKeyword = String(companyKeyword || '').trim();
+  const companyMode = companyFilterMode === 'supplier' ? 'supplier' : 'buyer';
+  const companyLike = normalizedCompanyKeyword ? `%${escapeSoql(normalizedCompanyKeyword)}%` : '';
+  const supplierCompanyFilterActive = Boolean(normalizedCompanyKeyword && companyMode === 'supplier');
+  const companyMatches = (name) => !normalizedCompanyKeyword
+    || String(name || '').toLowerCase().includes(normalizedCompanyKeyword.toLowerCase());
+  const companyCondition = normalizedCompanyKeyword
+    ? companyMode === 'supplier'
+      ? `Id IN (SELECT STEM__c FROM STEM_Line_Item__c WHERE Supplier_Name__c LIKE '${companyLike}' AND Cancelled__c = false)`
+      : buyerNameField
+        ? `${buyerNameField} LIKE '${companyLike}'`
+        : ''
+    : '';
+  const baseWhereConditions = [where, companyCondition].filter(Boolean);
+  const baseWhere = baseWhereConditions.map((condition) => `(${condition})`).join(' AND ');
+  const combinedWhere = [...baseWhereConditions, disputeCondition].filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
   const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
   const monthlyDateCondition = `(Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''}`;
-  const monthlyWhere = [monthlyDateCondition, disputeCondition, portCountryCondition]
+  const monthlyWhere = [monthlyDateCondition, disputeCondition, portCountryCondition, companyCondition]
     .filter(Boolean)
     .map((condition) => `(${condition})`)
     .join(' AND ');
@@ -601,9 +616,9 @@ async function salesforceDashboardFilteredFull(body) {
     hasType ? queryResult(`SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, { softFail: true }) : Promise.resolve({ records: [] }),
     queryResult(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, { limit: 3000, softFail: true }),
     hasDisputeStatus
-      ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${where ? ` AND (${where})` : ''}`, { softFail: true })
+      ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`, { softFail: true })
       : hasDispute
-        ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${where ? ` AND (${where})` : ''}`, { softFail: true })
+        ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`, { softFail: true })
         : Promise.resolve({ records: [] }),
     accountField ? queryResult(`SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`, { softFail: true }) : Promise.resolve({ records: [] }),
     buyerAmountField ? queryResult(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
@@ -687,22 +702,27 @@ async function salesforceDashboardFilteredFull(body) {
     const lineSell = lineSellAmount(li, stemHasDelivery);
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
     const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
-    if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
-    productQuantitiesByStem[id].push({
-      productName,
-      quantityLabel: lineItemQuantityLabel(li, stemHasDelivery),
-      unitOfMeasure: 'MT',
-    });
     const supplierName = String(li.Supplier_Name__c || '').trim();
+    const supplierMatchesCompanyFilter = !supplierCompanyFilterActive || companyMatches(supplierName);
+    if (supplierMatchesCompanyFilter) {
+      if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
+      productQuantitiesByStem[id].push({
+        productName,
+        quantityLabel: lineItemQuantityLabel(li, stemHasDelivery),
+        unitOfMeasure: 'MT',
+      });
+    }
     if (supplierName) {
       if (!supplierNamesByStem[id]) supplierNamesByStem[id] = new Set();
       supplierNamesByStem[id].add(supplierName);
-      if (filteredStemIds.has(id)) supplierNamesInFilteredStems.add(supplierName);
-      if (!supplierWeightByStem[id]) supplierWeightByStem[id] = {};
-      const supplierWeight = Math.abs(lineSell) || Math.abs(lineBuy) || financialQuantity(li, stemHasDelivery) || 1;
-      supplierWeightByStem[id][supplierName] = (supplierWeightByStem[id][supplierName] || 0) + supplierWeight;
+      if (supplierMatchesCompanyFilter) {
+        if (filteredStemIds.has(id)) supplierNamesInFilteredStems.add(supplierName);
+        if (!supplierWeightByStem[id]) supplierWeightByStem[id] = {};
+        const supplierWeight = Math.abs(lineSell) || Math.abs(lineBuy) || financialQuantity(li, stemHasDelivery) || 1;
+        supplierWeightByStem[id][supplierName] = (supplierWeightByStem[id][supplierName] || 0) + supplierWeight;
+      }
     }
-    if (filteredStemIds.has(id)) {
+    if (filteredStemIds.has(id) && supplierMatchesCompanyFilter) {
       const family = li['Product__r']?.Family || li['Product__r']?.Name || 'Unspecified';
       productFamilyQuantityByName[family] = (productFamilyQuantityByName[family] || 0) + financialQuantity(li, stemHasDelivery);
     }

@@ -34,6 +34,8 @@ export default function DashboardSettings() {
   const [portCountry, setPortCountry] = useState(savedPortCountry);
   const [counterpartyMode, setCounterpartyMode] = useState(savedFilters.counterpartyMode === 'supplier' ? 'supplier' : 'buyer');
   const [portCountryOptions, setPortCountryOptions] = useState([]);
+  const [companyKeyword, setCompanyKeyword] = useState(savedFilters.companyKeyword ?? '');
+  const [companyOptions, setCompanyOptions] = useState([]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -54,6 +56,12 @@ export default function DashboardSettings() {
     selectedMonths.length === 12 ? [THIS_MONTH] : MONTHS.map(m => m.value)
   );
 
+  const updateCounterpartyMode = (mode) => {
+    if (mode === counterpartyMode) return;
+    setCounterpartyMode(mode);
+    setCompanyKeyword('');
+  };
+
   useEffect(() => {
     let cancelled = false;
     const loadPortCountries = async () => {
@@ -68,6 +76,25 @@ export default function DashboardSettings() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadCompanies = async () => {
+      setCompanyOptions([]);
+      const isSupplier = counterpartyMode === 'supplier';
+      const field = isSupplier ? 'Supplier_Name__c' : 'Buyer_Name__c';
+      const objectName = isSupplier ? 'STEM_Line_Item__c' : 'stem__c';
+      const res = await appClient.functions.invoke('salesforceQuery', {
+        soql: `SELECT ${field}, COUNT(Id) total FROM ${objectName} WHERE ${field} != null GROUP BY ${field} ORDER BY ${field} LIMIT 2000`
+      });
+      if (cancelled || res.data?.error) return;
+      const names = [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
+        .sort((a, b) => String(a).localeCompare(String(b)));
+      setCompanyOptions(names);
+    };
+    loadCompanies();
+    return () => { cancelled = true; };
+  }, [counterpartyMode]);
+
   const buildWhereClause = (yrs = selectedYears, mos = selectedMonths, country = portCountry) => {
     const normalizedCountry = String(country || '').trim();
     const filters = [
@@ -77,16 +104,26 @@ export default function DashboardSettings() {
     return filters.map((condition) => `(${condition})`).join(' AND ');
   };
 
-  const load = async (yrs = selectedYears, mos = selectedMonths, onlyDisputes = disputeOnly, country = portCountry) => {
+  const load = async (
+    yrs = selectedYears,
+    mos = selectedMonths,
+    onlyDisputes = disputeOnly,
+    country = portCountry,
+    mode = counterpartyMode,
+    company = companyKeyword,
+  ) => {
     setLoading(true);
     setError(null);
     const normalizedCountry = String(country || '').trim();
+    const normalizedCompany = String(company || '').trim();
     const where = buildWhereClause(yrs, mos, normalizedCountry);
     const res = await appClient.functions.invoke('salesforceDashboardFiltered', {
       where,
       trendYear: THIS_YEAR,
       disputeOnly: onlyDisputes,
       portCountry: normalizedCountry || null,
+      companyFilterMode: mode,
+      companyKeyword: normalizedCompany || null,
     });
     if (res.data?.error) {
       setError(res.data.error);
@@ -98,13 +135,13 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load(selectedYears, selectedMonths, disputeOnly, portCountry);
+      load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode]);
+  }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -228,7 +265,7 @@ export default function DashboardSettings() {
                 {COUNTERPARTY_MODES.map((mode) => (
                   <button
                     key={mode.value}
-                    onClick={() => setCounterpartyMode(mode.value)}
+                    onClick={() => updateCounterpartyMode(mode.value)}
                     className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
                       counterpartyMode === mode.value
                         ? 'bg-primary text-primary-foreground border-primary'
@@ -239,6 +276,29 @@ export default function DashboardSettings() {
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="company-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {activeCounterparty.label} Company
+              </Label>
+              <Input
+                id="company-filter"
+                list={`company-options-${counterpartyMode}`}
+                value={companyKeyword}
+                onChange={(e) => setCompanyKeyword(e.target.value)}
+                placeholder={`All ${activeCounterparty.plural.toLowerCase()}`}
+                className="h-8 w-56 text-xs"
+              />
+              <datalist id={`company-options-${counterpartyMode}`}>
+                {companyOptions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              {companyKeyword && (
+                <button onClick={() => setCompanyKeyword('')} className="text-xs text-primary hover:underline">
+                  Clear
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="port-country-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -490,7 +550,7 @@ export default function DashboardSettings() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry)}
+        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword)}
       />
     </div>
   );
