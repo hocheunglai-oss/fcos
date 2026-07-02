@@ -240,7 +240,7 @@ export default function DashboardSettings() {
       />
 
       {/* Filter panel */}
-      <div className="bg-card rounded-xl border border-border p-4 mb-6 space-y-3">
+      <div className="relative z-40 overflow-visible bg-card rounded-xl border border-border p-4 mb-6 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <Label className="w-16 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Year</Label>
           <div className="flex flex-wrap gap-2">
@@ -301,7 +301,7 @@ export default function DashboardSettings() {
               <Label htmlFor="company-filter" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {activeCounterparty.label} Company
               </Label>
-              <div className="relative">
+              <div className="relative z-50">
                 <Input
                   id="company-filter"
                   value={companyKeyword}
@@ -323,7 +323,7 @@ export default function DashboardSettings() {
                   autoComplete="off"
                 />
                 {companySuggestionsOpen && companySuggestions.length > 0 && (
-                  <div className="absolute left-0 top-full z-30 mt-1 max-h-64 w-80 overflow-auto rounded-lg border border-border bg-card py-1 shadow-lg">
+                  <div className="absolute left-0 top-full z-[100] mt-1 max-h-64 w-80 overflow-auto rounded-lg border border-border bg-card py-1 shadow-lg">
                     {companySuggestions.map((name) => (
                       <button
                         key={name}
