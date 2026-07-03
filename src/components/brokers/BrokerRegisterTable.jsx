@@ -20,6 +20,14 @@ const fmtDelay = (value) => {
   const number = numericValue(value);
   return number != null ? `${number.toLocaleString()} day${Math.abs(number) === 1 ? '' : 's'}` : '—';
 };
+const payableAmount = (row) => {
+  const amount = Number(row.commissionAmount || 0);
+  return amount > 0 ? amount : null;
+};
+const receivableAmount = (row) => {
+  const amount = Number(row.commissionAmount || 0);
+  return amount < 0 ? Math.abs(amount) : null;
+};
 
 function ProductQuantityCell({ row }) {
   const items = row.productQuantities?.length
@@ -58,8 +66,8 @@ function CommissionUnitCell({ row }) {
 }
 
 export default function BrokerRegisterTable({ rows, onRowClick }) {
-  const payableTotal = rows.reduce((sum, row) => sum + (row.brokerType === 'Supplier Broker' ? Number(row.commissionAmount || 0) : 0), 0);
-  const receivableTotal = rows.reduce((sum, row) => sum + (row.brokerType !== 'Supplier Broker' ? Number(row.commissionAmount || 0) : 0), 0);
+  const payableTotal = rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+  const receivableTotal = rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
 
   return (
     <div className="overflow-hidden">
@@ -89,8 +97,8 @@ export default function BrokerRegisterTable({ rows, onRowClick }) {
                 <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={row.brokerType} /></td>
                 <td className="py-3 px-4 text-foreground">{textValue(row.brokerName)}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><CommissionUnitCell row={row} /></td>
-                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType === 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
-                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{row.brokerType !== 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '—'}</td>
+                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{payableAmount(row) != null ? fmtMoney(payableAmount(row)) : '—'}</td>
+                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{receivableAmount(row) != null ? fmtMoney(receivableAmount(row)) : '—'}</td>
                 <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
                 <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : '—')}</td>
                 <td className="py-3 px-4 whitespace-nowrap"><PaymentStatusBadge status={row.paymentStatus} /></td>

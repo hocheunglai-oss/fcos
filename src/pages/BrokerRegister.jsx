@@ -30,6 +30,14 @@ const fmtDelay = (value) => {
   return number != null ? `${number.toLocaleString()} day${Math.abs(number) === 1 ? '' : 's'}` : '';
 };
 const csvValue = (value) => `"${textValue(value, '').replaceAll('"', '""')}"`;
+const payableAmount = (row) => {
+  const amount = Number(row.commissionAmount || 0);
+  return amount > 0 ? amount : null;
+};
+const receivableAmount = (row) => {
+  const amount = Number(row.commissionAmount || 0);
+  return amount < 0 ? Math.abs(amount) : null;
+};
 
 export default function BrokerRegister() {
   const [rows, setRows] = useState([]);
@@ -90,8 +98,8 @@ export default function BrokerRegister() {
       row.brokerType,
       row.brokerName,
       fmtUnit(row.commissionUnitPriceLabel || row.commissionUnitPrice),
-      row.brokerType === 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '',
-      row.brokerType !== 'Supplier Broker' ? fmtMoney(row.commissionAmount) : '',
+      payableAmount(row) != null ? fmtMoney(payableAmount(row)) : '',
+      receivableAmount(row) != null ? fmtMoney(receivableAmount(row)) : '',
       row.paymentDateLabel,
       fmtDate(row.paymentDate),
       row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
