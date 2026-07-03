@@ -3,8 +3,6 @@ export const EXCHANGE_RATE_SETTINGS_KEY = 'broker_commission_exchange_rate_v1';
 export const RATE_PROVIDER_OPTIONS = [
   { value: 'blended', label: 'Frankfurter blended rate' },
   { value: 'ECB', label: 'European Central Bank reference rate' },
-  { value: 'HKMA', label: 'Hong Kong Monetary Authority published cross-rate' },
-  { value: 'BOC', label: 'Bank of Canada indicative rate' },
 ];
 
 export const DEFAULT_EXCHANGE_RATE_SETTINGS = {

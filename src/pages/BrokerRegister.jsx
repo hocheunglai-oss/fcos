@@ -138,7 +138,7 @@ export default function BrokerRegister() {
   }, [exchangeRateProvider, exchangeRateTargetDate]);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Products / Quantity', 'Delivery Date', 'Broker Type', 'Broker Name', 'Commission / Unit', 'Payable Balance', 'Receivable Balance', 'Payment Date Label', 'Payment Date', 'Payment Delay'];
+    const headers = ['Stem Name', 'Products / Quantity', 'Delivery Date', 'Broker Type', 'Broker Name', 'Commission / Unit', 'Commission Payable', 'Commission Receivable', 'Payment Date Label', 'Payment Date', 'Payment Delay'];
     const csvRows = filteredRows.map(row => [
       row.stemName,
       row.productQuantityLabel || row.productName,
@@ -189,11 +189,11 @@ export default function BrokerRegister() {
         <div className="min-w-72 flex-1">
           <div className="text-xs text-muted-foreground uppercase tracking-wide">USD/CNY Exchange Rate</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            USD/CNY · source configured in Settings · last available rate on or before the selected quarter end.
+            API rate is treated as mid-rate. CNY conversion uses bank buy rate: mid-rate less 0.2%.
             {exchangeRateLoading && ' Loading rate...'}
             {exchangeRateError && <span className="text-destructive"> {exchangeRateError}</span>}
             {exchangeRate && !exchangeRateLoading && (
-              <span> Applied: {Number(exchangeRate.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} on {fmtDate(exchangeRate.date)} · {exchangeRate.source} · {exchangeRate.rateType}</span>
+              <span> Mid-rate: {Number(exchangeRate.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} on {fmtDate(exchangeRate.date)} · {exchangeRate.source} · {exchangeRate.rateType}</span>
             )}
           </div>
         </div>

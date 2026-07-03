@@ -73,8 +73,9 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
   const payableTotal = rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
   const receivableTotal = rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
   const exchangeRateValue = numericValue(exchangeRate?.rate);
+  const bankBuyRate = exchangeRateValue != null ? exchangeRateValue * 0.998 : null;
   const exchangeRateLabel = exchangeRate
-    ? `USD/CNY ${Number(exchangeRateValue || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} · ${fmtDate(exchangeRate.date)} · ${exchangeRate.providerLabel} · ${exchangeRate.rateType}`
+    ? `Mid-rate ${Number(exchangeRateValue || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} · bank buy rate ${Number(bankBuyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} after 0.2% deduction · ${fmtDate(exchangeRate.date)} · ${exchangeRate.providerLabel}`
     : exchangeRateError
       ? `USD/CNY conversion unavailable: ${exchangeRateError}`
       : 'USD/CNY rate loading';
@@ -91,8 +92,8 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Type</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Name</th>
               <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission / Unit</th>
-              <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Payable Balance</th>
-              <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Receivable Balance</th>
+              <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission Payable</th>
+              <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission Receivable</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Payment Date</th>
               <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Payment Delay</th>
             </tr>
@@ -124,16 +125,16 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
               </tr>
               <tr className="border-t border-border bg-muted/30">
                 <td colSpan="6" className="py-3 px-4 text-right text-foreground">
-                  <div className="font-semibold">Summary in CNY</div>
+                  <div className="font-semibold">Summary in CNY using Bank Buy Rate</div>
                   <div className="text-xs font-normal text-muted-foreground">
                     {exchangeRateLoading ? 'Loading USD/CNY exchange rate...' : exchangeRateLabel}
                   </div>
                 </td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">
-                  {exchangeRateValue != null ? fmtCny(payableTotal * exchangeRateValue) : '—'}
+                  {bankBuyRate != null ? fmtCny(payableTotal * bankBuyRate) : '—'}
                 </td>
                 <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">
-                  {exchangeRateValue != null ? fmtCny(receivableTotal * exchangeRateValue) : '—'}
+                  {bankBuyRate != null ? fmtCny(receivableTotal * bankBuyRate) : '—'}
                 </td>
                 <td colSpan="2" className="py-3 px-4" />
               </tr>

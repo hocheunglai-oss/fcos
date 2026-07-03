@@ -245,7 +245,7 @@ export default function SettingsPage() {
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Rate Source</Label>
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Mid-Rate Source</Label>
             <Select
               value={exchangeRateSettings.provider}
               onValueChange={(provider) => setExchangeRateSettings((prev) => ({ ...prev, provider }))}
@@ -259,8 +259,9 @@ export default function SettingsPage() {
             </Select>
           </div>
           <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-            <div><span className="font-semibold text-foreground">Sources:</span> Frankfurter, HKMA Open API</div>
-            <div><span className="font-semibold text-foreground">HKMA calculation:</span> USD/HKD divided by CNY/HKD</div>
+            <div><span className="font-semibold text-foreground">Source:</span> Frankfurter API</div>
+            <div><span className="font-semibold text-foreground">Rate treatment:</span> API rate is mid-rate</div>
+            <div><span className="font-semibold text-foreground">Bank buy rate:</span> mid-rate less 0.2%</div>
             <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
             <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
           </div>
