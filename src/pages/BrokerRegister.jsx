@@ -189,11 +189,11 @@ export default function BrokerRegister() {
         <div className="min-w-72 flex-1">
           <div className="text-xs text-muted-foreground uppercase tracking-wide">USD/CNY Exchange Rate</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            Frankfurter API · USD/CNY · provider configured in Settings · last working day of selected quarter.
+            USD/CNY · source configured in Settings · last available rate on or before the selected quarter end.
             {exchangeRateLoading && ' Loading rate...'}
             {exchangeRateError && <span className="text-destructive"> {exchangeRateError}</span>}
             {exchangeRate && !exchangeRateLoading && (
-              <span> Applied: {Number(exchangeRate.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} on {fmtDate(exchangeRate.date)} · {exchangeRate.rateType}</span>
+              <span> Applied: {Number(exchangeRate.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} on {fmtDate(exchangeRate.date)} · {exchangeRate.source} · {exchangeRate.rateType}</span>
             )}
           </div>
         </div>

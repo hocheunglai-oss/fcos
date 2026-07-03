@@ -259,9 +259,9 @@ export default function SettingsPage() {
             </Select>
           </div>
           <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-            <div><span className="font-semibold text-foreground">API:</span> Frankfurter</div>
-            <div><span className="font-semibold text-foreground">Endpoint:</span> /v2/rate/USD/CNY</div>
-            <div><span className="font-semibold text-foreground">Date rule:</span> last working day of selected quarter</div>
+            <div><span className="font-semibold text-foreground">Sources:</span> Frankfurter, HKMA Open API</div>
+            <div><span className="font-semibold text-foreground">HKMA calculation:</span> USD/HKD divided by CNY/HKD</div>
+            <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
             <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
           </div>
         </div>

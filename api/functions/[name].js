@@ -373,7 +373,7 @@ const FRANKFURTER_PROVIDER_DETAILS = {
   HKMA: {
     key: 'HKMA',
     label: 'Hong Kong Monetary Authority',
-    rateType: 'published rate',
+    rateType: 'published HKD cross-rate',
   },
   BOC: {
     key: 'BOC',
@@ -408,6 +408,54 @@ async function fetchFrankfurterRate(date, provider) {
   return data;
 }
 
+async function fetchHkmaUsdCnyRate(requestedDate) {
+  const pageSize = 100;
+  for (let offset = 0; offset <= 10000; offset += pageSize) {
+    const url = new URL('https://api.hkma.gov.hk/public/market-data-and-statistics/monthly-statistical-bulletin/er-ir/er-eeri-daily');
+    url.searchParams.set('offset', String(offset));
+    url.searchParams.set('pagesize', String(pageSize));
+
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.header?.success === false) {
+      throw new Error(data.header?.err_msg || `HKMA request failed: ${response.status}`);
+    }
+
+    const records = data.result?.records || [];
+    if (!records.length) break;
+
+    const matchingRecord = records.find((record) => (
+      record.end_of_day <= requestedDate
+      && Number(record.usd) > 0
+      && Number(record.cny) > 0
+    ));
+
+    if (matchingRecord) {
+      const usdHkd = Number(matchingRecord.usd);
+      const cnyHkd = Number(matchingRecord.cny);
+      return {
+        source: 'HKMA Open API',
+        apiUrl: url.origin + url.pathname,
+        requestedDate,
+        date: matchingRecord.end_of_day,
+        base: 'USD',
+        quote: 'CNY',
+        rate: usdHkd / cnyHkd,
+        provider: 'HKMA',
+        providerLabel: FRANKFURTER_PROVIDER_DETAILS.HKMA.label,
+        rateType: FRANKFURTER_PROVIDER_DETAILS.HKMA.rateType,
+        calculation: 'USD/HKD divided by CNY/HKD',
+      };
+    }
+
+    const lastRecordDate = records.at(-1)?.end_of_day;
+    const dataSize = Number(data.result?.datasize || 0);
+    if (!lastRecordDate || offset + pageSize >= dataSize) break;
+  }
+
+  throw new Error('Unable to fetch HKMA USD/CNY published cross-rate');
+}
+
 async function frankfurterUsdCnyRate(body) {
   const provider = normalizeFrankfurterProvider(body.provider);
   const requestedDate = dateOnly(body.date || new Date());
@@ -415,6 +463,10 @@ async function frankfurterUsdCnyRate(body) {
 
   const today = dateOnly(new Date());
   let probeDate = requestedDate > today ? today : requestedDate;
+  if (provider === 'HKMA') {
+    return fetchHkmaUsdCnyRate(probeDate);
+  }
+
   let lastError = null;
   for (let attempt = 0; attempt < 16; attempt += 1) {
     try {
