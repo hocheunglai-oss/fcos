@@ -678,6 +678,30 @@ function cleanDownloadFilename(value, fallback = 'salesforce-document') {
     .slice(0, 180) || fallback;
 }
 
+const DOCUMENT_MIME_TYPES = {
+  csv: 'text/csv',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  eml: 'message/rfc822',
+  gif: 'image/gif',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  msg: 'application/vnd.ms-outlook',
+  pdf: 'application/pdf',
+  png: 'image/png',
+  txt: 'text/plain',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+function documentContentType(filename, salesforceContentType) {
+  const rawType = String(salesforceContentType || '').trim().toLowerCase();
+  const genericTypes = new Set(['', 'application/octet-stream', 'application/octetstream', 'binary/octet-stream']);
+  if (!genericTypes.has(rawType)) return salesforceContentType;
+  const extension = String(filename || '').split('.').pop()?.toLowerCase();
+  return DOCUMENT_MIME_TYPES[extension] || 'application/octet-stream';
+}
+
 function inferStemFieldSourceGroup(fieldName) {
   const lower = String(fieldName || '').toLowerCase();
   if (lower.includes('supplier') && lower.includes('invoice')) return 'Supplier Invoice';
@@ -978,7 +1002,7 @@ async function salesforceDocumentDownload(req, res) {
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
   res.setHeader('cache-control', 'no-store');
-  res.setHeader('content-type', file.contentType);
+  res.setHeader('content-type', documentContentType(filename, file.contentType));
   res.setHeader('content-disposition', `inline; filename="${asciiFilename.replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.end(file.buffer);
 }
