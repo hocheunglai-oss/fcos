@@ -173,27 +173,26 @@ export default function BrokerRegister() {
     ? `Mid-rate ${Number(exchangeRate.rate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; bank buy rate ${Number(bankBuyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; applied rate date ${fmtDate(exchangeRate.date)}`
     : exchangeRateError || 'USD/CNY rate unavailable';
   const filterSummaryRows = [
-    ['Search', search.trim() || 'All'],
-    ['Broker Type', selectedTypes.length ? selectedTypes.join(', ') : 'All'],
     ['Broker Name', selectedBrokerNames.length ? selectedBrokerNames.join(', ') : 'All'],
-    ['Hidden Broker Flags', selectedHiddenBrokerFlags.length ? selectedHiddenBrokerFlags.map(flag => flag === 'individual' ? 'Hidden Broker Individual' : 'Hidden Broker Company').join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
   ];
   const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
     const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
     return `<Cell ss:StyleID="${styleId}"${mergeAttr}><Data ss:Type="String">${escapeXmlText(value)}</Data></Cell>`;
   };
-  const workbookNumberCell = (value, styleId = 'Number') => {
+  const workbookNumberCell = (value, styleId = 'Number', mergeAcross = 0) => {
     const number = numericValue(value);
+    const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
     return number == null
-      ? workbookCell('', styleId)
-      : `<Cell ss:StyleID="${styleId}"><Data ss:Type="Number">${number}</Data></Cell>`;
+      ? workbookCell('', styleId, mergeAcross)
+      : `<Cell ss:StyleID="${styleId}"${mergeAttr}><Data ss:Type="Number">${number}</Data></Cell>`;
   };
-  const workbookCurrencyCell = (value, styleId = 'Currency') => {
+  const workbookCurrencyCell = (value, styleId = 'Currency', mergeAcross = 0) => {
     const number = roundCurrency(value);
+    const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
     return number == null
-      ? workbookCell('', styleId)
-      : `<Cell ss:StyleID="${styleId}"><Data ss:Type="Number">${number.toFixed(2)}</Data></Cell>`;
+      ? workbookCell('', styleId, mergeAcross)
+      : `<Cell ss:StyleID="${styleId}"${mergeAttr}><Data ss:Type="Number">${number.toFixed(2)}</Data></Cell>`;
   };
   const workbookRow = (cells) => `<Row ss:AutoFitHeight="1">${cells.join('')}</Row>`;
   const workbookColumns = (widths) => widths
@@ -342,60 +341,47 @@ export default function BrokerRegister() {
       paymentDate: fmtDate(row.paymentDate),
       paymentDelay: row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
     }));
-    const detailHeaders = ['Stem Name', 'Products / Quantity', 'Delivery Date', 'Broker Type', 'Commission / Unit', 'Commission Payable', 'Commission Receivable', 'Payment Date Label', 'Payment Date', 'Payment Delay'];
-    const brokerColumnValues = [
-      ['Broker\'s Commission', detailHeaders[0], ...detailRows.map((row) => row.stemName)],
-      [detailHeaders[1], ...detailRows.map((row) => row.productQuantity)],
-      [detailHeaders[2], ...detailRows.map((row) => row.deliveryDate)],
-      [detailHeaders[3], ...detailRows.map((row) => row.brokerType)],
-      [detailHeaders[4], ...detailRows.map((row) => row.commissionUnit)],
-      [detailHeaders[5], ...detailRows.map((row) => row.commissionPayable)],
-      [detailHeaders[6], ...detailRows.map((row) => row.commissionReceivable)],
-      [detailHeaders[7], ...detailRows.map((row) => row.paymentDateLabel)],
-      [detailHeaders[8], ...detailRows.map((row) => row.paymentDate)],
-      [detailHeaders[9], ...detailRows.map((row) => row.paymentDelay)],
+    const hasCommissionPayable = detailRows.some((row) => numericValue(row.commissionPayable) != null);
+    const hasCommissionReceivable = detailRows.some((row) => numericValue(row.commissionReceivable) != null);
+    const hasPaymentDelay = detailRows.some((row) => textValue(row.paymentDelay, '').trim());
+    const detailColumns = [
+      { header: 'Stem Name', value: (row) => row.stemName, cell: (row) => workbookCell(row.stemName), minWidth: 110, maxWidth: 280 },
+      { header: 'Products / Quantity', value: (row) => row.productQuantity, cell: (row) => workbookCell(row.productQuantity), minWidth: 110, maxWidth: 280 },
+      { header: 'Delivery Date', value: (row) => row.deliveryDate, cell: (row) => workbookCell(row.deliveryDate), minWidth: 85, maxWidth: 180 },
+      { header: 'Broker Type', value: (row) => row.brokerType, cell: (row) => workbookCell(row.brokerType), minWidth: 85, maxWidth: 180 },
+      { header: 'Commission / Unit', value: (row) => row.commissionUnit, cell: (row) => workbookCell(row.commissionUnit, 'TextRight'), minWidth: 85, maxWidth: 180 },
+      ...(hasCommissionPayable ? [{ header: 'Commission Payable', value: (row) => row.commissionPayable, cell: (row) => workbookCurrencyCell(row.commissionPayable), minWidth: 105, maxWidth: 180 }] : []),
+      ...(hasCommissionReceivable ? [{ header: 'Commission Receivable', value: (row) => row.commissionReceivable, cell: (row) => workbookCurrencyCell(row.commissionReceivable), minWidth: 105, maxWidth: 190 }] : []),
+      { header: 'Payment Date Label', value: (row) => row.paymentDateLabel, cell: (row) => workbookCell(row.paymentDateLabel), minWidth: 85, maxWidth: 180 },
+      { header: 'Payment Date', value: (row) => row.paymentDate, cell: (row) => workbookCell(row.paymentDate), minWidth: 85, maxWidth: 180 },
+      ...(hasPaymentDelay ? [{ header: 'Payment Delay', value: (row) => row.paymentDelay, cell: (row) => workbookCell(row.paymentDelay, 'TextRight'), minWidth: 85, maxWidth: 180 }] : []),
     ];
+    const detailColumnCount = detailColumns.length;
+    const detailMergeAcross = Math.max(0, detailColumnCount - 1);
+    const labelValueMergeAcross = Math.max(0, detailColumnCount - 2);
+    const brokerColumnValues = detailColumns.map((column, index) => [
+      ...(index === 0 ? ['Broker\'s Commission'] : []),
+      column.header,
+      ...detailRows.map((row) => column.value(row)),
+    ]);
     const brokerRows = [
-      workbookRow([workbookCell('Broker\'s Commission', 'Title', 9)]),
-      workbookRow([workbookCell(`Generated ${generatedAt} · ${filteredRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', 9)]),
-      workbookRow([workbookCell('Applied Filters', 'Section', 9)]),
-      ...filterSummaryRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text', 8)])),
-      workbookRow([workbookCell('Summary', 'Section', 9)]),
-      workbookRow([
-        workbookCell('Commission Payable', 'SummaryLabel'),
-        workbookCurrencyCell(commissionPayableTotal),
-        workbookCell('Commission Receivable', 'SummaryLabel'),
-        workbookCurrencyCell(commissionReceivableTotal),
-        workbookCell('Net Commission Total', 'SummaryLabel'),
-        workbookCurrencyCell(total),
-        workbookCell('Exchange Rate', 'SummaryLabel'),
-        workbookCell(exchangeRateSummary, 'SummaryText', 2),
-      ]),
-      workbookRow([
-        workbookCell('Commission Payable in CNY', 'SummaryLabel'),
-        workbookCurrencyCell(bankBuyRate != null ? commissionPayableTotal * bankBuyRate : null, 'Cny'),
-        workbookCell('Commission Receivable in CNY', 'SummaryLabel'),
-        workbookCurrencyCell(bankBuyRate != null ? commissionReceivableTotal * bankBuyRate : null, 'Cny'),
-        workbookCell('Bank Buy Rate', 'SummaryLabel'),
-        workbookNumberCell(bankBuyRate, 'Rate'),
-        workbookCell('', 'SummaryText', 3),
-      ]),
-      workbookRow([workbookCell('Broker Commission Rows', 'Section', 9)]),
-      workbookRow(detailHeaders.map((header) => workbookCell(header, 'Header'))),
+      workbookRow([workbookCell('Broker\'s Commission', 'Title', detailMergeAcross)]),
+      workbookRow([workbookCell(`Generated ${generatedAt} · ${filteredRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', detailMergeAcross)]),
+      workbookRow([workbookCell('Applied Filters', 'Section', detailMergeAcross)]),
+      ...filterSummaryRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text', labelValueMergeAcross)])),
+      workbookRow([workbookCell('Summary', 'Section', detailMergeAcross)]),
+      workbookRow([workbookCell('Commission Payable', 'SummaryLabel'), workbookCurrencyCell(commissionPayableTotal, 'Currency', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Commission Receivable', 'SummaryLabel'), workbookCurrencyCell(commissionReceivableTotal, 'Currency', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Net Commission Total', 'SummaryLabel'), workbookCurrencyCell(total, 'Currency', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Commission Payable in CNY', 'SummaryLabel'), workbookCurrencyCell(bankBuyRate != null ? commissionPayableTotal * bankBuyRate : null, 'Cny', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Commission Receivable in CNY', 'SummaryLabel'), workbookCurrencyCell(bankBuyRate != null ? commissionReceivableTotal * bankBuyRate : null, 'Cny', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Bank Buy Rate', 'SummaryLabel'), workbookNumberCell(bankBuyRate, 'Rate', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Exchange Rate', 'SummaryLabel'), workbookCell(exchangeRateSummary, 'SummaryText', labelValueMergeAcross)]),
+      workbookRow([workbookCell('Broker Commission Rows', 'Section', detailMergeAcross)]),
+      workbookRow(detailColumns.map((column) => workbookCell(column.header, 'Header'))),
       ...(detailRows.length
-        ? detailRows.map((row) => workbookRow([
-          workbookCell(row.stemName),
-          workbookCell(row.productQuantity),
-          workbookCell(row.deliveryDate),
-          workbookCell(row.brokerType),
-          workbookCell(row.commissionUnit, 'TextRight'),
-          workbookCurrencyCell(row.commissionPayable),
-          workbookCurrencyCell(row.commissionReceivable),
-          workbookCell(row.paymentDateLabel),
-          workbookCell(row.paymentDate),
-          workbookCell(row.paymentDelay, 'TextRight'),
-        ]))
-        : [workbookRow([workbookCell('No broker commissions found.', 'Text', 9)])]),
+        ? detailRows.map((row) => workbookRow(detailColumns.map((column) => column.cell(row))))
+        : [workbookRow([workbookCell('No broker commissions found.', 'Text', detailMergeAcross)])]),
     ];
     const settingsColumnValues = [
       ['Settings', ...methodologyRows.map(([label]) => label)],
@@ -421,8 +407,8 @@ export default function BrokerRegister() {
         </DocumentProperties>
         ${workbookStyles}
         <Worksheet ss:Name="Broker Commission">
-          <Table ss:ExpandedColumnCount="10" ss:ExpandedRowCount="${brokerRows.length}" x:FullColumns="1" x:FullRows="1">
-            ${workbookColumns(brokerColumnValues.map((values, index) => columnWidth(values, index <= 1 ? 110 : 85, index <= 1 ? 280 : 180)))}
+          <Table ss:ExpandedColumnCount="${detailColumnCount}" ss:ExpandedRowCount="${brokerRows.length}" x:FullColumns="1" x:FullRows="1">
+            ${workbookColumns(brokerColumnValues.map((values, index) => columnWidth(values, detailColumns[index].minWidth, detailColumns[index].maxWidth)))}
             ${brokerRows.join('')}
           </Table>
           <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
