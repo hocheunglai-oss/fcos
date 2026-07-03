@@ -653,9 +653,9 @@ async function resolveViaQuery(objectType, id, nameField = 'Name') {
 
 const DOCUMENT_SOURCE_GROUPS = [
   'Direct STEM',
-  'Buyer / Factoring Invoice',
-  'Supplier Invoice',
-  'Nomination',
+  'Invoices to Buyer',
+  'Invoices from Suppliers',
+  'Contracts and Compliance',
   'Dispute / Support',
   'Line Item',
   'Extra Cost',
@@ -704,9 +704,9 @@ function documentContentType(filename, salesforceContentType) {
 
 function inferStemFieldSourceGroup(fieldName) {
   const lower = String(fieldName || '').toLowerCase();
-  if (lower.includes('supplier') && lower.includes('invoice')) return 'Supplier Invoice';
-  if (lower.includes('invoice') || lower.includes('factoring')) return 'Buyer / Factoring Invoice';
-  if (lower.includes('nomination')) return 'Nomination';
+  if (lower.includes('supplier') && lower.includes('invoice')) return 'Invoices from Suppliers';
+  if (lower.includes('invoice') || lower.includes('factoring')) return 'Invoices to Buyer';
+  if (lower.includes('nomination')) return 'Contracts and Compliance';
   if (lower.includes('dispute')) return 'Dispute / Support';
   if (lower.includes('email') || lower.includes('mail')) return 'Email';
   return null;
@@ -836,7 +836,7 @@ async function salesforceStemDocuments(body = {}) {
     if (item.Supplier_Invoice__c) {
       addRelatedRecord(relatedRecords, seenRecordIds, {
         id: item.Supplier_Invoice__c,
-        sourceGroup: 'Supplier Invoice',
+        sourceGroup: 'Invoices from Suppliers',
         sourceLabel: item.Supplier_Name__c || 'Supplier Invoice',
         sourceObject: 'Supplier_Invoice__c',
         name: supplierInvoiceNames[item.Supplier_Invoice__c] || item.Supplier_Name__c || 'Supplier Invoice',
@@ -855,7 +855,7 @@ async function salesforceStemDocuments(body = {}) {
     if (cost.Supplier_Invoice__c) {
       addRelatedRecord(relatedRecords, seenRecordIds, {
         id: cost.Supplier_Invoice__c,
-        sourceGroup: 'Supplier Invoice',
+        sourceGroup: 'Invoices from Suppliers',
         sourceLabel: cost.Supplier_Name__c || 'Supplier Invoice',
         sourceObject: 'Supplier_Invoice__c',
         name: supplierInvoiceNames[cost.Supplier_Invoice__c] || cost.Supplier_Name__c || 'Supplier Invoice',
@@ -874,9 +874,9 @@ async function salesforceStemDocuments(body = {}) {
   }
 
   const lookupRelatedGroups = await Promise.all([
-    recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Supplier Invoice', 'Supplier Invoice'),
-    recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Buyer / Factoring Invoice', 'Buyer / Factoring Invoice'),
-    recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Nomination', 'Nomination'),
+    recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Invoices from Suppliers', 'Supplier Invoice'),
+    recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Invoices to Buyer', 'Buyer / Factoring Invoice'),
+    recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Contracts and Compliance', 'Nomination'),
     recordsLinkedToStemByLookup('Dispute__c', actualStemId, 'Dispute / Support', 'Dispute'),
     recordsLinkedToStemByLookup('EmailMessage', actualStemId, 'Email', 'Email'),
   ]);

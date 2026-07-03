@@ -242,16 +242,6 @@ function DocumentsSection({
                       >
                         <Download className="h-3 w-3" /> Open
                       </a>
-                      {document.salesforceUrl && (
-                        <a
-                          href={document.salesforceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
-                        >
-                          <ExternalLink className="h-3 w-3" /> Salesforce
-                        </a>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -527,16 +517,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                   })}
                 </div>
 
-                <DocumentsSection
-                  documents={documents}
-                  groups={documentGroups}
-                  loading={documentsLoading}
-                  error={documentsError}
-                  settings={documentSettings}
-                  showAll={showAllDocuments}
-                  setShowAll={setShowAllDocuments}
-                />
-
                 {/* Line Items */}
                 {lineItems.length > 0 && (
                   <div>
@@ -708,6 +688,16 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                     </div>
                   </div>
                 )}
+
+                <DocumentsSection
+                  documents={documents}
+                  groups={documentGroups}
+                  loading={documentsLoading}
+                  error={documentsError}
+                  settings={documentSettings}
+                  showAll={showAllDocuments}
+                  setShowAll={setShowAllDocuments}
+                />
               </div>
             )}
           </div>
