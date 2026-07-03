@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
-import { Pencil, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
-import StemEditModal from './StemEditModal';
+import { Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 import { numericValue, textValue } from '@/lib/displayValue';
 
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
@@ -213,14 +211,13 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   );
 }
 
-export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
+export default function StemDetailModal({ stemId, open, onClose }) {
   const [record, setRecord] = useState(null);
   const [lineItems, setLineItems] = useState([]);
   const [extraCosts, setExtraCosts] = useState([]);
   const [buyerBrokers, setBuyerBrokers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     if (!open || !stemId) return;
@@ -241,12 +238,6 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
       setLoading(false);
     });
   }, [open, stemId]);
-
-  const handleSaved = (updatedRecord) => {
-    setRecord(updatedRecord);
-    setEditOpen(false);
-    onUpdated?.();
-  };
 
   // Build a map from line item ID → buyer broker info
   const lineItemBuyerBrokerMap = {};
@@ -310,9 +301,6 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
                     <ExternalLink className="w-3.5 h-3.5" /> Salesforce
                   </a>
                 )}
-                <Button size="sm" variant="outline" onClick={() => setEditOpen(true)} disabled={!record} className="gap-1.5">
-                  <Pencil className="w-3.5 h-3.5" /> Edit
-                </Button>
               </div>
             </div>
 
@@ -547,14 +535,6 @@ export default function StemDetailModal({ stemId, open, onClose, onUpdated }) {
         </DialogContent>
       </Dialog>
 
-      {record && (
-        <StemEditModal
-          open={editOpen}
-          onClose={() => setEditOpen(false)}
-          record={record}
-          onSaved={handleSaved}
-        />
-      )}
     </>
   );
 }
