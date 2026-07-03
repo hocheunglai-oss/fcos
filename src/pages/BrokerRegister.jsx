@@ -37,7 +37,7 @@ const escapeHtml = (value) => textValue(value, '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#39;');
-const xlsLineBreaks = (value) => escapeHtml(value).replace(/\r?\n|; /g, '<br/>');
+const escapeXmlText = (value) => escapeHtml(value).replace(/\r?\n/g, '&#10;');
 const ISO_FORMAT = 'yyyy-MM-dd';
 const payableAmount = (row) => {
   const amount = Number(row.commissionAmount || 0);
@@ -74,6 +74,16 @@ const downloadBlob = (blob, filename) => {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+};
+const roundCurrency = (value) => {
+  const number = numericValue(value);
+  return number == null ? null : Math.round((number + Number.EPSILON) * 100) / 100;
+};
+const spreadsheetText = (value) => textValue(value, '').replace(/; /g, '\n');
+const widestLineLength = (value) => spreadsheetText(value).split(/\r?\n/).reduce((max, line) => Math.max(max, line.length), 0);
+const columnWidth = (values, min = 70, max = 260) => {
+  const maxLength = values.reduce((width, value) => Math.max(width, widestLineLength(value)), 0);
+  return Math.min(max, Math.max(min, Math.round(maxLength * 6.8 + 18)));
 };
 
 export default function BrokerRegister() {
@@ -168,21 +178,148 @@ export default function BrokerRegister() {
     ['Broker Name', selectedBrokerNames.length ? selectedBrokerNames.join(', ') : 'All'],
     ['Hidden Broker Flags', selectedHiddenBrokerFlags.length ? selectedHiddenBrokerFlags.map(flag => flag === 'individual' ? 'Hidden Broker Individual' : 'Hidden Broker Company').join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
-    ['Rows Exported', filteredRows.length.toLocaleString()],
   ];
-  const xlsCell = (value, className = '', attrs = '') => `<td${className ? ` class="${className}"` : ''}${attrs ? ` ${attrs}` : ''}>${value == null ? '' : value}</td>`;
-  const xlsTextCell = (value, className = '', attrs = '') => xlsCell(escapeHtml(value), className, attrs);
-  const xlsNumberCell = (value, className = 'num') => {
-    const number = numericValue(value);
-    return xlsCell(number == null ? '' : String(number), className);
+  const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
+    const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
+    return `<Cell ss:StyleID="${styleId}"${mergeAttr}><Data ss:Type="String">${escapeXmlText(value)}</Data></Cell>`;
   };
-  const xlsMoneyCell = (value, className = 'money') => {
+  const workbookNumberCell = (value, styleId = 'Number') => {
     const number = numericValue(value);
-    return xlsCell(number == null ? '' : String(number), className);
+    return number == null
+      ? workbookCell('', styleId)
+      : `<Cell ss:StyleID="${styleId}"><Data ss:Type="Number">${number}</Data></Cell>`;
   };
+  const workbookCurrencyCell = (value, styleId = 'Currency') => {
+    const number = roundCurrency(value);
+    return number == null
+      ? workbookCell('', styleId)
+      : `<Cell ss:StyleID="${styleId}"><Data ss:Type="Number">${number.toFixed(2)}</Data></Cell>`;
+  };
+  const workbookRow = (cells) => `<Row ss:AutoFitHeight="1">${cells.join('')}</Row>`;
+  const workbookColumns = (widths) => widths
+    .map((width) => `<Column ss:AutoFitWidth="1" ss:Width="${width}"/>`)
+    .join('');
+  const workbookStyles = `<Styles>
+      <Style ss:ID="Default" ss:Name="Normal">
+        <Alignment ss:Vertical="Top"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Color="#111827"/>
+      </Style>
+      <Style ss:ID="Title">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+        <Font ss:FontName="Arial" ss:Size="20" ss:Bold="1" ss:Color="#FFFFFF"/>
+        <Interior ss:Color="#0F172A" ss:Pattern="Solid"/>
+      </Style>
+      <Style ss:ID="Subtitle">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Center" ss:WrapText="1"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Color="#334155"/>
+        <Interior ss:Color="#E2E8F0" ss:Pattern="Solid"/>
+      </Style>
+      <Style ss:ID="Section">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#1E3A8A"/>
+        <Interior ss:Color="#DBEAFE" ss:Pattern="Solid"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Header">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Center" ss:WrapText="1"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/>
+        <Interior ss:Color="#334155" ss:Pattern="Solid"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Label">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Top"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#64748B"/>
+        <Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Text">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Top" ss:WrapText="1"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="TextRight">
+        <Alignment ss:Horizontal="Right" ss:Vertical="Top" ss:WrapText="1"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="SummaryLabel">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Top" ss:WrapText="1"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#065F46"/>
+        <Interior ss:Color="#ECFDF5" ss:Pattern="Solid"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="SummaryText">
+        <Alignment ss:Horizontal="Left" ss:Vertical="Top" ss:WrapText="1"/>
+        <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#065F46"/>
+        <Interior ss:Color="#ECFDF5" ss:Pattern="Solid"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Currency">
+        <Alignment ss:Horizontal="Right" ss:Vertical="Top"/>
+        <NumberFormat ss:Format="&quot;$&quot;#,##0.00"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Cny">
+        <Alignment ss:Horizontal="Right" ss:Vertical="Top"/>
+        <NumberFormat ss:Format="&quot;CNY &quot;#,##0.00"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+      <Style ss:ID="Rate">
+        <Alignment ss:Horizontal="Right" ss:Vertical="Top"/>
+        <NumberFormat ss:Format="#,##0.000000"/>
+        <Borders>
+          <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+          <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+        </Borders>
+      </Style>
+    </Styles>`;
   const exportXls = () => {
     const generatedAt = format(new Date(), 'dd MMM yyyy HH:mm');
     const methodologyRows = [
+      ['Generated At', generatedAt],
+      ['Rows Exported', filteredRows.length.toLocaleString()],
       ['Source', exchangeRate?.source || 'Frankfurter API'],
       ['API URL', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
       ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
@@ -193,110 +330,116 @@ export default function BrokerRegister() {
       ['Bank buy rate methodology', 'Frankfurter USD/CNY API rate is treated as the mid-rate. Bank buy rate is calculated as mid-rate less 0.2%, i.e. mid-rate x 0.998.'],
       ['Target-date methodology', 'The default exchange-rate target is the last working day of the quarter based on the selected To Date, otherwise selected From Date, otherwise the latest payment/delivery date in filtered rows, otherwise today. Weekends are moved back to Friday; public holidays are handled by the API fallback to prior available dates.'],
     ];
-    const detailRows = filteredRows.map((row) => `
-      <tr>
-        ${xlsTextCell(row.stemName, 'text')}
-        ${xlsCell(xlsLineBreaks(row.productQuantityLabel || row.productName), 'wrap')}
-        ${xlsTextCell(fmtDate(row.deliveryDate), 'date')}
-        ${xlsTextCell(row.brokerType, 'text')}
-        ${xlsTextCell(row.brokerName, 'text')}
-        ${xlsCell(xlsLineBreaks(row.commissionUnitPriceLabel || fmtUnit(row.commissionUnitPrice)), 'wrap right')}
-        ${xlsMoneyCell(payableAmount(row), 'money')}
-        ${xlsMoneyCell(receivableAmount(row), 'money')}
-        ${xlsTextCell(row.paymentDateLabel, 'text')}
-        ${xlsTextCell(fmtDate(row.paymentDate), 'date')}
-        ${xlsTextCell(row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : ''), 'right')}
-      </tr>
-    `).join('');
-    const workbookHtml = `<!DOCTYPE html>
-      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-        <meta charset="utf-8" />
-        <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Broker Commission</x:Name><x:WorksheetOptions><x:FreezePanes/><x:FrozenNoSplit/><x:SplitHorizontal>16</x:SplitHorizontal><x:TopRowBottomPane>16</x:TopRowBottomPane><x:ProtectContents>False</x:ProtectContents></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-        <style>
-          body { font-family: Arial, sans-serif; color: #111827; }
-          table { border-collapse: collapse; }
-          .report { width: 100%; }
-          .title { background: #0f172a; color: #ffffff; font-size: 20pt; font-weight: 700; padding: 14px 12px; }
-          .subtitle { background: #e2e8f0; color: #334155; font-size: 10pt; padding: 8px 12px; }
-          .section { background: #dbeafe; color: #1e3a8a; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-          .header { background: #334155; color: #ffffff; font-weight: 700; border: 1px solid #cbd5e1; }
-          td, th { border: 1px solid #cbd5e1; padding: 7px 9px; vertical-align: top; font-size: 10pt; }
-          .label { background: #f8fafc; color: #64748b; font-weight: 700; }
-          .value { background: #ffffff; color: #111827; }
-          .summary-label { background: #ecfdf5; color: #065f46; font-weight: 700; }
-          .summary-value { background: #ecfdf5; color: #065f46; font-weight: 700; }
-          .method-label { background: #fefce8; color: #854d0e; font-weight: 700; width: 220px; }
-          .method-value { background: #fffbeb; color: #1f2937; }
-          .money { mso-number-format:"\\0022$\\0022#,##0.00"; text-align: right; white-space: nowrap; }
-          .cny { mso-number-format:"\\0022CNY \\0022#,##0.00"; text-align: right; white-space: nowrap; }
-          .rate { mso-number-format:"0.000000"; text-align: right; }
-          .num { mso-number-format:"#,##0.00"; text-align: right; }
-          .date { white-space: nowrap; }
-          .right { text-align: right; }
-          .text { white-space: nowrap; }
-          .wrap { white-space: normal; }
-          .detail tr:nth-child(even) td { background: #f8fafc; }
-          .note { color: #475569; font-style: italic; }
-          col.stem { width: 260px; }
-          col.product { width: 260px; }
-          col.short { width: 125px; }
-          col.type { width: 165px; }
-          col.broker { width: 260px; }
-          col.moneycol { width: 150px; }
-          col.delay { width: 120px; }
-        </style>
-      </head>
-      <body>
-        <table class="report">
-          <colgroup>
-            <col class="stem" />
-            <col class="product" />
-            <col class="short" />
-            <col class="type" />
-            <col class="broker" />
-            <col class="moneycol" />
-            <col class="moneycol" />
-            <col class="moneycol" />
-            <col class="short" />
-            <col class="short" />
-            <col class="delay" />
-          </colgroup>
-          <tr><td class="title" colspan="11">Broker's Commission</td></tr>
-          <tr><td class="subtitle" colspan="11">Generated ${escapeHtml(generatedAt)} · ${escapeHtml(filteredRows.length.toLocaleString())} rows · Filtered commission total ${escapeHtml(fmtMoney(total))}</td></tr>
-          <tr><td colspan="11"></td></tr>
-          <tr><td class="section" colspan="11">Applied Filters</td></tr>
-          ${filterSummaryRows.map(([label, value]) => `<tr>${xlsTextCell(label, 'label')}${xlsTextCell(value, 'value', 'colspan="10"')}</tr>`).join('')}
-          <tr><td colspan="11"></td></tr>
-          <tr><td class="section" colspan="11">Summary</td></tr>
-          <tr>${xlsTextCell('Commission Payable', 'summary-label')}${xlsMoneyCell(commissionPayableTotal, 'money summary-value')}${xlsTextCell('Commission Receivable', 'summary-label')}${xlsMoneyCell(commissionReceivableTotal, 'money summary-value')}${xlsTextCell('Net Commission Total', 'summary-label')}${xlsMoneyCell(total, 'money summary-value')}${xlsTextCell('Exchange Rate', 'summary-label')}${xlsTextCell(exchangeRateSummary, 'summary-value', 'colspan="4"')}</tr>
-          <tr>${xlsTextCell('Commission Payable in CNY', 'summary-label')}${xlsNumberCell(bankBuyRate != null ? commissionPayableTotal * bankBuyRate : null, 'cny summary-value')}${xlsTextCell('Commission Receivable in CNY', 'summary-label')}${xlsNumberCell(bankBuyRate != null ? commissionReceivableTotal * bankBuyRate : null, 'cny summary-value')}${xlsTextCell('Bank Buy Rate', 'summary-label')}${xlsNumberCell(bankBuyRate, 'rate summary-value')}${xlsTextCell('', 'summary-value', 'colspan="5"')}</tr>
-          <tr><td colspan="11"></td></tr>
-          <tr><td class="section" colspan="11">Exchange Rate Source and Methodology</td></tr>
-          ${methodologyRows.map(([label, value]) => `<tr>${xlsTextCell(label, 'method-label')}${xlsTextCell(value, 'method-value', 'colspan="10"')}</tr>`).join('')}
-          <tr><td class="note" colspan="11">All commission amounts are exported from the filtered Broker's Commission rows shown in the application at the time of export.</td></tr>
-          <tr><td colspan="11"></td></tr>
-          <tr><td class="section" colspan="11">Broker Commission Rows</td></tr>
-          <tbody class="detail">
-            <tr>
-              <th class="header">Stem Name</th>
-              <th class="header">Products / Quantity</th>
-              <th class="header">Delivery Date</th>
-              <th class="header">Broker Type</th>
-              <th class="header">Broker Name</th>
-              <th class="header">Commission / Unit</th>
-              <th class="header">Commission Payable</th>
-              <th class="header">Commission Receivable</th>
-              <th class="header">Payment Date Label</th>
-              <th class="header">Payment Date</th>
-              <th class="header">Payment Delay</th>
-            </tr>
-            ${detailRows || `<tr><td colspan="11">No broker commissions found.</td></tr>`}
-          </tbody>
-        </table>
-      </body>
-      </html>`;
-    const blob = new Blob([workbookHtml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+    const detailRows = filteredRows.map((row) => ({
+      stemName: row.stemName,
+      productQuantity: spreadsheetText(row.productQuantityLabel || row.productName),
+      deliveryDate: fmtDate(row.deliveryDate),
+      brokerType: row.brokerType,
+      commissionUnit: spreadsheetText(row.commissionUnitPriceLabel || fmtUnit(row.commissionUnitPrice)),
+      commissionPayable: payableAmount(row),
+      commissionReceivable: receivableAmount(row),
+      paymentDateLabel: row.paymentDateLabel,
+      paymentDate: fmtDate(row.paymentDate),
+      paymentDelay: row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
+    }));
+    const detailHeaders = ['Stem Name', 'Products / Quantity', 'Delivery Date', 'Broker Type', 'Commission / Unit', 'Commission Payable', 'Commission Receivable', 'Payment Date Label', 'Payment Date', 'Payment Delay'];
+    const brokerColumnValues = [
+      ['Broker\'s Commission', detailHeaders[0], ...detailRows.map((row) => row.stemName)],
+      [detailHeaders[1], ...detailRows.map((row) => row.productQuantity)],
+      [detailHeaders[2], ...detailRows.map((row) => row.deliveryDate)],
+      [detailHeaders[3], ...detailRows.map((row) => row.brokerType)],
+      [detailHeaders[4], ...detailRows.map((row) => row.commissionUnit)],
+      [detailHeaders[5], ...detailRows.map((row) => row.commissionPayable)],
+      [detailHeaders[6], ...detailRows.map((row) => row.commissionReceivable)],
+      [detailHeaders[7], ...detailRows.map((row) => row.paymentDateLabel)],
+      [detailHeaders[8], ...detailRows.map((row) => row.paymentDate)],
+      [detailHeaders[9], ...detailRows.map((row) => row.paymentDelay)],
+    ];
+    const brokerRows = [
+      workbookRow([workbookCell('Broker\'s Commission', 'Title', 9)]),
+      workbookRow([workbookCell(`Generated ${generatedAt} · ${filteredRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', 9)]),
+      workbookRow([workbookCell('Applied Filters', 'Section', 9)]),
+      ...filterSummaryRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text', 8)])),
+      workbookRow([workbookCell('Summary', 'Section', 9)]),
+      workbookRow([
+        workbookCell('Commission Payable', 'SummaryLabel'),
+        workbookCurrencyCell(commissionPayableTotal),
+        workbookCell('Commission Receivable', 'SummaryLabel'),
+        workbookCurrencyCell(commissionReceivableTotal),
+        workbookCell('Net Commission Total', 'SummaryLabel'),
+        workbookCurrencyCell(total),
+        workbookCell('Exchange Rate', 'SummaryLabel'),
+        workbookCell(exchangeRateSummary, 'SummaryText', 2),
+      ]),
+      workbookRow([
+        workbookCell('Commission Payable in CNY', 'SummaryLabel'),
+        workbookCurrencyCell(bankBuyRate != null ? commissionPayableTotal * bankBuyRate : null, 'Cny'),
+        workbookCell('Commission Receivable in CNY', 'SummaryLabel'),
+        workbookCurrencyCell(bankBuyRate != null ? commissionReceivableTotal * bankBuyRate : null, 'Cny'),
+        workbookCell('Bank Buy Rate', 'SummaryLabel'),
+        workbookNumberCell(bankBuyRate, 'Rate'),
+        workbookCell('', 'SummaryText', 3),
+      ]),
+      workbookRow([workbookCell('Broker Commission Rows', 'Section', 9)]),
+      workbookRow(detailHeaders.map((header) => workbookCell(header, 'Header'))),
+      ...(detailRows.length
+        ? detailRows.map((row) => workbookRow([
+          workbookCell(row.stemName),
+          workbookCell(row.productQuantity),
+          workbookCell(row.deliveryDate),
+          workbookCell(row.brokerType),
+          workbookCell(row.commissionUnit, 'TextRight'),
+          workbookCurrencyCell(row.commissionPayable),
+          workbookCurrencyCell(row.commissionReceivable),
+          workbookCell(row.paymentDateLabel),
+          workbookCell(row.paymentDate),
+          workbookCell(row.paymentDelay, 'TextRight'),
+        ]))
+        : [workbookRow([workbookCell('No broker commissions found.', 'Text', 9)])]),
+    ];
+    const settingsColumnValues = [
+      ['Settings', ...methodologyRows.map(([label]) => label)],
+      ['Exchange Rate Source and Methodology', ...methodologyRows.map(([, value]) => value)],
+    ];
+    const settingsRows = [
+      workbookRow([workbookCell('Settings', 'Title', 1)]),
+      workbookRow([workbookCell('Exchange Rate Source and Methodology', 'Section', 1)]),
+      ...methodologyRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text')])),
+      workbookRow([workbookCell('Note', 'Label'), workbookCell('All commission amounts are exported from the filtered Broker\'s Commission rows shown in the application at the time of export.', 'Text')]),
+    ];
+    const workbookXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <?mso-application progid="Excel.Sheet"?>
+      <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+        xmlns:o="urn:schemas-microsoft-com:office:office"
+        xmlns:x="urn:schemas-microsoft-com:office:excel"
+        xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+        xmlns:html="http://www.w3.org/TR/REC-html40">
+        <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
+          <Title>Broker's Commission</Title>
+          <Author>Salesforce Analytics Hub</Author>
+          <Created>${new Date().toISOString()}</Created>
+        </DocumentProperties>
+        ${workbookStyles}
+        <Worksheet ss:Name="Broker Commission">
+          <Table ss:ExpandedColumnCount="10" ss:ExpandedRowCount="${brokerRows.length}" x:FullColumns="1" x:FullRows="1">
+            ${workbookColumns(brokerColumnValues.map((values, index) => columnWidth(values, index <= 1 ? 110 : 85, index <= 1 ? 280 : 180)))}
+            ${brokerRows.join('')}
+          </Table>
+          <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+            <FreezePanes/>
+            <FrozenNoSplit/>
+            <SplitHorizontal>10</SplitHorizontal>
+            <TopRowBottomPane>10</TopRowBottomPane>
+          </WorksheetOptions>
+        </Worksheet>
+        <Worksheet ss:Name="Settings">
+          <Table ss:ExpandedColumnCount="2" ss:ExpandedRowCount="${settingsRows.length}" x:FullColumns="1" x:FullRows="1">
+            ${workbookColumns(settingsColumnValues.map((values, index) => columnWidth(values, index === 0 ? 150 : 260, index === 0 ? 260 : 620)))}
+            ${settingsRows.join('')}
+          </Table>
+        </Worksheet>
+      </Workbook>`;
+    const blob = new Blob([workbookXml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
     downloadBlob(blob, `brokers-commission-${new Date().toISOString().slice(0, 10)}.xls`);
   };
 
