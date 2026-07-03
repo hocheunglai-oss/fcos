@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { compactTextValue, numericValue, textValue } from '@/lib/displayValue';
+import { cn } from '@/lib/utils';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
@@ -129,7 +130,7 @@ const COL_ORDER = [
   '__pnl__',
 ];
 
-export default function PnlTable({ records = [], onRowClick, counterpartyMode = 'buyer' }) {
+export default function PnlTable({ records = [], onRowClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
   const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
   const [sortDir, setSortDir] = useState(-1);
   const firstRecord = records[0] || {};
@@ -182,7 +183,7 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
   );
 
   return (
-    <div className="max-h-[520px] overflow-auto rounded-lg">
+    <div className={cn('overflow-auto rounded-lg', scrollClassName)}>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border">

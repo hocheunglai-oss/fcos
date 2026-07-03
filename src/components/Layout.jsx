@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle } from 'lucide-react';
+import { Outlet, Link, NavLink, useLocation } from 'react-router-dom';
+import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle, ListFilter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  {
+    to: '/',
+    label: 'Dashboard',
+    icon: LayoutDashboard,
+    children: [
+      { to: '/#filtered-stems', label: 'Filtered STEMs', icon: ListFilter, hash: '#filtered-stems' },
+    ],
+  },
   { to: '/review', label: 'Exception Review', icon: ClipboardCheck },
   { to: '/disputes', label: 'Dispute Management', icon: AlertTriangle },
   { to: '/buyer-invoices', label: 'Outstanding Buyer Invoices', icon: ReceiptText },
@@ -37,13 +44,35 @@ export default function Layout() {
     return () => window.removeEventListener('salesforce-extension:dirty-state', onDirtyState);
   }, []);
 
+  useEffect(() => {
+    if (!location.hash) return undefined;
+    const targetId = decodeURIComponent(location.hash.slice(1));
+    const timeout = window.setTimeout(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+    return () => window.clearTimeout(timeout);
+  }, [location.hash, location.pathname]);
+
   const unsaved = Object.values(dirtyState).find((state) => state?.dirty);
   const confirmLeaveWithUnsavedChanges = () => {
     if (!unsaved) return true;
     return window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
   };
+  const scrollToHashTarget = (to) => {
+    const [, hash] = String(to).split('#');
+    if (!hash) return;
+    window.setTimeout(() => {
+      document.getElementById(decodeURIComponent(hash))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  };
   const handleSidebarNavigation = (event, to) => {
-    if (to === location.pathname || !unsaved) return;
+    const [pathname = '/'] = String(to).split('#');
+    const targetPathname = pathname || '/';
+    const samePage = targetPathname === location.pathname;
+    if (samePage || !unsaved) {
+      scrollToHashTarget(to);
+      return;
+    }
     const leave = window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
     if (!leave) event.preventDefault();
   };
@@ -74,25 +103,54 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-2 py-4 space-y-0.5">
-          {navItems.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              title={collapsed ? label : undefined}
-              onClick={(event) => handleSidebarNavigation(event, to)}
-              className={({ isActive }) => cn(
-                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
-                collapsed ? 'justify-center px-2' : '',
-                isActive
-                  ? 'bg-white/10 text-sidebar-primary shadow-sm ring-1 ring-white/10'
-                  : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
-              )}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {!collapsed && label}
-            </NavLink>
-          ))}
+          {navItems.map(({ to, label, icon: Icon, children }) => {
+            const showChildren = children?.length && location.pathname === to;
+            return (
+              <div key={to} className="space-y-0.5">
+                <NavLink
+                  to={to}
+                  end={to === '/'}
+                  title={collapsed ? label : undefined}
+                  onClick={(event) => handleSidebarNavigation(event, to)}
+                  className={({ isActive }) => cn(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
+                    collapsed ? 'justify-center px-2' : '',
+                    isActive
+                      ? 'bg-white/10 text-sidebar-primary shadow-sm ring-1 ring-white/10'
+                      : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
+                  )}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {!collapsed && label}
+                </NavLink>
+                {showChildren && (
+                  <div className={cn('space-y-0.5', collapsed ? 'pt-0.5' : 'ml-5 border-l border-sidebar-border/70 pl-2')}>
+                    {children.map(({ to: childTo, label: childLabel, icon: ChildIcon, hash }) => {
+                      const isActive = location.pathname === '/' && location.hash === hash;
+                      return (
+                        <Link
+                          key={childTo}
+                          to={childTo}
+                          title={collapsed ? childLabel : undefined}
+                          onClick={(event) => handleSidebarNavigation(event, childTo)}
+                          className={cn(
+                            'flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium transition-all duration-150',
+                            collapsed ? 'justify-center px-2' : '',
+                            isActive
+                              ? 'bg-white/10 text-sidebar-primary shadow-sm ring-1 ring-white/10'
+                              : 'text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
+                          )}
+                        >
+                          <ChildIcon className="h-3.5 w-3.5 shrink-0" />
+                          {!collapsed && childLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Footer */}

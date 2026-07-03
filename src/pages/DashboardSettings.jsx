@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +26,7 @@ const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replac
 const formatQuantity = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 export default function DashboardSettings() {
+  const location = useLocation();
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
   const savedPortCountry = savedFilters.portCountry ?? (savedFilters.koreanPortOnly ? 'KOREA' : '');
 
@@ -151,6 +153,14 @@ export default function DashboardSettings() {
     }, 400);
     return () => clearTimeout(debounceRef.current);
   }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword]);
+
+  useEffect(() => {
+    if (location.hash !== '#filtered-stems' || loading || !data) return undefined;
+    const timeout = window.setTimeout(() => {
+      document.getElementById('filtered-stems')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+    return () => window.clearTimeout(timeout);
+  }, [data, loading, location.hash]);
 
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
@@ -607,28 +617,35 @@ export default function DashboardSettings() {
           )}
 
           {/* P&L Report */}
-          <TableShell
-            title="Filtered STEMs"
-            meta={`${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
-            actions={(
-              <div className="relative w-full sm:w-80">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                <Input
-                  placeholder={`Search by vessel, stem name, or ${activeCounterparty.label.toLowerCase()}…`}
-                  value={tableSearch}
-                  onChange={e => setTableSearch(e.target.value)}
-                  className="pl-8 h-8 text-xs"
-                />
-                {tableSearch && (
-                  <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            )}
-          >
-            <PnlTable records={filteredStems} counterpartyMode={counterpartyMode} onRowClick={(row) => setSelectedStemId(row.Id)} />
-          </TableShell>
+          <div id="filtered-stems" className="scroll-mt-6">
+            <TableShell
+              title="Filtered STEMs"
+              meta={`${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
+              actions={(
+                <div className="relative w-full sm:w-80">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder={`Search by vessel, stem name, or ${activeCounterparty.label.toLowerCase()}…`}
+                    value={tableSearch}
+                    onChange={e => setTableSearch(e.target.value)}
+                    className="pl-8 h-8 text-xs"
+                  />
+                  {tableSearch && (
+                    <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              )}
+            >
+              <PnlTable
+                records={filteredStems}
+                counterpartyMode={counterpartyMode}
+                scrollClassName="max-h-[calc(100vh-15rem)] min-h-[280px]"
+                onRowClick={(row) => setSelectedStemId(row.Id)}
+              />
+            </TableShell>
+          </div>
         </>
       )}
       <StemDetailModal
