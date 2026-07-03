@@ -85,7 +85,9 @@ function overdueSeverity(daysUntilDue) {
   return 'yellow';
 }
 
-function rowSeverityClass(daysUntilDue, idx) {
+function rowSeverityClass(row, idx) {
+  if (row.prpspStatus === 'Conditional-Not Sent') return 'bg-purple-200 hover:bg-purple-300/80';
+  const { daysUntilDue } = row;
   const severity = overdueSeverity(daysUntilDue);
   if (severity === 'red') return 'bg-red-100 hover:bg-red-200/80';
   if (severity === 'orange') return 'bg-orange-200 hover:bg-orange-300/80';
@@ -635,7 +637,7 @@ export default function BuyerInvoices() {
                     <tr
                       key={row.id}
                       onClick={() => setSelectedStemId(row.stemId)}
-                      className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row.daysUntilDue, idx)}`}
+                      className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
                     >
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '—'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '—'}</td>

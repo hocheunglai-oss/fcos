@@ -1481,14 +1481,17 @@ function overdueDisplayValue(daysUntilDue) {
   return String(-Number(daysUntilDue));
 }
 
-function overdueEmailStyles(daysUntilDue) {
+function overdueEmailStyles(daysUntilDue, prpspStatus) {
   const severity = overdueSeverity(daysUntilDue);
   const styles = {
     red: { row: 'background:#fee2e2', border: '#fca5a5', text: '#991b1b', pill: 'background:#fecaca;border-color:#f87171;color:#7f1d1d' },
     orange: { row: 'background:#fed7aa', border: '#fb923c', text: '#9a3412', pill: 'background:#fdba74;border-color:#f97316;color:#7c2d12' },
     yellow: { row: 'background:#fde68a', border: '#facc15', text: '#854d0e', pill: 'background:#fcd34d;border-color:#eab308;color:#713f12' },
   };
-  return styles[severity] || { row: '', border: '#e5e7eb', text: '#2563eb', pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8' };
+  const base = styles[severity] || { row: '', border: '#e5e7eb', text: '#2563eb', pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8' };
+  return prpspStatus === 'Conditional-Not Sent'
+    ? { ...base, row: 'background:#e9d5ff', border: '#c084fc' }
+    : base;
 }
 
 function renderBuyerInvoiceEmailContent(template, report, settings) {
@@ -1554,7 +1557,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
       </tr>
     </table>` : '';
   const tableRows = rows.map((row) => {
-    const severity = overdueEmailStyles(row.daysUntilDue);
+    const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
     const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
     return `
     <tr style="${severity.row}">
