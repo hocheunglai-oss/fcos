@@ -385,6 +385,12 @@ export default function BrokerRegister() {
     </Styles>`;
   const exportXls = () => {
     const generatedAt = format(new Date(), 'dd MMM yyyy HH:mm');
+    const bankBuyRateMethodology = 'Frankfurter USD/CNY API rate is treated as the mid-rate. Bank buy rate is calculated as mid-rate less 0.2%, i.e. mid-rate x 0.998.';
+    const targetDateMethodology = 'The default exchange-rate target is the last working day of the quarter based on the selected To Date, otherwise selected From Date, otherwise the latest payment/delivery date in filtered rows, otherwise today. Weekends are moved back to Friday; public holidays are handled by the API fallback to prior available dates.';
+    const bankBuyRateMethodologyZh = 'Frankfurter USD/CNY API 汇率视为中间价。银行买入价按中间价下调 0.2% 计算，即中间价 x 0.998。';
+    const targetDateMethodologyZh = '默认汇率目标日期为所选结束日期所在季度的最后一个工作日；如未选择结束日期，则使用所选开始日期；如未选择开始日期，则使用筛选结果中最新的付款/交付日期；否则使用当天。周末会回退至星期五；公众假期由 API 回退至前一个可用汇率日期。';
+    const exportNote = 'All commission amounts are exported from the filtered Broker\'s Commission rows shown in the application at the time of export.';
+    const exportNoteZh = '所有佣金金额均来自导出时应用程序中已筛选的 Broker\'s Commission 行。';
     const methodologyRows = showCny ? [
       ['Generated At', generatedAt],
       ['Rows Exported', filteredRows.length.toLocaleString()],
@@ -395,8 +401,21 @@ export default function BrokerRegister() {
       ['Requested rate date', exchangeRate?.requestedDate || exchangeRateTargetDate],
       ['Applied rate date', exchangeRate?.date || 'Unavailable'],
       ['Mid-rate', exchangeRate?.rate != null ? Number(exchangeRate.rate).toFixed(6) : 'Unavailable'],
-      ['Bank buy rate methodology', 'Frankfurter USD/CNY API rate is treated as the mid-rate. Bank buy rate is calculated as mid-rate less 0.2%, i.e. mid-rate x 0.998.'],
-      ['Target-date methodology', 'The default exchange-rate target is the last working day of the quarter based on the selected To Date, otherwise selected From Date, otherwise the latest payment/delivery date in filtered rows, otherwise today. Weekends are moved back to Friday; public holidays are handled by the API fallback to prior available dates.'],
+      ['Bank buy rate methodology', bankBuyRateMethodology],
+      ['Target-date methodology', targetDateMethodology],
+    ] : [];
+    const methodologyRowsZh = showCny ? [
+      ['生成时间', generatedAt],
+      ['导出行数', filteredRows.length.toLocaleString()],
+      ['来源', exchangeRate?.source || 'Frankfurter API'],
+      ['API 地址', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
+      ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
+      ['汇率目标日期', exchangeRateTargetDate],
+      ['请求汇率日期', exchangeRate?.requestedDate || exchangeRateTargetDate],
+      ['实际使用汇率日期', exchangeRate?.date || '不可用'],
+      ['中间价', exchangeRate?.rate != null ? Number(exchangeRate.rate).toFixed(6) : '不可用'],
+      ['银行买入价方法', bankBuyRateMethodologyZh],
+      ['目标日期方法', targetDateMethodologyZh],
     ] : [];
     const detailRows = filteredRows.map((row) => ({
       stemName: row.stemName,
@@ -455,14 +474,17 @@ export default function BrokerRegister() {
         : [workbookRow([workbookCell('No broker commissions found.', 'Text', detailMergeAcross)])]),
     ];
     const settingsColumnValues = showCny ? [
-      ['Settings', ...methodologyRows.map(([label]) => label)],
-      ['Exchange Rate Source and Methodology', ...methodologyRows.map(([, value]) => value)],
+      ['Settings', ...methodologyRows.map(([label]) => label), '汇率来源和方法（简体中文）', ...methodologyRowsZh.map(([label]) => label), 'Note', '备注'],
+      ['Exchange Rate Source and Methodology', ...methodologyRows.map(([, value]) => value), 'Exchange Rate Source and Methodology (Simplified Chinese)', ...methodologyRowsZh.map(([, value]) => value), exportNote, exportNoteZh],
     ] : [];
     const settingsRows = showCny ? [
       workbookRow([workbookCell('Settings', 'Title', 1)]),
       workbookRow([workbookCell('Exchange Rate Source and Methodology', 'Section', 1)]),
       ...methodologyRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text')])),
-      workbookRow([workbookCell('Note', 'Label'), workbookCell('All commission amounts are exported from the filtered Broker\'s Commission rows shown in the application at the time of export.', 'Text')]),
+      workbookRow([workbookCell('汇率来源和方法（简体中文）', 'Section', 1)]),
+      ...methodologyRowsZh.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text')])),
+      workbookRow([workbookCell('Note', 'Label'), workbookCell(exportNote, 'Text')]),
+      workbookRow([workbookCell('备注', 'Label'), workbookCell(exportNoteZh, 'Text')]),
     ] : [];
     const settingsWorksheet = showCny ? `
         <Worksheet ss:Name="Settings">
