@@ -1,0 +1,14 @@
+{
+  "name": "Salesforce Analytics Hub",
+  "short_name": "Analytics Hub",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "theme_color": "#2563eb",
+  "background_color": "#f8fafc",
+  "display": "standalone"
+}
