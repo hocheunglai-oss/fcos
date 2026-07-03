@@ -45,27 +45,41 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
       : [...selectedHiddenBrokerFlags, flag]);
   };
 
-  const applyDateRange = (rangeKey) => {
+  const dateRangeFor = (rangeKey) => {
     const today = new Date();
     if (rangeKey === 'all') {
-      setFromDate('');
-      setToDate('');
-    } else if (rangeKey === 'this_month') {
-      setFromDate(format(startOfMonth(today), ISO_FORMAT));
-      setToDate(format(endOfMonth(today), ISO_FORMAT));
-    } else if (rangeKey === 'last_month') {
-      const lastMonth = subMonths(today, 1);
-      setFromDate(format(startOfMonth(lastMonth), ISO_FORMAT));
-      setToDate(format(endOfMonth(lastMonth), ISO_FORMAT));
-    } else if (rangeKey === 'this_year') {
-      setFromDate(format(startOfYear(today), ISO_FORMAT));
-      setToDate(format(endOfYear(today), ISO_FORMAT));
+      return { from: '', to: '' };
     }
+    if (rangeKey === 'this_month') {
+      return { from: format(startOfMonth(today), ISO_FORMAT), to: format(endOfMonth(today), ISO_FORMAT) };
+    }
+    if (rangeKey === 'last_month') {
+      const lastMonth = subMonths(today, 1);
+      return { from: format(startOfMonth(lastMonth), ISO_FORMAT), to: format(endOfMonth(lastMonth), ISO_FORMAT) };
+    }
+    if (rangeKey === 'this_year') {
+      return { from: format(startOfYear(today), ISO_FORMAT), to: format(endOfYear(today), ISO_FORMAT) };
+    }
+    return { from: '', to: '' };
+  };
+
+  const quarterRangeFor = (quarter) => ({
+    from: format(new Date(selectedYear, quarter.startMonth, 1), ISO_FORMAT),
+    to: format(new Date(selectedYear, quarter.endMonth + 1, 0), ISO_FORMAT),
+  });
+
+  const isActiveRange = ({ from, to }) => fromDate === from && toDate === to;
+
+  const applyDateRange = (rangeKey) => {
+    const range = dateRangeFor(rangeKey);
+    setFromDate(range.from);
+    setToDate(range.to);
   };
 
   const applyQuarterRange = (quarter) => {
-    setFromDate(format(new Date(selectedYear, quarter.startMonth, 1), ISO_FORMAT));
-    setToDate(format(new Date(selectedYear, quarter.endMonth + 1, 0), ISO_FORMAT));
+    const range = quarterRangeFor(quarter);
+    setFromDate(range.from);
+    setToDate(range.to);
   };
 
   return (
@@ -121,7 +135,7 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date range</p>
             <div className="flex flex-wrap items-center gap-2">
               {RANGE_OPTIONS.map(option => (
-                <Button key={option.key} type="button" size="sm" variant="outline" onClick={() => applyDateRange(option.key)}>
+                <Button key={option.key} type="button" size="sm" variant={isActiveRange(dateRangeFor(option.key)) ? 'default' : 'outline'} onClick={() => applyDateRange(option.key)}>
                   {option.label}
                 </Button>
               ))}
@@ -133,7 +147,7 @@ export default function BrokerFilters({ search, setSearch, selectedTypes, setSel
                 {YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}
               </select>
               {QUARTER_OPTIONS.map(option => (
-                <Button key={option.key} type="button" size="sm" variant="outline" onClick={() => applyQuarterRange(option)}>
+                <Button key={option.key} type="button" size="sm" variant={isActiveRange(quarterRangeFor(option)) ? 'default' : 'outline'} onClick={() => applyQuarterRange(option)}>
                   {option.label}
                 </Button>
               ))}
