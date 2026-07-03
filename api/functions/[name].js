@@ -657,7 +657,7 @@ const DOCUMENT_SOURCE_GROUPS = [
   'Invoices from Suppliers',
   'Contracts and Compliance',
   'Dispute / Support',
-  'Line Item',
+  'Product Line Attachments',
   'Extra Cost',
   'Broker',
   'Email',
@@ -690,6 +690,7 @@ const DOCUMENT_MIME_TYPES = {
   pdf: 'application/pdf',
   png: 'image/png',
   txt: 'text/plain',
+  webp: 'image/webp',
   xls: 'application/vnd.ms-excel',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
@@ -828,8 +829,8 @@ async function salesforceStemDocuments(body = {}) {
   for (const item of lineItems) {
     addRelatedRecord(relatedRecords, seenRecordIds, {
       id: item.Id,
-      sourceGroup: 'Line Item',
-      sourceLabel: item['Product__r']?.Name || item.Name || 'Line Item',
+      sourceGroup: 'Product Line Attachments',
+      sourceLabel: item['Product__r']?.Name || item.Name || 'Product Line',
       sourceObject: 'STEM_Line_Item__c',
       name: item.Name || item['Product__r']?.Name,
     });

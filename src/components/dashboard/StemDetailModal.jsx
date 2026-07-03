@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
-import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings } from 'lucide-react';
+import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Search, Eye, X, CheckCircle2 } from 'lucide-react';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { readDocumentSettings } from '@/lib/documentSettings';
 
@@ -123,25 +123,117 @@ function SectionHeader({ title }) {
   );
 }
 
+const DOCUMENT_PURPOSE_ORDER = [
+  'Invoices',
+  'Contracts and Compliance',
+  'Delivery / BDN Support',
+  'Broker / Commission',
+  'Other Attachments',
+];
+
+const DOCUMENT_REQUIREMENTS = [
+  {
+    label: 'Invoice to Buyer',
+    test: (documents) => documents.some((document) => document.sourceGroup === 'Invoices to Buyer'),
+  },
+  {
+    label: 'Invoice from Supplier',
+    test: (documents) => documents.some((document) => document.sourceGroup === 'Invoices from Suppliers'),
+  },
+  {
+    label: 'Contract / Nomination',
+    test: (documents) => documents.some((document) => document.sourceGroup === 'Contracts and Compliance'),
+  },
+  {
+    label: 'BDN / Delivery Support',
+    test: (documents) => documents.some((document) => (
+      document.sourceGroup === 'Product Line Attachments'
+      || /\b(bdn|delivery|bunker delivery|delivery note)\b/i.test(documentSearchText(document))
+    )),
+  },
+  {
+    label: 'Compliance Document',
+    test: (documents) => documents.some((document) => (
+      /\b(compliance|pdd|psprs|sanction|kyc|aml|certificate|cert)\b/i.test(documentSearchText(document))
+    )),
+  },
+];
+
+function documentSearchText(document) {
+  return [
+    document.fileName,
+    document.title,
+    document.sourceGroup,
+    document.sourceLabel,
+    document.sourceObject,
+    document.fileType,
+    document.fileExtension,
+    document.ownerName,
+    documentPurpose(document),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function documentExtension(document) {
+  const filenameExtension = String(document.fileName || '').split('.').pop()?.toLowerCase();
+  return String(document.fileExtension || filenameExtension || '').toLowerCase();
+}
+
+function documentPreviewKind(document) {
+  const extension = documentExtension(document);
+  const fileType = String(document.fileType || '').toLowerCase();
+  if (extension === 'pdf' || fileType.includes('pdf')) return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension) || fileType.startsWith('image/')) return 'image';
+  return null;
+}
+
+function documentPurpose(document) {
+  const sourceGroup = document.sourceGroup || 'Other Related';
+  const text = [
+    document.fileName,
+    document.title,
+    document.sourceLabel,
+    sourceGroup,
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (sourceGroup === 'Invoices to Buyer' || sourceGroup === 'Invoices from Suppliers') return 'Invoices';
+  if (sourceGroup === 'Contracts and Compliance') return 'Contracts and Compliance';
+  if (sourceGroup === 'Product Line Attachments' || /\b(bdn|delivery|bunker delivery|delivery note)\b/i.test(text)) return 'Delivery / BDN Support';
+  if (sourceGroup === 'Broker') return 'Broker / Commission';
+  return 'Other Attachments';
+}
+
 function DocumentsSection({
   documents,
-  groups,
   loading,
   error,
   settings,
   showAll,
   setShowAll,
 }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [previewDocument, setPreviewDocument] = useState(null);
   const relevantGroups = new Set(settings.relevantSourceGroups || []);
-  const visibleDocuments = settings.showOnlyRelevant && !showAll
+  const baseDocuments = settings.showOnlyRelevant && !showAll
     ? documents.filter((document) => relevantGroups.has(document.sourceGroup))
     : documents;
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const visibleDocuments = normalizedSearch
+    ? baseDocuments.filter((document) => documentSearchText(document).includes(normalizedSearch))
+    : baseDocuments;
   const groupedDocuments = visibleDocuments.reduce((acc, document) => {
-    const group = document.sourceGroup || 'Other Related';
+    const group = documentPurpose(document);
     if (!acc[group]) acc[group] = [];
     acc[group].push(document);
     return acc;
   }, {});
+  const groupEntries = DOCUMENT_PURPOSE_ORDER
+    .filter((group) => groupedDocuments[group]?.length)
+    .map((group) => [group, groupedDocuments[group]]);
+  const requirementChecklist = DOCUMENT_REQUIREMENTS.map((requirement) => ({
+    label: requirement.label,
+    found: requirement.test(documents),
+  }));
+  const missingRequirements = requirementChecklist.filter((item) => !item.found);
+  const previewKind = previewDocument ? documentPreviewKind(previewDocument) : null;
 
   return (
     <div>
@@ -184,34 +276,67 @@ function DocumentsSection({
         </div>
       )}
 
-      {!loading && !error && documents.length > 0 && visibleDocuments.length === 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-700">
-          Documents were found, but none match the relevant source groups selected in Settings.
+      {!loading && !error && documents.length > 0 && (
+        <div className="mb-3 rounded-xl border border-border bg-muted/10 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Required Documents</div>
+            {missingRequirements.length > 0 && (
+              <div className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                <AlertCircle className="h-3 w-3" /> {missingRequirements.length} missing
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {requirementChecklist.map((item) => (
+              <span
+                key={item.label}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium ${
+                  item.found
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-300 bg-amber-100 text-amber-800'
+                }`}
+              >
+                {item.found ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+                {item.label}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
-      {!loading && !error && visibleDocuments.length > 0 && (
+      {!loading && !error && documents.length > 0 && (
         <div className="space-y-3">
-          {groups.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="relative w-full sm:w-80">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search documents..."
+                className="h-9 w-full rounded-md border border-border bg-background pl-8 pr-3 text-sm outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/10"
+              />
+            </div>
             <div className="flex flex-wrap gap-1.5">
-              {groups.map((group) => {
-                const isRelevant = relevantGroups.has(group.sourceGroup);
+              {DOCUMENT_PURPOSE_ORDER.map((group) => {
+                const count = baseDocuments.filter((document) => documentPurpose(document) === group).length;
+                if (!count) return null;
                 return (
-                  <span
-                    key={group.sourceGroup}
-                    className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
-                      isRelevant
-                        ? 'border-primary/30 bg-primary/10 text-primary'
-                        : 'border-border bg-muted/40 text-muted-foreground'
-                    }`}
-                  >
-                    {group.sourceGroup}: {group.count}
+                  <span key={group} className="rounded-md border border-border bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                    {group}: {count}
                   </span>
                 );
               })}
             </div>
+          </div>
+
+          {visibleDocuments.length === 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-700">
+              Documents were found, but none match the current document filters.
+            </div>
           )}
-          {Object.entries(groupedDocuments).map(([group, docs]) => (
+
+          {groupEntries.map(([group, docs]) => (
             <div key={group} className="overflow-hidden rounded-xl border border-border">
               <div className="border-b border-border bg-muted/30 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {group} ({docs.length})
@@ -226,6 +351,7 @@ function DocumentsSection({
                           {document.fileName || document.title}
                         </div>
                         <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                          <span>{document.sourceGroup || group}</span>
                           <span>{document.sourceLabel || document.sourceObject || group}</span>
                           <span>{document.fileType || document.fileExtension || 'File'}</span>
                           <span>{fmtBytes(document.contentSize)}</span>
@@ -234,20 +360,83 @@ function DocumentsSection({
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <a
-                        href={document.downloadUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
-                      >
-                        <Download className="h-3 w-3" /> Open
-                      </a>
+                      {documentPreviewKind(document) ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDocument(document)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
+                        >
+                          <Eye className="h-3 w-3" /> Open
+                        </button>
+                      ) : (
+                        <a
+                          href={document.downloadUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
+                        >
+                          <Download className="h-3 w-3" /> Open
+                        </a>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {previewDocument && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreviewDocument(null)}
+        >
+          <div
+            className="flex h-[88vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-foreground">{previewDocument.fileName || previewDocument.title}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{previewDocument.sourceGroup} · {previewDocument.sourceLabel || documentPurpose(previewDocument)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={previewDocument.downloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
+                >
+                  <Download className="h-3.5 w-3.5" /> Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewDocument(null)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 bg-muted/20">
+              {previewKind === 'image' ? (
+                <div className="flex h-full items-center justify-center overflow-auto p-4">
+                  <img
+                    src={previewDocument.downloadUrl}
+                    alt={previewDocument.fileName || previewDocument.title || 'Document preview'}
+                    className="max-h-full max-w-full rounded-md object-contain"
+                  />
+                </div>
+              ) : (
+                <iframe
+                  title={previewDocument.fileName || previewDocument.title || 'Document preview'}
+                  src={previewDocument.downloadUrl}
+                  className="h-full w-full border-0 bg-background"
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -356,7 +545,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
   const [extraCosts, setExtraCosts] = useState([]);
   const [buyerBrokers, setBuyerBrokers] = useState([]);
   const [documents, setDocuments] = useState([]);
-  const [documentGroups, setDocumentGroups] = useState([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState(null);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
@@ -371,7 +559,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
     setExtraCosts([]);
     setBuyerBrokers([]);
     setDocuments([]);
-    setDocumentGroups([]);
     setDocumentsError(null);
     setDocumentsLoading(true);
     setDocumentSettings(readDocumentSettings());
@@ -392,7 +579,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
       if (res.data?.error) setDocumentsError(res.data.error);
       else {
         setDocuments(res.data?.documents || []);
-        setDocumentGroups(res.data?.groups || []);
       }
       setDocumentsLoading(false);
     });
@@ -691,7 +877,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
 
                 <DocumentsSection
                   documents={documents}
-                  groups={documentGroups}
                   loading={documentsLoading}
                   error={documentsError}
                   settings={documentSettings}

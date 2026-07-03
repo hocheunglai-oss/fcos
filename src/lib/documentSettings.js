@@ -6,7 +6,7 @@ export const DOCUMENT_SOURCE_GROUPS = [
   'Invoices from Suppliers',
   'Contracts and Compliance',
   'Dispute / Support',
-  'Line Item',
+  'Product Line Attachments',
   'Extra Cost',
   'Broker',
   'Email',
@@ -20,6 +20,7 @@ export const DEFAULT_DOCUMENT_SETTINGS = {
     'Invoices from Suppliers',
     'Contracts and Compliance',
     'Dispute / Support',
+    'Product Line Attachments',
     'Email',
   ],
   showOnlyRelevant: true,
@@ -29,6 +30,7 @@ const LEGACY_SOURCE_GROUPS = {
   'Buyer / Factoring Invoice': 'Invoices to Buyer',
   'Supplier Invoice': 'Invoices from Suppliers',
   Nomination: 'Contracts and Compliance',
+  'Line Item': 'Product Line Attachments',
 };
 
 function normalizeSourceGroups(groups) {
