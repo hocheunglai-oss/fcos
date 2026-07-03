@@ -1176,6 +1176,10 @@ async function salesforceBuyerInvoicesDue(body) {
   const fields = ['Id', 'Name'];
   for (const field of dueFields) fields.push(field);
   if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
+  if (fieldNames.includes('Delivery_Date__c')) fields.push('Delivery_Date__c');
+  if (fieldNames.includes('Delivery_Date_Or_Expected__c')) fields.push('Delivery_Date_Or_Expected__c');
+  if (fieldNames.includes('Expected_Delivery_Date__c')) fields.push('Expected_Delivery_Date__c');
+  if (fieldNames.includes('Payment_Term__c')) fields.push('Payment_Term__c');
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
   if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
   if (fieldNames.includes('Buyer_Name__c')) fields.push('Buyer_Name__c');
@@ -1187,9 +1191,18 @@ async function salesforceBuyerInvoicesDue(body) {
   }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
 
-  const dueCondition = dueFields
+  const storedDueCondition = dueFields
     .map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`)
     .join(' OR ');
+  const calculatedDueDateConditions = [
+    fieldNames.includes('Delivery_Date__c') ? `Delivery_Date__c != null AND Delivery_Date__c <= ${dueThrough}` : '',
+    fieldNames.includes('Delivery_Date_Or_Expected__c') ? `Delivery_Date_Or_Expected__c != null AND Delivery_Date_Or_Expected__c <= ${dueThrough}` : '',
+    fieldNames.includes('Expected_Delivery_Date__c') ? `Expected_Delivery_Date__c != null AND Expected_Delivery_Date__c <= ${dueThrough}` : '',
+  ].filter(Boolean);
+  const calculatedDueCondition = fieldNames.includes('Payment_Term__c') && calculatedDueDateConditions.length
+    ? `(Payment_Term__c != null AND (${calculatedDueDateConditions.map((condition) => `(${condition})`).join(' OR ')}))`
+    : '';
+  const dueCondition = [storedDueCondition, calculatedDueCondition].filter(Boolean).join(' OR ');
   const outstandingConditions = [];
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
   if (fieldNames.includes('Receivable_Balance__c')) outstandingConditions.push('Receivable_Balance__c >= 50');
@@ -1236,7 +1249,11 @@ async function salesforceBuyerInvoicesDue(body) {
 
   const allRows = stems
     .map((stem) => {
-      const dueDate = earliestDate(dueFields.map((field) => stem[field]));
+      const dueDate = calculatedBuyerPayTermDate(stem)
+        || stem.Invoice_Due_Date__c
+        || stem.Due_Date__c
+        || stem.Buyer_Pay_Term_Date__c
+        || earliestDate(dueFields.map((field) => stem[field]));
       if (!dueDate || dueDate > dueThrough) return null;
       if (dueDate < MIN_BUYER_INVOICE_DUE_DATE) return null;
       if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
