@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CalendarClock, Download, Eye, Loader2, Mail, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
+import { AlertCircle, CalendarClock, Check, Copy, Download, Eye, Loader2, Mail, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -27,6 +27,17 @@ const DEFAULT_EMAIL_SETTINGS = {
   weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
   sendTimes: '08:00, 14:00',
 };
+
+const COPY_COLUMNS = [
+  { header: 'Stem Name', value: (row) => row.stemName || '—' },
+  { header: 'Buyer Name', value: (row) => row.buyerName || '—' },
+  { header: 'Invoice Amount', value: (row) => fmtMoney(row.invoiceAmount) },
+  { header: 'Receivable Balance', value: (row) => fmtMoney(row.receivableBalance) },
+  { header: 'Buyer Invoice Due Date', value: (row) => fmtDate(row.buyerInvoiceDueDate) },
+  { header: 'Buyer Trader in Charge', value: (row) => row.buyerTraderInCharge || '—' },
+  { header: 'Status', value: (row) => row.status || '—' },
+  { header: 'Overdue', value: (row) => overdueDisplayValue(row.daysUntilDue) },
+];
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -104,6 +115,34 @@ function overdueDisplayValue(daysUntilDue) {
   return Object.is(overdue, -0) ? '0' : overdue.toLocaleString();
 }
 
+function markdownCell(value) {
+  return textValue(value, '—').replaceAll('|', '\\|').replace(/\s+/g, ' ').trim() || '—';
+}
+
+function invoiceRecordTableText(row) {
+  return [
+    `| ${COPY_COLUMNS.map((column) => markdownCell(column.header)).join(' | ')} |`,
+    `| ${COPY_COLUMNS.map(() => '---').join(' | ')} |`,
+    `| ${COPY_COLUMNS.map((column) => markdownCell(column.value(row))).join(' | ')} |`,
+  ].join('\n');
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
 function readInitialFilters() {
   if (typeof window === 'undefined') return { daysAhead: 7, buyerTraders: [], hasBuyerTraderFilter: false };
   const params = new URLSearchParams(window.location.search);
@@ -151,6 +190,7 @@ export default function BuyerInvoices() {
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
   const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
+  const [copiedRowId, setCopiedRowId] = useState(null);
   const traderFilterInitialized = useRef(false);
   const initialBuyerTraderFilter = useRef(initialFilters);
 
@@ -260,6 +300,16 @@ export default function BuyerInvoices() {
     link.download = `buyer-invoices-due-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const copyInvoiceRecord = async (row) => {
+    try {
+      await writeClipboardText(invoiceRecordTableText(row));
+      setCopiedRowId(row.id);
+      window.setTimeout(() => setCopiedRowId((current) => (current === row.id ? null : current)), 1500);
+    } catch {
+      setError('Unable to copy invoice details to clipboard.');
+    }
   };
 
   const updateEmailSetting = (key, value) => {
@@ -524,7 +574,7 @@ export default function BuyerInvoices() {
         <TableShell title="Buyer Invoice Due List" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
           {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
-              <table className="w-full min-w-[980px] text-sm">
+              <table className="w-full min-w-[1080px] text-sm">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
@@ -535,6 +585,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Copy</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -557,6 +608,22 @@ export default function BuyerInvoices() {
                       </td>
                       <td className={`px-4 py-3 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
                         {overdueDisplayValue(row.daysUntilDue)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          title="Copy row details"
+                          aria-label={`Copy ${row.stemName || 'invoice'} details`}
+                          className="h-7 px-2"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            copyInvoiceRecord(row);
+                          }}
+                        >
+                          {copiedRowId === row.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        </Button>
                       </td>
                     </tr>
                   ))}
