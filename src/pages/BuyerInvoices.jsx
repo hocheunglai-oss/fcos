@@ -19,6 +19,7 @@ import {
   smtpFromAddress,
 } from '@/lib/smtpSettings';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { cn } from '@/lib/utils';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
@@ -374,6 +375,41 @@ function collectionPill(status) {
   if (status === 'On Hold') return 'bg-amber-50 text-amber-700 border-amber-200';
   if (status === 'Paid / Closed') return 'bg-muted text-muted-foreground border-border';
   return 'bg-background text-foreground border-border';
+}
+
+function hongKongDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+function isPaymentReminderSentEvent(event) {
+  return /^Payment reminder sent\b/i.test(textValue(event?.note, ''));
+}
+
+function latestPaymentReminderSentAt(row) {
+  const events = Array.isArray(row?.collectionEvents) ? row.collectionEvents : [];
+  const latestEvent = events
+    .filter(isPaymentReminderSentEvent)
+    .filter((event) => event.createdAt)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  if (latestEvent) return latestEvent.createdAt;
+  if (isPaymentReminderSentEvent({ note: row?.collection?.latestNote })) {
+    return row?.collection?.lastEventAt || row?.collection?.updatedAt || null;
+  }
+  return null;
+}
+
+function wasPaymentReminderSentToday(row, todayKey = hongKongDateKey()) {
+  const sentAt = latestPaymentReminderSentAt(row);
+  return Boolean(sentAt && hongKongDateKey(sentAt) === todayKey);
 }
 
 function overdueDisplayValue(daysUntilDue) {
@@ -1720,12 +1756,14 @@ export default function BuyerInvoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row, idx) => (
-                    <tr
-                      key={row.id}
-                      onClick={() => setSelectedStemId(row.stemId)}
-                      className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
-                    >
+                  {filteredRows.map((row, idx) => {
+                    const reminderSentToday = wasPaymentReminderSentToday(row);
+                    return (
+                      <tr
+                        key={row.id}
+                        onClick={() => setSelectedStemId(row.stemId)}
+                        className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
+                      >
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '-'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '-'}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
@@ -1760,9 +1798,12 @@ export default function BuyerInvoices() {
                             type="button"
                             size="sm"
                             variant="outline"
-                            title="Send payment reminder"
+                            title={reminderSentToday ? 'Payment reminder sent today' : 'Send payment reminder'}
                             aria-label={`Send payment reminder for ${row.stemName || 'invoice'}`}
-                            className="h-7 px-2"
+                            className={cn(
+                              'h-7 px-2',
+                              reminderSentToday && 'border-zinc-700 bg-zinc-800 text-white shadow-sm hover:bg-zinc-700 hover:text-white',
+                            )}
                             onClick={(event) => {
                               event.stopPropagation();
                               setSelectedReminderRow(row);
@@ -1800,8 +1841,9 @@ export default function BuyerInvoices() {
                           </Button>
                         </div>
                       </td>
-                    </tr>
-                  ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
