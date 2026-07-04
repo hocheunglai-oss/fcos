@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Download, Loader2, RefreshCw, Search, X } from 'lucide-react';
+import { AlertTriangle, Download, FileText, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import DisputeDocumentsModal from '@/components/disputes/DisputeDocumentsModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -42,6 +43,23 @@ const pairTitle = (pairs, key) =>
     ? pairs.map((pair) => pair?.[key] || '—').join('\n')
     : '';
 
+const lineValues = (value) => textValue(value, '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean);
+
+function MultilineValue({ value }) {
+  const lines = lineValues(value);
+  if (!lines.length) return '—';
+  return (
+    <div className="space-y-1">
+      {lines.map((line, idx) => (
+        <div key={`${line}-${idx}`} className="truncate leading-5">{line}</div>
+      ))}
+    </div>
+  );
+}
+
 function Metric({ label, value, tone = 'default' }) {
   const toneClass = tone === 'red' ? 'text-red-600' : tone === 'amber' ? 'text-amber-600' : 'text-foreground';
   return (
@@ -60,6 +78,7 @@ export default function DisputeManagement() {
   const [search, setSearch] = useState('');
   const [selectedStatuses, setSelectedStatuses] = useState(NOT_CLOSED_STATUSES);
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [documentsStem, setDocumentsStem] = useState(null);
 
   const loadRows = async () => {
     setLoading(true);
@@ -105,6 +124,8 @@ export default function DisputeManagement() {
         row._Buyer_Name,
         row._Supplier_Names,
         row._Product_Names,
+        row._Buyer_Dispute_Label,
+        row._Supplier_Dispute_Label,
         displayStatus(row.Dispute_Status__c),
       ].some(value => value != null && textValue(value, '').toLowerCase().includes(q));
       return isActiveDispute && statusMatch && textMatch;
@@ -119,12 +140,14 @@ export default function DisputeManagement() {
   }), [filteredRows]);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Supplier Name(s)', 'Product Name(s)', 'Dispute Status', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Receivable Balance', 'Payable Balance', 'Last Modified'];
+    const headers = ['Stem Name', 'Buyer Name', 'Supplier Name(s)', 'Product Name(s)', 'Buyer Dispute', 'Supplier Dispute', 'Dispute Status', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Receivable Balance', 'Payable Balance', 'Last Modified'];
     const csvRows = filteredRows.map(row => [
       row._Display_Name,
       row._Buyer_Name,
       row._Supplier_Names,
       row._Product_Names,
+      row._Buyer_Dispute_Label,
+      row._Supplier_Dispute_Label,
       displayStatus(row.Dispute_Status__c),
       row.Delivery_Date__c,
       row.Expected_Delivery_Date__c,
@@ -217,13 +240,15 @@ export default function DisputeManagement() {
           <StateBlock icon={Loader2} title="Loading disputes..." description="Fetching dispute STEMs from Salesforce." />
         ) : filteredRows.length ? (
           <div className="max-h-[68vh] overflow-auto">
-            <table className="w-full min-w-[1420px] text-xs">
+            <table className="w-full min-w-[1720px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Name(s)</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Product Name(s)</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Dispute</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Dispute</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
@@ -231,6 +256,7 @@ export default function DisputeManagement() {
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable Balance</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Modified</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Documents</th>
                 </tr>
               </thead>
               <tbody>
@@ -266,6 +292,12 @@ export default function DisputeManagement() {
                           row._Product_Names || '—'
                         )}
                       </td>
+                      <td className="max-w-[220px] px-3 py-2.5 text-muted-foreground" title={row._Buyer_Dispute_Label || ''}>
+                        <MultilineValue value={row._Buyer_Dispute_Label} />
+                      </td>
+                      <td className="max-w-[260px] px-3 py-2.5 text-muted-foreground" title={row._Supplier_Dispute_Label || ''}>
+                        <MultilineValue value={row._Supplier_Dispute_Label} />
+                      </td>
                       <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
                       <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
@@ -273,6 +305,20 @@ export default function DisputeManagement() {
                       <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
                       <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row._Payable_Balance)}</td>
                       <td className="px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDocumentsStem(row);
+                          }}
+                        >
+                          <FileText className="h-3.5 w-3.5" /> Manage
+                        </Button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -285,6 +331,7 @@ export default function DisputeManagement() {
       </TableShell>
 
       <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={loadRows} />
+      <DisputeDocumentsModal stem={documentsStem} open={!!documentsStem} onClose={() => setDocumentsStem(null)} />
     </div>
   );
 }

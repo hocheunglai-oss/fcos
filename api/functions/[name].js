@@ -1264,10 +1264,76 @@ async function recordsLinkedToStemByLookup(objectName, stemId, sourceGroup, sour
 }
 
 function buildContentVersionFilename(document, version) {
-  const title = version?.Title || document?.Title || 'Salesforce File';
+  const title = document?.Title || version?.Title || 'Salesforce File';
   const extension = version?.FileExtension || '';
   if (!extension || title.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) return cleanDownloadFilename(title);
   return cleanDownloadFilename(`${title}.${extension}`);
+}
+
+function cleanBase64Payload(value) {
+  return String(value || '').replace(/^data:[^;]+;base64,/i, '').trim();
+}
+
+function ensureFilenameExtension(filename, title) {
+  const cleanFilename = cleanDownloadFilename(filename || title || 'salesforce-document');
+  if (cleanFilename.includes('.')) return cleanFilename;
+  const titleExtension = String(title || '').split('.').pop();
+  if (titleExtension && titleExtension !== title) return `${cleanFilename}.${titleExtension}`;
+  return cleanFilename;
+}
+
+async function salesforceStemDocumentUpload(body = {}) {
+  const actualStemId = await resolveStemId(body.stemId);
+  const fileBase64 = cleanBase64Payload(body.fileBase64);
+  if (!fileBase64) throw appError('File content is required.', 400);
+
+  const title = cleanDownloadFilename(body.title || body.fileName || 'Salesforce File');
+  const pathOnClient = ensureFilenameExtension(body.fileName, title);
+  await sfRequest('/sobjects/ContentVersion', {
+    method: 'POST',
+    body: {
+      Title: title,
+      PathOnClient: pathOnClient,
+      VersionData: fileBase64,
+      FirstPublishLocationId: actualStemId,
+    },
+  });
+
+  return salesforceStemDocuments({ stemId: actualStemId });
+}
+
+async function salesforceDocumentRename(body = {}) {
+  const title = cleanDownloadFilename(body.title || body.fileName || 'Salesforce File');
+  const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
+  const id = body.attachmentId || body.contentDocumentId || body.id;
+  if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
+
+  if (kind === 'attachment') {
+    await sfRequest(`/sobjects/Attachment/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { Name: title },
+    });
+  } else {
+    await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { Title: title },
+    });
+  }
+
+  return body.stemId ? salesforceStemDocuments({ stemId: body.stemId }) : { success: true };
+}
+
+async function salesforceDocumentDelete(body = {}) {
+  const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
+  const id = body.attachmentId || body.contentDocumentId || body.id;
+  if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
+
+  const path = kind === 'attachment'
+    ? `/sobjects/Attachment/${encodeURIComponent(id)}`
+    : `/sobjects/ContentDocument/${encodeURIComponent(id)}`;
+  await sfRequest(path, { method: 'DELETE' });
+
+  return body.stemId ? salesforceStemDocuments({ stemId: body.stemId }) : { success: true };
 }
 
 async function salesforceStemDocuments(body = {}) {
@@ -2566,6 +2632,12 @@ async function salesforceDisputeStems(body) {
   const supplierInvoiceFieldNames = supplierInvoiceDescribe.fields.map((f) => f.name);
   const supplierInvoicePayableField = ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']
     .find((field) => supplierInvoiceFieldNames.includes(field));
+  const disputeObjectDescribe = await salesforceObjectFields({ objectName: 'Dispute__c' }).catch(() => ({ fields: [] }));
+  const disputeObjectFields = disputeObjectDescribe.fields || [];
+  const disputeObjectFieldNames = disputeObjectFields.map((field) => field.name);
+  const disputeObjectFieldByName = Object.fromEntries(disputeObjectFields.map((field) => [field.name, field]));
+  const disputeBuyerRelationship = disputeObjectFieldByName.Buyer__c?.relationshipName;
+  const disputeSupplierRelationship = disputeObjectFieldByName.Supplier__c?.relationshipName;
 
   const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
   for (const field of [
@@ -2606,6 +2678,7 @@ async function salesforceDisputeStems(body) {
   const lineItemsByStem = {};
   const extraCostsByStem = {};
   const supplierInvoicePayableByStem = {};
+  const disputeRecordsByStem = {};
 
   if (stemIds.length) {
     const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
@@ -2662,6 +2735,36 @@ async function salesforceDisputeStems(body) {
       if (!invoice.STEM__c || supplierInvoicePayableField == null) continue;
       supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
     }
+
+    if (disputeObjectFieldNames.includes('STEM__c')) {
+      const disputeSelectFields = ['Id', 'STEM__c'];
+      for (const field of ['Status_Buyer__c', 'Status_Supplier__c', 'Dispute_Status__c', 'Supplier_Key__c']) {
+        if (disputeObjectFieldNames.includes(field)) disputeSelectFields.push(field);
+      }
+      if (disputeObjectFieldNames.includes('Buyer__c')) {
+        disputeSelectFields.push('Buyer__c');
+        if (disputeBuyerRelationship) disputeSelectFields.push(`${disputeBuyerRelationship}.Name`);
+      }
+      if (disputeObjectFieldNames.includes('Supplier__c')) {
+        disputeSelectFields.push('Supplier__c');
+        if (disputeSupplierRelationship) disputeSelectFields.push(`${disputeSupplierRelationship}.Name`);
+      }
+
+      for (const chunk of chunkIds(stemIds)) {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        const disputeRows = await queryRows(`
+          SELECT ${[...new Set(disputeSelectFields)].join(', ')}
+          FROM Dispute__c
+          WHERE STEM__c IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+        for (const dispute of disputeRows) {
+          if (!dispute.STEM__c) continue;
+          if (!disputeRecordsByStem[dispute.STEM__c]) disputeRecordsByStem[dispute.STEM__c] = [];
+          disputeRecordsByStem[dispute.STEM__c].push(dispute);
+        }
+      }
+    }
   }
 
   return {
@@ -2671,6 +2774,7 @@ async function salesforceDisputeStems(body) {
         const stemHasDelivery = !!stem.Delivery_Date__c;
         const lineItems = lineItemsByStem[stem.Id] || [];
         const extraCosts = extraCostsByStem[stem.Id] || [];
+        const disputeRecords = disputeRecordsByStem[stem.Id] || [];
         const supplierNames = new Set();
         const productNames = new Set();
         const supplierProductPairs = [];
@@ -2731,6 +2835,18 @@ async function salesforceDisputeStems(body) {
           : rawSupplier;
         const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
         const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
+        const buyerDisputes = disputeRecords
+          .filter((dispute) => dispute.Status_Buyer__c || dispute.Buyer__c)
+          .map((dispute) => ({
+            buyerName: dispute[disputeBuyerRelationship]?.Name || dispute.Buyer__c || null,
+            status: dispute.Status_Buyer__c || dispute.Dispute_Status__c || 'Yes',
+          }));
+        const supplierDisputes = disputeRecords
+          .filter((dispute) => dispute.Status_Supplier__c || dispute.Supplier__c || dispute.Supplier_Key__c)
+          .map((dispute) => ({
+            supplierName: dispute[disputeSupplierRelationship]?.Name || dispute.Supplier_Key__c || dispute.Supplier__c || null,
+            status: dispute.Status_Supplier__c || dispute.Dispute_Status__c || 'Yes',
+          }));
 
         return {
           ...stem,
@@ -2738,6 +2854,10 @@ async function salesforceDisputeStems(body) {
           _Supplier_Names: [...supplierNames].sort().join(', ') || null,
           _Product_Names: [...productNames].sort().join(', ') || null,
           _Supplier_Product_Pairs: supplierProductPairs,
+          _Buyer_Disputes: buyerDisputes,
+          _Supplier_Disputes: supplierDisputes,
+          _Buyer_Dispute_Label: buyerDisputes.map((dispute) => [dispute.buyerName, dispute.status].filter(Boolean).join(': ')).join('\n') || null,
+          _Supplier_Dispute_Label: supplierDisputes.map((dispute) => [dispute.supplierName, dispute.status].filter(Boolean).join(': ')).join('\n') || null,
           _Payable_Balance: payableBalance,
           _Display_Name: formatStemName(stem),
           _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
@@ -3180,6 +3300,9 @@ const handlers = {
   salesforceDashboardFiltered: salesforceDashboardFilteredFull,
   salesforceStemDetail: salesforceStemDetailFull,
   salesforceStemDocuments,
+  salesforceStemDocumentUpload,
+  salesforceDocumentRename,
+  salesforceDocumentDelete,
   salesforceDescribeChildren,
   salesforceTopBuyers,
   salesforceBrokerRegister: salesforceBrokerRegisterFull,
