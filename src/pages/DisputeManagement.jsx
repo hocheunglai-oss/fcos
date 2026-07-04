@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, FileText, Loader2, Pencil, RefreshCw, Search, X } from 'lucide-react';
+import { AlertTriangle, FileText, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -49,94 +49,27 @@ const fmtDate = (value) => {
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return textValue(value); }
 };
 
-const pairTitle = (pairs, key) =>
-  Array.isArray(pairs) && pairs.length
-    ? pairs.map((pair) => pair?.[key] || '—').join('\n')
-    : '';
-
-const lineValues = (value) => textValue(value, '')
-  .split('\n')
-  .map((line) => line.trim())
-  .filter(Boolean);
-
-function MultilineValue({ value }) {
-  const lines = lineValues(value);
-  if (!lines.length) return '—';
-  return (
-    <div className="space-y-1">
-      {lines.map((line, idx) => (
-        <div key={`${line}-${idx}`} className="whitespace-nowrap leading-5">{line}</div>
-      ))}
-    </div>
-  );
-}
-
-function PartyDisputeLines({ rows, side, fallback, onEdit }) {
-  if (!Array.isArray(rows)) return <MultilineValue value={fallback ?? rows} />;
-  const lines = Array.isArray(rows) ? rows : [];
-  if (!lines.length) return '—';
-  return (
-    <div className="space-y-2">
-      {lines.map((line, idx) => (
-        <div key={`${line.disputeIds?.join('-') || side}-${line.supplierName || line.buyerName || 'party'}-${idx}`} className="group flex items-start gap-2 leading-5">
-          <div className="min-w-0">
-            <div className="whitespace-nowrap">
-              {[side === 'buyer' ? line.buyerName : line.supplierName, line.status].filter(Boolean).join(': ') || '—'}
-            </div>
-            {line.description && (
-              <div className="mt-0.5 whitespace-pre-wrap text-[11px] leading-4 text-muted-foreground/85">
-                {line.description}
-              </div>
-            )}
-            {side === 'supplier' && isDeductBelowAmountStatus(line.status) && numericValue(line.deductionAmount) != null && (
-              <div className="mt-0.5 text-[11px] font-medium leading-4 text-amber-700">
-                Deduction amount: {fmtMoney(line.deductionAmount)}
-              </div>
-            )}
-          </div>
-          {line.disputeIds?.length ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onEdit?.({ ...line, side });
-              }}
-              className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground opacity-70 hover:border-primary/50 hover:text-primary group-hover:opacity-100"
-              title="Edit dispute status and description"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MoneyLines({ rows, field, fallback }) {
-  const lines = Array.isArray(rows) && rows.length ? rows : null;
-  if (!lines) return fmtMoney(fallback);
-  return (
-    <div className="space-y-1 text-right tabular-nums">
-      {lines.map((line, idx) => (
-        <div key={`${field}-${idx}-${line.supplierName || ''}`} className="whitespace-nowrap leading-5">
-          {fmtMoney(line[field])}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const supplierRowsTitle = (rows, formatter) =>
-  Array.isArray(rows) && rows.length
-    ? rows.map(formatter).join('\n')
-    : '';
-
 const disputeStatusOptions = (side, currentStatus) => {
   const base = side === 'buyer' ? BUYER_DISPUTE_STATUS_OPTIONS : SUPPLIER_DISPUTE_STATUS_OPTIONS;
   const current = textValue(currentStatus, '').trim();
   if (!current || base.some(option => normalizeStatus(option) === normalizeStatus(current))) return base;
   return [...base, current];
+};
+
+const compactSupplierSummary = (row) => {
+  const names = new Set();
+  const pairs = Array.isArray(row._Supplier_Product_Pairs) ? row._Supplier_Product_Pairs : [];
+  const supplierRows = Array.isArray(row._Supplier_Dispute_Rows) ? row._Supplier_Dispute_Rows : [];
+  for (const pair of pairs) if (pair?.supplierName) names.add(pair.supplierName);
+  for (const supplierRow of supplierRows) if (supplierRow?.supplierName) names.add(supplierRow.supplierName);
+  for (const name of textValue(row._Supplier_Names, '').split(',')) {
+    const trimmed = name.trim();
+    if (trimmed) names.add(trimmed);
+  }
+  const list = [...names];
+  if (!list.length) return '—';
+  if (list.length === 1) return list[0];
+  return `${list[0]} +${list.length - 1}`;
 };
 
 function Metric({ label, value, tone = 'default' }) {
@@ -172,11 +105,15 @@ export default function DisputeManagement() {
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
+      setLoading(false);
+      return [];
     } else {
-      setRows(res.data?.rows || []);
+      const nextRows = res.data?.rows || [];
+      setRows(nextRows);
       setLastRefresh(new Date());
+      setLoading(false);
+      return nextRows;
     }
-    setLoading(false);
   };
 
   useEffect(() => { loadRows(); }, []);
@@ -238,7 +175,8 @@ export default function DisputeManagement() {
     setEditDescription('');
     setEditDeductionAmount('');
     setSavingEdit(false);
-    await loadRows();
+    const nextRows = await loadRows();
+    setDocumentsStem(prev => prev ? nextRows.find(row => row.Id === prev.Id) || prev : prev);
   };
 
   const filteredRows = useMemo(() => {
@@ -339,75 +277,32 @@ export default function DisputeManagement() {
           <StateBlock icon={Loader2} title="Loading disputes..." description="Fetching dispute STEMs from Salesforce." />
         ) : filteredRows.length ? (
           <div className="max-h-[68vh] overflow-auto">
-            <table className="w-max min-w-full table-auto text-xs">
+            <table className="w-full min-w-[980px] table-auto text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Name(s)</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Product Name(s)</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Dispute</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Dispute</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier(s)</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable Balance</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable / Payable</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Modified</th>
-                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Documents</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Manage</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.map((row, idx) => {
-                  const pairs = Array.isArray(row._Supplier_Product_Pairs) ? row._Supplier_Product_Pairs : [];
-                  const supplierDisputeRows = Array.isArray(row._Supplier_Dispute_Rows) ? row._Supplier_Dispute_Rows : [];
-                  const buyerDisputeRows = Array.isArray(row._Buyer_Dispute_Rows) ? row._Buyer_Dispute_Rows : [];
+                  const supplierSummary = compactSupplierSummary(row);
                   return (
                     <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
                       <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
-                      <td className="px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'supplierName') || row._Supplier_Names || ''}>
-                        {pairs.length ? (
-                          <div className="space-y-1">
-                            {pairs.map((pair, pairIdx) => (
-                              <div key={`${pair.supplierName || 'supplier'}-${pair.productName || 'product'}-${pairIdx}`} className="whitespace-nowrap leading-5">
-                                {pair.supplierName || '—'}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          row._Supplier_Names || '—'
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'productName') || row._Product_Names || ''}>
-                        {pairs.length ? (
-                          <div className="space-y-1">
-                            {pairs.map((pair, pairIdx) => (
-                              <div key={`${pair.productName || 'product'}-${pair.supplierName || 'supplier'}-${pairIdx}`} className="whitespace-nowrap leading-5">
-                                {pair.productName || '—'}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          row._Product_Names || '—'
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-muted-foreground" title={row._Buyer_Dispute_Label || ''}>
-                        <PartyDisputeLines rows={buyerDisputeRows.length ? buyerDisputeRows : row._Buyer_Dispute_Label} side="buyer" fallback={row._Buyer_Dispute_Label} onEdit={openDisputeEdit} />
-                      </td>
-                      <td className="px-3 py-2.5 text-muted-foreground" title={supplierRowsTitle(supplierDisputeRows, (line) => [line.supplierName, line.status].filter(Boolean).join(': ')) || row._Supplier_Dispute_Label || ''}>
-                        <PartyDisputeLines rows={supplierDisputeRows.length ? supplierDisputeRows : row._Supplier_Dispute_Label} side="supplier" fallback={row._Supplier_Dispute_Label} onEdit={openDisputeEdit} />
-                      </td>
                       <td className="whitespace-nowrap px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
+                      <td className="max-w-[240px] truncate whitespace-nowrap px-3 py-2.5 text-muted-foreground" title={row._Buyer_Name || ''}>{row._Buyer_Name || '—'}</td>
+                      <td className="max-w-[260px] truncate whitespace-nowrap px-3 py-2.5 text-muted-foreground" title={row._Supplier_Names || supplierSummary}>{supplierSummary}</td>
                       <td className="whitespace-nowrap px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
-                      <td className="px-3 py-2.5 font-medium text-foreground">
-                        <MoneyLines rows={supplierDisputeRows} field="supplierInvoiceAmount" fallback={row.Total_Invoiced_Amount_From_Suppliers__c} />
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
-                      <td className="px-3 py-2.5 font-medium text-foreground">
-                        <MoneyLines rows={supplierDisputeRows} field="payableBalance" fallback={row._Payable_Balance} />
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                        <div className="font-semibold text-foreground">{fmtMoney(row.Receivable_Balance__c)}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">{fmtMoney(row._Payable_Balance)}</div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-right">
@@ -436,7 +331,7 @@ export default function DisputeManagement() {
       </TableShell>
 
       <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={loadRows} />
-      <DisputeDocumentsModal stem={documentsStem} open={!!documentsStem} onClose={() => setDocumentsStem(null)} />
+      <DisputeDocumentsModal stem={documentsStem} open={!!documentsStem} onClose={() => setDocumentsStem(null)} onEditDispute={openDisputeEdit} />
       <Dialog open={!!editingDispute} onOpenChange={(open) => { if (!open) closeDisputeEdit(); }}>
         <DialogContent className="w-[min(560px,94vw)] max-w-none">
           <DialogHeader>

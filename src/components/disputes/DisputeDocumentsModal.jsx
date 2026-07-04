@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { textValue } from '@/lib/displayValue';
+import { numericValue, textValue } from '@/lib/displayValue';
 
 const fmtDate = (value) => {
   if (!value) return '—';
@@ -22,6 +22,12 @@ const fmtBytes = (value) => {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const fmtMoney = (value) => {
+  const number = numericValue(value);
+  if (number == null) return '—';
+  return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 const UPLOAD_NAME_PRESETS = [
@@ -68,6 +74,7 @@ const documentSearchText = (document) => [
 ].filter(Boolean).join(' ').toLowerCase();
 
 const isDisputeFlowDocument = (document) => document.sourceGroup === 'Direct STEM';
+const isDeductBelowAmountStatus = (value) => /deduct\s+below\s+amount/i.test(textValue(value, ''));
 const isBdnDocument = (document) => (
   document.sourceGroup === 'Product Line Attachments'
   || /\b(bdn|delivery|bunker delivery|delivery note)\b/i.test(documentSearchText(document))
@@ -110,6 +117,142 @@ const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(reader.error || new Error('Unable to read file.'));
   reader.readAsDataURL(file);
 });
+
+const lineValues = (value) => textValue(value, '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean);
+
+function TextLines({ value }) {
+  const lines = lineValues(value);
+  if (!lines.length) return <span className="text-muted-foreground">—</span>;
+  return (
+    <div className="space-y-1">
+      {lines.map((line, index) => (
+        <div key={`${line}-${index}`} className="leading-5">{line}</div>
+      ))}
+    </div>
+  );
+}
+
+function DetailSection({ title, meta, children }) {
+  return (
+    <section className="rounded-xl border border-border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
+        {meta && <div className="text-[11px] text-muted-foreground">{meta}</div>}
+      </div>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
+function SummaryItem({ label, value, align = 'left' }) {
+  return (
+    <div className={align === 'right' ? 'text-right' : ''}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-0.5 truncate text-sm font-semibold text-foreground" title={textValue(value, '')}>{value || '—'}</div>
+    </div>
+  );
+}
+
+function PartyDisputeList({ rows, side, fallback, onEditDispute }) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return <TextLines value={fallback} />;
+  return (
+    <div className="space-y-2">
+      {list.map((line, index) => {
+        const partyName = side === 'buyer' ? line.buyerName : line.supplierName;
+        return (
+          <div key={`${line.disputeIds?.join('-') || side}-${partyName || 'party'}-${index}`} className="rounded-lg border border-border bg-muted/10 p-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-foreground" title={partyName || ''}>{partyName || '—'}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{line.status || '—'}</div>
+              </div>
+              {line.disputeIds?.length ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1"
+                  onClick={() => onEditDispute?.({ ...line, side })}
+                >
+                  <Pencil className="h-3 w-3" /> Edit
+                </Button>
+              ) : null}
+            </div>
+            {line.description && (
+              <div className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                {line.description}
+              </div>
+            )}
+            {side === 'supplier' && isDeductBelowAmountStatus(line.status) && numericValue(line.deductionAmount) != null && (
+              <div className="mt-2 text-xs font-semibold text-amber-700">
+                Deduction amount: {fmtMoney(line.deductionAmount)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SupplierFinanceList({ rows, field, fallback }) {
+  const list = Array.isArray(rows) ? rows.filter(row => row?.[field] != null || row?.supplierName) : [];
+  if (!list.length) {
+    return <div className="text-right font-semibold tabular-nums">{fmtMoney(fallback)}</div>;
+  }
+  return (
+    <div className="space-y-1">
+      {list.map((row, index) => (
+        <div key={`${field}-${row.supplierName || 'supplier'}-${index}`} className="grid grid-cols-[1fr_auto] gap-3 text-sm">
+          <div className="truncate text-muted-foreground" title={row.supplierName || ''}>{row.supplierName || '—'}</div>
+          <div className="font-semibold tabular-nums text-foreground">{fmtMoney(row[field])}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductPartyList({ pairs, supplierFallback, productFallback }) {
+  const list = Array.isArray(pairs) ? pairs : [];
+  if (!list.length) {
+    return (
+      <div className="grid gap-2 md:grid-cols-2">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier(s)</div>
+          <div className="mt-1 text-sm"><TextLines value={supplierFallback} /></div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product(s)</div>
+          <div className="mt-1 text-sm"><TextLines value={productFallback} /></div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-border bg-muted/30">
+            <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Supplier</th>
+            <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Product</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((pair, index) => (
+            <tr key={`${pair.supplierName || 'supplier'}-${pair.productName || 'product'}-${index}`} className="border-b border-border/40 last:border-0">
+              <td className="px-3 py-2 text-muted-foreground">{pair.supplierName || '—'}</td>
+              <td className="px-3 py-2 font-medium text-foreground">{pair.productName || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function DocumentPreview({ document, onClose }) {
   const previewKind = documentPreviewKind(document);
@@ -163,7 +306,7 @@ function DocumentPreview({ document, onClose }) {
   );
 }
 
-export default function DisputeDocumentsModal({ stem, open, onClose }) {
+export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispute }) {
   const fileInputRef = useRef(null);
   const [documents, setDocuments] = useState([]);
   const [activeTab, setActiveTab] = useState('disputeFlow');
@@ -182,6 +325,18 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
 
   const stemId = stem?.Id;
   const stemName = stem?._Display_Name || stem?.Name || stem?.KeyStem__c || 'STEM';
+  const buyerDisputeRows = Array.isArray(stem?._Buyer_Dispute_Rows) ? stem._Buyer_Dispute_Rows : [];
+  const supplierDisputeRows = Array.isArray(stem?._Supplier_Dispute_Rows) ? stem._Supplier_Dispute_Rows : [];
+  const supplierProductPairs = Array.isArray(stem?._Supplier_Product_Pairs) ? stem._Supplier_Product_Pairs : [];
+  const supplierNames = new Set();
+  for (const pair of supplierProductPairs) if (pair?.supplierName) supplierNames.add(pair.supplierName);
+  for (const row of supplierDisputeRows) if (row?.supplierName) supplierNames.add(row.supplierName);
+  for (const name of textValue(stem?._Supplier_Names, '').split(',')) {
+    const trimmed = name.trim();
+    if (trimmed) supplierNames.add(trimmed);
+  }
+  const supplierCount = supplierNames.size;
+  const supplierSummary = supplierCount > 1 ? `${supplierCount} suppliers` : [...supplierNames][0] || '—';
 
   const sortedDocuments = useMemo(() => documents.slice().sort((a, b) => {
     return String(b.createdDate || '').localeCompare(String(a.createdDate || ''));
@@ -377,12 +532,71 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
           }}
         >
           <DialogHeader className="border-b border-border px-5 py-4">
-            <DialogTitle className="pr-8">Documents</DialogTitle>
+            <DialogTitle className="pr-8">Manage Dispute</DialogTitle>
             <div className="text-sm text-muted-foreground">{stemName}</div>
           </DialogHeader>
 
+          <div className="grid gap-3 border-b border-border bg-muted/10 px-5 py-3 sm:grid-cols-3 lg:grid-cols-6">
+            <SummaryItem label="Status" value={textValue(stem?.Dispute_Status__c)} />
+            <SummaryItem label="Delivery" value={fmtDate(stem?._Effective_Date)} />
+            <SummaryItem label="Buyer" value={stem?._Buyer_Name || '—'} />
+            <SummaryItem label="Supplier(s)" value={supplierSummary} />
+            <SummaryItem label="Receivable" value={fmtMoney(stem?.Receivable_Balance__c)} align="right" />
+            <SummaryItem label="Payable" value={fmtMoney(stem?._Payable_Balance)} align="right" />
+          </div>
+
           <div className="space-y-4 overflow-y-auto px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <DetailSection title="Dispute Overview">
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Dispute</div>
+                  <PartyDisputeList
+                    rows={buyerDisputeRows}
+                    side="buyer"
+                    fallback={stem?._Buyer_Dispute_Label}
+                    onEditDispute={onEditDispute}
+                  />
+                </div>
+                <div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier Dispute</div>
+                  <PartyDisputeList
+                    rows={supplierDisputeRows}
+                    side="supplier"
+                    fallback={stem?._Supplier_Dispute_Label}
+                    onEditDispute={onEditDispute}
+                  />
+                </div>
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Financials">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <div className="grid grid-cols-[1fr_auto] gap-3 text-sm">
+                    <div className="text-muted-foreground">Buyer invoice amount</div>
+                    <div className="font-semibold tabular-nums text-foreground">{fmtMoney(stem?.Total_Invoice_Amount__c)}</div>
+                    <div className="text-muted-foreground">Receivable balance</div>
+                    <div className="font-semibold tabular-nums text-foreground">{fmtMoney(stem?.Receivable_Balance__c)}</div>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier invoice amount(s)</div>
+                  <SupplierFinanceList rows={supplierDisputeRows} field="supplierInvoiceAmount" fallback={stem?.Total_Invoiced_Amount_From_Suppliers__c} />
+                  <div className="mt-3 border-t border-border pt-2">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payable balance</div>
+                    <SupplierFinanceList rows={supplierDisputeRows} field="payableBalance" fallback={stem?._Payable_Balance} />
+                  </div>
+                </div>
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Products & Parties" meta={`${supplierProductPairs.length || 0} product line${supplierProductPairs.length === 1 ? '' : 's'}`}>
+              <ProductPartyList pairs={supplierProductPairs} supplierFallback={stem?._Supplier_Names} productFallback={stem?._Product_Names} />
+            </DetailSection>
+
+            <DetailSection title="Documents" meta={`${activeDocuments.length} shown`}>
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="disputeFlow">Dispute Flow ({disputeFlowDocuments.length})</TabsTrigger>
@@ -392,7 +606,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
               <Button variant="outline" size="sm" onClick={loadDocuments} disabled={loading} className="gap-2">
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
               </Button>
-            </div>
+                </div>
 
             {activeTab === 'disputeFlow' && (
               <div className="rounded-xl border border-border bg-muted/10 p-3">
@@ -559,6 +773,8 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
                 </div>
               )}
             </div>
+              </div>
+            </DetailSection>
           </div>
 
           {previewDocument && (
