@@ -97,7 +97,7 @@ const COPY_COLUMNS = [
   { header: 'Buyer Trader in Charge', value: (row) => row.buyerTraderInCharge || '-' },
   { header: 'PSPRS', value: (row) => row.prpspStatus || '-' },
   { header: 'Status', value: (row) => row.status || '-' },
-  { header: 'Overdue', value: (row) => overdueDisplayValue(row.daysUntilDue), align: 'right' },
+  { header: 'Overdue Volume', value: (row) => overdueDisplayValue(row.daysUntilDue), align: 'right' },
 ];
 
 const fmtMoney = (value) => {
@@ -138,6 +138,37 @@ function richTemplateValue(value) {
     .filter(Boolean)
     .map((block) => `<p>${escapeHtml(block).replaceAll('\n', '<br>')}</p>`)
     .join('');
+}
+
+function sanitizePreviewHtml(value) {
+  return textValue(value, '')
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
+function invoiceTableMarkerHtml(count) {
+  return `
+    <div style="margin:12px 0;padding:10px 12px;border:1px dashed #2563eb;border-radius:8px;background:#eff6ff;color:#1d4ed8;font-size:13px;font-weight:600">
+      Outstanding invoice table inserted here (${Number(count || 0).toLocaleString()} invoices)
+    </div>`;
+}
+
+function emailBodyPreviewHtml(body, selectedCount) {
+  const html = sanitizePreviewHtml(richTemplateValue(body));
+  const marker = invoiceTableMarkerHtml(selectedCount);
+  const match = /for your attention\./i.exec(html);
+  if (!match) return `${html}${marker}`;
+  const afterMarker = match.index + match[0].length;
+  const rest = html.slice(afterMarker);
+  const paragraphClose = /<\/p>/i.exec(rest);
+  if (paragraphClose && paragraphClose.index < 300) {
+    const insertAt = afterMarker + paragraphClose.index + paragraphClose[0].length;
+    return `${html.slice(0, insertAt)}${marker}${html.slice(insertAt)}`;
+  }
+  return `${html.slice(0, afterMarker)}${marker}${html.slice(afterMarker)}`;
 }
 
 function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
@@ -284,7 +315,8 @@ function collectionPill(status) {
 function overdueDisplayValue(daysUntilDue) {
   if (daysUntilDue == null) return '-';
   const overdue = -Number(daysUntilDue);
-  return Object.is(overdue, -0) ? '0' : overdue.toLocaleString();
+  const value = Object.is(overdue, -0) ? 0 : overdue;
+  return `${value.toLocaleString()} Days`;
 }
 
 function copyCell(value) {
@@ -715,7 +747,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </Button>
                 </div>
                 <div className="max-h-[34vh] overflow-auto rounded-lg border border-border">
-                  <table className="w-full min-w-[1160px] text-sm">
+                  <table className="w-full min-w-[1240px] text-sm">
                     <thead>
                       <tr className="border-b border-border bg-muted/40">
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
@@ -726,7 +758,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recipient</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
+                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue Volume</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -801,39 +833,17 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-border bg-card">
-                  <div className="border-b border-border px-4 py-3">
-                    <h3 className="text-sm font-semibold text-foreground">Invoice table preview</h3>
-                    <p className="text-xs text-muted-foreground">{selectedRows.length.toLocaleString()} invoices will be included inline in the email.</p>
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-foreground">Email content preview</h3>
+                    <p className="text-xs text-muted-foreground">
+                      The outstanding invoice table is inserted at the marker below when the email is sent.
+                    </p>
                   </div>
-                  <div className="max-h-[34vh] overflow-auto">
-                    <table className="w-full min-w-[980px] text-xs">
-                      <thead>
-                        <tr className="border-b border-border bg-muted/40">
-                          <th className="sticky top-0 bg-card px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                          <th className="sticky top-0 bg-card px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedRows.map((candidate, idx) => (
-                          <tr key={candidate.stemId} className={`border-b border-border/40 ${rowSeverityClass(candidate, idx)}`}>
-                            <td className="px-3 py-2 font-medium text-foreground">{candidate.stemName || '-'}</td>
-                            <td className="px-3 py-2 text-muted-foreground">{candidate.buyerName || '-'}</td>
-                            <td className="px-3 py-2 text-right font-semibold text-foreground">{fmtMoney(candidate.invoiceAmount)}</td>
-                            <td className="px-3 py-2 text-right font-semibold text-foreground">{fmtMoney(candidate.receivableBalance)}</td>
-                            <td className="px-3 py-2 text-foreground">{fmtDate(candidate.buyerInvoiceDueDate)}</td>
-                            <td className="px-3 py-2 text-muted-foreground">{candidate.status || '-'}</td>
-                            <td className={`px-3 py-2 text-right font-medium ${dueTextClass(candidate.daysUntilDue)}`}>{overdueDisplayValue(candidate.daysUntilDue)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <div
+                    className="max-h-72 overflow-auto rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
+                    dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(form.body, selectedRows.length) }}
+                  />
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1618,7 +1628,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection / Payment Handler</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue Volume</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
                   </tr>
                 </thead>
