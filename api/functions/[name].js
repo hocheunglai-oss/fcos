@@ -3027,20 +3027,27 @@ function buildBuyerInvoiceReportEmail(report, settings) {
         <tbody>${tableRows || '<tr><td colspan="9" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
       </table>
     </div>` : '';
+  const contentHtml = emailContentHtml(content);
+  const hasAttentionMarker = /for your attention\./i.test(contentHtml);
+  const reportBodyHtml = hasAttentionMarker && tableHtml
+    ? `${insertAfterAttentionSentence(contentHtml, tableHtml)}${summaryHtml}`
+    : `${contentHtml}${summaryHtml}${tableHtml}`;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${emailContentHtml(content)}
-      ${summaryHtml}
-      ${tableHtml}
+      ${reportBodyHtml}
     </div>`;
+  const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
+  const introText = hasAttentionMarker && tableText
+    ? insertAfterAttentionSentence(content, `\n\n${tableText}\n\n`)
+    : content;
   const textLines = [
-    content,
+    introText,
     `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
     `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
     `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`,
     ...((report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`)),
     '',
-    ...rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
+    ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`)),
   ];
   return { subject, html, text: textLines.join('\n'), totals };
 }
@@ -3144,6 +3151,20 @@ function paymentReminderContentHtml(content) {
   return blocks.map((block) => `<p style="margin:0 0 14px;color:#1f2937">${escapeHtml(block).replaceAll('\n', '<br>')}</p>`).join('');
 }
 
+function insertAfterAttentionSentence(content, insertContent) {
+  const source = String(content || '');
+  const marker = /for your attention\./i.exec(source);
+  if (!marker) return `${source}${insertContent}`;
+  const afterMarker = marker.index + marker[0].length;
+  const rest = source.slice(afterMarker);
+  const paragraphClose = /<\/p>/i.exec(rest);
+  if (paragraphClose && paragraphClose.index < 300) {
+    const insertAt = afterMarker + paragraphClose.index + paragraphClose[0].length;
+    return `${source.slice(0, insertAt)}${insertContent}${source.slice(insertAt)}`;
+  }
+  return `${source.slice(0, afterMarker)}\n\n${insertContent}${source.slice(afterMarker)}`;
+}
+
 function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, overrides = {}) {
   const selectedRows = rows || [];
   const context = paymentReminderTemplateContext(report, selectedRows, selected);
@@ -3167,33 +3188,34 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       <td style="${cellStyle};text-align:right;font-weight:600;color:${severity.text};white-space:nowrap">${overdueDisplayValue(row.daysUntilDue)}</td>
     </tr>`;
   }).join('');
+  const tableHtml = `
+    <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px;margin:16px 0">
+      <table style="border-collapse:collapse;width:100%;min-width:1120px;font-size:13px">
+        <thead>
+          <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Stem Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Invoice Amount</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Receivable Balance</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Due Date</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Trader</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">PSPRS Status</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Status</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Overdue</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows || '<tr><td colspan="9" style="padding:18px;text-align:center;color:#667085">No invoices selected.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  const bodyHtml = paymentReminderContentHtml(body);
+  const htmlWithTable = insertAfterAttentionSentence(bodyHtml, tableHtml);
+  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
+  const bodyText = hasHtmlMarkup(body) ? htmlToPlainText(body) : body;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${paymentReminderContentHtml(body)}
-      <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px;margin-top:16px">
-        <table style="border-collapse:collapse;width:100%;min-width:1120px;font-size:13px">
-          <thead>
-            <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Stem Name</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Name</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Invoice Amount</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Receivable Balance</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Due Date</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Trader</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">PSPRS Status</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Status</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Overdue</th>
-            </tr>
-          </thead>
-          <tbody>${tableRows || '<tr><td colspan="9" style="padding:18px;text-align:center;color:#667085">No invoices selected.</td></tr>'}</tbody>
-        </table>
-      </div>
+      ${htmlWithTable}
     </div>`;
-  const text = [
-    hasHtmlMarkup(body) ? htmlToPlainText(body) : body,
-    '',
-    ...selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
-  ].join('\n');
+  const text = insertAfterAttentionSentence(bodyText, `\n\n${invoiceText}\n\n`);
   return { subject, body, html, text };
 }
 
@@ -3468,12 +3490,13 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null) {
   }
   const credentials = body.credentials || {};
   const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
+  const smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
   let result;
   try {
     result = useSmtp
       ? await sendWithSmtp({
           smtp: credentials.smtp || credentials,
-          from: settings.from,
+          from: smtpFrom,
           to: settings.to,
           cc: settings.cc,
           subject: email.subject,

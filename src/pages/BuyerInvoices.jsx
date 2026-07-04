@@ -1292,7 +1292,7 @@ export default function BuyerInvoices() {
     setEmailMessage(null);
     const smtpSettings = readSmtpSettings();
     const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
-      ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587) } }
+      ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587), from: smtpFromAddress(smtpSettings) } }
       : undefined;
     const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings: settingsForServer(), credentials, preview, force: !preview });
     if (res.data?.error) {
