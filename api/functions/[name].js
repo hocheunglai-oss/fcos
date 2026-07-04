@@ -1122,6 +1122,15 @@ function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
   return url.toString();
 }
 
+function serverEmailDeliveryStatus() {
+  const hasResend = Boolean(process.env.RESEND_API_KEY);
+  const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+  return {
+    hasServerProvider: hasResend || hasSmtp,
+    provider: hasResend ? 'resend' : hasSmtp ? 'smtp' : 'none',
+  };
+}
+
 function isSafeSalesforceFieldPath(value) {
   const parts = String(value || '').trim().split('.').filter(Boolean);
   if (!parts.length || parts.length > 4) return false;
@@ -3226,6 +3235,7 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
     preview: { html: email.html, text: email.text },
     settings: {
       paymentReminderToSource: 'Account.Accounts_Email__c + Nomination__c.BT_ST_Email_Address__c',
+      emailDelivery: serverEmailDeliveryStatus(),
       from: settings.from,
       daysAhead: report.daysAhead,
     },
@@ -3253,26 +3263,42 @@ async function buyerInvoicePaymentReminderSend(body, req) {
   });
   const credentials = body.credentials || {};
   const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
-  const result = useSmtp
-    ? await sendWithSmtp({
-        smtp: credentials.smtp || credentials,
-        from: settings.from,
-        to,
-        cc,
-        bcc,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      })
-    : await sendWithResend({
-        from: settings.from,
-        to,
-        cc,
-        bcc,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      });
+  let result;
+  try {
+    result = useSmtp
+      ? await sendWithSmtp({
+          smtp: credentials.smtp || credentials,
+          from: settings.from,
+          to,
+          cc,
+          bcc,
+          subject: email.subject,
+          html: email.html,
+          text: email.text,
+        })
+      : await sendWithResend({
+          from: settings.from,
+          to,
+          cc,
+          bcc,
+          subject: email.subject,
+          html: email.html,
+          text: email.text,
+        });
+  } catch (error) {
+    console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
+      message: error.message,
+      provider: useSmtp ? 'smtp' : 'resend',
+      hasRequestSmtp: Boolean(credentials.method === 'smtp' || credentials.smtp),
+      hasResendEnv: Boolean(process.env.RESEND_API_KEY),
+      hasSmtpEnv: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD),
+      toCount: to.length,
+      ccCount: cc.length,
+      bccCount: bcc.length,
+      rows: rows.length,
+    });
+    throw error;
+  }
 
   const collectionResults = [];
   const note = [
@@ -4421,6 +4447,11 @@ export default async function handler(req, res) {
     const data = await fn(body, req);
     return sendJson(res, data);
   } catch (error) {
+    console.error(`[api/functions] ${req?.url || ''} failed`, {
+      message: error.message,
+      status: error.status || error.statusCode || 500,
+      stack: error.stack,
+    });
     return sendJson(res, { error: error.message }, error.status || error.statusCode || 500);
   }
 }

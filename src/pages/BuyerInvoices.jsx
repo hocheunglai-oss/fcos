@@ -627,7 +627,14 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     setSending(true);
     setError(null);
     const smtpSettings = readSmtpSettings();
-    const credentials = hasUsableSmtpSettings(smtpSettings)
+    const hasLocalSmtp = hasUsableSmtpSettings(smtpSettings);
+    const hasServerEmailProvider = Boolean(data?.settings?.emailDelivery?.hasServerProvider);
+    if (!hasLocalSmtp && !hasServerEmailProvider) {
+      setError('Email sending is not configured. Save SMTP credentials in Settings, or add RESEND_API_KEY / SMTP credentials in Vercel.');
+      setSending(false);
+      return;
+    }
+    const credentials = hasLocalSmtp
       ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587) } }
       : undefined;
     const res = await appClient.functions.invoke('buyerInvoicePaymentReminderSend', {
@@ -824,7 +831,12 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </div>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  {error ? (
+                    <div className="max-w-3xl rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+                      {error}
+                    </div>
+                  ) : <span />}
                   <Button type="button" onClick={sendReminder} disabled={sending || !selectedRows.length} className="gap-2">
                     {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     Send Reminder
