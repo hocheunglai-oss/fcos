@@ -1129,13 +1129,6 @@ function normalizeSalesforceFieldPath(value) {
   return isSafeSalesforceFieldPath(raw) ? raw : '';
 }
 
-function getPathValue(record, path) {
-  if (!record || !path) return null;
-  return path.split('.').reduce((current, key) => (
-    current && typeof current === 'object' ? current[key] : null
-  ), record);
-}
-
 function numericValue(value) {
   if (value == null || value === '') return null;
   const number = Number(value);
@@ -1245,6 +1238,26 @@ function parseEmailList(value, fallback = []) {
   if (typeof value !== 'string') return fallback;
   const parsed = value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
   return parsed.length ? parsed : fallback;
+}
+
+function uniqueEmailList(...values) {
+  const seen = new Set();
+  const emails = [];
+  const addValue = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) addValue(item);
+      return;
+    }
+    if (typeof value !== 'string') return;
+    for (const email of value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)) {
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      emails.push(email);
+    }
+  };
+  for (const value of values) addValue(value);
+  return emails;
 }
 
 function parseStringList(value, fallback = []) {
@@ -2494,7 +2507,6 @@ async function salesforceBuyerInvoicesDue(body) {
   const dueThrough = addDays(today, daysAhead);
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
-  const reminderRecipientFieldPath = normalizeSalesforceFieldPath(body.paymentReminderRecipientFieldPath || '');
   const accountDescribe = fieldNames.includes('Account__c')
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
@@ -2521,9 +2533,9 @@ async function salesforceBuyerInvoicesDue(body) {
     fields.push('Account__c', 'Account__r.Name');
     if (accountFieldNames.includes('Group_Name__c')) fields.push('Account__r.Group_Name__c');
     if (accountFieldNames.includes('ParentId')) fields.push('Account__r.Parent.Name');
+    if (accountFieldNames.includes('Accounts_Email__c')) fields.push('Account__r.Accounts_Email__c');
   }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
-  if (reminderRecipientFieldPath) fields.push(reminderRecipientFieldPath);
 
   const storedDueCondition = dueFields
     .map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`)
@@ -2558,7 +2570,7 @@ async function salesforceBuyerInvoicesDue(body) {
       Promise.all(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
         return queryRows(`
-          SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c
+          SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c
           FROM Nomination__c
           WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
           ORDER BY CreatedDate ASC
@@ -2578,12 +2590,25 @@ async function salesforceBuyerInvoicesDue(body) {
 
     for (const nomination of nominationArrays.flat()) {
       if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [] };
+      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [], buyerEmails: [], allEmails: [] };
       const name = String(nomination.Name || '');
       const value = nomination.Buyer_Supplier_Trader__c;
+      const emails = uniqueEmailList(nomination.BT_ST_Email_Address__c);
       if (!traderByStem[nomination.STEM__c].all.includes(value)) traderByStem[nomination.STEM__c].all.push(value);
+      for (const email of emails) {
+        if (!traderByStem[nomination.STEM__c].allEmails.some((item) => item.toLowerCase() === email.toLowerCase())) {
+          traderByStem[nomination.STEM__c].allEmails.push(email);
+        }
+      }
       if (name.startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(value)) {
         traderByStem[nomination.STEM__c].buyer.push(value);
+      }
+      if (name.startsWith('Confirmation to ')) {
+        for (const email of emails) {
+          if (!traderByStem[nomination.STEM__c].buyerEmails.some((item) => item.toLowerCase() === email.toLowerCase())) {
+            traderByStem[nomination.STEM__c].buyerEmails.push(email);
+          }
+        }
       }
     }
 
@@ -2615,6 +2640,8 @@ async function salesforceBuyerInvoicesDue(body) {
       const daysUntilDue = daysBetween(today, dueDate);
       const account = stem['Account__r'] || {};
       const traderInfo = traderByStem[stem.Id] || {};
+      const buyerTraderEmails = traderInfo.buyerEmails?.length ? traderInfo.buyerEmails : traderInfo.allEmails || [];
+      const paymentReminderRecipients = uniqueEmailList(account.Accounts_Email__c, buyerTraderEmails);
       const prpspUploadDate = prpspUploadDateByStem[stem.Id] || null;
       const rawPsprsStatus = stem.PSPRS__c || null;
       return {
@@ -2629,7 +2656,10 @@ async function salesforceBuyerInvoicesDue(body) {
         receivableBalance: stem.Receivable_Balance__c ?? null,
         buyerInvoiceDueDate: dueDate,
         buyerTraderInCharge: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
-        paymentReminderRecipient: reminderRecipientFieldPath ? getPathValue(stem, reminderRecipientFieldPath) : null,
+        buyerAccountsEmail: account.Accounts_Email__c || null,
+        buyerTraderEmail: buyerTraderEmails.join(', ') || null,
+        paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
+        paymentReminderRecipients,
         prpspStatus: prpspDisplayStatus(rawPsprsStatus, prpspUploadDate),
         prpspUploadDate,
         rawPsprsStatus,
@@ -2993,14 +3023,32 @@ function isPaymentReminderCandidate(row, selected) {
 }
 
 function paymentReminderRecipients(rows) {
-  return [...new Set((rows || []).flatMap((row) => parseEmailList(String(row.paymentReminderRecipient || ''), [])))];
+  return uniqueEmailList(...(rows || []).flatMap((row) => [
+    row.paymentReminderRecipients || [],
+    row.paymentReminderRecipient || '',
+    row.buyerAccountsEmail || '',
+    row.buyerTraderEmail || '',
+  ]));
 }
 
 function paymentReminderTemplateContext(report, rows, selected) {
   const totalReceivable = (rows || []).reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0);
+  const selectedRow = selected || {};
   return {
-    buyerName: selected?.buyerName || 'Customer',
-    buyerGroupName: selected?.buyerGroupName || '',
+    stemName: selectedRow.stemName || '',
+    keyStem: selectedRow.keyStem || '',
+    buyerName: selectedRow.buyerName || 'Customer',
+    buyerGroupName: selectedRow.buyerGroupName || '',
+    invoiceAmount: money(selectedRow.invoiceAmount),
+    receivableBalance: money(selectedRow.receivableBalance),
+    buyerInvoiceDueDate: prettyDate(selectedRow.buyerInvoiceDueDate),
+    buyerTraderInCharge: selectedRow.buyerTraderInCharge || '',
+    buyerAccountsEmail: selectedRow.buyerAccountsEmail || '',
+    buyerTraderEmail: selectedRow.buyerTraderEmail || '',
+    toRecipients: paymentReminderRecipients(rows).join(', '),
+    psprsStatus: selectedRow.prpspStatus || '',
+    overdue: overdueDisplayValue(selectedRow.daysUntilDue),
+    invoiceStatus: selectedRow.status || '',
     daysAhead: String(report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead),
     today: prettyDate(report.today),
     dueThrough: prettyDate(report.dueThrough),
@@ -3116,7 +3164,6 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}) {
   };
   const report = await salesforceBuyerInvoicesDue({
     daysAhead: body.daysAhead ?? settings.daysAhead,
-    paymentReminderRecipientFieldPath: settings.paymentReminderRecipientFieldPath,
   });
   const stemId = String(body.stemId || body.stem_id || '').trim();
   const selected = report.rows.find((row) => row.stemId === stemId);
@@ -3146,7 +3193,7 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
     body: email.body,
     preview: { html: email.html, text: email.text },
     settings: {
-      paymentReminderRecipientFieldPath: settings.paymentReminderRecipientFieldPath,
+      paymentReminderToSource: 'Account.Accounts_Email__c + Nomination__c.BT_ST_Email_Address__c',
       from: settings.from,
       daysAhead: report.daysAhead,
     },

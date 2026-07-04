@@ -49,6 +49,38 @@ const QUILL_MODULES = {
   ],
 };
 
+const PAYMENT_REMINDER_VARIABLE_GROUPS = [
+  {
+    label: 'Stem',
+    variables: [
+      { label: 'Stem name', token: '{{stemName}}' },
+      { label: 'Key stem', token: '{{keyStem}}' },
+      { label: 'Buyer name', token: '{{buyerName}}' },
+      { label: 'Buyer group', token: '{{buyerGroupName}}' },
+      { label: 'Invoice amount', token: '{{invoiceAmount}}' },
+      { label: 'Receivable balance', token: '{{receivableBalance}}' },
+      { label: 'Due date', token: '{{buyerInvoiceDueDate}}' },
+      { label: 'Buyer trader', token: '{{buyerTraderInCharge}}' },
+      { label: 'Account emails', token: '{{buyerAccountsEmail}}' },
+      { label: 'Trader emails', token: '{{buyerTraderEmail}}' },
+      { label: 'To recipients', token: '{{toRecipients}}' },
+      { label: 'PSPRS status', token: '{{psprsStatus}}' },
+      { label: 'Invoice status', token: '{{invoiceStatus}}' },
+      { label: 'Overdue', token: '{{overdue}}' },
+    ],
+  },
+  {
+    label: 'Reminder',
+    variables: [
+      { label: 'Due days', token: '{{daysAhead}}' },
+      { label: 'Today', token: '{{today}}' },
+      { label: 'Due through', token: '{{dueThrough}}' },
+      { label: 'Invoice count', token: '{{invoiceCount}}' },
+      { label: 'Total receivable', token: '{{totalReceivable}}' },
+    ],
+  },
+];
+
 const COPY_COLUMNS = [
   { header: 'Stem Name', value: (row) => row.stemName || '-' },
   { header: 'Buyer Name', value: (row) => row.buyerName || '-' },
@@ -143,6 +175,58 @@ function SummaryCard({ label, value, tone = 'default' }) {
     <div className="rounded-xl border border-border bg-card p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className={`mt-1 font-dm text-2xl font-bold ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
+
+function PaymentReminderVariablePalette({ onInsert }) {
+  const [copiedToken, setCopiedToken] = useState(null);
+
+  const copyToken = async (token) => {
+    try {
+      await navigator.clipboard?.writeText(token);
+      setCopiedToken(token);
+      window.setTimeout(() => setCopiedToken((current) => (current === token ? null : current)), 1200);
+    } catch {
+      onInsert(token);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {PAYMENT_REMINDER_VARIABLE_GROUPS.map((group) => (
+        <div key={group.label} className="space-y-1.5">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.label} variables</div>
+          <div className="flex flex-wrap gap-1.5">
+            {group.variables.map((variable) => (
+              <div key={variable.token} className="inline-flex overflow-hidden rounded-md border border-border bg-muted/50">
+                <button
+                  type="button"
+                  draggable
+                  onClick={() => onInsert(variable.token)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData('text/plain', variable.token);
+                    event.dataTransfer.setData('application/x-template-variable', variable.token);
+                  }}
+                  className="px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  title={`Insert ${variable.token}`}
+                >
+                  {variable.label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => copyToken(variable.token)}
+                  className="border-l border-border px-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                  title={`Copy ${variable.token}`}
+                  aria-label={`Copy ${variable.label} variable`}
+                >
+                  {copiedToken === variable.token ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -599,7 +683,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     {selectedRows.length.toLocaleString()} selected · {fmtMoney(selectedReceivable)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Recipient field: {data.settings?.paymentReminderRecipientFieldPath || 'Not configured'}
+                    To: buyer account accounts email + buyer trader in charge email
                   </div>
                 </div>
               </div>
@@ -766,6 +850,57 @@ function PaymentReminderTemplateModal({
   onCancel,
   onSave,
 }) {
+  const [activeTemplateField, setActiveTemplateField] = useState('body');
+  const ccRef = useRef(null);
+  const bccRef = useRef(null);
+  const subjectRef = useRef(null);
+  const bodyEditorRef = useRef(null);
+
+  const inputRefs = {
+    paymentReminderCc: ccRef,
+    paymentReminderBcc: bccRef,
+    paymentReminderSubject: subjectRef,
+  };
+
+  const insertTextVariable = (key, token) => {
+    const current = emailSettings[key] || '';
+    const node = inputRefs[key]?.current;
+    const start = node?.selectionStart ?? current.length;
+    const end = node?.selectionEnd ?? start;
+    const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+    updateEmailSetting(key, next);
+    window.setTimeout(() => {
+      node?.focus();
+      node?.setSelectionRange(start + token.length, start + token.length);
+    }, 0);
+  };
+
+  const insertBodyVariable = (token) => {
+    const editor = bodyEditorRef.current?.getEditor?.();
+    if (!editor) {
+      updateEmailSetting('paymentReminderBody', `${emailSettings.paymentReminderBody || ''}${token}`);
+      return;
+    }
+    const range = editor.getSelection(true);
+    const index = range?.index ?? editor.getLength();
+    editor.insertText(index, token);
+    editor.setSelection(index + token.length, 0);
+  };
+
+  const insertVariable = (token) => {
+    if (activeTemplateField === 'body') insertBodyVariable(token);
+    else insertTextVariable(activeTemplateField, token);
+  };
+
+  const dropToken = (key, event) => {
+    event.preventDefault();
+    const token = event.dataTransfer.getData('application/x-template-variable') || event.dataTransfer.getData('text/plain');
+    if (!token) return;
+    setActiveTemplateField(key);
+    if (key === 'body') insertBodyVariable(token);
+    else insertTextVariable(key, token);
+  };
+
   if (!open) return null;
 
   return (
@@ -785,23 +920,31 @@ function PaymentReminderTemplateModal({
         </div>
 
         <div className="max-h-[calc(92vh-76px)] overflow-auto p-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5 md:col-span-2">
-              <Label className="text-xs text-muted-foreground">Payment reminder recipient field path</Label>
-              <Input
-                value={emailSettings.paymentReminderRecipientFieldPath || ''}
-                onChange={(event) => updateEmailSetting('paymentReminderRecipientFieldPath', event.target.value)}
-                placeholder="Account__r.Payment_Reminder_Email__c"
-              />
-              <p className="text-xs text-muted-foreground">
-                Exact Salesforce field path relative to STEM. The reminder modal uses this to prefill To recipients.
+          <div className="space-y-4">
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">To</div>
+              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer account emails and buyer trader in charge email</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Uses <span className="font-mono">Account.Accounts_Email__c</span> and <span className="font-mono">Nomination__c.BT_ST_Email_Address__c</span>. You can still edit the final To field before sending a reminder.
               </p>
             </div>
 
+            <div className="rounded-xl border border-border bg-muted/10 p-3">
+              <PaymentReminderVariablePalette onInsert={insertVariable} />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Click a variable to insert it into the active template field, drag it into CC, BCC, Subject, or Content, or copy the token.
+              </p>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Reminder CC template</Label>
               <Input
+                ref={ccRef}
                 value={emailSettings.paymentReminderCc || ''}
+                onFocus={() => setActiveTemplateField('paymentReminderCc')}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropToken('paymentReminderCc', event)}
                 onChange={(event) => updateEmailSetting('paymentReminderCc', event.target.value)}
                 placeholder="finance@example.com"
               />
@@ -810,7 +953,11 @@ function PaymentReminderTemplateModal({
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Reminder BCC template</Label>
               <Input
+                ref={bccRef}
                 value={emailSettings.paymentReminderBcc || ''}
+                onFocus={() => setActiveTemplateField('paymentReminderBcc')}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropToken('paymentReminderBcc', event)}
                 onChange={(event) => updateEmailSetting('paymentReminderBcc', event.target.value)}
                 placeholder="archive@example.com"
               />
@@ -819,15 +966,25 @@ function PaymentReminderTemplateModal({
             <div className="space-y-1.5 md:col-span-2">
               <Label className="text-xs text-muted-foreground">Payment reminder subject</Label>
               <Input
+                ref={subjectRef}
                 value={emailSettings.paymentReminderSubject || ''}
+                onFocus={() => setActiveTemplateField('paymentReminderSubject')}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropToken('paymentReminderSubject', event)}
                 onChange={(event) => updateEmailSetting('paymentReminderSubject', event.target.value)}
               />
             </div>
 
             <div className="space-y-1.5 md:col-span-2">
               <Label className="text-xs text-muted-foreground">Payment reminder content</Label>
-              <div className="rounded-md border border-input bg-background [&_.ql-container]:min-h-72 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border">
+              <div
+                className="rounded-md border border-input bg-background [&_.ql-container]:min-h-72 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border"
+                onFocus={() => setActiveTemplateField('body')}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropToken('body', event)}
+              >
                 <ReactQuill
+                  ref={bodyEditorRef}
                   theme="snow"
                   modules={QUILL_MODULES}
                   value={emailSettings.paymentReminderBody || ''}
@@ -837,6 +994,7 @@ function PaymentReminderTemplateModal({
               <p className="text-xs text-muted-foreground">
                 Default template includes a 2.00% per month late payment interest charge warning.
               </p>
+            </div>
             </div>
           </div>
 
