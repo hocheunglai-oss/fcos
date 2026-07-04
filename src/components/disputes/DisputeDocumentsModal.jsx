@@ -275,10 +275,10 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
         }}
       >
         <DialogContent
-          className={`relative flex max-w-none flex-col overflow-hidden p-0 ${
+          className={`fixed flex max-w-none flex-col overflow-hidden p-0 ${
             previewDocument
               ? 'h-[96dvh] max-h-[96dvh] w-[98vw]'
-              : 'max-h-[90vh] w-[min(1120px,94vw)]'
+              : 'max-h-[90dvh] w-[min(1120px,94vw)]'
           }`}
           onEscapeKeyDown={(event) => {
             if (previewDocument) {
