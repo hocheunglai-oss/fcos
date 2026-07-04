@@ -1070,6 +1070,7 @@ function traderEmailLookupKey(value) {
 }
 
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
+const INVOICE_TABLE_TOKEN_PATTERN = /\{\{\s*invoiceTable\s*\}\}/i;
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
@@ -1087,7 +1088,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   paymentReminderCc: [],
   paymentReminderBcc: [],
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
-  paymentReminderBody: '<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
+  paymentReminderBody: '<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>{{invoiceTable}}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
 };
 const BUYER_INVOICE_COLLECTION_STATUSES = [
   'Not Started',
@@ -3184,6 +3185,16 @@ function insertAfterAttentionSentence(content, insertContent) {
   return `${source.slice(0, afterMarker)}\n\n${insertContent}${source.slice(afterMarker)}`;
 }
 
+function insertInvoiceTable(content, insertContent) {
+  const source = String(content || '');
+  if (INVOICE_TABLE_TOKEN_PATTERN.test(source)) {
+    return source
+      .replace(new RegExp(`<p\\b[^>]*>\\s*${INVOICE_TABLE_TOKEN_PATTERN.source}\\s*<\\/p>`, 'i'), insertContent)
+      .replace(INVOICE_TABLE_TOKEN_PATTERN, insertContent);
+  }
+  return insertAfterAttentionSentence(source, insertContent);
+}
+
 function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, overrides = {}) {
   const selectedRows = rows || [];
   const context = paymentReminderTemplateContext(report, selectedRows, selected);
@@ -3228,14 +3239,14 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       </table>
     </div>`;
   const bodyHtml = paymentReminderContentHtml(body);
-  const htmlWithTable = insertAfterAttentionSentence(bodyHtml, tableHtml);
+  const htmlWithTable = insertInvoiceTable(bodyHtml, tableHtml);
   const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue Volume ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
   const bodyText = hasHtmlMarkup(body) ? htmlToPlainText(body) : body;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${htmlWithTable}
     </div>`;
-  const text = insertAfterAttentionSentence(bodyText, `\n\n${invoiceText}\n\n`);
+  const text = insertInvoiceTable(bodyText, `\n\n${invoiceText}\n\n`);
   return { subject, body, html, text };
 }
 

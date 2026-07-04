@@ -21,6 +21,7 @@ import {
 import { numericValue, textValue } from '@/lib/displayValue';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
+const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -40,7 +41,7 @@ const DEFAULT_EMAIL_SETTINGS = {
   paymentReminderCc: '',
   paymentReminderBcc: '',
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
-  paymentReminderBody: '<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
+  paymentReminderBody: `<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>${INVOICE_TABLE_TOKEN}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>`,
 };
 
 const QUILL_MODULES = {
@@ -74,6 +75,7 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
       { label: 'PSPRS status', token: '{{psprsStatus}}' },
       { label: 'Invoice status', token: '{{invoiceStatus}}' },
       { label: 'Overdue', token: '{{overdue}}' },
+      { label: 'Invoice table', token: INVOICE_TABLE_TOKEN },
     ],
   },
   {
@@ -193,6 +195,12 @@ function invoiceTableMarkerHtml(count) {
 function emailBodyPreviewHtml(body, selectedCount) {
   const html = normalizeReminderPreviewHtml(body);
   const marker = invoiceTableMarkerHtml(selectedCount);
+  const tokenPattern = /\{\{\s*invoiceTable\s*\}\}/i;
+  if (tokenPattern.test(html)) {
+    return html
+      .replace(new RegExp(`<p\\b[^>]*>\\s*${tokenPattern.source}\\s*<\\/p>`, 'i'), marker)
+      .replace(tokenPattern, marker);
+  }
   const match = /for your attention\./i.exec(html);
   if (!match) return `${html}${marker}`;
   const afterMarker = match.index + match[0].length;
@@ -203,6 +211,28 @@ function emailBodyPreviewHtml(body, selectedCount) {
     return `${html.slice(0, insertAt)}${marker}${html.slice(insertAt)}`;
   }
   return `${html.slice(0, afterMarker)}${marker}${html.slice(afterMarker)}`;
+}
+
+function removeInvoiceTableTokenHtml(value) {
+  const tokenPattern = /\{\{\s*invoiceTable\s*\}\}/gi;
+  return textValue(value, '')
+    .replace(new RegExp(`<p\\b[^>]*>\\s*${tokenPattern.source}\\s*<\\/p>`, 'gi'), '')
+    .replace(tokenPattern, '');
+}
+
+function insertTokenIntoQuill(editor, token) {
+  const range = editor.getSelection(true);
+  let index = range?.index ?? editor.getLength();
+  if (token === INVOICE_TABLE_TOKEN) {
+    const text = editor.getText();
+    const matches = [...text.matchAll(/\{\{\s*invoiceTable\s*\}\}/gi)];
+    for (const match of matches.reverse()) {
+      editor.deleteText(match.index, match[0].length);
+      if (match.index < index) index -= match[0].length;
+    }
+  }
+  editor.insertText(Math.max(0, index), token);
+  editor.setSelection(Math.max(0, index) + token.length, 0);
 }
 
 function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
@@ -620,6 +650,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
+  const reminderBodyEditorRef = useRef(null);
   const [form, setForm] = useState({
     to: '',
     cc: '',
@@ -674,6 +705,14 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   if (!open || !row) return null;
 
   const updateForm = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const insertInvoiceTableToken = () => {
+    const editor = reminderBodyEditorRef.current?.getEditor?.();
+    if (!editor) {
+      updateForm('body', `${removeInvoiceTableTokenHtml(form.body)}<p>${INVOICE_TABLE_TOKEN}</p>`);
+      return;
+    }
+    insertTokenIntoQuill(editor, INVOICE_TABLE_TOKEN);
+  };
   const toggleInvoice = (stemId) => {
     setSelectedIds((prev) => (
       prev.includes(stemId)
@@ -855,15 +894,24 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     <Input value={form.subject} onChange={(event) => updateForm('subject', event.target.value)} />
                   </div>
                   <div className="space-y-1.5 md:col-span-3">
-                    <Label className="text-xs text-muted-foreground">Email content</Label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">Email content</Label>
+                      <Button type="button" variant="outline" size="sm" onClick={insertInvoiceTableToken}>
+                        Insert invoice table here
+                      </Button>
+                    </div>
                     <div className="rounded-md border border-input bg-background [&_.ql-container]:min-h-64 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border">
                       <ReactQuill
+                        ref={reminderBodyEditorRef}
                         theme="snow"
                         modules={QUILL_MODULES}
                         value={form.body}
                         onChange={(value) => updateForm('body', value)}
                       />
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Move the invoice table by moving <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> to the desired position.
+                    </p>
                   </div>
                 </div>
 
@@ -941,13 +989,13 @@ function PaymentReminderTemplateModal({
   const insertBodyVariable = (token) => {
     const editor = bodyEditorRef.current?.getEditor?.();
     if (!editor) {
-      updateEmailSetting('paymentReminderBody', `${emailSettings.paymentReminderBody || ''}${token}`);
+      const current = token === INVOICE_TABLE_TOKEN
+        ? removeInvoiceTableTokenHtml(emailSettings.paymentReminderBody)
+        : emailSettings.paymentReminderBody || '';
+      updateEmailSetting('paymentReminderBody', `${current}${token}`);
       return;
     }
-    const range = editor.getSelection(true);
-    const index = range?.index ?? editor.getLength();
-    editor.insertText(index, token);
-    editor.setSelection(index + token.length, 0);
+    insertTokenIntoQuill(editor, token);
   };
 
   const insertVariable = (token) => {
@@ -1039,7 +1087,12 @@ function PaymentReminderTemplateModal({
             </div>
 
             <div className="space-y-1.5 md:col-span-2">
-              <Label className="text-xs text-muted-foreground">Payment reminder content</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-xs text-muted-foreground">Payment reminder content</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => insertBodyVariable(INVOICE_TABLE_TOKEN)}>
+                  Insert invoice table position
+                </Button>
+              </div>
               <div
                 className="rounded-md border border-input bg-background [&_.ql-container]:min-h-72 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border"
                 onFocus={() => setActiveTemplateField('body')}
@@ -1055,7 +1108,7 @@ function PaymentReminderTemplateModal({
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                Default template includes a 2.00% per month late payment interest charge warning.
+                Move the invoice table by placing <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> where the table should appear. The default template includes a 2.00% per month late payment interest charge warning.
               </p>
             </div>
             </div>
