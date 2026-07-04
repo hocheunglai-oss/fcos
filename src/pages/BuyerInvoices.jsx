@@ -63,6 +63,8 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
       { label: 'Buyer trader', token: '{{buyerTraderInCharge}}' },
       { label: 'Account emails', token: '{{buyerAccountsEmail}}' },
       { label: 'Trader emails', token: '{{buyerTraderEmail}}' },
+      { label: 'Payment handler', token: '{{paymentHandlerName}}' },
+      { label: 'Payment handler email', token: '{{paymentHandlerEmail}}' },
       { label: 'To recipients', token: '{{toRecipients}}' },
       { label: 'PSPRS status', token: '{{psprsStatus}}' },
       { label: 'Invoice status', token: '{{invoiceStatus}}' },
@@ -683,7 +685,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     {selectedRows.length.toLocaleString()} selected · {fmtMoney(selectedReceivable)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    To: buyer account accounts email + buyer trader in charge email
+                    To: buyer account accounts email + buyer trader in charge email + payment handler email
                   </div>
                 </div>
               </div>
@@ -923,9 +925,9 @@ function PaymentReminderTemplateModal({
           <div className="space-y-4">
             <div className="rounded-xl border border-border bg-muted/20 p-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">To</div>
-              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer account emails and buyer trader in charge email</div>
+              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer account emails, buyer trader email, and payment handler email</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Uses <span className="font-mono">Account.Accounts_Email__c</span> and <span className="font-mono">Nomination__c.BT_ST_Email_Address__c</span>. You can still edit the final To field before sending a reminder.
+                Uses <span className="font-mono">Account.Accounts_Email__c</span>, <span className="font-mono">Nomination__c.BT_ST_Email_Address__c</span>, and the saved Payment Handler name. You can still edit the final To field before sending a reminder.
               </p>
             </div>
 

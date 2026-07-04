@@ -1065,6 +1065,10 @@ function splitBuyerTraderNames(value) {
     .filter(Boolean);
 }
 
+function traderEmailLookupKey(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
@@ -2564,6 +2568,7 @@ async function salesforceBuyerInvoicesDue(body) {
 
   const stemIds = stems.map((stem) => stem.Id);
   const traderByStem = {};
+  const traderEmailByName = {};
   const prpspUploadDateByStem = {};
   if (stemIds.length) {
     const [nominationArrays, supplierInvoiceArrays] = await Promise.all([
@@ -2590,15 +2595,23 @@ async function salesforceBuyerInvoicesDue(body) {
 
     for (const nomination of nominationArrays.flat()) {
       if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [], buyerEmails: [], allEmails: [] };
+      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [], buyerEmails: [], allEmails: [], emailByName: {} };
       const name = String(nomination.Name || '');
       const value = nomination.Buyer_Supplier_Trader__c;
       const emails = uniqueEmailList(nomination.BT_ST_Email_Address__c);
+      const traderKey = traderEmailLookupKey(value);
       if (!traderByStem[nomination.STEM__c].all.includes(value)) traderByStem[nomination.STEM__c].all.push(value);
       for (const email of emails) {
         if (!traderByStem[nomination.STEM__c].allEmails.some((item) => item.toLowerCase() === email.toLowerCase())) {
           traderByStem[nomination.STEM__c].allEmails.push(email);
         }
+      }
+      if (traderKey && emails.length) {
+        traderByStem[nomination.STEM__c].emailByName[traderKey] = uniqueEmailList(
+          traderByStem[nomination.STEM__c].emailByName[traderKey] || [],
+          emails,
+        );
+        traderEmailByName[traderKey] = uniqueEmailList(traderEmailByName[traderKey] || [], emails);
       }
       if (name.startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(value)) {
         traderByStem[nomination.STEM__c].buyer.push(value);
@@ -2658,6 +2671,7 @@ async function salesforceBuyerInvoicesDue(body) {
         buyerTraderInCharge: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
         buyerAccountsEmail: account.Accounts_Email__c || null,
         buyerTraderEmail: buyerTraderEmails.join(', ') || null,
+        buyerTraderEmailByName: traderInfo.emailByName || {},
         paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
         paymentReminderRecipients,
         prpspStatus: prpspDisplayStatus(rawPsprsStatus, prpspUploadDate),
@@ -2676,8 +2690,23 @@ async function salesforceBuyerInvoicesDue(body) {
   const collectionMap = await loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId));
   const rowsWithCollection = allRows.map((row) => {
     const collection = collectionMap[row.stemId] || {};
+    const paymentHandlerName = collection.item?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
+    const paymentHandlerEmail = uniqueEmailList(
+      row.buyerTraderEmailByName?.[traderEmailLookupKey(paymentHandlerName)] || [],
+      traderEmailByName[traderEmailLookupKey(paymentHandlerName)] || [],
+    );
+    const paymentReminderRecipients = uniqueEmailList(
+      row.paymentReminderRecipients || [],
+      row.buyerAccountsEmail || '',
+      row.buyerTraderEmail || '',
+      paymentHandlerEmail,
+    );
     return {
       ...row,
+      paymentHandlerName,
+      paymentHandlerEmail: paymentHandlerEmail.join(', ') || null,
+      paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
+      paymentReminderRecipients,
       collection: collection.item || null,
       collectionEvents: collection.events || [],
     };
@@ -3028,6 +3057,7 @@ function paymentReminderRecipients(rows) {
     row.paymentReminderRecipient || '',
     row.buyerAccountsEmail || '',
     row.buyerTraderEmail || '',
+    row.paymentHandlerEmail || '',
   ]));
 }
 
@@ -3045,6 +3075,8 @@ function paymentReminderTemplateContext(report, rows, selected) {
     buyerTraderInCharge: selectedRow.buyerTraderInCharge || '',
     buyerAccountsEmail: selectedRow.buyerAccountsEmail || '',
     buyerTraderEmail: selectedRow.buyerTraderEmail || '',
+    paymentHandlerName: selectedRow.paymentHandlerName || selectedRow.collection?.ownerName || '',
+    paymentHandlerEmail: selectedRow.paymentHandlerEmail || '',
     toRecipients: paymentReminderRecipients(rows).join(', '),
     psprsStatus: selectedRow.prpspStatus || '',
     overdue: overdueDisplayValue(selectedRow.daysUntilDue),
