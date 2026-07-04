@@ -1080,8 +1080,10 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
   sendTimes: ['08:00', '14:00'],
   paymentReminderRecipientFieldPath: '',
+  paymentReminderCc: [],
+  paymentReminderBcc: [],
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
-  paymentReminderBody: 'Dear {{buyerName}},\n\nPlease find below the outstanding buyer invoices for your attention.\n\nThis reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.\n\nRegards,\nFratelli Cosulich',
+  paymentReminderBody: '<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
 };
 const BUYER_INVOICE_COLLECTION_STATUSES = [
   'Not Started',
@@ -1402,6 +1404,8 @@ function normalizeBuyerInvoiceEmailSettings(input = {}, defaults = DEFAULT_BUYER
     sendTimes: parseStringList(input.sendTimes, defaults.sendTimes),
     appUrl: input.appUrl || defaults.appUrl,
     paymentReminderRecipientFieldPath: normalizeSalesforceFieldPath(input.paymentReminderRecipientFieldPath ?? defaults.paymentReminderRecipientFieldPath),
+    paymentReminderCc: parseEmailList(input.paymentReminderCc, defaults.paymentReminderCc),
+    paymentReminderBcc: parseEmailList(input.paymentReminderBcc, defaults.paymentReminderBcc),
     paymentReminderSubject: String(input.paymentReminderSubject ?? defaults.paymentReminderSubject),
     paymentReminderBody: String(input.paymentReminderBody ?? defaults.paymentReminderBody),
   };
@@ -3012,7 +3016,41 @@ function renderPaymentReminderTemplate(template, context) {
   ));
 }
 
-function paymentReminderBodyHtml(content) {
+function renderPaymentReminderEmailList(value, context) {
+  const raw = Array.isArray(value) ? value.join(', ') : String(value || '');
+  return parseEmailList(renderPaymentReminderTemplate(raw, context), []);
+}
+
+function hasHtmlMarkup(value) {
+  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+}
+
+function sanitizeReminderHtml(value) {
+  return String(value || '')
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
+function htmlToPlainText(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function paymentReminderContentHtml(content) {
+  if (hasHtmlMarkup(content)) return sanitizeReminderHtml(content);
   const blocks = String(content || '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   return blocks.map((block) => `<p style="margin:0 0 14px;color:#1f2937">${escapeHtml(block).replaceAll('\n', '<br>')}</p>`).join('');
 }
@@ -3042,7 +3080,7 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
   }).join('');
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${paymentReminderBodyHtml(body)}
+      ${paymentReminderContentHtml(body)}
       <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px;margin-top:16px">
         <table style="border-collapse:collapse;width:100%;min-width:1120px;font-size:13px">
           <thead>
@@ -3063,7 +3101,7 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       </div>
     </div>`;
   const text = [
-    body,
+    hasHtmlMarkup(body) ? htmlToPlainText(body) : body,
     '',
     ...selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS Status ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`),
   ].join('\n');
@@ -3097,11 +3135,13 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
   const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body);
   const recipients = paymentReminderRecipients(candidates);
   const email = buildBuyerInvoicePaymentReminderEmail(report, settings, selected, candidates);
+  const context = paymentReminderTemplateContext(report, candidates, selected);
   return {
     selected,
     candidates,
     to: recipients,
-    cc: settings.cc,
+    cc: renderPaymentReminderEmailList(settings.paymentReminderCc, context),
+    bcc: renderPaymentReminderEmailList(settings.paymentReminderBcc, context),
     subject: email.subject,
     body: email.body,
     preview: { html: email.html, text: email.text },
@@ -3122,8 +3162,10 @@ async function buyerInvoicePaymentReminderSend(body, req) {
   const rows = candidates.filter((row) => selectedStemIds.has(row.stemId));
   if (!rows.length) throw appError('Select at least one invoice to include in the payment reminder.', 400);
 
+  const sendContext = paymentReminderTemplateContext(report, rows, selected);
   const to = parseEmailList(body.to, []);
-  const cc = parseEmailList(body.cc, []);
+  const cc = renderPaymentReminderEmailList(body.cc, sendContext);
+  const bcc = renderPaymentReminderEmailList(body.bcc, sendContext);
   if (!to.length) throw appError('Payment reminder recipient is required.', 400);
 
   const email = buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, {
@@ -3138,6 +3180,7 @@ async function buyerInvoicePaymentReminderSend(body, req) {
         from: settings.from,
         to,
         cc,
+        bcc,
         subject: email.subject,
         html: email.html,
         text: email.text,
@@ -3146,6 +3189,7 @@ async function buyerInvoicePaymentReminderSend(body, req) {
         from: settings.from,
         to,
         cc,
+        bcc,
         subject: email.subject,
         html: email.html,
         text: email.text,
@@ -3153,7 +3197,7 @@ async function buyerInvoicePaymentReminderSend(body, req) {
 
   const collectionResults = [];
   const note = [
-    `Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}.`,
+    `Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`,
     `Subject: ${email.subject}`,
     `Included invoices: ${rows.length}`,
   ].join('\n');
@@ -3183,13 +3227,14 @@ async function buyerInvoicePaymentReminderSend(body, req) {
     id: result.id,
     to,
     cc,
+    bcc,
     subject: email.subject,
     rows: rows.length,
     collectionResults,
   };
 }
 
-async function sendWithResend({ from, to, cc, subject, html, text }) {
+async function sendWithResend({ from, to, cc, bcc, subject, html, text }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error('Missing RESEND_API_KEY in Vercel. Add it for scheduled email reports, or enable a saved SMTP account in Settings for Send Now.');
   const res = await fetch('https://api.resend.com/emails', {
@@ -3198,14 +3243,14 @@ async function sendWithResend({ from, to, cc, subject, html, text }) {
       authorization: `Bearer ${apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ from, to, cc, subject, html, text }),
+    body: JSON.stringify({ from, to, cc, bcc, subject, html, text }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || `Resend request failed: ${res.status}`);
   return data;
 }
 
-async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text }) {
+async function sendWithSmtp({ smtp = {}, from, to, cc, bcc, subject, html, text }) {
   const host = smtp.host || process.env.SMTP_HOST;
   const port = Number(smtp.port || process.env.SMTP_PORT || 587);
   const user = smtp.user || process.env.SMTP_USER;
@@ -3227,7 +3272,7 @@ async function sendWithSmtp({ smtp = {}, from, to, cc, subject, html, text }) {
     secure: Boolean(secure),
     auth: { user, pass },
   });
-  const result = await transporter.sendMail({ from, to, cc, subject, html, text });
+  const result = await transporter.sendMail({ from, to, cc, bcc, subject, html, text });
   return { id: result.messageId, accepted: result.accepted, rejected: result.rejected };
 }
 
