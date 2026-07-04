@@ -280,7 +280,10 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
         <DialogContent
           className="flex max-h-[90vh] w-[min(1120px,94vw)] max-w-none flex-col overflow-hidden p-0"
           onEscapeKeyDown={(event) => {
-            if (previewDocument) event.preventDefault();
+            if (previewDocument) {
+              event.preventDefault();
+              setPreviewDocument(null);
+            }
           }}
           onPointerDownOutside={(event) => {
             if (previewDocument) event.preventDefault();
@@ -433,12 +436,12 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
               )}
             </div>
           </div>
+
+          {previewDocument && (
+            <DocumentPreview document={previewDocument} onClose={() => setPreviewDocument(null)} />
+          )}
         </DialogContent>
       </Dialog>
-
-      {previewDocument && (
-        <DocumentPreview document={previewDocument} onClose={() => setPreviewDocument(null)} />
-      )}
     </>
   );
 }
