@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Download, FileText, Loader2, Pencil, RefreshCw, Search, X } from 'lucide-react';
+import { AlertTriangle, FileText, Loader2, Pencil, RefreshCw, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -48,8 +48,6 @@ const fmtDate = (value) => {
   if (typeof value === 'object') return textValue(value);
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return textValue(value); }
 };
-
-const csvValue = (value) => `"${textValue(value, '').replaceAll('"', '""')}"`;
 
 const pairTitle = (pairs, key) =>
   Array.isArray(pairs) && pairs.length
@@ -140,14 +138,6 @@ const disputeStatusOptions = (side, currentStatus) => {
   if (!current || base.some(option => normalizeStatus(option) === normalizeStatus(current))) return base;
   return [...base, current];
 };
-
-const supplierMoneyCsv = (rows, field, fallback) =>
-  Array.isArray(rows) && rows.length
-    ? rows.map((row) => {
-        const supplier = row.supplierName ? `${row.supplierName}: ` : '';
-        return `${supplier}${fmtMoney(row[field])}`;
-      }).join('\n')
-    : fallback;
 
 function Metric({ label, value, tone = 'default' }) {
   const toneClass = tone === 'red' ? 'text-red-600' : tone === 'amber' ? 'text-amber-600' : 'text-foreground';
@@ -272,37 +262,8 @@ export default function DisputeManagement() {
   const totals = useMemo(() => ({
     count: filteredRows.length,
     receivable: filteredRows.reduce((sum, row) => sum + Number(row.Receivable_Balance__c || 0), 0),
-    buyerInvoice: filteredRows.reduce((sum, row) => sum + Number(row.Total_Invoice_Amount__c || 0), 0),
     payable: filteredRows.reduce((sum, row) => sum + Number(row._Payable_Balance || 0), 0),
   }), [filteredRows]);
-
-  const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Supplier Name(s)', 'Product Name(s)', 'Buyer Dispute', 'Supplier Dispute', 'Dispute Status', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Receivable Balance', 'Payable Balance', 'Last Modified'];
-    const csvRows = filteredRows.map(row => [
-      row._Display_Name,
-      row._Buyer_Name,
-      row._Supplier_Names,
-      row._Product_Names,
-      row._Buyer_Dispute_Label,
-      row._Supplier_Dispute_Label,
-      displayStatus(row.Dispute_Status__c),
-      row.Delivery_Date__c,
-      row.Expected_Delivery_Date__c,
-      row.Total_Invoice_Amount__c,
-      supplierMoneyCsv(row._Supplier_Dispute_Rows, 'supplierInvoiceAmount', row.Total_Invoiced_Amount_From_Suppliers__c),
-      row.Receivable_Balance__c,
-      supplierMoneyCsv(row._Supplier_Dispute_Rows, 'payableBalance', row._Payable_Balance),
-      row.LastModifiedDate,
-    ]);
-    const csv = [headers, ...csvRows].map(row => row.map(csvValue).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `dispute-management-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
 
   const editStatusOptions = useMemo(
     () => disputeStatusOptions(editingDispute?.side, editStatus),
@@ -316,17 +277,12 @@ export default function DisputeManagement() {
         icon={AlertTriangle}
         eyebrow="Dispute workflow"
         title="Dispute Management"
-        description="Manage all disputed STEMs from Salesforce, inspect detail, and export the working list."
+        description="Manage all disputed STEMs from Salesforce, inspect detail, and maintain dispute documents."
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce'}
         actions={(
-          <>
-            <Button variant="outline" onClick={exportCsv} disabled={loading || !filteredRows.length} className="gap-2">
-              <Download className="h-4 w-4" /> Export CSV
-            </Button>
-            <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2">
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
-            </Button>
-          </>
+          <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
+          </Button>
         )}
       />
 
