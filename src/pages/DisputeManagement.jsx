@@ -54,11 +54,53 @@ function MultilineValue({ value }) {
   return (
     <div className="space-y-1">
       {lines.map((line, idx) => (
-        <div key={`${line}-${idx}`} className="truncate leading-5">{line}</div>
+        <div key={`${line}-${idx}`} className="whitespace-nowrap leading-5">{line}</div>
       ))}
     </div>
   );
 }
+
+function SupplierDisputeLines({ rows }) {
+  if (!Array.isArray(rows)) return <MultilineValue value={rows} />;
+  const lines = Array.isArray(rows) ? rows : [];
+  if (!lines.length) return '—';
+  return (
+    <div className="space-y-1">
+      {lines.map((line, idx) => (
+        <div key={`${line.supplierName || 'supplier'}-${line.status || 'status'}-${idx}`} className="whitespace-nowrap leading-5">
+          {[line.supplierName, line.status].filter(Boolean).join(': ') || '—'}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MoneyLines({ rows, field, fallback }) {
+  const lines = Array.isArray(rows) && rows.length ? rows : null;
+  if (!lines) return fmtMoney(fallback);
+  return (
+    <div className="space-y-1 text-right tabular-nums">
+      {lines.map((line, idx) => (
+        <div key={`${field}-${idx}-${line.supplierName || ''}`} className="whitespace-nowrap leading-5">
+          {fmtMoney(line[field])}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const supplierRowsTitle = (rows, formatter) =>
+  Array.isArray(rows) && rows.length
+    ? rows.map(formatter).join('\n')
+    : '';
+
+const supplierMoneyCsv = (rows, field, fallback) =>
+  Array.isArray(rows) && rows.length
+    ? rows.map((row) => {
+        const supplier = row.supplierName ? `${row.supplierName}: ` : '';
+        return `${supplier}${fmtMoney(row[field])}`;
+      }).join('\n')
+    : fallback;
 
 function Metric({ label, value, tone = 'default' }) {
   const toneClass = tone === 'red' ? 'text-red-600' : tone === 'amber' ? 'text-amber-600' : 'text-foreground';
@@ -152,9 +194,9 @@ export default function DisputeManagement() {
       row.Delivery_Date__c,
       row.Expected_Delivery_Date__c,
       row.Total_Invoice_Amount__c,
-      row.Total_Invoiced_Amount_From_Suppliers__c,
+      supplierMoneyCsv(row._Supplier_Dispute_Rows, 'supplierInvoiceAmount', row.Total_Invoiced_Amount_From_Suppliers__c),
       row.Receivable_Balance__c,
-      row._Payable_Balance,
+      supplierMoneyCsv(row._Supplier_Dispute_Rows, 'payableBalance', row._Payable_Balance),
       row.LastModifiedDate,
     ]);
     const csv = [headers, ...csvRows].map(row => row.map(csvValue).join(',')).join('\n');
@@ -240,37 +282,38 @@ export default function DisputeManagement() {
           <StateBlock icon={Loader2} title="Loading disputes..." description="Fetching dispute STEMs from Salesforce." />
         ) : filteredRows.length ? (
           <div className="max-h-[68vh] overflow-auto">
-            <table className="w-full min-w-[1720px] text-xs">
+            <table className="w-max min-w-full table-auto text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Name(s)</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Product Name(s)</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Dispute</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Dispute</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable Balance</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Modified</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Documents</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Name(s)</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Product Name(s)</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Dispute</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Dispute</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable Balance</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Modified</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Documents</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.map((row, idx) => {
                   const pairs = Array.isArray(row._Supplier_Product_Pairs) ? row._Supplier_Product_Pairs : [];
+                  const supplierDisputeRows = Array.isArray(row._Supplier_Dispute_Rows) ? row._Supplier_Dispute_Rows : [];
                   return (
                     <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
-                      <td className="px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
-                      <td className="px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
-                      <td className="max-w-[280px] px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'supplierName') || row._Supplier_Names || ''}>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'supplierName') || row._Supplier_Names || ''}>
                         {pairs.length ? (
                           <div className="space-y-1">
                             {pairs.map((pair, pairIdx) => (
-                              <div key={`${pair.supplierName || 'supplier'}-${pair.productName || 'product'}-${pairIdx}`} className="truncate leading-5">
+                              <div key={`${pair.supplierName || 'supplier'}-${pair.productName || 'product'}-${pairIdx}`} className="whitespace-nowrap leading-5">
                                 {pair.supplierName || '—'}
                               </div>
                             ))}
@@ -279,11 +322,11 @@ export default function DisputeManagement() {
                           row._Supplier_Names || '—'
                         )}
                       </td>
-                      <td className="max-w-[300px] px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'productName') || row._Product_Names || ''}>
+                      <td className="px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'productName') || row._Product_Names || ''}>
                         {pairs.length ? (
                           <div className="space-y-1">
                             {pairs.map((pair, pairIdx) => (
-                              <div key={`${pair.productName || 'product'}-${pair.supplierName || 'supplier'}-${pairIdx}`} className="truncate leading-5">
+                              <div key={`${pair.productName || 'product'}-${pair.supplierName || 'supplier'}-${pairIdx}`} className="whitespace-nowrap leading-5">
                                 {pair.productName || '—'}
                               </div>
                             ))}
@@ -292,20 +335,24 @@ export default function DisputeManagement() {
                           row._Product_Names || '—'
                         )}
                       </td>
-                      <td className="max-w-[220px] px-3 py-2.5 text-muted-foreground" title={row._Buyer_Dispute_Label || ''}>
+                      <td className="px-3 py-2.5 text-muted-foreground" title={row._Buyer_Dispute_Label || ''}>
                         <MultilineValue value={row._Buyer_Dispute_Label} />
                       </td>
-                      <td className="max-w-[260px] px-3 py-2.5 text-muted-foreground" title={row._Supplier_Dispute_Label || ''}>
-                        <MultilineValue value={row._Supplier_Dispute_Label} />
+                      <td className="px-3 py-2.5 text-muted-foreground" title={supplierRowsTitle(supplierDisputeRows, (line) => [line.supplierName, line.status].filter(Boolean).join(': ')) || row._Supplier_Dispute_Label || ''}>
+                        <SupplierDisputeLines rows={supplierDisputeRows.length ? supplierDisputeRows : row._Supplier_Dispute_Label} />
                       </td>
-                      <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
-                      <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoiced_Amount_From_Suppliers__c)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row._Payable_Balance)}</td>
-                      <td className="px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
-                      <td className="px-3 py-2.5 text-right">
+                      <td className="whitespace-nowrap px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
+                      <td className="px-3 py-2.5 font-medium text-foreground">
+                        <MoneyLines rows={supplierDisputeRows} field="supplierInvoiceAmount" fallback={row.Total_Invoiced_Amount_From_Suppliers__c} />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
+                      <td className="px-3 py-2.5 font-medium text-foreground">
+                        <MoneyLines rows={supplierDisputeRows} field="payableBalance" fallback={row._Payable_Balance} />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right">
                         <Button
                           type="button"
                           variant="outline"

@@ -808,6 +808,16 @@ function escapeSoql(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+function supplierMatchKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^[*]+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 function dateOnly(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -2646,9 +2656,18 @@ async function salesforceDisputeStems(body) {
   const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
   if (!hasDispute && !hasDisputeStatus) return { rows: [] };
   const supplierInvoiceDescribe = await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }));
-  const supplierInvoiceFieldNames = supplierInvoiceDescribe.fields.map((f) => f.name);
+  const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
+  const supplierInvoiceFieldNames = supplierInvoiceFields.map((f) => f.name);
+  const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
   const supplierInvoicePayableField = ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']
     .find((field) => supplierInvoiceFieldNames.includes(field));
+  const supplierInvoiceAmountFields = ['Invoice_Amount__c', 'Calculated_Amount__c', 'Amount__c', 'Total_Amount__c']
+    .filter((field) => supplierInvoiceFieldNames.includes(field));
+  const supplierInvoiceSupplierFields = ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']
+    .filter((field) => supplierInvoiceFieldNames.includes(field));
+  const supplierInvoiceSupplierNameRelationships = supplierInvoiceSupplierFields
+    .map((field) => supplierInvoiceFieldByName[field]?.relationshipName)
+    .filter(Boolean);
   const disputeObjectDescribe = await salesforceObjectFields({ objectName: 'Dispute__c' }).catch(() => ({ fields: [] }));
   const disputeObjectFields = disputeObjectDescribe.fields || [];
   const disputeObjectFieldNames = disputeObjectFields.map((field) => field.name);
@@ -2694,6 +2713,7 @@ async function salesforceDisputeStems(body) {
   const stemIds = rows.map((stem) => stem.Id).filter(Boolean);
   const lineItemsByStem = {};
   const extraCostsByStem = {};
+  const supplierInvoicesByStem = {};
   const supplierInvoicePayableByStem = {};
   const disputeRecordsByStem = {};
 
@@ -2725,11 +2745,20 @@ async function salesforceDisputeStems(body) {
           LIMIT 5000
         `, { limit: 5000, softFail: true });
       })),
-      supplierInvoicePayableField
+      supplierInvoiceFieldNames.includes('STEM__c')
         ? Promise.all(chunkIds(stemIds).map((chunk) => {
             const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+            const supplierInvoiceSelectFields = [
+              'STEM__c',
+              'Name',
+              ...supplierInvoiceAmountFields,
+              supplierInvoicePayableField,
+              supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null,
+              ...supplierInvoiceSupplierFields,
+              ...supplierInvoiceSupplierNameRelationships.map((relationship) => `${relationship}.Name`),
+            ].filter(Boolean);
             return queryRows(`
-              SELECT STEM__c, ${supplierInvoicePayableField}
+              SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
               FROM Supplier_Invoice__c
               WHERE STEM__c IN (${inList})
               LIMIT 5000
@@ -2749,7 +2778,10 @@ async function salesforceDisputeStems(body) {
       extraCostsByStem[item.STEM__c].push(item);
     }
     for (const invoice of supplierInvoiceArrays.flat()) {
-      if (!invoice.STEM__c || supplierInvoicePayableField == null) continue;
+      if (!invoice.STEM__c) continue;
+      if (!supplierInvoicesByStem[invoice.STEM__c]) supplierInvoicesByStem[invoice.STEM__c] = [];
+      supplierInvoicesByStem[invoice.STEM__c].push(invoice);
+      if (supplierInvoicePayableField == null) continue;
       supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
     }
 
@@ -2791,11 +2823,14 @@ async function salesforceDisputeStems(body) {
         const stemHasDelivery = !!stem.Delivery_Date__c;
         const lineItems = lineItemsByStem[stem.Id] || [];
         const extraCosts = extraCostsByStem[stem.Id] || [];
+        const supplierInvoices = supplierInvoicesByStem[stem.Id] || [];
         const disputeRecords = disputeRecordsByStem[stem.Id] || [];
         const supplierNames = new Set();
         const productNames = new Set();
         const supplierProductPairs = [];
         const supplierProductPairKeys = new Set();
+        const supplierLineBuyBySupplier = new Map();
+        const uninvoicedSupplierLineBuyBySupplier = new Map();
         let supplierLineBuy = 0;
         let uninvoicedSupplierLineBuy = 0;
         let extraCostBuy = 0;
@@ -2820,10 +2855,22 @@ async function salesforceDisputeStems(body) {
           }
           const buy = lineBuyAmount(item, stemHasDelivery);
           supplierLineBuy += buy;
+          if (item.Supplier_Name__c) {
+            const supplierKey = supplierMatchKey(item.Supplier_Name__c);
+            const supplierLine = supplierLineBuyBySupplier.get(supplierKey) || { supplierName: item.Supplier_Name__c, amount: 0 };
+            supplierLine.amount += buy;
+            supplierLineBuyBySupplier.set(supplierKey, supplierLine);
+          }
           if (item.Supplier_Invoice__c) {
             hasSupplierInvoice = true;
           } else {
             uninvoicedSupplierLineBuy += buy;
+            if (item.Supplier_Name__c) {
+              const supplierKey = supplierMatchKey(item.Supplier_Name__c);
+              const supplierLine = uninvoicedSupplierLineBuyBySupplier.get(supplierKey) || { supplierName: item.Supplier_Name__c, amount: 0 };
+              supplierLine.amount += buy;
+              uninvoicedSupplierLineBuyBySupplier.set(supplierKey, supplierLine);
+            }
           }
         }
 
@@ -2852,6 +2899,37 @@ async function salesforceDisputeStems(body) {
           : rawSupplier;
         const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
         const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
+        const supplierFinanceByKey = new Map();
+        const addSupplierFinance = (supplierName, invoiceAmount = 0, supplierPayableBalance = 0) => {
+          const supplierKey = supplierMatchKey(supplierName);
+          if (!supplierKey) return;
+          const current = supplierFinanceByKey.get(supplierKey) || {
+            supplierName,
+            supplierInvoiceAmount: 0,
+            payableBalance: 0,
+          };
+          current.supplierInvoiceAmount += Number(invoiceAmount || 0);
+          current.payableBalance += Number(supplierPayableBalance || 0);
+          supplierFinanceByKey.set(supplierKey, current);
+        };
+        for (const invoice of supplierInvoices) {
+          const supplierName = invoice['Supplier__r']?.Name
+            || invoice.Supplier_Name__c
+            || invoice['Expected_Supplier__r']?.Name
+            || invoice['Substitute_Supplier__r']?.Name
+            || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean)
+            || null;
+          const invoiceAmountField = supplierInvoiceAmountFields.find((field) => invoice[field] != null);
+          const invoiceAmount = invoiceAmountField ? Number(invoice[invoiceAmountField] || 0) : 0;
+          const supplierPayableBalance = supplierInvoicePayableField ? Number(invoice[supplierInvoicePayableField] || 0) : 0;
+          addSupplierFinance(supplierName, invoiceAmount, supplierPayableBalance);
+        }
+        const supplementalLineBuyBySupplier = (hasSupplierInvoice || supplierInvoices.length)
+          ? uninvoicedSupplierLineBuyBySupplier
+          : supplierLineBuyBySupplier;
+        for (const supplierLine of supplementalLineBuyBySupplier.values()) {
+          addSupplierFinance(supplierLine.supplierName, supplierLine.amount, 0);
+        }
         const buyerDisputes = disputeRecords
           .filter((dispute) => dispute.Status_Buyer__c || dispute.Buyer__c)
           .map((dispute) => ({
@@ -2864,6 +2942,35 @@ async function salesforceDisputeStems(body) {
             supplierName: dispute[disputeSupplierRelationship]?.Name || dispute.Supplier_Key__c || dispute.Supplier__c || null,
             status: dispute.Status_Supplier__c || dispute.Dispute_Status__c || 'Yes',
           }));
+        const seenSupplierDisputeRows = new Set();
+        const supplierDisputeRows = supplierDisputes
+          .map((dispute) => {
+            const supplierKey = supplierMatchKey(dispute.supplierName);
+            const finance = supplierFinanceByKey.get(supplierKey);
+            return {
+              supplierName: dispute.supplierName,
+              status: dispute.status,
+              supplierInvoiceAmount: finance?.supplierInvoiceAmount ?? null,
+              payableBalance: finance?.payableBalance ?? null,
+            };
+          })
+          .filter((row) => {
+            const key = `${supplierMatchKey(row.supplierName)}\u0000${row.status || ''}`;
+            if (seenSupplierDisputeRows.has(key)) return false;
+            seenSupplierDisputeRows.add(key);
+            return true;
+          });
+        const supplierFinanceOnlyRows = [...supplierFinanceByKey.values()]
+          .filter((finance) => !supplierDisputeRows.some((row) => supplierMatchKey(row.supplierName) === supplierMatchKey(finance.supplierName)))
+          .map((finance) => ({
+            supplierName: finance.supplierName,
+            status: null,
+            supplierInvoiceAmount: finance.supplierInvoiceAmount,
+            payableBalance: finance.payableBalance,
+          }));
+        const supplierFinanceRows = supplierDisputeRows.length
+          ? supplierDisputeRows
+          : supplierFinanceOnlyRows;
 
         return {
           ...stem,
@@ -2873,8 +2980,11 @@ async function salesforceDisputeStems(body) {
           _Supplier_Product_Pairs: supplierProductPairs,
           _Buyer_Disputes: buyerDisputes,
           _Supplier_Disputes: supplierDisputes,
+          _Supplier_Dispute_Rows: supplierFinanceRows,
           _Buyer_Dispute_Label: buyerDisputes.map((dispute) => [dispute.buyerName, dispute.status].filter(Boolean).join(': ')).join('\n') || null,
-          _Supplier_Dispute_Label: supplierDisputes.map((dispute) => [dispute.supplierName, dispute.status].filter(Boolean).join(': ')).join('\n') || null,
+          _Supplier_Dispute_Label: supplierFinanceRows.map((dispute) => [dispute.supplierName, dispute.status].filter(Boolean).join(': ')).join('\n') || null,
+          _Supplier_Invoice_Split_Label: supplierFinanceRows.map((dispute) => dispute.supplierInvoiceAmount).join('\n') || null,
+          _Payable_Balance_Split_Label: supplierFinanceRows.map((dispute) => dispute.payableBalance).join('\n') || null,
           _Payable_Balance: payableBalance,
           _Display_Name: formatStemName(stem),
           _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
