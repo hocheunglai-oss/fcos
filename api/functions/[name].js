@@ -73,7 +73,7 @@ function supabaseAdminClient() {
 }
 
 function bearerToken(req) {
-  const header = req.headers?.authorization || req.headers?.Authorization || '';
+  const header = req?.headers?.authorization || req?.headers?.Authorization || '';
   const match = String(header).match(/^Bearer\s+(.+)$/i);
   return match?.[1] || null;
 }
@@ -3017,7 +3017,8 @@ function requireCronAuthorization(req) {
   if (String(header) !== `Bearer ${secret}`) throw appError('Unauthorized cron request.', 401);
 }
 
-async function outstandingBuyerInvoicesEmailReport(body = {}) {
+async function outstandingBuyerInvoicesEmailReport(body = {}, req = null) {
+  if (!body.scheduled) await requireActiveUser(req);
   const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl']
     .some((key) => Object.prototype.hasOwnProperty.call(body, key));
   const stored = hasExplicitSettings ? null : await loadStoredBuyerInvoiceEmailSettings();
