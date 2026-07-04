@@ -350,22 +350,22 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
   const ownerChoices = useMemo(() => uniqueNames([
     ...rowTraderOptions,
-    row?.collection?.ownerName,
     ...ownerOptions,
-  ]), [ownerOptions, row?.collection?.ownerName, rowTraderOptions]);
+  ]), [ownerOptions, rowTraderOptions]);
 
   useEffect(() => {
     if (!row) return;
+    const existingHandler = row.collection?.ownerName || '';
     setForm({
       status: collectionStatus(row),
-      ownerName: row.collection?.ownerName || rowTraderOptions[0] || ownerOptions[0] || '',
+      ownerName: ownerChoices.includes(existingHandler) ? existingHandler : rowTraderOptions[0] || ownerOptions[0] || '',
       latestNote: row.collection?.latestNote || '',
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
       promisedAmount: row.collection?.promisedAmount ?? '',
     });
     setError(null);
-  }, [ownerOptions, row, rowTraderOptions]);
+  }, [ownerChoices, ownerOptions, row, rowTraderOptions]);
 
   if (!open || !row) return null;
 
@@ -414,7 +414,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Owner</Label>
+                <Label className="text-xs text-muted-foreground">Payment Handler</Label>
                 <select
                   value={form.ownerName}
                   onChange={(event) => update('ownerName', event.target.value)}
@@ -459,7 +459,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
           <div className="rounded-xl border border-border bg-background/50">
             <div className="border-b border-border px-4 py-3">
               <h3 className="text-sm font-semibold text-foreground">History</h3>
-              <p className="text-xs text-muted-foreground">Status, note, owner, follow-up, and promise changes.</p>
+              <p className="text-xs text-muted-foreground">Status, note, payment handler, follow-up, and promise changes.</p>
             </div>
             <div className="max-h-[58vh] overflow-auto p-3">
               {(row.collectionEvents || []).length ? (
@@ -472,7 +472,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                       </div>
                       {event.note && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{event.note}</p>}
                       <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                        {event.ownerName && <span>Owner: {event.ownerName}</span>}
+                        {event.ownerName && <span>Payment Handler: {event.ownerName}</span>}
                         {event.nextFollowUpDate && <span>Next follow-up: {fmtDate(event.nextFollowUpDate)}</span>}
                         {event.promisedPaymentDate && <span>Promise date: {fmtDate(event.promisedPaymentDate)}</span>}
                         {event.promisedAmount != null && <span>Promise amount: {fmtMoney(event.promisedAmount)}</span>}
@@ -919,9 +919,8 @@ export default function BuyerInvoices() {
   ), [rows]);
 
   const ownerOptions = useMemo(() => (
-    [...new Set(rows.map(collectionOwner).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b))
-  ), [rows]);
+    buyerTraderOptions
+  ), [buyerTraderOptions]);
 
   useEffect(() => {
     if (!buyerTraderOptions.length) {
@@ -1058,7 +1057,7 @@ export default function BuyerInvoices() {
   };
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', 'Buyer Trader in Charge', 'PSPRS Status', 'Status', 'Overdue', 'Collection Status', 'Collection Owner', 'Next Follow-up Date', 'Promised Payment Date', 'Promised Amount', 'Latest Note'];
+    const headers = ['Stem Name', 'Buyer Name', 'Invoice Amount', 'Receivable Balance', 'Buyer Invoice Due Date', 'Buyer Trader in Charge', 'PSPRS Status', 'Status', 'Overdue', 'Collection Status', 'Payment Handler', 'Next Follow-up Date', 'Promised Payment Date', 'Promised Amount', 'Latest Note'];
     const csvRows = filteredRows.map((row) => [
       row.stemName,
       row.buyerName,
@@ -1384,7 +1383,7 @@ export default function BuyerInvoices() {
           </div>
           {ownerOptions.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <Label className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</Label>
+              <Label className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Handler</Label>
               {ownerOptions.map((owner) => (
                 <button
                   key={owner}
@@ -1400,7 +1399,7 @@ export default function BuyerInvoices() {
                 </button>
               ))}
               {selectedOwners.length > 0 && (
-                <button type="button" onClick={() => setSelectedOwners([])} className="text-xs text-primary hover:underline">Clear owners</button>
+                <button type="button" onClick={() => setSelectedOwners([])} className="text-xs text-primary hover:underline">Clear handlers</button>
               )}
             </div>
           )}
@@ -1642,7 +1641,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">PSPRS Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection / Payment Handler</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
