@@ -2619,6 +2619,7 @@ async function salesforceDisputeStems(body) {
                  Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
           FROM STEM_Line_Item__c
           WHERE STEM__c IN (${inList})
+          ORDER BY STEM__c, CreatedDate ASC
           LIMIT 5000
         `, { limit: 5000, softFail: true });
       })),
@@ -2672,6 +2673,8 @@ async function salesforceDisputeStems(body) {
         const extraCosts = extraCostsByStem[stem.Id] || [];
         const supplierNames = new Set();
         const productNames = new Set();
+        const supplierProductPairs = [];
+        const supplierProductPairKeys = new Set();
         let supplierLineBuy = 0;
         let uninvoicedSupplierLineBuy = 0;
         let extraCostBuy = 0;
@@ -2684,6 +2687,16 @@ async function salesforceDisputeStems(body) {
           if (item.Supplier_Name__c) supplierNames.add(item.Supplier_Name__c);
           const productName = item['Product__r']?.Name;
           if (productName) productNames.add(productName);
+          if (item.Supplier_Name__c || productName) {
+            const pairKey = `${item.Supplier_Name__c || ''}\u0000${productName || ''}`;
+            if (!supplierProductPairKeys.has(pairKey)) {
+              supplierProductPairKeys.add(pairKey);
+              supplierProductPairs.push({
+                supplierName: item.Supplier_Name__c || null,
+                productName: productName || null,
+              });
+            }
+          }
           const buy = lineBuyAmount(item, stemHasDelivery);
           supplierLineBuy += buy;
           if (item.Supplier_Invoice__c) {
@@ -2725,6 +2738,7 @@ async function salesforceDisputeStems(body) {
           Total_Invoiced_Amount_From_Suppliers__c: calculatedSupplierInvoice || stem.Total_Invoiced_Amount_From_Suppliers__c || null,
           _Supplier_Names: [...supplierNames].sort().join(', ') || null,
           _Product_Names: [...productNames].sort().join(', ') || null,
+          _Supplier_Product_Pairs: supplierProductPairs,
           _Payable_Balance: payableBalance,
           _Display_Name: formatStemName(stem),
           _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,

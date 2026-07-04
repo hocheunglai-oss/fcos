@@ -37,6 +37,11 @@ const fmtDate = (value) => {
 
 const csvValue = (value) => `"${textValue(value, '').replaceAll('"', '""')}"`;
 
+const pairTitle = (pairs, key) =>
+  Array.isArray(pairs) && pairs.length
+    ? pairs.map((pair) => pair?.[key] || '—').join('\n')
+    : '';
+
 function Metric({ label, value, tone = 'default' }) {
   const toneClass = tone === 'red' ? 'text-red-600' : tone === 'amber' ? 'text-amber-600' : 'text-foreground';
   return (
@@ -229,21 +234,48 @@ export default function DisputeManagement() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row, idx) => (
-                  <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
-                    <td className="px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
-                    <td className="px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
-                    <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row._Supplier_Names || ''}>{row._Supplier_Names || '—'}</td>
-                    <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row._Product_Names || ''}>{row._Product_Names || '—'}</td>
-                    <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
-                    <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoiced_Amount_From_Suppliers__c)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row._Payable_Balance)}</td>
-                    <td className="px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
-                  </tr>
-                ))}
+                {filteredRows.map((row, idx) => {
+                  const pairs = Array.isArray(row._Supplier_Product_Pairs) ? row._Supplier_Product_Pairs : [];
+                  return (
+                    <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
+                      <td className="px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
+                      <td className="max-w-[280px] px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'supplierName') || row._Supplier_Names || ''}>
+                        {pairs.length ? (
+                          <div className="space-y-1">
+                            {pairs.map((pair, pairIdx) => (
+                              <div key={`${pair.supplierName || 'supplier'}-${pair.productName || 'product'}-${pairIdx}`} className="truncate leading-5">
+                                {pair.supplierName || '—'}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          row._Supplier_Names || '—'
+                        )}
+                      </td>
+                      <td className="max-w-[300px] px-3 py-2.5 text-muted-foreground" title={pairTitle(pairs, 'productName') || row._Product_Names || ''}>
+                        {pairs.length ? (
+                          <div className="space-y-1">
+                            {pairs.map((pair, pairIdx) => (
+                              <div key={`${pair.productName || 'product'}-${pair.supplierName || 'supplier'}-${pairIdx}`} className="truncate leading-5">
+                                {pair.productName || '—'}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          row._Product_Names || '—'
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
+                      <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoiced_Amount_From_Suppliers__c)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row._Payable_Balance)}</td>
+                      <td className="px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
