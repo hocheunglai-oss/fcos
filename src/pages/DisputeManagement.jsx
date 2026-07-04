@@ -25,6 +25,7 @@ const NOT_CLOSED_STATUSES = ACTIVE_DISPUTE_STATUSES.filter(status => status !== 
 const BUYER_DISPUTE_STATUS_OPTIONS = [
   'No agreement yet',
   'Settlement Agreement Concluded',
+  'Full Payment Received',
 ];
 const SUPPLIER_DISPUTE_STATUS_OPTIONS = [
   'Decision Pending',
