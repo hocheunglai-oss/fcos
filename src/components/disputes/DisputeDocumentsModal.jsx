@@ -24,6 +24,23 @@ const fmtBytes = (value) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const UPLOAD_NAME_PRESETS = [
+  { label: 'From Supplier', value: 'from supplier' },
+  { label: 'To Supplier', value: 'to supplier' },
+  { label: 'From Buyer', value: 'from buyer' },
+  { label: 'To Buyer', value: 'to buyer' },
+];
+
+const todayUploadDate = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+};
+
+const uploadDocumentName = (date, preset) => `${date || todayUploadDate()} ${preset || UPLOAD_NAME_PRESETS[0].value}`;
+
 const documentExtension = (document) => {
   const filenameExtension = String(document.fileName || '').split('.').pop()?.toLowerCase();
   return String(document.fileExtension || filenameExtension || '').toLowerCase();
@@ -153,7 +170,9 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [file, setFile] = useState(null);
-  const [uploadName, setUploadName] = useState('');
+  const [uploadDate, setUploadDate] = useState(todayUploadDate());
+  const [uploadNamePreset, setUploadNamePreset] = useState(UPLOAD_NAME_PRESETS[0].value);
+  const [uploadName, setUploadName] = useState(uploadDocumentName(todayUploadDate(), UPLOAD_NAME_PRESETS[0].value));
   const [uploading, setUploading] = useState(false);
   const [renameKey, setRenameKey] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -185,12 +204,20 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
     setLoading(false);
   };
 
+  const resetUploadNaming = () => {
+    const date = todayUploadDate();
+    const preset = UPLOAD_NAME_PRESETS[0].value;
+    setUploadDate(date);
+    setUploadNamePreset(preset);
+    setUploadName(uploadDocumentName(date, preset));
+  };
+
   useEffect(() => {
     if (!open) return;
     setDocuments([]);
     setActiveTab('disputeFlow');
     setFile(null);
-    setUploadName('');
+    resetUploadNaming();
     setRenameKey(null);
     setRenameValue('');
     setPreviewDocument(null);
@@ -210,7 +237,18 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
   const handleFileChange = (event) => {
     const selectedFile = event.target.files?.[0] || null;
     setFile(selectedFile);
-    setUploadName(selectedFile?.name || '');
+    if (!uploadName.trim()) setUploadName(uploadDocumentName(uploadDate, uploadNamePreset));
+  };
+
+  const handleUploadDateChange = (event) => {
+    const nextDate = event.target.value.replace(/\D/g, '').slice(0, 8);
+    setUploadDate(nextDate);
+    setUploadName(uploadDocumentName(nextDate, uploadNamePreset));
+  };
+
+  const applyUploadPreset = (preset) => {
+    setUploadNamePreset(preset);
+    setUploadName(uploadDocumentName(uploadDate, preset));
   };
 
   const handleUpload = async () => {
@@ -228,7 +266,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
       });
       if (applyDocumentResponse(res.data)) {
         setFile(null);
-        setUploadName('');
+        resetUploadNaming();
       }
     } catch (uploadError) {
       setError(uploadError.message || 'Upload failed.');
@@ -324,6 +362,31 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
                 <div className="mb-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Upload Document</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">The file will be linked directly to this STEM as a Dispute Flow document.</div>
+                </div>
+                <div className="mb-2 grid gap-2 md:grid-cols-[120px_1fr]">
+                  <Input
+                    value={uploadDate}
+                    onChange={handleUploadDateChange}
+                    placeholder="yyyymmdd"
+                    inputMode="numeric"
+                    className="h-8 text-xs font-mono"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {UPLOAD_NAME_PRESETS.map((preset) => (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        onClick={() => applyUploadPreset(preset.value)}
+                        className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                          uploadNamePreset === preset.value
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="grid gap-2 md:grid-cols-[1.2fr_1fr_auto]">
                   <Input type="file" onChange={handleFileChange} className="h-9 text-xs" />
