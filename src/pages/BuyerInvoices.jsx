@@ -149,6 +149,40 @@ function sanitizePreviewHtml(value) {
     .replace(/javascript:/gi, '');
 }
 
+function previewPlainText(value) {
+  return textValue(value, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeReminderPreviewHtml(value) {
+  const html = sanitizePreviewHtml(richTemplateValue(value));
+  const matches = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)];
+  const paragraphs = matches.length ? matches.map((match) => match[1]) : [html];
+  return paragraphs
+    .map((inner) => inner.trim())
+    .filter((inner) => previewPlainText(inner))
+    .map((inner) => {
+      const text = previewPlainText(inner).replace(/\s+/g, ' ').trim().toLowerCase();
+      let margin = '0 0 12px';
+      if (/^to\s+/.test(text)) margin = '0 0 3px';
+      else if (/^attn\b/.test(text)) margin = '0 0 18px';
+      else if (/^regards,?/.test(text)) margin = '24px 0 3px';
+      else if (/^fratelli\s+cosulich/.test(text)) margin = '0';
+      return `<p style="margin:${margin};padding:0;line-height:1.35;text-align:left">${inner}</p>`;
+    })
+    .join('');
+}
+
 function invoiceTableMarkerHtml(count) {
   return `
     <div style="margin:12px 0;padding:10px 12px;border:1px dashed #2563eb;border-radius:8px;background:#eff6ff;color:#1d4ed8;font-size:13px;font-weight:600">
@@ -157,7 +191,7 @@ function invoiceTableMarkerHtml(count) {
 }
 
 function emailBodyPreviewHtml(body, selectedCount) {
-  const html = sanitizePreviewHtml(richTemplateValue(body));
+  const html = normalizeReminderPreviewHtml(body);
   const marker = invoiceTableMarkerHtml(selectedCount);
   const match = /for your attention\./i.exec(html);
   if (!match) return `${html}${marker}`;

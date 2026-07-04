@@ -3148,9 +3148,26 @@ function htmlToPlainText(value) {
 }
 
 function paymentReminderContentHtml(content) {
-  if (hasHtmlMarkup(content)) return sanitizeReminderHtml(content);
-  const blocks = String(content || '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-  return blocks.map((block) => `<p style="margin:0 0 14px;color:#1f2937">${escapeHtml(block).replaceAll('\n', '<br>')}</p>`).join('');
+  const html = hasHtmlMarkup(content)
+    ? sanitizeReminderHtml(content)
+    : String(content || '').split(/\n{2,}/).map((block) => `<p>${escapeHtml(block.trim()).replaceAll('\n', '<br>')}</p>`).join('');
+  const matches = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)];
+  const paragraphs = matches.length
+    ? matches.map((match) => match[1])
+    : html.split(/<br\s*\/?>|\n{2,}/i).map((block) => escapeHtml(block.trim()));
+  return paragraphs
+    .map((inner) => inner.trim())
+    .filter((inner) => htmlToPlainText(inner).trim())
+    .map((inner) => {
+      const text = htmlToPlainText(inner).replace(/\s+/g, ' ').trim().toLowerCase();
+      let margin = '0 0 12px';
+      if (/^to\s+/.test(text)) margin = '0 0 3px';
+      else if (/^attn\b/.test(text)) margin = '0 0 18px';
+      else if (/^regards,?/.test(text)) margin = '24px 0 3px';
+      else if (/^fratelli\s+cosulich/.test(text)) margin = '0';
+      return `<p style="margin:${margin};padding:0;color:#1f2937;line-height:1.35;text-align:left">${inner}</p>`;
+    })
+    .join('');
 }
 
 function insertAfterAttentionSentence(content, insertContent) {
@@ -3174,36 +3191,37 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
   const body = renderPaymentReminderTemplate(overrides.body || settings.paymentReminderBody, context);
   const tableRows = selectedRows.map((row) => {
     const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
-    const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
+    const cellStyle = `border-bottom:1px solid ${severity.border};padding:7px 8px;vertical-align:top`;
+    const nowrapCellStyle = `${cellStyle};white-space:nowrap`;
     return `
     <tr style="${severity.row}">
-      <td style="${cellStyle};font-weight:600;white-space:nowrap">${escapeHtml(row.stemName)}</td>
-      <td style="${cellStyle};min-width:180px">${escapeHtml(row.buyerName || '-')}</td>
-      <td style="${cellStyle};text-align:right;white-space:nowrap">${money(row.invoiceAmount)}</td>
-      <td style="${cellStyle};text-align:right;font-weight:600;white-space:nowrap">${money(row.receivableBalance)}</td>
-      <td style="${cellStyle};white-space:nowrap">${prettyDate(row.buyerInvoiceDueDate)}</td>
-      <td style="${cellStyle};min-width:140px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-      <td style="${cellStyle};min-width:160px">${escapeHtml(row.prpspStatus || '-')}</td>
-      <td style="${cellStyle}">
+      <td style="${cellStyle};font-weight:600;min-width:150px">${escapeHtml(row.stemName)}</td>
+      <td style="${cellStyle};min-width:110px">${escapeHtml(row.buyerName || '-')}</td>
+      <td style="${nowrapCellStyle};text-align:right">${money(row.invoiceAmount)}</td>
+      <td style="${nowrapCellStyle};text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
+      <td style="${nowrapCellStyle}">${prettyDate(row.buyerInvoiceDueDate)}</td>
+      <td style="${cellStyle};min-width:84px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
+      <td style="${cellStyle};min-width:86px">${escapeHtml(row.prpspStatus || '-')}</td>
+      <td style="${nowrapCellStyle}">
         <span style="display:inline-block;border:1px solid;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;${severity.pill}">${escapeHtml(row.status)}</span>
       </td>
-      <td style="${cellStyle};text-align:right;font-weight:600;color:${severity.text};white-space:nowrap">${overdueDisplayValue(row.daysUntilDue)}</td>
+      <td style="${nowrapCellStyle};text-align:right;font-weight:600;color:${severity.text}">${overdueDisplayValue(row.daysUntilDue)}</td>
     </tr>`;
   }).join('');
   const tableHtml = `
-    <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px;margin:16px 0">
-      <table style="border-collapse:collapse;width:100%;min-width:1120px;font-size:13px">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #d9e2ef;border-radius:10px;margin:14px 0 16px;max-width:100%">
+      <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
         <thead>
           <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Stem Name</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Name</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Invoice Amount</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Receivable Balance</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Due Date</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Buyer Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">PSPRS</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left">Status</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right">Overdue Volume</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Invoice</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">PSPRS</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Status</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
           </tr>
         </thead>
         <tbody>${tableRows || '<tr><td colspan="9" style="padding:18px;text-align:center;color:#667085">No invoices selected.</td></tr>'}</tbody>
