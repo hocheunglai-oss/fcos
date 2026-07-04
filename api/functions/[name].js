@@ -3059,6 +3059,10 @@ function reminderCandidateKey(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function isFratelliCosulichBuyerGroup(value) {
+  return /\bfratelli\s+cosulich\b/i.test(String(value || ''));
+}
+
 function isPaymentReminderCandidate(row, selected) {
   if (!row || !selected) return false;
   if (row.stemId === selected.stemId) return true;
@@ -3066,6 +3070,7 @@ function isPaymentReminderCandidate(row, selected) {
   const rowBuyer = reminderCandidateKey(row.buyerName);
   if (selectedBuyer && rowBuyer && selectedBuyer === rowBuyer) return true;
   const selectedGroup = reminderCandidateKey(selected.buyerGroupName);
+  if (isFratelliCosulichBuyerGroup(selectedGroup)) return false;
   const rowGroup = reminderCandidateKey(row.buyerGroupName);
   return Boolean(selectedGroup && rowGroup && selectedGroup === rowGroup);
 }

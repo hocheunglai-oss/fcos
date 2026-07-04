@@ -812,7 +812,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   <div>
                     <h3 className="text-sm font-semibold text-foreground">Related invoices</h3>
                     <p className="text-xs text-muted-foreground">
-                      Same buyer and same buyer group, using the current Due in next days value.
+                      Same buyer and same buyer group, except Fratelli Cosulich group, using the current Due in next days value.
                     </p>
                   </div>
                   <Button type="button" variant="outline" size="sm" onClick={toggleAll}>
