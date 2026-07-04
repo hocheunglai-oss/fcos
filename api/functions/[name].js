@@ -2562,6 +2562,10 @@ async function salesforceDisputeStems(body) {
   const hasDispute = fieldNames.includes('Dispute__c');
   const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
   if (!hasDispute && !hasDisputeStatus) return { rows: [] };
+  const supplierInvoiceDescribe = await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }));
+  const supplierInvoiceFieldNames = supplierInvoiceDescribe.fields.map((f) => f.name);
+  const supplierInvoicePayableField = ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']
+    .find((field) => supplierInvoiceFieldNames.includes(field));
 
   const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
   for (const field of [
@@ -2573,11 +2577,12 @@ async function salesforceDisputeStems(body) {
     'Buyer__c',
     'Dispute__c',
     'Dispute_Status__c',
-    'Dispute_Type__c',
-    'Dispute_Particular__c',
     'Total_Invoice_Amount__c',
     'Total_Invoiced_Amount_From_Suppliers__c',
+    'Payable_Balance__c',
     'Receivable_Balance__c',
+    'QLIK_STEM_Line_Item_Total_Cost__c',
+    'QLIK_Costs_Total_Cost__c',
   ]) {
     if (fieldNames.includes(field)) fields.push(field);
   }
@@ -2597,15 +2602,135 @@ async function salesforceDisputeStems(body) {
     LIMIT ${limit}
   `, { limit, softFail: true });
 
+  const stemIds = rows.map((stem) => stem.Id).filter(Boolean);
+  const lineItemsByStem = {};
+  const extraCostsByStem = {};
+  const supplierInvoicePayableByStem = {};
+
+  if (stemIds.length) {
+    const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
+      Promise.all(chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT STEM__c, Product__r.Name, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
+                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+                 Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
+                 Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
+                 Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
+          FROM STEM_Line_Item__c
+          WHERE STEM__c IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+      })),
+      Promise.all(chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c,
+                 Quantity_Range_Max__c, Is_Quantity_Range__c,
+                 Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c,
+                 Supplier_Invoice__c, Cancelled__c
+          FROM STEM_Extra_Cost__c
+          WHERE STEM__c IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+      })),
+      supplierInvoicePayableField
+        ? Promise.all(chunkIds(stemIds).map((chunk) => {
+            const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+            return queryRows(`
+              SELECT STEM__c, ${supplierInvoicePayableField}
+              FROM Supplier_Invoice__c
+              WHERE STEM__c IN (${inList})
+              LIMIT 5000
+            `, { limit: 5000, softFail: true });
+          }))
+        : Promise.resolve([]),
+    ]);
+
+    for (const item of lineItemArrays.flat()) {
+      if (!item.STEM__c) continue;
+      if (!lineItemsByStem[item.STEM__c]) lineItemsByStem[item.STEM__c] = [];
+      lineItemsByStem[item.STEM__c].push(item);
+    }
+    for (const item of extraCostArrays.flat()) {
+      if (!item.STEM__c) continue;
+      if (!extraCostsByStem[item.STEM__c]) extraCostsByStem[item.STEM__c] = [];
+      extraCostsByStem[item.STEM__c].push(item);
+    }
+    for (const invoice of supplierInvoiceArrays.flat()) {
+      if (!invoice.STEM__c || supplierInvoicePayableField == null) continue;
+      supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
+    }
+  }
+
   return {
     rows: rows
       .filter((stem) => !hasDisputeStatus || String(stem.Dispute_Status__c || '').toLowerCase() !== 'no dispute')
-      .map((stem) => ({
-        ...stem,
-        _Display_Name: formatStemName(stem),
-        _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
-        _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
-      })),
+      .map((stem) => {
+        const stemHasDelivery = !!stem.Delivery_Date__c;
+        const lineItems = lineItemsByStem[stem.Id] || [];
+        const extraCosts = extraCostsByStem[stem.Id] || [];
+        const supplierNames = new Set();
+        const productNames = new Set();
+        let supplierLineBuy = 0;
+        let uninvoicedSupplierLineBuy = 0;
+        let extraCostBuy = 0;
+        let invoicedExtraCostBuy = 0;
+        let sellOnlyExtraSell = 0;
+        let hasSupplierInvoice = false;
+
+        for (const item of lineItems) {
+          if (item.Cancelled__c) continue;
+          if (item.Supplier_Name__c) supplierNames.add(item.Supplier_Name__c);
+          const productName = item['Product__r']?.Name;
+          if (productName) productNames.add(productName);
+          const buy = lineBuyAmount(item, stemHasDelivery);
+          supplierLineBuy += buy;
+          if (item.Supplier_Invoice__c) {
+            hasSupplierInvoice = true;
+          } else {
+            uninvoicedSupplierLineBuy += buy;
+          }
+        }
+
+        for (const item of extraCosts) {
+          if (item.Cancelled__c) continue;
+          if (item.Supplier_Name__c) supplierNames.add(item.Supplier_Name__c);
+          const buy = extraBuyAmount(item, stemHasDelivery);
+          const sell = extraSellAmount(item, stemHasDelivery);
+          if (item.Supplier_Invoice__c) {
+            invoicedExtraCostBuy += buy;
+          } else {
+            extraCostBuy += buy;
+            if (buy === 0 && sell > 0) sellOnlyExtraSell += sell;
+          }
+        }
+
+        const supplierBase = Number(stem.Total_Invoiced_Amount_From_Suppliers__c || 0)
+          + (hasSupplierInvoice ? uninvoicedSupplierLineBuy : supplierLineBuy);
+        const rawSupplier = supplierBase + extraCostBuy;
+        const unmatchedSellOnlyExtra = hasSupplierInvoice ? Math.max(0, sellOnlyExtraSell - invoicedExtraCostBuy) : 0;
+        const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
+          ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0)
+          : null;
+        const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
+        const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
+          ? qlikSupplierCost
+          : rawSupplier;
+        const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
+        const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
+
+        return {
+          ...stem,
+          Total_Invoiced_Amount_From_Suppliers__c: calculatedSupplierInvoice || stem.Total_Invoiced_Amount_From_Suppliers__c || null,
+          _Supplier_Names: [...supplierNames].sort().join(', ') || null,
+          _Product_Names: [...productNames].sort().join(', ') || null,
+          _Payable_Balance: payableBalance,
+          _Display_Name: formatStemName(stem),
+          _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
+          _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
+        };
+      }),
   };
 }
 

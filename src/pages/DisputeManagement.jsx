@@ -9,7 +9,6 @@ import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { numericValue, textValue } from '@/lib/displayValue';
 
 const ACTIVE_DISPUTE_STATUSES = [
@@ -54,8 +53,7 @@ export default function DisputeManagement() {
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [search, setSearch] = useState('');
-  const [selectedStatuses, setSelectedStatuses] = useState(ACTIVE_DISPUTE_STATUSES);
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [selectedStatuses, setSelectedStatuses] = useState(NOT_CLOSED_STATUSES);
   const [selectedStemId, setSelectedStemId] = useState(null);
 
   const loadRows = async () => {
@@ -74,7 +72,6 @@ export default function DisputeManagement() {
 
   useEffect(() => { loadRows(); }, []);
 
-  const types = useMemo(() => [...new Set(rows.map(row => row.Dispute_Type__c).filter(Boolean))].sort(), [rows]);
   const selectedStatusKeys = useMemo(() => new Set(selectedStatuses.map(normalizeStatus)), [selectedStatuses]);
   const notClosedActive = NOT_CLOSED_STATUSES.every(status => selectedStatusKeys.has(normalizeStatus(status)))
     && !selectedStatusKeys.has(normalizeStatus('Closed'));
@@ -98,37 +95,38 @@ export default function DisputeManagement() {
     return rows.filter(row => {
       const isActiveDispute = normalizeStatus(row.Dispute_Status__c) !== 'no dispute';
       const statusMatch = selectedStatusKeys.has(normalizeStatus(row.Dispute_Status__c));
-      const typeMatch = typeFilter === 'all' || row.Dispute_Type__c === typeFilter;
       const textMatch = !q || [
         row._Display_Name,
         row._Buyer_Name,
+        row._Supplier_Names,
+        row._Product_Names,
         displayStatus(row.Dispute_Status__c),
-        row.Dispute_Type__c,
-        row.Dispute_Particular__c,
       ].some(value => value != null && textValue(value, '').toLowerCase().includes(q));
-      return isActiveDispute && statusMatch && typeMatch && textMatch;
+      return isActiveDispute && statusMatch && textMatch;
     });
-  }, [rows, search, selectedStatusKeys, typeFilter]);
+  }, [rows, search, selectedStatusKeys]);
 
   const totals = useMemo(() => ({
     count: filteredRows.length,
     receivable: filteredRows.reduce((sum, row) => sum + Number(row.Receivable_Balance__c || 0), 0),
     buyerInvoice: filteredRows.reduce((sum, row) => sum + Number(row.Total_Invoice_Amount__c || 0), 0),
+    payable: filteredRows.reduce((sum, row) => sum + Number(row._Payable_Balance || 0), 0),
   }), [filteredRows]);
 
   const exportCsv = () => {
-    const headers = ['Stem Name', 'Buyer Name', 'Dispute Status', 'Dispute Type', 'Dispute Particular', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Receivable Balance', 'Last Modified'];
+    const headers = ['Stem Name', 'Buyer Name', 'Supplier Name(s)', 'Product Name(s)', 'Dispute Status', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Receivable Balance', 'Payable Balance', 'Last Modified'];
     const csvRows = filteredRows.map(row => [
       row._Display_Name,
       row._Buyer_Name,
+      row._Supplier_Names,
+      row._Product_Names,
       displayStatus(row.Dispute_Status__c),
-      row.Dispute_Type__c,
-      row.Dispute_Particular__c,
       row.Delivery_Date__c,
       row.Expected_Delivery_Date__c,
       row.Total_Invoice_Amount__c,
       row.Total_Invoiced_Amount_From_Suppliers__c,
       row.Receivable_Balance__c,
+      row._Payable_Balance,
       row.LastModifiedDate,
     ]);
     const csv = [headers, ...csvRows].map(row => row.map(csvValue).join(',')).join('\n');
@@ -164,14 +162,14 @@ export default function DisputeManagement() {
       <div className="grid gap-3 md:grid-cols-3">
         <Metric label="Disputed STEMs" value={totals.count.toLocaleString()} tone="red" />
         <Metric label="Receivable Balance" value={fmtMoney(totals.receivable)} tone="amber" />
-        <Metric label="Buyer Invoice Total" value={fmtMoney(totals.buyerInvoice)} />
+        <Metric label="Payable Balance" value={fmtMoney(totals.payable)} />
       </div>
 
       <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-start gap-3">
           <div className="relative w-full md:w-80">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input placeholder="Search dispute, stem, buyer..." value={search} onChange={event => setSearch(event.target.value)} className="h-9 pl-8 text-xs" />
+            <Input placeholder="Search stem, buyer, supplier, product..." value={search} onChange={event => setSearch(event.target.value)} className="h-9 pl-8 text-xs" />
             {search && (
               <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 <X className="h-3 w-3" />
@@ -200,18 +198,6 @@ export default function DisputeManagement() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type</Label>
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="h-9 w-[190px] text-xs">
-                <SelectValue placeholder="All types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="text-xs">All types</SelectItem>
-                {types.map(type => <SelectItem key={type} value={type} className="text-xs">{type}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
         </div>
       </div>
 
@@ -226,17 +212,19 @@ export default function DisputeManagement() {
           <StateBlock icon={Loader2} title="Loading disputes..." description="Fetching dispute STEMs from Salesforce." />
         ) : filteredRows.length ? (
           <div className="max-h-[68vh] overflow-auto">
-            <table className="w-full min-w-[1180px] text-xs">
+            <table className="w-full min-w-[1420px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Name(s)</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Product Name(s)</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Type</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Particular</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable Balance</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Modified</th>
                 </tr>
               </thead>
@@ -245,12 +233,14 @@ export default function DisputeManagement() {
                   <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className={`cursor-pointer border-b border-border/40 hover:bg-muted/30 ${idx % 2 ? 'bg-muted/10' : ''}`}>
                     <td className="px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
                     <td className="px-3 py-2.5 text-muted-foreground">{row._Buyer_Name || '—'}</td>
+                    <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row._Supplier_Names || ''}>{row._Supplier_Names || '—'}</td>
+                    <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row._Product_Names || ''}>{row._Product_Names || '—'}</td>
                     <td className="px-3 py-2.5">{displayStatus(row.Dispute_Status__c) || '—'}</td>
-                    <td className="px-3 py-2.5">{row.Dispute_Type__c || '—'}</td>
-                    <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row.Dispute_Particular__c || ''}>{row.Dispute_Particular__c || '—'}</td>
                     <td className="px-3 py-2.5">{fmtDate(row._Effective_Date)}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtMoney(row.Total_Invoiced_Amount_From_Suppliers__c)}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row.Receivable_Balance__c)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtMoney(row._Payable_Balance)}</td>
                     <td className="px-3 py-2.5">{fmtDate(row.LastModifiedDate)}</td>
                   </tr>
                 ))}
