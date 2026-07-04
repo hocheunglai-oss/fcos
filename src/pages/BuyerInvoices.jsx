@@ -11,7 +11,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { hasUsableSmtpSettings, readSmtpSettings } from '@/lib/smtpSettings';
-import { useAuth } from '@/lib/AuthContext';
 import { numericValue, textValue } from '@/lib/displayValue';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
@@ -263,7 +262,11 @@ function isNeedsAction(row, today) {
   return row.status === 'Overdue' || isFollowUpDue(row, today);
 }
 
-function CollectionModal({ row, open, onClose, onSaved, currentUser }) {
+function uniqueNames(values) {
+  return [...new Set(values.map((value) => textValue(value, '').trim()).filter(Boolean))];
+}
+
+function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
   const [form, setForm] = useState({
     status: 'Not Started',
     ownerName: '',
@@ -274,19 +277,25 @@ function CollectionModal({ row, open, onClose, onSaved, currentUser }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
+  const ownerChoices = useMemo(() => uniqueNames([
+    ...rowTraderOptions,
+    row?.collection?.ownerName,
+    ...ownerOptions,
+  ]), [ownerOptions, row?.collection?.ownerName, rowTraderOptions]);
 
   useEffect(() => {
     if (!row) return;
     setForm({
       status: collectionStatus(row),
-      ownerName: row.collection?.ownerName || currentUser?.full_name || currentUser?.email || '',
+      ownerName: row.collection?.ownerName || rowTraderOptions[0] || ownerOptions[0] || '',
       latestNote: row.collection?.latestNote || '',
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
       promisedAmount: row.collection?.promisedAmount ?? '',
     });
     setError(null);
-  }, [row, currentUser]);
+  }, [ownerOptions, row, rowTraderOptions]);
 
   if (!open || !row) return null;
 
@@ -336,7 +345,14 @@ function CollectionModal({ row, open, onClose, onSaved, currentUser }) {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Owner</Label>
-                <Input value={form.ownerName} onChange={(event) => update('ownerName', event.target.value)} placeholder="Collection owner" />
+                <select
+                  value={form.ownerName}
+                  onChange={(event) => update('ownerName', event.target.value)}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  {!ownerChoices.length && <option value="">No buyer trader assigned</option>}
+                  {ownerChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Next Follow-up Date</Label>
@@ -407,7 +423,6 @@ function CollectionModal({ row, open, onClose, onSaved, currentUser }) {
 }
 
 export default function BuyerInvoices() {
-  const { user } = useAuth();
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
@@ -1120,7 +1135,7 @@ export default function BuyerInvoices() {
         open={!!selectedCollectionRow}
         onClose={() => setSelectedCollectionRow(null)}
         onSaved={mergeCollectionResult}
-        currentUser={user}
+        ownerOptions={buyerTraderOptions}
       />
     </div>
   );

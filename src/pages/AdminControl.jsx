@@ -89,24 +89,6 @@ function ModuleGrid({ modules, permissions, locked = false, onToggle }) {
   );
 }
 
-function EmptyEditorHint({ activeSection }) {
-  return (
-    <div className="flex min-h-[320px] items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-8 text-center">
-      <div>
-        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-          {activeSection === 'users' ? <Users className="h-5 w-5" /> : <UserCog className="h-5 w-5" />}
-        </div>
-        <div className="text-sm font-semibold text-foreground">
-          {activeSection === 'users' ? 'Select a user to edit' : 'Select a user type to edit'}
-        </div>
-        <div className="mt-1 text-xs text-muted-foreground">
-          Create and edit records in a pop-out window without leaving this page.
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function AdminControl() {
   const { authMode, isSupabaseConfigured, user: currentUser } = useAuth();
   const [activeSection, setActiveSection] = useState('users');
@@ -453,8 +435,8 @@ export default function AdminControl() {
           </div>
         </div>
 
-        <div className="grid min-h-[calc(100vh-260px)] xl:grid-cols-[420px_1fr]">
-          <aside className="min-h-0 border-b border-border xl:border-b-0 xl:border-r">
+        <div className="min-h-[calc(100vh-260px)]">
+          <aside className="min-h-0">
             <div className="flex h-12 items-center justify-between border-b border-border px-4">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
@@ -528,10 +510,6 @@ export default function AdminControl() {
               <StateBlock title="No user types found" description="Create a user type to define reusable access rights." />
             )}
           </aside>
-
-          <main className="p-5">
-            <EmptyEditorHint activeSection={activeSection} />
-          </main>
         </div>
       </section>
 
