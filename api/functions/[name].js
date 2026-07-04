@@ -2708,7 +2708,17 @@ async function salesforceDisputeStems(body) {
 
         for (const item of extraCosts) {
           if (item.Cancelled__c) continue;
-          if (item.Supplier_Name__c) supplierNames.add(item.Supplier_Name__c);
+          if (item.Supplier_Name__c) {
+            supplierNames.add(item.Supplier_Name__c);
+            const pairKey = `${item.Supplier_Name__c}\u0000`;
+            if (!supplierProductPairKeys.has(pairKey)) {
+              supplierProductPairKeys.add(pairKey);
+              supplierProductPairs.push({
+                supplierName: item.Supplier_Name__c,
+                productName: null,
+              });
+            }
+          }
           const buy = extraBuyAmount(item, stemHasDelivery);
           const sell = extraSellAmount(item, stemHasDelivery);
           if (item.Supplier_Invoice__c) {
