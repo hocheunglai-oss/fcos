@@ -5,6 +5,14 @@ import { APP_MODULES, FULL_ACCESS, USER_TYPES } from '@/lib/authModules';
 import { useAuth } from '@/lib/AuthContext';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 const emptyUserForm = {
   id: null,
@@ -32,6 +40,10 @@ function normalizedPermissions(modules, permissions = {}) {
 
 function typeLabel(type) {
   return String(type?.label || type?.id || '').replaceAll('_', ' ');
+}
+
+function compareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
 }
 
 function permissionSummary(modules, permissions = {}) {
@@ -77,6 +89,24 @@ function ModuleGrid({ modules, permissions, locked = false, onToggle }) {
   );
 }
 
+function EmptyEditorHint({ activeSection }) {
+  return (
+    <div className="flex min-h-[320px] items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-8 text-center">
+      <div>
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          {activeSection === 'users' ? <Users className="h-5 w-5" /> : <UserCog className="h-5 w-5" />}
+        </div>
+        <div className="text-sm font-semibold text-foreground">
+          {activeSection === 'users' ? 'Select a user to edit' : 'Select a user type to edit'}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          Create and edit records in a pop-out window without leaving this page.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminControl() {
   const { authMode, isSupabaseConfigured, user: currentUser } = useAuth();
   const [activeSection, setActiveSection] = useState('users');
@@ -87,6 +117,8 @@ export default function AdminControl() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [userForm, setUserForm] = useState(emptyUserForm);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
   const [savingType, setSavingType] = useState(false);
@@ -98,6 +130,14 @@ export default function AdminControl() {
   const sortedModules = useMemo(
     () => modules.slice().sort((a, b) => Number(a.sortOrder || a.sort_order || 0) - Number(b.sortOrder || b.sort_order || 0)),
     [modules]
+  );
+  const sortedUserTypes = useMemo(
+    () => userTypes.slice().sort((a, b) => compareText(typeLabel(a), typeLabel(b))),
+    [userTypes]
+  );
+  const sortedUsers = useMemo(
+    () => users.slice().sort((a, b) => compareText(a.full_name || a.email, b.full_name || b.email)),
+    [users]
   );
   const selectedUser = useMemo(() => users.find((item) => item.id === userForm.id) || null, [users, userForm.id]);
   const selectedType = useMemo(() => userTypes.find((item) => item.id === typeForm.id) || null, [userTypes, typeForm.id]);
@@ -155,8 +195,18 @@ export default function AdminControl() {
     setError('');
   };
 
-  const selectUser = (item) => {
+  const openUserDialog = (item) => {
     resetAlerts();
+    setActiveSection('users');
+    if (!item) {
+      setUserForm({
+        ...emptyUserForm,
+        permissions: normalizedPermissions(sortedModules, typePermissions.viewer || {}),
+      });
+      setUserDialogOpen(true);
+      return;
+    }
+
     const useTypeDefaults = item.user_type === 'administrator' ? true : item.use_type_defaults !== false;
     const sourcePermissions = useTypeDefaults
       ? typePermissions[item.user_type] || item.permissions || {}
@@ -171,15 +221,7 @@ export default function AdminControl() {
       use_type_defaults: useTypeDefaults,
       permissions: normalizedPermissions(sortedModules, sourcePermissions),
     });
-  };
-
-  const newUser = () => {
-    resetAlerts();
-    setActiveSection('users');
-    setUserForm({
-      ...emptyUserForm,
-      permissions: normalizedPermissions(sortedModules, typePermissions.viewer || {}),
-    });
+    setUserDialogOpen(true);
   };
 
   const setUserType = (userType) => {
@@ -237,6 +279,7 @@ export default function AdminControl() {
       return;
     }
     setMessage('User saved.');
+    setUserDialogOpen(false);
     setUserForm((prev) => ({ ...prev, id: res.data.user?.id || prev.id, password: '' }));
     await load();
   };
@@ -255,12 +298,23 @@ export default function AdminControl() {
       return;
     }
     setMessage('User deleted.');
+    setUserDialogOpen(false);
     setUserForm(emptyUserForm);
     await load();
   };
 
-  const selectUserType = (item) => {
+  const openTypeDialog = (item) => {
     resetAlerts();
+    setActiveSection('types');
+    if (!item) {
+      setTypeForm({
+        ...emptyTypeForm,
+        permissions: normalizedPermissions(sortedModules, { dashboard: true }),
+      });
+      setTypeDialogOpen(true);
+      return;
+    }
+
     setTypeForm({
       id: item.id,
       label: item.label || item.id,
@@ -269,15 +323,7 @@ export default function AdminControl() {
       is_system: item.is_system === true,
       permissions: normalizedPermissions(sortedModules, typePermissions[item.id] || {}),
     });
-  };
-
-  const newUserType = () => {
-    resetAlerts();
-    setActiveSection('types');
-    setTypeForm({
-      ...emptyTypeForm,
-      permissions: normalizedPermissions(sortedModules, { dashboard: true }),
-    });
+    setTypeDialogOpen(true);
   };
 
   const toggleTypeModule = (moduleId) => {
@@ -309,6 +355,7 @@ export default function AdminControl() {
       return;
     }
     setMessage('User type saved.');
+    setTypeDialogOpen(false);
     setTypeForm((prev) => ({
       ...prev,
       id: res.data.userType?.id || prev.id,
@@ -336,6 +383,7 @@ export default function AdminControl() {
       return;
     }
     setMessage('User type deleted.');
+    setTypeDialogOpen(false);
     setTypeForm(emptyTypeForm);
     await load();
   };
@@ -355,7 +403,7 @@ export default function AdminControl() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={activeSection === 'users' ? newUser : newUserType}
+              onClick={() => (activeSection === 'users' ? openUserDialog(null) : openTypeDialog(null))}
               disabled={!isSupabaseConfigured}
               className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >
@@ -401,11 +449,11 @@ export default function AdminControl() {
             </SegmentButton>
           </div>
           <div className="text-xs font-medium text-muted-foreground">
-            {activeSection === 'users' ? 'Create accounts and choose inherited or custom access.' : 'Design reusable access templates.'}
+            {activeSection === 'users' ? 'Sorted by name.' : 'Sorted alphabetically.'}
           </div>
         </div>
 
-        <div className="grid min-h-[calc(100vh-260px)] xl:grid-cols-[360px_1fr]">
+        <div className="grid min-h-[calc(100vh-260px)] xl:grid-cols-[420px_1fr]">
           <aside className="min-h-0 border-b border-border xl:border-b-0 xl:border-r">
             <div className="flex h-12 items-center justify-between border-b border-border px-4">
               <div>
@@ -417,9 +465,9 @@ export default function AdminControl() {
             {activeSection === 'users' ? (
               loading ? (
                 <StateBlock icon={Loader2} title="Loading users..." description="Fetching access-control users." />
-              ) : users.length ? (
+              ) : sortedUsers.length ? (
                 <div className="max-h-[calc(100vh-322px)] divide-y divide-border overflow-auto">
-                  {users.map((item) => {
+                  {sortedUsers.map((item) => {
                     const permissions = item.use_type_defaults !== false
                       ? typePermissions[item.user_type] || item.permissions || {}
                       : item.permissions || {};
@@ -427,7 +475,7 @@ export default function AdminControl() {
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => selectUser(item)}
+                        onClick={() => openUserDialog(item)}
                         className={`block w-full px-4 py-3 text-left text-sm hover:bg-muted/30 ${selectedUser?.id === item.id ? 'bg-primary/10' : 'bg-background/40'}`}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -450,15 +498,15 @@ export default function AdminControl() {
               )
             ) : loading ? (
               <StateBlock icon={Loader2} title="Loading user types..." description="Fetching access templates." />
-            ) : userTypes.length ? (
+            ) : sortedUserTypes.length ? (
               <div className="max-h-[calc(100vh-322px)] divide-y divide-border overflow-auto">
-                {userTypes.map((item) => {
+                {sortedUserTypes.map((item) => {
                   const assignedCount = users.filter((userItem) => userItem.user_type === item.id).length;
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => selectUserType(item)}
+                      onClick={() => openTypeDialog(item)}
                       className={`block w-full px-4 py-3 text-left text-sm hover:bg-muted/30 ${selectedType?.id === item.id ? 'bg-primary/10' : 'bg-background/40'}`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -481,210 +529,8 @@ export default function AdminControl() {
             )}
           </aside>
 
-          <main className="min-h-0 overflow-auto p-5">
-            {activeSection === 'users' ? (
-              <form onSubmit={saveUser} className="mx-auto max-w-5xl">
-                <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-base font-semibold text-foreground">{userForm.id ? 'Edit User' : 'Create User'}</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">Assign a user type, then inherit its access rights or set custom access.</p>
-                  </div>
-                  {userForm.id && userForm.id !== currentUser?.id && (
-                    <button
-                      type="button"
-                      onClick={deleteUser}
-                      disabled={deletingUser || !isSupabaseConfigured}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 disabled:opacity-60"
-                    >
-                      {deletingUser ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                      Delete User
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email</span>
-                    <input
-                      type="email"
-                      value={userForm.email}
-                      onChange={(event) => setUserForm((prev) => ({ ...prev, email: event.target.value }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      required
-                      disabled={Boolean(userForm.id)}
-                    />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Full Name</span>
-                    <input
-                      value={userForm.full_name}
-                      onChange={(event) => setUserForm((prev) => ({ ...prev, full_name: event.target.value }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">User Type</span>
-                    <select
-                      value={userForm.user_type}
-                      onChange={(event) => setUserType(event.target.value)}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    >
-                      {userTypes.map((item) => <option key={item.id} value={item.id}>{typeLabel(item)}</option>)}
-                    </select>
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{userForm.id ? 'New Password' : 'Password'}</span>
-                    <input
-                      type="password"
-                      value={userForm.password}
-                      onChange={(event) => setUserForm((prev) => ({ ...prev, password: event.target.value }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      required={!userForm.id}
-                      minLength={8}
-                      placeholder={userForm.id ? 'Leave blank to keep current password' : ''}
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <label className="flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={userForm.active}
-                      onChange={(event) => setUserForm((prev) => ({ ...prev, active: event.target.checked }))}
-                    />
-                    Active user
-                  </label>
-                  <label className={`flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground ${userForm.user_type === 'administrator' ? 'opacity-60' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
-                      disabled={userForm.user_type === 'administrator'}
-                      onChange={(event) => setUseTypeDefaults(event.target.checked)}
-                    />
-                    Use user type defaults
-                  </label>
-                </div>
-
-                <div className="mt-6">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Module Access</div>
-                    <div className="text-xs text-muted-foreground">
-                      {userForm.use_type_defaults || userForm.user_type === 'administrator' ? 'Inherited' : 'Custom'}
-                    </div>
-                  </div>
-                  <ModuleGrid
-                    modules={sortedModules}
-                    permissions={effectiveUserPermissions}
-                    locked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
-                    onToggle={toggleUserModule}
-                  />
-                </div>
-
-                <div className="sticky bottom-0 mt-6 flex justify-end border-t border-border bg-card/95 py-4">
-                  <button
-                    type="submit"
-                    disabled={savingUser || !isSupabaseConfigured}
-                    className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-                  >
-                    {savingUser ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Save User
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <form onSubmit={saveUserType} className="mx-auto max-w-5xl">
-                <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-                      <UserCog className="h-4 w-4 text-primary" />
-                      {typeForm.id ? 'Edit User Type' : 'Create User Type'}
-                    </h2>
-                    <p className="mt-1 text-xs text-muted-foreground">Design the access rights inherited by users of this type.</p>
-                  </div>
-                  {typeForm.id && typeForm.id !== 'administrator' && (
-                    <button
-                      type="button"
-                      onClick={deleteUserType}
-                      disabled={!canDeleteSelectedType || deletingType || !isSupabaseConfigured}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 disabled:opacity-50"
-                      title={selectedTypeAssignedCount > 0 ? 'Reassign users before deleting this type.' : ''}
-                    >
-                      {deletingType ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                      Delete Type
-                    </button>
-                  )}
-                </div>
-
-                {typeForm.id === 'administrator' && (
-                  <div className="mb-4 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-                    Administrator is protected and always has full access.
-                  </div>
-                )}
-                {typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount > 0 && (
-                  <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                    This type has {selectedTypeAssignedCount} assigned user{selectedTypeAssignedCount === 1 ? '' : 's'}. Reassign them before deleting it.
-                  </div>
-                )}
-
-                <div className="grid gap-4 md:grid-cols-[1fr_140px]">
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type Name</span>
-                    <input
-                      value={typeForm.label}
-                      onChange={(event) => setTypeForm((prev) => ({ ...prev, label: event.target.value }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      required
-                    />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sort Order</span>
-                    <input
-                      type="number"
-                      value={typeForm.sort_order}
-                      onChange={(event) => setTypeForm((prev) => ({ ...prev, sort_order: Number(event.target.value) || 100 }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    />
-                  </label>
-                  <label className="space-y-1.5 md:col-span-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
-                    <input
-                      value={typeForm.description}
-                      onChange={(event) => setTypeForm((prev) => ({ ...prev, description: event.target.value }))}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-6">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Module Access</div>
-                    {typeForm.id === 'administrator' && (
-                      <div className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                        <KeyRound className="h-3.5 w-3.5" /> Always full access
-                      </div>
-                    )}
-                  </div>
-                  <ModuleGrid
-                    modules={sortedModules}
-                    permissions={activeTypePermissions}
-                    locked={typeForm.id === 'administrator'}
-                    onToggle={toggleTypeModule}
-                  />
-                </div>
-
-                <div className="sticky bottom-0 mt-6 flex justify-end border-t border-border bg-card/95 py-4">
-                  <button
-                    type="submit"
-                    disabled={savingType || !isSupabaseConfigured}
-                    className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-                  >
-                    {savingType ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Save User Type
-                  </button>
-                </div>
-              </form>
-            )}
+          <main className="p-5">
+            <EmptyEditorHint activeSection={activeSection} />
           </main>
         </div>
       </section>
@@ -718,6 +564,214 @@ export default function AdminControl() {
           <StateBlock title="No audit logs" description="Admin changes will appear here." />
         )}
       </details>
+
+      <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
+        <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
+          <DialogHeader className="border-b border-border px-5 py-4">
+            <DialogTitle>{userForm.id ? 'Edit User' : 'Create User'}</DialogTitle>
+            <DialogDescription>Assign a user type, then inherit its access rights or set custom access.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={saveUser} className="min-h-0">
+            <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email</span>
+                  <input
+                    type="email"
+                    value={userForm.email}
+                    onChange={(event) => setUserForm((prev) => ({ ...prev, email: event.target.value }))}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    required
+                    disabled={Boolean(userForm.id)}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Full Name</span>
+                  <input
+                    value={userForm.full_name}
+                    onChange={(event) => setUserForm((prev) => ({ ...prev, full_name: event.target.value }))}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">User Type</span>
+                  <select
+                    value={userForm.user_type}
+                    onChange={(event) => setUserType(event.target.value)}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    {sortedUserTypes.map((item) => <option key={item.id} value={item.id}>{typeLabel(item)}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{userForm.id ? 'New Password' : 'Password'}</span>
+                  <input
+                    type="password"
+                    value={userForm.password}
+                    onChange={(event) => setUserForm((prev) => ({ ...prev, password: event.target.value }))}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    required={!userForm.id}
+                    minLength={8}
+                    placeholder={userForm.id ? 'Leave blank to keep current password' : ''}
+                  />
+                </label>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <label className="flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={userForm.active}
+                    onChange={(event) => setUserForm((prev) => ({ ...prev, active: event.target.checked }))}
+                  />
+                  Active user
+                </label>
+                <label className={`flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground ${userForm.user_type === 'administrator' ? 'opacity-60' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
+                    disabled={userForm.user_type === 'administrator'}
+                    onChange={(event) => setUseTypeDefaults(event.target.checked)}
+                  />
+                  Use user type defaults
+                </label>
+              </div>
+
+              <div className="mt-6">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Module Access</div>
+                  <div className="text-xs text-muted-foreground">
+                    {userForm.use_type_defaults || userForm.user_type === 'administrator' ? 'Inherited' : 'Custom'}
+                  </div>
+                </div>
+                <ModuleGrid
+                  modules={sortedModules}
+                  permissions={effectiveUserPermissions}
+                  locked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
+                  onToggle={toggleUserModule}
+                />
+              </div>
+            </div>
+            <DialogFooter className="border-t border-border px-5 py-4">
+              {userForm.id && userForm.id !== currentUser?.id && (
+                <button
+                  type="button"
+                  onClick={deleteUser}
+                  disabled={deletingUser || !isSupabaseConfigured}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-700 disabled:opacity-60"
+                >
+                  {deletingUser ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Delete
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setUserDialogOpen(false)}
+                className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingUser || !isSupabaseConfigured}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {savingUser ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save User
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={typeDialogOpen} onOpenChange={setTypeDialogOpen}>
+        <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
+          <DialogHeader className="border-b border-border px-5 py-4">
+            <DialogTitle>{typeForm.id ? 'Edit User Type' : 'Create User Type'}</DialogTitle>
+            <DialogDescription>Design the access rights inherited by users of this type.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={saveUserType}>
+            <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
+              {typeForm.id === 'administrator' && (
+                <div className="mb-4 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+                  Administrator is protected and always has full access.
+                </div>
+              )}
+              {typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount > 0 && (
+                <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  This type has {selectedTypeAssignedCount} assigned user{selectedTypeAssignedCount === 1 ? '' : 's'}. Reassign them before deleting it.
+                </div>
+              )}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type Name</span>
+                  <input
+                    value={typeForm.label}
+                    onChange={(event) => setTypeForm((prev) => ({ ...prev, label: event.target.value }))}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    required
+                  />
+                </label>
+                <label className="space-y-1.5 md:col-span-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</span>
+                  <input
+                    value={typeForm.description}
+                    onChange={(event) => setTypeForm((prev) => ({ ...prev, description: event.target.value }))}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-6">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Module Access</div>
+                  {typeForm.id === 'administrator' && (
+                    <div className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                      <KeyRound className="h-3.5 w-3.5" /> Always full access
+                    </div>
+                  )}
+                </div>
+                <ModuleGrid
+                  modules={sortedModules}
+                  permissions={activeTypePermissions}
+                  locked={typeForm.id === 'administrator'}
+                  onToggle={toggleTypeModule}
+                />
+              </div>
+            </div>
+            <DialogFooter className="border-t border-border px-5 py-4">
+              {typeForm.id && typeForm.id !== 'administrator' && (
+                <button
+                  type="button"
+                  onClick={deleteUserType}
+                  disabled={!canDeleteSelectedType || deletingType || !isSupabaseConfigured}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-700 disabled:opacity-50"
+                  title={selectedTypeAssignedCount > 0 ? 'Reassign users before deleting this type.' : ''}
+                >
+                  {deletingType ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Delete
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setTypeDialogOpen(false)}
+                className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingType || !isSupabaseConfigured}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {savingType ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save User Type
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
