@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Download, Eye, FileText, Loader2, Pencil, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -164,11 +164,13 @@ function DocumentPreview({ document, onClose }) {
 }
 
 export default function DisputeDocumentsModal({ stem, open, onClose }) {
+  const fileInputRef = useRef(null);
   const [documents, setDocuments] = useState([]);
   const [activeTab, setActiveTab] = useState('disputeFlow');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [file, setFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
   const [uploadDate, setUploadDate] = useState(todayUploadDate());
   const [uploadNamePreset, setUploadNamePreset] = useState(UPLOAD_NAME_PRESETS[0].value);
   const [uploadName, setUploadName] = useState(uploadDocumentName(todayUploadDate(), UPLOAD_NAME_PRESETS[0].value));
@@ -211,11 +213,22 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
     setUploadName(uploadDocumentName(date, preset));
   };
 
+  const setSelectedUploadFile = (selectedFile) => {
+    setFile(selectedFile);
+    if (!uploadName.trim()) setUploadName(uploadDocumentName(uploadDate, uploadNamePreset));
+  };
+
+  const clearSelectedUploadFile = () => {
+    setFile(null);
+    setDragActive(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   useEffect(() => {
     if (!open) return;
     setDocuments([]);
     setActiveTab('disputeFlow');
-    setFile(null);
+    clearSelectedUploadFile();
     resetUploadNaming();
     setRenameKey(null);
     setRenameValue('');
@@ -235,8 +248,33 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
 
   const handleFileChange = (event) => {
     const selectedFile = event.target.files?.[0] || null;
-    setFile(selectedFile);
-    if (!uploadName.trim()) setUploadName(uploadDocumentName(uploadDate, uploadNamePreset));
+    setSelectedUploadFile(selectedFile);
+  };
+
+  const handleDragEvent = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleUploadDragEnter = (event) => {
+    handleDragEvent(event);
+    setDragActive(true);
+  };
+
+  const handleUploadDragLeave = (event) => {
+    handleDragEvent(event);
+    const nextTarget = event.relatedTarget;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) setDragActive(false);
+  };
+
+  const handleUploadDrop = (event) => {
+    handleDragEvent(event);
+    setDragActive(false);
+    const droppedFile = event.dataTransfer?.files?.[0] || null;
+    if (droppedFile) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setSelectedUploadFile(droppedFile);
+    }
   };
 
   const handleUploadDateChange = (event) => {
@@ -264,7 +302,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
         fileBase64,
       });
       if (applyDocumentResponse(res.data)) {
-        setFile(null);
+        clearSelectedUploadFile();
         resetUploadNaming();
       }
     } catch (uploadError) {
@@ -388,7 +426,22 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
                   </div>
                 </div>
                 <div className="grid gap-2 md:grid-cols-[1.2fr_1fr_auto]">
-                  <Input type="file" onChange={handleFileChange} className="h-9 text-xs" />
+                  <div
+                    onDragEnter={handleUploadDragEnter}
+                    onDragOver={handleDragEvent}
+                    onDragLeave={handleUploadDragLeave}
+                    onDrop={handleUploadDrop}
+                    className={`rounded-lg border border-dashed px-3 py-2 transition-colors ${
+                      dragActive
+                        ? 'border-primary bg-primary/10'
+                        : 'border-border bg-card hover:border-primary/50'
+                    }`}
+                  >
+                    <Input ref={fileInputRef} type="file" onChange={handleFileChange} className="h-8 text-xs" />
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {file ? `${file.name} · ${fmtBytes(file.size)}` : 'Drag file here, then click Upload when ready.'}
+                    </div>
+                  </div>
                   <Input
                     value={uploadName}
                     onChange={(event) => setUploadName(event.target.value)}
