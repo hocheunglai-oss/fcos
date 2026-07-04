@@ -92,11 +92,8 @@ function DocumentPreview({ document, onClose }) {
   if (!document || !previewKind) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div
-        className="flex h-[88vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-card">
+      <div className="flex h-full w-full flex-col overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-foreground">{document.fileName || document.title}</div>
@@ -122,7 +119,7 @@ function DocumentPreview({ document, onClose }) {
         </div>
         <div className="min-h-0 flex-1 bg-muted/20">
           {previewKind === 'image' ? (
-            <div className="flex h-full items-center justify-center overflow-auto p-4">
+            <div className="flex h-full items-center justify-center overflow-auto p-3">
               <img
                 src={document.downloadUrl}
                 alt={document.fileName || document.title || 'Document preview'}
@@ -278,7 +275,11 @@ export default function DisputeDocumentsModal({ stem, open, onClose }) {
         }}
       >
         <DialogContent
-          className="flex max-h-[90vh] w-[min(1120px,94vw)] max-w-none flex-col overflow-hidden p-0"
+          className={`relative flex max-w-none flex-col overflow-hidden p-0 ${
+            previewDocument
+              ? 'h-[96dvh] max-h-[96dvh] w-[98vw]'
+              : 'max-h-[90vh] w-[min(1120px,94vw)]'
+          }`}
           onEscapeKeyDown={(event) => {
             if (previewDocument) {
               event.preventDefault();
