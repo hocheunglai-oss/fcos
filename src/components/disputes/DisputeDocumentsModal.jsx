@@ -51,15 +51,23 @@ const documentSearchText = (document) => [
 ].filter(Boolean).join(' ').toLowerCase();
 
 const isDisputeFlowDocument = (document) => document.sourceGroup === 'Direct STEM';
+const isInvoiceNamedBdnSourceDocument = (document) => {
+  const nameText = [document.fileName, document.title].filter(Boolean).join(' ').toLowerCase();
+  const sourceText = [document.sourceGroup, document.sourceLabel, document.sourceObject].filter(Boolean).join(' ').toLowerCase();
+  return nameText.includes('inv') && sourceText.includes('bdn');
+};
 const isBdnDocument = (document) => (
   document.sourceGroup === 'Product Line Attachments'
   || /\b(bdn|delivery|bunker delivery|delivery note)\b/i.test(documentSearchText(document))
 );
 const isStemDocument = (document) => (
-  document.sourceGroup === 'Invoices to Buyer'
-  || document.sourceGroup === 'Invoices from Suppliers'
-  || document.sourceGroup === 'Contracts and Compliance'
-  || isBdnDocument(document)
+  !isInvoiceNamedBdnSourceDocument(document)
+  && (
+    document.sourceGroup === 'Invoices to Buyer'
+    || document.sourceGroup === 'Invoices from Suppliers'
+    || document.sourceGroup === 'Contracts and Compliance'
+    || isBdnDocument(document)
+  )
 );
 
 const documentSourceLabel = (document) => {
