@@ -25,8 +25,18 @@ function profileToUser(profile, authUser) {
 }
 
 async function loadSupabaseUser() {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (!sessionData?.session) return { user: null, access: {}, error: { type: 'auth_required' } };
+
   const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError) throw userError;
+  if (userError) {
+    const message = String(userError.message || '').toLowerCase();
+    if (message.includes('session missing') || message.includes('auth session missing')) {
+      return { user: null, access: {}, error: { type: 'auth_required' } };
+    }
+    throw userError;
+  }
   const authUser = userData?.user;
   if (!authUser) return { user: null, access: {}, error: { type: 'auth_required' } };
 
