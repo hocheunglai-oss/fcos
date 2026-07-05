@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { appClient } from '@/api/appClient';
 import { Settings, Search, Loader2, Check, Mail, CircleDollarSign, FileText } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ObjectSchemaTree from '@/components/settings/ObjectSchemaTree';
 import PageHeader from '@/components/common/PageHeader';
+import DraftNotice from '@/components/common/DraftNotice';
 import {
   readPaymentReminderSmtpSettings,
   readSmtpSettings,
@@ -15,8 +16,10 @@ import {
 } from '@/lib/smtpSettings';
 import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettings } from '@/lib/exchangeRateSettings';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const SETTINGS_KEY = 'report_builder_config';
+const SETTINGS_DRAFT_KEY = 'settings:page';
 
 async function loadSettingsRecord() {
   const records = await appClient.entities.AppSettings.filter({ key: SETTINGS_KEY });
@@ -134,6 +137,25 @@ export default function SettingsPage() {
   const [paymentReminderSmtpSettings, setPaymentReminderSmtpSettings] = useState(readPaymentReminderSmtpSettings);
   const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
+  const [baseSettings, setBaseSettings] = useState(null);
+  const [draftRestoredAt, setDraftRestoredAt] = useState(null);
+
+  const settingsDraftValue = useMemo(() => ({
+    allowedMap,
+    defaultObject,
+    defaultOrderBy,
+    defaultLimit,
+    smtpSettings,
+    paymentReminderSmtpSettings,
+    exchangeRateSettings,
+    documentSettings,
+  }), [allowedMap, defaultLimit, defaultObject, defaultOrderBy, documentSettings, exchangeRateSettings, paymentReminderSmtpSettings, smtpSettings]);
+  const settingsDirty = Boolean(baseSettings && !sameDraftValue(settingsDraftValue, baseSettings));
+  useDraftAutosave(SETTINGS_DRAFT_KEY, settingsDraftValue, {
+    enabled: !loading,
+    dirty: settingsDirty,
+    message: 'Autosaved Settings draft. Save or discard it before leaving.',
+  });
 
   // Load schema + settings from DB in parallel
   useEffect(() => {
@@ -145,10 +167,55 @@ export default function SettingsPage() {
       if (record) {
         setSettingsRecord(record);
         const v = record.value || {};
-        setAllowedMap(v.allowedMap || {});
-        setDefaultObject(v.defaultObject || 'stem__c');
-        setDefaultOrderBy(v.defaultOrderBy || 'KeyStem__c');
-        setDefaultLimit(String(v.defaultLimit || 100));
+        const base = {
+          allowedMap: v.allowedMap || {},
+          defaultObject: v.defaultObject || 'stem__c',
+          defaultOrderBy: v.defaultOrderBy || 'KeyStem__c',
+          defaultLimit: String(v.defaultLimit || 100),
+          smtpSettings: readSmtpSettings(),
+          paymentReminderSmtpSettings: readPaymentReminderSmtpSettings(),
+          exchangeRateSettings: readExchangeRateSettings(),
+          documentSettings: readDocumentSettings(),
+        };
+        const draft = readDraft(SETTINGS_DRAFT_KEY);
+        const next = draft?.data && !sameDraftValue(draft.data, base)
+          ? { ...base, ...draft.data }
+          : base;
+        setAllowedMap(next.allowedMap || {});
+        setDefaultObject(next.defaultObject || 'stem__c');
+        setDefaultOrderBy(next.defaultOrderBy || 'KeyStem__c');
+        setDefaultLimit(String(next.defaultLimit || 100));
+        setSmtpSettings(next.smtpSettings || base.smtpSettings);
+        setPaymentReminderSmtpSettings(next.paymentReminderSmtpSettings || base.paymentReminderSmtpSettings);
+        setExchangeRateSettings(next.exchangeRateSettings || base.exchangeRateSettings);
+        setDocumentSettings(next.documentSettings || base.documentSettings);
+        setBaseSettings(base);
+        setDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
+      } else {
+        const base = {
+          allowedMap: {},
+          defaultObject: 'stem__c',
+          defaultOrderBy: 'KeyStem__c',
+          defaultLimit: '100',
+          smtpSettings: readSmtpSettings(),
+          paymentReminderSmtpSettings: readPaymentReminderSmtpSettings(),
+          exchangeRateSettings: readExchangeRateSettings(),
+          documentSettings: readDocumentSettings(),
+        };
+        const draft = readDraft(SETTINGS_DRAFT_KEY);
+        const next = draft?.data && !sameDraftValue(draft.data, base)
+          ? { ...base, ...draft.data }
+          : base;
+        setAllowedMap(next.allowedMap || {});
+        setDefaultObject(next.defaultObject || 'stem__c');
+        setDefaultOrderBy(next.defaultOrderBy || 'KeyStem__c');
+        setDefaultLimit(String(next.defaultLimit || 100));
+        setSmtpSettings(next.smtpSettings || base.smtpSettings);
+        setPaymentReminderSmtpSettings(next.paymentReminderSmtpSettings || base.paymentReminderSmtpSettings);
+        setExchangeRateSettings(next.exchangeRateSettings || base.exchangeRateSettings);
+        setDocumentSettings(next.documentSettings || base.documentSettings);
+        setBaseSettings(base);
+        setDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
       }
       setLoading(false);
     });
@@ -181,9 +248,37 @@ export default function SettingsPage() {
       const created = await appClient.entities.AppSettings.create({ key: SETTINGS_KEY, value });
       setSettingsRecord(created);
     }
+    const savedValue = {
+      allowedMap,
+      defaultObject,
+      defaultOrderBy,
+      defaultLimit,
+      smtpSettings,
+      paymentReminderSmtpSettings,
+      exchangeRateSettings,
+      documentSettings,
+    };
+    setBaseSettings(savedValue);
+    clearDraft(SETTINGS_DRAFT_KEY);
+    setDraftRestoredAt(null);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const discardSettingsDraft = () => {
+    clearDraft(SETTINGS_DRAFT_KEY);
+    if (baseSettings) {
+      setAllowedMap(baseSettings.allowedMap || {});
+      setDefaultObject(baseSettings.defaultObject || 'stem__c');
+      setDefaultOrderBy(baseSettings.defaultOrderBy || 'KeyStem__c');
+      setDefaultLimit(String(baseSettings.defaultLimit || 100));
+      setSmtpSettings(baseSettings.smtpSettings || readSmtpSettings());
+      setPaymentReminderSmtpSettings(baseSettings.paymentReminderSmtpSettings || readPaymentReminderSmtpSettings());
+      setExchangeRateSettings(baseSettings.exchangeRateSettings || readExchangeRateSettings());
+      setDocumentSettings(baseSettings.documentSettings || readDocumentSettings());
+    }
+    setDraftRestoredAt(null);
   };
 
   const filteredObjects = allObjects.filter(o =>
@@ -216,6 +311,8 @@ export default function SettingsPage() {
           </Button>
         )}
       />
+
+      <DraftNotice restoredAt={draftRestoredAt} label="Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />
 
       {/* ── Allowed Objects & Fields ── */}
       <div className="bg-card rounded-xl border border-border p-5 mb-6">

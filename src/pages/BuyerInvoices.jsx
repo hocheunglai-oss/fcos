@@ -4,6 +4,7 @@ import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
@@ -19,6 +20,7 @@ import {
 } from '@/lib/smtpSettings';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
@@ -557,6 +559,7 @@ function uniqueNames(values) {
 }
 
 function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
+  const draftKey = row?.stemId ? `buyer-invoices:collection:${row.stemId}` : null;
   const [form, setForm] = useState({
     status: 'Not Started',
     ownerName: '',
@@ -565,6 +568,8 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
     promisedPaymentDate: '',
     promisedAmount: '',
   });
+  const [baseForm, setBaseForm] = useState(null);
+  const [restoredAt, setRestoredAt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
@@ -576,20 +581,39 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
   useEffect(() => {
     if (!row) return;
     const existingHandler = row.collection?.ownerName || '';
-    setForm({
+    const nextBase = {
       status: collectionStatus(row),
       ownerName: ownerChoices.includes(existingHandler) ? existingHandler : rowTraderOptions[0] || ownerOptions[0] || '',
       latestNote: row.collection?.latestNote || '',
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
       promisedAmount: row.collection?.promisedAmount ?? '',
-    });
+    };
+    const draft = readDraft(draftKey);
+    const nextForm = draft?.data && !sameDraftValue(draft.data, nextBase)
+      ? { ...nextBase, ...draft.data }
+      : nextBase;
+    setBaseForm(nextBase);
+    setForm(nextForm);
+    setRestoredAt(draft?.data && !sameDraftValue(draft.data, nextBase) ? draft.updatedAt : null);
     setError(null);
-  }, [ownerChoices, ownerOptions, row, rowTraderOptions]);
+  }, [draftKey, ownerChoices, ownerOptions, row, rowTraderOptions]);
+
+  const formDirty = Boolean(baseForm && !sameDraftValue(form, baseForm));
+  useDraftAutosave(draftKey, form, {
+    enabled: open && Boolean(row),
+    dirty: formDirty,
+    message: 'Autosaved collection follow-up draft. Save or discard it before leaving.',
+  });
 
   if (!open || !row) return null;
 
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const discardDraft = () => {
+    clearDraft(draftKey);
+    if (baseForm) setForm(baseForm);
+    setRestoredAt(null);
+  };
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -600,6 +624,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
     if (res.data?.error) {
       setError(res.data.error);
     } else {
+      clearDraft(draftKey);
       onSaved(res.data);
       onClose();
     }
@@ -622,6 +647,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
 
         <div className="grid max-h-[calc(90vh-76px)] gap-4 overflow-auto p-4 lg:grid-cols-[1fr_0.9fr]">
           <div className="space-y-4">
+            <DraftNotice restoredAt={restoredAt} label="Collection draft restored" onDiscard={discardDraft} />
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Collection Status</Label>
@@ -713,6 +739,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
 }
 
 function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
+  const draftKey = row?.stemId ? `buyer-invoices:payment-reminder:${row.stemId}:${daysAhead}` : null;
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -726,6 +753,8 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     subject: '',
     body: '',
   });
+  const [baseDraftValue, setBaseDraftValue] = useState(null);
+  const [restoredAt, setRestoredAt] = useState(null);
 
   useEffect(() => {
     if (!open || !row) return;
@@ -743,15 +772,27 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
         setData(null);
       } else {
         const candidates = res.data.candidates || [];
-        setData(res.data);
-        setSelectedIds(candidates.map((candidate) => candidate.stemId));
-        setForm({
+        const baseForm = {
           to: arrayToInput(res.data.to || []),
           cc: arrayToInput(res.data.cc || []),
           bcc: arrayToInput(res.data.bcc || []),
           subject: res.data.subject || '',
           body: richTemplateValue(res.data.body || ''),
-        });
+        };
+        const baseSelectedIds = candidates.map((candidate) => candidate.stemId);
+        const draft = readDraft(draftKey);
+        const candidateIds = new Set(baseSelectedIds);
+        const draftSelectedIds = Array.isArray(draft?.data?.selectedIds)
+          ? draft.data.selectedIds.filter((id) => candidateIds.has(id))
+          : baseSelectedIds;
+        const nextForm = draft?.data?.form ? { ...baseForm, ...draft.data.form } : baseForm;
+        setData(res.data);
+        setSelectedIds(draftSelectedIds.length ? draftSelectedIds : baseSelectedIds);
+        setForm(nextForm);
+        const nextBaseDraftValue = { form: baseForm, selectedIds: baseSelectedIds };
+        const nextDraftValue = { form: nextForm, selectedIds: draftSelectedIds.length ? draftSelectedIds : baseSelectedIds };
+        setBaseDraftValue(nextBaseDraftValue);
+        setRestoredAt(draft?.data && !sameDraftValue(draft.data, nextBaseDraftValue) && !sameDraftValue(draft.data, nextDraftValue) ? draft.updatedAt : draft?.data && !sameDraftValue(nextDraftValue, nextBaseDraftValue) ? draft.updatedAt : null);
       }
       setLoading(false);
     };
@@ -759,7 +800,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     return () => {
       cancelled = true;
     };
-  }, [daysAhead, open, row]);
+  }, [daysAhead, draftKey, open, row]);
 
   const candidates = data?.candidates || [];
   const selectedRows = useMemo(() => {
@@ -772,10 +813,25 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const reminderHistoryRow = data?.selected || candidates.find((candidate) => candidate.stemId === row?.stemId) || row;
   const lastReminderSentAt = latestPaymentReminderSentAt(reminderHistoryRow) || latestPaymentReminderSentAt(row);
   const lastReminderSentToday = wasPaymentReminderSentToday(reminderHistoryRow) || wasPaymentReminderSentToday(row);
+  const currentDraftValue = useMemo(() => ({ form, selectedIds }), [form, selectedIds]);
+  const reminderDirty = Boolean(baseDraftValue && !sameDraftValue(currentDraftValue, baseDraftValue));
+  useDraftAutosave(draftKey, currentDraftValue, {
+    enabled: open && Boolean(row) && !loading,
+    dirty: reminderDirty,
+    message: 'Autosaved payment reminder draft. Send or discard it before leaving.',
+  });
 
   if (!open || !row) return null;
 
   const updateForm = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const discardDraft = () => {
+    clearDraft(draftKey);
+    if (baseDraftValue) {
+      setForm(baseDraftValue.form);
+      setSelectedIds(baseDraftValue.selectedIds);
+    }
+    setRestoredAt(null);
+  };
   const insertInvoiceTableToken = () => {
     const editor = reminderBodyEditorRef.current?.getEditor?.();
     if (!editor) {
@@ -832,6 +888,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     if (res.data?.error) {
       setError(res.data.error);
     } else {
+      clearDraft(draftKey);
       onSent(res.data);
       onClose();
     }
@@ -867,6 +924,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
 
           {!loading && data && (
             <div className="space-y-4">
+              <DraftNotice restoredAt={restoredAt} label="Payment reminder draft restored" onDiscard={discardDraft} />
               <div
                 className={cn(
                   'rounded-xl border p-4 shadow-sm',
@@ -1051,6 +1109,7 @@ function PaymentReminderTemplateModal({
   emailSettings,
   updateEmailSetting,
   emailDirty,
+  draftRestoredAt,
   emailBusy,
   emailLoading,
   emailMessage,
@@ -1058,6 +1117,7 @@ function PaymentReminderTemplateModal({
   onClose,
   onCancel,
   onSave,
+  onDiscardDraft,
 }) {
   const [activeTemplateField, setActiveTemplateField] = useState('body');
   const ccRef = useRef(null);
@@ -1130,6 +1190,7 @@ function PaymentReminderTemplateModal({
 
         <div className="max-h-[calc(92vh-76px)] overflow-auto p-4">
           <div className="space-y-4">
+            <DraftNotice restoredAt={draftRestoredAt} label="Payment reminder template draft restored" onDiscard={onDiscardDraft} />
             <div className="rounded-xl border border-border bg-muted/20 p-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">To</div>
               <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer account emails, buyer trader email, and payment handler email</div>
@@ -1249,6 +1310,7 @@ export default function BuyerInvoices() {
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
+  const [emailDraftRestoredAt, setEmailDraftRestoredAt] = useState(null);
   const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
   const [selectedCollectionStatuses, setSelectedCollectionStatuses] = useState(COLLECTION_STATUSES);
   const [severityFilter, setSeverityFilter] = useState('all');
@@ -1259,6 +1321,11 @@ export default function BuyerInvoices() {
   const initialBuyerTraderFilter = useRef(initialFilters);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
+  useDraftAutosave('buyer-invoices:email-settings', emailSettings, {
+    enabled: !emailLoading,
+    dirty: emailDirty,
+    message: 'Autosaved internal email reminder/template draft. Save or discard it before leaving.',
+  });
 
   const buyerTraderOptions = useMemo(() => (
     [...new Set(rows.flatMap((row) => [
@@ -1337,8 +1404,13 @@ export default function BuyerInvoices() {
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
+      const draft = readDraft('buyer-invoices:email-settings');
+      const nextSettings = draft?.data && !sameSettings(draft.data, formSettings)
+        ? emailSettingsToForm(draft.data)
+        : formSettings;
       setSavedEmailSettings(formSettings);
-      setEmailSettings(formSettings);
+      setEmailSettings(nextSettings);
+      setEmailDraftRestoredAt(draft?.data && !sameSettings(nextSettings, formSettings) ? draft.updatedAt : null);
       setEmailMeta(res.data.meta || null);
       setEmailError(null);
     }
@@ -1349,28 +1421,6 @@ export default function BuyerInvoices() {
     loadRows();
     loadEmailSettings();
   }, []);
-
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', {
-      detail: {
-        key: 'buyer-invoice-email-settings',
-        dirty: emailDirty,
-        message: 'Save changes to the email report schedule before leaving?',
-      },
-    }));
-    const beforeUnload = (event) => {
-      if (!emailDirty) return;
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', beforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', beforeUnload);
-      window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', {
-        detail: { key: 'buyer-invoice-email-settings', dirty: false },
-      }));
-    };
-  }, [emailDirty]);
 
   const totals = useMemo(() => {
     const overdue = filteredRows.filter((row) => row.status === 'Overdue');
@@ -1452,8 +1502,10 @@ export default function BuyerInvoices() {
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
+      clearDraft('buyer-invoices:email-settings');
       setSavedEmailSettings(formSettings);
       setEmailSettings(formSettings);
+      setEmailDraftRestoredAt(null);
       setEmailMeta(res.data.meta || null);
       setEmailMessage('Email report schedule saved.');
     }
@@ -1461,7 +1513,9 @@ export default function BuyerInvoices() {
   };
 
   const cancelEmailSettings = () => {
+    clearDraft('buyer-invoices:email-settings');
     setEmailSettings(savedEmailSettings);
+    setEmailDraftRestoredAt(null);
     setEmailMessage(null);
     setEmailError(null);
   };
@@ -1683,6 +1737,8 @@ export default function BuyerInvoices() {
               </Button>
             </div>
           </div>
+
+          <DraftNotice restoredAt={emailDraftRestoredAt} label="Email reminder settings draft restored" onDiscard={cancelEmailSettings} className="mb-4" />
 
           <div className="mb-4 grid gap-2 md:grid-cols-4">
             <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
@@ -1935,6 +1991,7 @@ export default function BuyerInvoices() {
         emailSettings={emailSettings}
         updateEmailSetting={updateEmailSetting}
         emailDirty={emailDirty}
+        draftRestoredAt={emailDraftRestoredAt}
         emailBusy={emailBusy}
         emailLoading={emailLoading}
         emailMessage={emailMessage}
@@ -1942,6 +1999,7 @@ export default function BuyerInvoices() {
         onClose={closePaymentReminderTemplate}
         onCancel={cancelPaymentReminderTemplate}
         onSave={saveEmailSettings}
+        onDiscardDraft={cancelEmailSettings}
       />
     </div>
   );

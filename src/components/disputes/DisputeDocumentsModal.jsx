@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Download, Eye, FileText, Loader2, Pencil, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import DraftNotice from '@/components/common/DraftNotice';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const fmtDate = (value) => {
   if (!value) return '—';
@@ -327,6 +329,10 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
   const [uploadDate, setUploadDate] = useState(todayUploadDate());
   const [uploadNamePreset, setUploadNamePreset] = useState(UPLOAD_NAME_PRESETS[0].value);
   const [uploadName, setUploadName] = useState(uploadDocumentName(todayUploadDate(), UPLOAD_NAME_PRESETS[0].value));
+  const [uploadBase, setUploadBase] = useState(null);
+  const [uploadDraftRestoredAt, setUploadDraftRestoredAt] = useState(null);
+  const [statusBase, setStatusBase] = useState(null);
+  const [statusDraftRestoredAt, setStatusDraftRestoredAt] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [renameKey, setRenameKey] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -334,6 +340,8 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
   const [previewDocument, setPreviewDocument] = useState(null);
 
   const stemId = stem?.Id;
+  const uploadDraftKey = stemId ? `disputes:document-upload:${stemId}` : null;
+  const statusDraftKey = stemId ? `disputes:document-status:${stemId}` : null;
   const stemName = stem?._Display_Name || stem?.Name || stem?.KeyStem__c || 'STEM';
   const buyerDisputeRows = Array.isArray(stem?._Buyer_Dispute_Rows) ? stem._Buyer_Dispute_Rows : [];
   const supplierDisputeRows = Array.isArray(stem?._Supplier_Dispute_Rows) ? stem._Supplier_Dispute_Rows : [];
@@ -348,6 +356,24 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
   const supplierCount = supplierNames.size;
   const supplierSummary = supplierCount > 1 ? `${supplierCount} suppliers` : [...supplierNames][0] || '—';
   const hasStatusChange = managedStatus && managedStatus !== stem?.Dispute_Status__c;
+  const uploadDraftValue = useMemo(() => ({
+    uploadDate,
+    uploadNamePreset,
+    uploadName,
+  }), [uploadDate, uploadName, uploadNamePreset]);
+  const statusDraftValue = useMemo(() => ({ managedStatus }), [managedStatus]);
+  const uploadDirty = Boolean(open && uploadBase && !sameDraftValue(uploadDraftValue, uploadBase));
+  const statusDirty = Boolean(open && statusBase && !sameDraftValue(statusDraftValue, statusBase));
+  useDraftAutosave(uploadDraftKey, uploadDraftValue, {
+    enabled: open,
+    dirty: uploadDirty,
+    message: 'Autosaved dispute document upload naming draft. Upload or discard it before leaving.',
+  });
+  useDraftAutosave(statusDraftKey, statusDraftValue, {
+    enabled: open,
+    dirty: statusDirty,
+    message: 'Autosaved dispute status draft. Save or discard it before leaving.',
+  });
 
   const sortedDocuments = useMemo(() => documents.slice().sort((a, b) => {
     return String(b.createdDate || '').localeCompare(String(a.createdDate || ''));
@@ -377,6 +403,8 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
     setUploadDate(date);
     setUploadNamePreset(preset);
     setUploadName(uploadDocumentName(date, preset));
+    setUploadBase({ uploadDate: date, uploadNamePreset: preset, uploadName: uploadDocumentName(date, preset) });
+    setUploadDraftRestoredAt(null);
   };
 
   const setSelectedUploadFile = (selectedFile) => {
@@ -400,13 +428,38 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
     setRenameValue('');
     setPreviewDocument(null);
     setStatusError(null);
-    setManagedStatus(stem?.Dispute_Status__c || '');
+    const uploadDefault = {
+      uploadDate: todayUploadDate(),
+      uploadNamePreset: UPLOAD_NAME_PRESETS[0].value,
+      uploadName: uploadDocumentName(todayUploadDate(), UPLOAD_NAME_PRESETS[0].value),
+    };
+    const uploadDraft = readDraft(uploadDraftKey);
+    const nextUpload = uploadDraft?.data && !sameDraftValue(uploadDraft.data, uploadDefault)
+      ? { ...uploadDefault, ...uploadDraft.data }
+      : uploadDefault;
+    setUploadDate(nextUpload.uploadDate);
+    setUploadNamePreset(nextUpload.uploadNamePreset);
+    setUploadName(nextUpload.uploadName);
+    setUploadBase(uploadDefault);
+    setUploadDraftRestoredAt(uploadDraft?.data && !sameDraftValue(nextUpload, uploadDefault) ? uploadDraft.updatedAt : null);
+    const baseStatus = { managedStatus: stem?.Dispute_Status__c || '' };
+    const statusDraft = readDraft(statusDraftKey);
+    const nextStatus = statusDraft?.data && !sameDraftValue(statusDraft.data, baseStatus)
+      ? { ...baseStatus, ...statusDraft.data }
+      : baseStatus;
+    setManagedStatus(nextStatus.managedStatus);
+    setStatusBase(baseStatus);
+    setStatusDraftRestoredAt(statusDraft?.data && !sameDraftValue(nextStatus, baseStatus) ? statusDraft.updatedAt : null);
     loadDocuments();
-  }, [open, stemId]);
+  }, [open, stemId, statusDraftKey, uploadDraftKey]);
 
   useEffect(() => {
-    if (open) setManagedStatus(stem?.Dispute_Status__c || '');
-  }, [open, stem?.Dispute_Status__c]);
+    if (!open) return;
+    const draft = readDraft(statusDraftKey);
+    const baseStatus = { managedStatus: stem?.Dispute_Status__c || '' };
+    setStatusBase(baseStatus);
+    if (!draft?.data) setManagedStatus(baseStatus.managedStatus);
+  }, [open, statusDraftKey, stem?.Dispute_Status__c]);
 
   const applyDocumentResponse = (data) => {
     if (data?.error) {
@@ -474,6 +527,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
         fileBase64,
       });
       if (applyDocumentResponse(res.data)) {
+        clearDraft(uploadDraftKey);
         clearSelectedUploadFile();
         resetUploadNaming();
       }
@@ -533,8 +587,28 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
       setSavingStatus(false);
       return;
     }
+    clearDraft(statusDraftKey);
+    setStatusDraftRestoredAt(null);
     await onStatusUpdated?.(stemId);
     setSavingStatus(false);
+  };
+
+  const discardUploadDraft = () => {
+    clearDraft(uploadDraftKey);
+    if (uploadBase) {
+      setUploadDate(uploadBase.uploadDate);
+      setUploadNamePreset(uploadBase.uploadNamePreset);
+      setUploadName(uploadBase.uploadName);
+    }
+    setUploadDraftRestoredAt(null);
+  };
+
+  const discardStatusDraft = () => {
+    clearDraft(statusDraftKey);
+    const baseStatus = { managedStatus: stem?.Dispute_Status__c || '' };
+    setManagedStatus(baseStatus.managedStatus);
+    setStatusBase(baseStatus);
+    setStatusDraftRestoredAt(null);
   };
 
   return (
@@ -597,6 +671,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
                 )}
               </div>
               {statusError && <div className="mt-1 text-[11px] text-destructive">{statusError}</div>}
+              <DraftNotice restoredAt={statusDraftRestoredAt} label="Status draft restored" onDiscard={discardStatusDraft} className="mt-2" />
             </div>
             <SummaryItem label="Delivery" value={fmtDate(stem?._Effective_Date)} />
             <SummaryItem label="Buyer" value={stem?._Buyer_Name || '—'} />
@@ -670,6 +745,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
 
             {activeTab === 'disputeFlow' && (
               <div className="rounded-xl border border-border bg-muted/10 p-3">
+                <DraftNotice restoredAt={uploadDraftRestoredAt} label="Upload naming draft restored" onDiscard={discardUploadDraft} className="mb-3" />
                 <div className="mb-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Upload Document</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">The file will be linked directly to this STEM as a Dispute Flow document.</div>

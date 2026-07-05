@@ -3,6 +3,7 @@ import { AlertTriangle, FileText, Loader2, RefreshCw, Search, X } from 'lucide-r
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
@@ -14,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const ACTIVE_DISPUTE_STATUSES = [
   'Opened',
@@ -57,6 +59,11 @@ const disputeStatusOptions = (side, currentStatus) => {
   return [...base, current];
 };
 
+const disputeEditDraftKey = (line) => {
+  const ids = Array.isArray(line?.disputeIds) ? line.disputeIds.filter(Boolean) : [];
+  return ids.length ? `disputes:party:${ids.join('-')}` : null;
+};
+
 const compactSupplierSummary = (row) => {
   const names = new Set();
   const pairs = Array.isArray(row._Supplier_Product_Pairs) ? row._Supplier_Product_Pairs : [];
@@ -96,6 +103,8 @@ export default function DisputeManagement() {
   const [editStatus, setEditStatus] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editDeductionAmount, setEditDeductionAmount] = useState('');
+  const [editBase, setEditBase] = useState(null);
+  const [editDraftRestoredAt, setEditDraftRestoredAt] = useState(null);
   const [editError, setEditError] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -138,10 +147,21 @@ export default function DisputeManagement() {
   };
 
   const openDisputeEdit = (line) => {
+    const base = {
+      status: line.status || '',
+      description: line.description || '',
+      deductionAmount: line.deductionAmount ?? '',
+    };
+    const draft = readDraft(disputeEditDraftKey(line));
+    const next = draft?.data && !sameDraftValue(draft.data, base)
+      ? { ...base, ...draft.data }
+      : base;
     setEditingDispute(line);
-    setEditStatus(line.status || '');
-    setEditDescription(line.description || '');
-    setEditDeductionAmount(line.deductionAmount ?? '');
+    setEditStatus(next.status);
+    setEditDescription(next.description);
+    setEditDeductionAmount(next.deductionAmount);
+    setEditBase(base);
+    setEditDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
     setEditError(null);
   };
 
@@ -151,7 +171,32 @@ export default function DisputeManagement() {
     setEditStatus('');
     setEditDescription('');
     setEditDeductionAmount('');
+    setEditBase(null);
+    setEditDraftRestoredAt(null);
     setEditError(null);
+  };
+
+  const activeDisputeDraftKey = disputeEditDraftKey(editingDispute);
+  const editDraftValue = useMemo(() => ({
+    status: editStatus,
+    description: editDescription,
+    deductionAmount: editDeductionAmount,
+  }), [editDeductionAmount, editDescription, editStatus]);
+  const editDirty = Boolean(editingDispute && editBase && !sameDraftValue(editDraftValue, editBase));
+  useDraftAutosave(activeDisputeDraftKey, editDraftValue, {
+    enabled: Boolean(editingDispute),
+    dirty: editDirty,
+    message: 'Autosaved dispute edit draft. Save or discard it before leaving.',
+  });
+
+  const discardDisputeDraft = () => {
+    clearDraft(activeDisputeDraftKey);
+    if (editBase) {
+      setEditStatus(editBase.status);
+      setEditDescription(editBase.description);
+      setEditDeductionAmount(editBase.deductionAmount);
+    }
+    setEditDraftRestoredAt(null);
   };
 
   const saveDisputeEdit = async () => {
@@ -171,6 +216,7 @@ export default function DisputeManagement() {
       setSavingEdit(false);
       return;
     }
+    clearDraft(activeDisputeDraftKey);
     setEditingDispute(null);
     setEditStatus('');
     setEditDescription('');
@@ -364,6 +410,8 @@ export default function DisputeManagement() {
                 </div>
               )}
             </div>
+
+            <DraftNotice restoredAt={editDraftRestoredAt} label="Dispute edit draft restored" onDiscard={discardDisputeDraft} />
 
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</Label>

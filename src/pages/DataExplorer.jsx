@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -8,18 +8,24 @@ import { Search, Download, AlertCircle, Loader2, Database, Copy, Check, ChevronD
 import ExplorerResultsTable from '@/components/data-explorer/ExplorerResultsTable';
 import FieldHoverInfo from '@/components/common/FieldHoverInfo';
 import PageHeader from '@/components/common/PageHeader';
+import DraftNotice from '@/components/common/DraftNotice';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { textValue } from '@/lib/displayValue';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+
+const DATA_EXPLORER_DRAFT_KEY = 'data-explorer:query';
 
 export default function DataExplorer() {
+  const initialDraftRef = useRef(readDraft(DATA_EXPLORER_DRAFT_KEY));
+  const initialDraft = initialDraftRef.current?.data || {};
   const [objects, setObjects] = useState([]);
-  const [selectedObject, setSelectedObject] = useState('stem__c');
+  const [selectedObject, setSelectedObject] = useState(initialDraft.selectedObject || 'stem__c');
   const [fields, setFields] = useState([]);
-  const [selectedFields, setSelectedFields] = useState([]);
-  const [whereClause, setWhereClause] = useState('');
-  const [orderByField, setOrderByField] = useState('CreatedDate');
-  const [limitVal, setLimitVal] = useState(50);
+  const [selectedFields, setSelectedFields] = useState(initialDraft.selectedFields || []);
+  const [whereClause, setWhereClause] = useState(initialDraft.whereClause || '');
+  const [orderByField, setOrderByField] = useState(initialDraft.orderByField || 'CreatedDate');
+  const [limitVal, setLimitVal] = useState(Number(initialDraft.limitVal || 50));
   const [records, setRecords] = useState([]);
   const [totalSize, setTotalSize] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -28,8 +34,25 @@ export default function DataExplorer() {
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [hoverInfo, setHoverInfo] = useState(null);
-  const [showSoql, setShowSoql] = useState(false);
-  const [showFields, setShowFields] = useState(true);
+  const [showSoql, setShowSoql] = useState(initialDraft.showSoql === true);
+  const [showFields, setShowFields] = useState(initialDraft.showFields !== false);
+  const [baseDraftValue, setBaseDraftValue] = useState(null);
+  const [draftRestoredAt, setDraftRestoredAt] = useState(initialDraftRef.current?.updatedAt || null);
+  const draftValue = useMemo(() => ({
+    selectedObject,
+    selectedFields,
+    whereClause,
+    orderByField,
+    limitVal,
+    showSoql,
+    showFields,
+  }), [limitVal, orderByField, selectedFields, selectedObject, showFields, showSoql, whereClause]);
+  const draftDirty = Boolean(baseDraftValue && !sameDraftValue(draftValue, baseDraftValue));
+  useDraftAutosave(DATA_EXPLORER_DRAFT_KEY, draftValue, {
+    enabled: !loadingObjects,
+    dirty: draftDirty,
+    message: 'Autosaved Data Explorer query draft. Run, save externally, or discard it before leaving.',
+  });
 
   useEffect(() => {
     appClient.functions.invoke('salesforceSchema', {}).then(res => {
@@ -48,7 +71,32 @@ export default function DataExplorer() {
       const f = res.data?.fields || [];
       setFields(f);
       const defaults = f.filter(x => !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp').slice(0, 8).map(x => x.name);
-      setSelectedFields(defaults);
+      const draft = initialDraftRef.current?.data;
+      const restoredFields = draft?.selectedObject === selectedObject && Array.isArray(draft.selectedFields)
+        ? draft.selectedFields.filter((field) => f.some((item) => item.name === field))
+        : null;
+      const nextSelectedFields = restoredFields?.length ? restoredFields : defaults;
+      setSelectedFields(nextSelectedFields);
+      const base = {
+        selectedObject,
+        selectedFields: defaults,
+        whereClause: '',
+        orderByField: 'CreatedDate',
+        limitVal: 50,
+        showSoql: false,
+        showFields: true,
+      };
+      setBaseDraftValue(base);
+      setDraftRestoredAt(draft && !sameDraftValue({
+        selectedObject,
+        selectedFields: nextSelectedFields,
+        whereClause,
+        orderByField,
+        limitVal,
+        showSoql,
+        showFields,
+      }, base) ? initialDraftRef.current?.updatedAt : null);
+      initialDraftRef.current = null;
       setLoadingFields(false);
     });
   }, [selectedObject]);
@@ -123,6 +171,21 @@ export default function DataExplorer() {
   };
 
   const sortableFields = fields.filter(f => f.sortable);
+  const discardDraft = () => {
+    clearDraft(DATA_EXPLORER_DRAFT_KEY);
+    if (baseDraftValue) {
+      setSelectedObject(baseDraftValue.selectedObject);
+      setSelectedFields(baseDraftValue.selectedFields);
+      setWhereClause(baseDraftValue.whereClause);
+      setOrderByField(baseDraftValue.orderByField);
+      setLimitVal(baseDraftValue.limitVal);
+      setShowSoql(baseDraftValue.showSoql);
+      setShowFields(baseDraftValue.showFields);
+      setRecords([]);
+      setTotalSize(0);
+    }
+    setDraftRestoredAt(null);
+  };
 
   return (
     <div className="p-6 lg:p-8 max-w-full">
@@ -150,6 +213,8 @@ export default function DataExplorer() {
           </>
         )}
       />
+
+      <DraftNotice restoredAt={draftRestoredAt} label="Data Explorer query draft restored" onDiscard={discardDraft} className="mb-6" />
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left panel */}

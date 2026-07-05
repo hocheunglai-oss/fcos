@@ -4,6 +4,7 @@ import { appClient } from '@/api/appClient';
 import { APP_MODULES, FULL_ACCESS, USER_TYPES } from '@/lib/authModules';
 import { useAuth } from '@/lib/AuthContext';
 import PageHeader from '@/components/common/PageHeader';
+import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const emptyUserForm = {
   id: null,
@@ -51,6 +53,18 @@ function permissionSummary(modules, permissions = {}) {
   if (count === modules.length) return 'All modules';
   if (count === 0) return 'No modules';
   return `${count} modules`;
+}
+
+function userDraftKey(form) {
+  return form?.id ? `admin:user:${form.id}` : 'admin:user:new';
+}
+
+function userTypeDraftKey(form) {
+  return form?.id ? `admin:user-type:${form.id}` : 'admin:user-type:new';
+}
+
+function safeUserDraft(form) {
+  return { ...form, password: '' };
 }
 
 function SegmentButton({ active, children, icon: Icon, onClick }) {
@@ -99,6 +113,10 @@ export default function AdminControl() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [userForm, setUserForm] = useState(emptyUserForm);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
+  const [baseUserForm, setBaseUserForm] = useState(emptyUserForm);
+  const [baseTypeForm, setBaseTypeForm] = useState(emptyTypeForm);
+  const [userDraftRestoredAt, setUserDraftRestoredAt] = useState(null);
+  const [typeDraftRestoredAt, setTypeDraftRestoredAt] = useState(null);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -140,6 +158,22 @@ export default function AdminControl() {
     () => users.filter((item) => item.user_type === typeForm.id).length,
     [typeForm.id, users]
   );
+  const activeUserDraftKey = userDraftKey(userForm);
+  const activeTypeDraftKey = userTypeDraftKey(typeForm);
+  const userDraftValue = useMemo(() => safeUserDraft(userForm), [userForm]);
+  const baseUserDraftValue = useMemo(() => safeUserDraft(baseUserForm), [baseUserForm]);
+  const userDraftDirty = Boolean(userDialogOpen && !sameDraftValue(userDraftValue, baseUserDraftValue));
+  const typeDraftDirty = Boolean(typeDialogOpen && !sameDraftValue(typeForm, baseTypeForm));
+  useDraftAutosave(activeUserDraftKey, userDraftValue, {
+    enabled: userDialogOpen,
+    dirty: userDraftDirty,
+    message: 'Autosaved admin user draft. Save or discard it before leaving.',
+  });
+  useDraftAutosave(activeTypeDraftKey, typeForm, {
+    enabled: typeDialogOpen,
+    dirty: typeDraftDirty,
+    message: 'Autosaved admin user type draft. Save or discard it before leaving.',
+  });
 
   const load = async () => {
     if (!isSupabaseConfigured) return;
@@ -181,10 +215,17 @@ export default function AdminControl() {
     resetAlerts();
     setActiveSection('users');
     if (!item) {
-      setUserForm({
+      const base = {
         ...emptyUserForm,
         permissions: normalizedPermissions(sortedModules, typePermissions.viewer || {}),
-      });
+      };
+      const draft = readDraft(userDraftKey(base));
+      const next = draft?.data && !sameDraftValue(draft.data, safeUserDraft(base))
+        ? { ...base, ...draft.data, password: '' }
+        : base;
+      setBaseUserForm(base);
+      setUserForm(next);
+      setUserDraftRestoredAt(draft?.data && !sameDraftValue(safeUserDraft(next), safeUserDraft(base)) ? draft.updatedAt : null);
       setUserDialogOpen(true);
       return;
     }
@@ -193,7 +234,7 @@ export default function AdminControl() {
     const sourcePermissions = useTypeDefaults
       ? typePermissions[item.user_type] || item.permissions || {}
       : item.permissions || {};
-    setUserForm({
+    const base = {
       id: item.id,
       email: item.email || '',
       full_name: item.full_name || '',
@@ -202,7 +243,14 @@ export default function AdminControl() {
       password: '',
       use_type_defaults: useTypeDefaults,
       permissions: normalizedPermissions(sortedModules, sourcePermissions),
-    });
+    };
+    const draft = readDraft(userDraftKey(base));
+    const next = draft?.data && !sameDraftValue(draft.data, safeUserDraft(base))
+      ? { ...base, ...draft.data, password: '' }
+      : base;
+    setBaseUserForm(base);
+    setUserForm(next);
+    setUserDraftRestoredAt(draft?.data && !sameDraftValue(safeUserDraft(next), safeUserDraft(base)) ? draft.updatedAt : null);
     setUserDialogOpen(true);
   };
 
@@ -260,6 +308,8 @@ export default function AdminControl() {
       setError(res.data.error);
       return;
     }
+    clearDraft(activeUserDraftKey);
+    setUserDraftRestoredAt(null);
     setMessage('User saved.');
     setUserDialogOpen(false);
     setUserForm((prev) => ({ ...prev, id: res.data.user?.id || prev.id, password: '' }));
@@ -280,6 +330,8 @@ export default function AdminControl() {
       return;
     }
     setMessage('User deleted.');
+    clearDraft(activeUserDraftKey);
+    setUserDraftRestoredAt(null);
     setUserDialogOpen(false);
     setUserForm(emptyUserForm);
     await load();
@@ -289,22 +341,36 @@ export default function AdminControl() {
     resetAlerts();
     setActiveSection('types');
     if (!item) {
-      setTypeForm({
+      const base = {
         ...emptyTypeForm,
         permissions: normalizedPermissions(sortedModules, { dashboard: true }),
-      });
+      };
+      const draft = readDraft(userTypeDraftKey(base));
+      const next = draft?.data && !sameDraftValue(draft.data, base)
+        ? { ...base, ...draft.data }
+        : base;
+      setBaseTypeForm(base);
+      setTypeForm(next);
+      setTypeDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
       setTypeDialogOpen(true);
       return;
     }
 
-    setTypeForm({
+    const base = {
       id: item.id,
       label: item.label || item.id,
       description: item.description || '',
       sort_order: item.sort_order ?? item.sortOrder ?? 100,
       is_system: item.is_system === true,
       permissions: normalizedPermissions(sortedModules, typePermissions[item.id] || {}),
-    });
+    };
+    const draft = readDraft(userTypeDraftKey(base));
+    const next = draft?.data && !sameDraftValue(draft.data, base)
+      ? { ...base, ...draft.data }
+      : base;
+    setBaseTypeForm(base);
+    setTypeForm(next);
+    setTypeDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
     setTypeDialogOpen(true);
   };
 
@@ -336,6 +402,8 @@ export default function AdminControl() {
       setError(res.data.error);
       return;
     }
+    clearDraft(activeTypeDraftKey);
+    setTypeDraftRestoredAt(null);
     setMessage('User type saved.');
     setTypeDialogOpen(false);
     setTypeForm((prev) => ({
@@ -365,6 +433,8 @@ export default function AdminControl() {
       return;
     }
     setMessage('User type deleted.');
+    clearDraft(activeTypeDraftKey);
+    setTypeDraftRestoredAt(null);
     setTypeDialogOpen(false);
     setTypeForm(emptyTypeForm);
     await load();
@@ -373,6 +443,16 @@ export default function AdminControl() {
   const canDeleteSelectedType = typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount === 0;
   const activeListTitle = activeSection === 'users' ? 'Users' : 'User Types';
   const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
+  const discardUserDraft = () => {
+    clearDraft(activeUserDraftKey);
+    setUserForm(baseUserForm);
+    setUserDraftRestoredAt(null);
+  };
+  const discardTypeDraft = () => {
+    clearDraft(activeTypeDraftKey);
+    setTypeForm(baseTypeForm);
+    setTypeDraftRestoredAt(null);
+  };
 
   return (
     <div className="p-6 lg:p-8">
@@ -551,6 +631,7 @@ export default function AdminControl() {
           </DialogHeader>
           <form onSubmit={saveUser} className="min-h-0">
             <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
+              <DraftNotice restoredAt={userDraftRestoredAt} label="Admin user draft restored" onDiscard={discardUserDraft} className="mb-4" />
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Email</span>
@@ -670,6 +751,7 @@ export default function AdminControl() {
           </DialogHeader>
           <form onSubmit={saveUserType}>
             <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
+              <DraftNotice restoredAt={typeDraftRestoredAt} label="Admin user type draft restored" onDiscard={discardTypeDraft} className="mb-4" />
               {typeForm.id === 'administrator' && (
                 <div className="mb-4 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
                   Administrator is protected and always has full access.

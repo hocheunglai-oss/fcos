@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { AlertCircle, Loader2, Play, Save, Trash2, Clock, Download, Plus, FileBarChart2, ChevronRight, Filter, Calculator, Link2, Code, BookOpen, ChevronDown, LayoutList, AlignJustify, Copy, Check } from 'lucide-react';
+import DraftNotice from '@/components/common/DraftNotice';
 
 import FilterGroup from '@/components/report-builder/FilterGroup';
 import CalculatedFields from '@/components/report-builder/CalculatedFields';
@@ -14,6 +15,9 @@ import ColumnSelector, { toSoqlToken } from '@/components/report-builder/ColumnS
 import ExpandableResultsTable from '@/components/report-builder/ExpandableResultsTable';
 import { format } from 'date-fns';
 import { textValue } from '@/lib/displayValue';
+import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+
+const REPORT_BUILDER_DRAFT_KEY = 'report-builder:workspace';
 
 const CATEGORIES = [
   { value: 'sales_operations', label: 'Sales & Operations' },
@@ -91,26 +95,28 @@ function buildWhereFromGroup(group, childRelationships = []) {
 }
 
 export default function ReportBuilder() {
+  const initialDraftRef = useRef(readDraft(REPORT_BUILDER_DRAFT_KEY));
+  const initialDraft = initialDraftRef.current?.data || {};
   const [savedReports, setSavedReports] = useState([]);
   const [fields, setFields] = useState([]);
   const [childRelationships, setChildRelationships] = useState([]);
 
   // Report config
-  const [reportName, setReportName] = useState('');
-  const [reportDesc, setReportDesc] = useState('');
-  const [reportCategory, setReportCategory] = useState('general');
-  const [selectedObject, setSelectedObject] = useState(() => localStorage.getItem('rb_default_object') || 'stem__c');
-  const [selectedFields, setSelectedFields] = useState([]);
-  const [filterGroup, setFilterGroup] = useState(defaultFilterGroup());
-  const [calcFields, setCalcFields] = useState([]);
-  const [lookups, setLookups] = useState([]);
-  const [orderByField, setOrderByField] = useState(() => localStorage.getItem('rb_default_orderby') || 'KeyStem__c');
-  const [limitVal, setLimitVal] = useState(() => Number(localStorage.getItem('rb_default_limit') || 100));
+  const [reportName, setReportName] = useState(initialDraft.reportName || '');
+  const [reportDesc, setReportDesc] = useState(initialDraft.reportDesc || '');
+  const [reportCategory, setReportCategory] = useState(initialDraft.reportCategory || 'general');
+  const [selectedObject, setSelectedObject] = useState(() => initialDraft.selectedObject || localStorage.getItem('rb_default_object') || 'stem__c');
+  const [selectedFields, setSelectedFields] = useState(initialDraft.selectedFields || []);
+  const [filterGroup, setFilterGroup] = useState(initialDraft.filterGroup || defaultFilterGroup());
+  const [calcFields, setCalcFields] = useState(initialDraft.calcFields || []);
+  const [lookups, setLookups] = useState(initialDraft.lookups || []);
+  const [orderByField, setOrderByField] = useState(() => initialDraft.orderByField || localStorage.getItem('rb_default_orderby') || 'KeyStem__c');
+  const [limitVal, setLimitVal] = useState(() => Number(initialDraft.limitVal || localStorage.getItem('rb_default_limit') || 100));
   const LIMIT_OPTIONS = [100, 200, 300, 400, 500];
-  const [scheduleEnabled, setScheduleEnabled] = useState(false);
-  const [scheduleFreq, setScheduleFreq] = useState('weekly');
-  const [scheduleEmail, setScheduleEmail] = useState('');
-  const [activeTab, setActiveTab] = useState('filters');
+  const [scheduleEnabled, setScheduleEnabled] = useState(initialDraft.scheduleEnabled === true);
+  const [scheduleFreq, setScheduleFreq] = useState(initialDraft.scheduleFreq || 'weekly');
+  const [scheduleEmail, setScheduleEmail] = useState(initialDraft.scheduleEmail || '');
+  const [activeTab, setActiveTab] = useState(initialDraft.activeTab || 'filters');
 
   // Execution state
   const [records, setRecords] = useState([]);
@@ -123,20 +129,49 @@ export default function ReportBuilder() {
   const [selectedSavedReport, setSelectedSavedReport] = useState(null);
   const [showSoql, setShowSoql] = useState(false);
   const [soqlCopied, setSoqlCopied] = useState(false);
-  const [rawSoqlMode, setRawSoqlMode] = useState(false);
-  const [rawSoql, setRawSoql] = useState('');
+  const [rawSoqlMode, setRawSoqlMode] = useState(initialDraft.rawSoqlMode === true);
+  const [rawSoql, setRawSoql] = useState(initialDraft.rawSoql || '');
   const [fieldsError, setFieldsError] = useState(false);
   const [fieldsRetry, setFieldsRetry] = useState(0);
   const [compact, setCompact] = useState(() => localStorage.getItem('rb_compact') === 'true');
   const [showReportsPanel, setShowReportsPanel] = useState(false);
+  const [baseDraftValue, setBaseDraftValue] = useState(null);
+  const [draftRestoredAt, setDraftRestoredAt] = useState(initialDraftRef.current?.updatedAt || null);
 
   const toggleCompact = () => setCompact(v => {
     const next = !v;
     localStorage.setItem('rb_compact', String(next));
     return next;
   });
-  const pendingFieldsRef = useRef(null); // fields to restore after object switch
-  const pendingFilterRef = useRef(null); // filter group to restore after object switch
+  const pendingFieldsRef = useRef(initialDraft.selectedFields?.length ? initialDraft.selectedFields : null); // fields to restore after object switch
+  const pendingFilterRef = useRef(initialDraft.filterGroup || null); // filter group to restore after object switch
+  const pendingCalcFieldsRef = useRef(initialDraft.calcFields || null);
+  const pendingLookupsRef = useRef(initialDraft.lookups || null);
+
+  const draftValue = useMemo(() => ({
+    reportName,
+    reportDesc,
+    reportCategory,
+    selectedObject,
+    selectedFields,
+    filterGroup,
+    calcFields,
+    lookups,
+    orderByField,
+    limitVal,
+    scheduleEnabled,
+    scheduleFreq,
+    scheduleEmail,
+    activeTab,
+    rawSoqlMode,
+    rawSoql,
+  }), [activeTab, calcFields, filterGroup, limitVal, lookups, orderByField, rawSoql, rawSoqlMode, reportCategory, reportDesc, reportName, scheduleEmail, scheduleEnabled, scheduleFreq, selectedFields, selectedObject]);
+  const draftDirty = Boolean(baseDraftValue && !sameDraftValue(draftValue, baseDraftValue));
+  useDraftAutosave(REPORT_BUILDER_DRAFT_KEY, draftValue, {
+    enabled: !loadingFields,
+    dirty: draftDirty,
+    message: 'Autosaved Report Builder draft. Save or discard it before leaving.',
+  });
 
   useEffect(() => {
     loadSavedReports();
@@ -167,6 +202,37 @@ export default function ReportBuilder() {
       if (pendingFilterRef.current) {
         setFilterGroup(pendingFilterRef.current);
         pendingFilterRef.current = null;
+      }
+      if (pendingCalcFieldsRef.current) {
+        setCalcFields(pendingCalcFieldsRef.current);
+        pendingCalcFieldsRef.current = null;
+      }
+      if (pendingLookupsRef.current) {
+        setLookups(pendingLookupsRef.current);
+        pendingLookupsRef.current = null;
+      }
+      const base = {
+        reportName: '',
+        reportDesc: '',
+        reportCategory: 'general',
+        selectedObject,
+        selectedFields: [],
+        filterGroup: defaultFilterGroup(),
+        calcFields: [],
+        lookups: [],
+        orderByField: localStorage.getItem('rb_default_orderby') || 'KeyStem__c',
+        limitVal: Number(localStorage.getItem('rb_default_limit') || 100),
+        scheduleEnabled: false,
+        scheduleFreq: 'weekly',
+        scheduleEmail: '',
+        activeTab: 'filters',
+        rawSoqlMode: false,
+        rawSoql: '',
+      };
+      setBaseDraftValue(base);
+      if (initialDraftRef.current?.data) {
+        setDraftRestoredAt(!sameDraftValue(initialDraftRef.current.data, base) ? initialDraftRef.current.updatedAt : null);
+        initialDraftRef.current = null;
       }
     }).catch(err => {
       console.error('Failed to load fields:', err);
@@ -431,11 +497,16 @@ export default function ReportBuilder() {
       await appClient.entities.SavedReport.create(payload);
     }
     await loadSavedReports();
+    clearDraft(REPORT_BUILDER_DRAFT_KEY);
+    setBaseDraftValue(draftValue);
+    setDraftRestoredAt(null);
     setSaving(false);
     setSaveDialogOpen(false);
   };
 
   const loadReport = (report) => {
+    clearDraft(REPORT_BUILDER_DRAFT_KEY);
+    setDraftRestoredAt(null);
     setSelectedSavedReport(report);
     setReportName(report.name);
     setReportDesc(report.description || '');
@@ -449,6 +520,8 @@ export default function ReportBuilder() {
     setError(null);
     // Stash selected fields so they survive the object-load reset
     pendingFieldsRef.current = report.selected_fields?.length ? report.selected_fields : null;
+    pendingCalcFieldsRef.current = report.calc_fields || null;
+    pendingLookupsRef.current = report.lookups || null;
     if (report.object_name !== selectedObject) {
       setSelectedObject(report.object_name);
       pendingFilterRef.current = report.filters?.[0] || defaultFilterGroup();
@@ -456,7 +529,27 @@ export default function ReportBuilder() {
       setSelectedFields(report.selected_fields || []);
       setFilterGroup(report.filters?.[0] || defaultFilterGroup());
       pendingFieldsRef.current = null;
+      pendingCalcFieldsRef.current = null;
+      pendingLookupsRef.current = null;
     }
+    setBaseDraftValue({
+      reportName: report.name,
+      reportDesc: report.description || '',
+      reportCategory: report.category || 'general',
+      selectedObject: report.object_name,
+      selectedFields: report.selected_fields || [],
+      filterGroup: report.filters?.[0] || defaultFilterGroup(),
+      calcFields: report.calc_fields || [],
+      lookups: report.lookups || [],
+      orderByField,
+      limitVal,
+      scheduleEnabled: report.schedule_enabled || false,
+      scheduleFreq: report.schedule_frequency || 'weekly',
+      scheduleEmail: report.schedule_email || '',
+      activeTab,
+      rawSoqlMode: false,
+      rawSoql: '',
+    });
   };
 
   const deleteReport = async (id, e) => {
@@ -467,6 +560,8 @@ export default function ReportBuilder() {
   };
 
   const newReport = () => {
+    clearDraft(REPORT_BUILDER_DRAFT_KEY);
+    setDraftRestoredAt(null);
     setSelectedSavedReport(null);
     setReportName('');
     setReportDesc('');
@@ -479,11 +574,39 @@ export default function ReportBuilder() {
     setRecords([]);
     setError(null);
     pendingFieldsRef.current = null;
+    pendingFilterRef.current = null;
+    pendingCalcFieldsRef.current = null;
+    pendingLookupsRef.current = null;
     if (selectedObject === 'stem__c') {
       setFieldsRetry(v => v + 1); // re-trigger fields load via useEffect
     } else {
       setSelectedObject('stem__c');
     }
+  };
+
+  const discardDraft = () => {
+    clearDraft(REPORT_BUILDER_DRAFT_KEY);
+    if (baseDraftValue) {
+      setReportName(baseDraftValue.reportName);
+      setReportDesc(baseDraftValue.reportDesc);
+      setReportCategory(baseDraftValue.reportCategory);
+      setSelectedFields(baseDraftValue.selectedFields);
+      setFilterGroup(baseDraftValue.filterGroup);
+      setCalcFields(baseDraftValue.calcFields);
+      setLookups(baseDraftValue.lookups);
+      setOrderByField(baseDraftValue.orderByField);
+      setLimitVal(baseDraftValue.limitVal);
+      setScheduleEnabled(baseDraftValue.scheduleEnabled);
+      setScheduleFreq(baseDraftValue.scheduleFreq);
+      setScheduleEmail(baseDraftValue.scheduleEmail);
+      setActiveTab(baseDraftValue.activeTab);
+      setRawSoqlMode(baseDraftValue.rawSoqlMode);
+      setRawSoql(baseDraftValue.rawSoql);
+      setRecords([]);
+      setTotalSize(0);
+      if (baseDraftValue.selectedObject !== selectedObject) setSelectedObject(baseDraftValue.selectedObject);
+    }
+    setDraftRestoredAt(null);
   };
 
   const exportCsv = () => {
@@ -642,6 +765,8 @@ export default function ReportBuilder() {
               </div>
             ))}
           </div>
+
+          <DraftNotice restoredAt={draftRestoredAt} label="Report Builder draft restored" onDiscard={discardDraft} className="mb-4" />
 
           {/* Saved Reports dropdown panel */}
           {showReportsPanel && (
