@@ -1,6 +1,7 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 
 const STORAGE_PREFIX = 'salesforce_extension';
+const functionResponseCache = new Map();
 
 const storage = {
   get(key, fallback) {
@@ -18,6 +19,22 @@ const storage = {
 
 function now() {
   return new Date().toISOString();
+}
+
+function cloneJson(value) {
+  if (value == null) return value;
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function stableStringify(value) {
+  if (value == null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function functionCacheKey(name, payload) {
+  return `${name}:${stableStringify(payload || {})}`;
 }
 
 function createEntityStore(name) {
@@ -70,7 +87,16 @@ function createEntityStore(name) {
   };
 }
 
-async function invoke(name, payload = {}) {
+async function invoke(name, payload = {}, options = {}) {
+  const cacheKey = options.cacheKey || (options.cache ? functionCacheKey(name, payload) : null);
+  if (cacheKey && !options.force && functionResponseCache.has(cacheKey)) {
+    const cached = functionResponseCache.get(cacheKey);
+    return {
+      data: cloneJson(cached.data),
+      meta: { cached: true, cachedAt: cached.updatedAt },
+    };
+  }
+
   const headers = { 'content-type': 'application/json' };
   if (isSupabaseConfigured) {
     const { data } = await supabase.auth.getSession();
@@ -87,11 +113,20 @@ async function invoke(name, payload = {}) {
     return { data: { error: data.error || `Request failed: ${res.status}` } };
   }
 
-  return { data };
+  const fetchedAt = now();
+  if (cacheKey) {
+    functionResponseCache.set(cacheKey, { data: cloneJson(data), updatedAt: fetchedAt });
+  }
+
+  return { data, meta: cacheKey ? { cached: false, cachedAt: fetchedAt } : undefined };
+}
+
+function clearFunctionCache() {
+  functionResponseCache.clear();
 }
 
 export const appClient = {
-  functions: { invoke },
+  functions: { invoke, clearCache: clearFunctionCache },
   entities: {
     AppSettings: createEntityStore('app_settings'),
     SavedReport: createEntityStore('saved_reports'),

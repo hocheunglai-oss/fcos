@@ -198,7 +198,7 @@ export default function SettingsPage() {
   // Load schema + settings from DB in parallel
   useEffect(() => {
     Promise.all([
-      appClient.functions.invoke('salesforceSchema', {}).then(res => res.data?.objects || []),
+      appClient.functions.invoke('salesforceSchema', {}, { cache: true }).then(res => res.data?.objects || []),
       loadSettingsRecord(),
     ]).then(([objects, record]) => {
       setAllObjects(objects);
@@ -262,7 +262,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!defaultObject) return;
     setRbFieldsLoading(true);
-    appClient.functions.invoke('salesforceObjectFields', { objectName: defaultObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: defaultObject }, { cache: true }).then(res => {
       setRbFields((res.data?.fields || []).filter(f => f.sortable));
       setRbFieldsLoading(false);
     });

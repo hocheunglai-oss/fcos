@@ -188,7 +188,7 @@ export default function ReportBuilder() {
     setLookups([]);
     setFilterGroup(defaultFilterGroup());
     setSelectedFields([]);
-    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }, { cache: true, force: fieldsRetry > 0 }).then(res => {
       if (res.data?.error) throw new Error(res.data.error);
       const f = res.data?.fields || [];
       setFields(f);

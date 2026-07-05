@@ -116,10 +116,10 @@ export default function BrokerRegister() {
   const [exchangeRateError, setExchangeRateError] = useState(null);
   const [showCny, setShowCny] = useState(false);
 
-  const loadRows = async () => {
+  const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBrokerRegister', { limit: 2000 });
+    const res = await appClient.functions.invoke('salesforceBrokerRegister', { limit: 2000 }, { cache: true, force: options.force });
     if (res.data?.error) setError(res.data.error);
     setRows(res.data?.rows || []);
     setLoading(false);
@@ -533,7 +533,7 @@ export default function BrokerRegister() {
           <Button variant="outline" onClick={exportXls} disabled={loading || !filteredRows.length} className="gap-2 w-fit">
             <Download className="w-4 h-4" /> Export XLS
           </Button>
-          <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2 w-fit">
+          <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
           </Button>
           </>
@@ -575,7 +575,7 @@ export default function BrokerRegister() {
         </TableShell>
       )}
 
-      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={loadRows} />
+      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={() => loadRows({ force: true })} />
     </div>
   );
 }

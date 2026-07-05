@@ -175,14 +175,14 @@ export default function AdminControl() {
     message: 'Autosaved admin user type draft. Save or discard it before leaving.',
   });
 
-  const load = async () => {
+  const load = async (options = {}) => {
     if (!isSupabaseConfigured) return;
     setLoading(true);
     setError('');
     try {
       const [usersRes, logsRes] = await Promise.all([
-        appClient.functions.invoke('adminUsersList', {}),
-        appClient.functions.invoke('adminAuditLogs', {}),
+        appClient.functions.invoke('adminUsersList', {}, { cache: true, force: options.force }),
+        appClient.functions.invoke('adminAuditLogs', {}, { cache: true, force: options.force }),
       ]);
       if (usersRes.data?.error) {
         setError(usersRes.data.error);
@@ -313,7 +313,7 @@ export default function AdminControl() {
     setMessage('User saved.');
     setUserDialogOpen(false);
     setUserForm((prev) => ({ ...prev, id: res.data.user?.id || prev.id, password: '' }));
-    await load();
+    await load({ force: true });
   };
 
   const deleteUser = async () => {
@@ -334,7 +334,7 @@ export default function AdminControl() {
     setUserDraftRestoredAt(null);
     setUserDialogOpen(false);
     setUserForm(emptyUserForm);
-    await load();
+    await load({ force: true });
   };
 
   const openTypeDialog = (item) => {
@@ -412,7 +412,7 @@ export default function AdminControl() {
       is_system: res.data.userType?.is_system === true,
       permissions: normalizedPermissions(sortedModules, res.data.userType?.permissions || prev.permissions),
     }));
-    await load();
+    await load({ force: true });
   };
 
   const deleteUserType = async () => {
@@ -437,7 +437,7 @@ export default function AdminControl() {
     setTypeDraftRestoredAt(null);
     setTypeDialogOpen(false);
     setTypeForm(emptyTypeForm);
-    await load();
+    await load({ force: true });
   };
 
   const canDeleteSelectedType = typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount === 0;

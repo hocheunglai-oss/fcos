@@ -70,7 +70,7 @@ function SchemaNode({ objectName, label, nodeValue, onChange, depth = 0, isChild
   const loadMeta = () => {
     if (meta || loading) return;
     setLoading(true);
-    appClient.functions.invoke('salesforceObjectFields', { objectName }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName }, { cache: true }).then(res => {
       setMeta({
         fields: (res.data?.fields || []).filter(f => !['IsDeleted', 'SystemModstamp', 'attributes'].includes(f.name)),
         childRelationships: res.data?.childRelationships || [],

@@ -108,10 +108,10 @@ export default function DisputeManagement() {
   const [editError, setEditError] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const loadRows = async () => {
+  const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceDisputeStems', { limit: 10000 });
+    const res = await appClient.functions.invoke('salesforceDisputeStems', { limit: 10000 }, { cache: true, force: options.force });
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
@@ -222,12 +222,12 @@ export default function DisputeManagement() {
     setEditDescription('');
     setEditDeductionAmount('');
     setSavingEdit(false);
-    const nextRows = await loadRows();
+    const nextRows = await loadRows({ force: true });
     setDocumentsStem(prev => prev ? nextRows.find(row => row.Id === prev.Id) || prev : prev);
   };
 
   const refreshManagedStem = async (stemId) => {
-    const nextRows = await loadRows();
+    const nextRows = await loadRows({ force: true });
     setDocumentsStem(prev => {
       const targetId = stemId || prev?.Id;
       return prev && targetId ? nextRows.find(row => row.Id === targetId) || prev : prev;
@@ -273,7 +273,7 @@ export default function DisputeManagement() {
         description="Manage all disputed STEMs from Salesforce, inspect detail, and maintain dispute documents."
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce'}
         actions={(
-          <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2">
+          <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
           </Button>
         )}
@@ -385,7 +385,7 @@ export default function DisputeManagement() {
         )}
       </TableShell>
 
-      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={loadRows} />
+      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={() => loadRows({ force: true })} />
       <DisputeDocumentsModal
         stem={documentsStem}
         open={!!documentsStem}

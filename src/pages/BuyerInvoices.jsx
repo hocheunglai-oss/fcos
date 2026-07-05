@@ -625,6 +625,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
       setError(res.data.error);
     } else {
       clearDraft(draftKey);
+      appClient.functions.clearCache();
       onSaved(res.data);
       onClose();
     }
@@ -889,6 +890,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       setError(res.data.error);
     } else {
       clearDraft(draftKey);
+      appClient.functions.clearCache();
       onSent(res.data);
       onClose();
     }
@@ -1382,11 +1384,11 @@ export default function BuyerInvoices() {
     return next;
   }, [actionOnly, buyerTraderOptions, followUpFilter, rows, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
 
-  const loadRows = async () => {
+  const loadRows = async (options = {}) => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBuyerInvoicesDue', { daysAhead: nextDays });
+    const res = await appClient.functions.invoke('salesforceBuyerInvoicesDue', { daysAhead: nextDays }, { cache: true, force: options.force });
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
@@ -1596,7 +1598,7 @@ export default function BuyerInvoices() {
             <Button variant="outline" onClick={() => setShowPaymentReminderTemplate(true)} className="gap-2 w-fit">
               <Mail className="h-4 w-4" /> Payment Reminder Template
             </Button>
-            <Button variant="outline" onClick={loadRows} disabled={loading} className="gap-2 w-fit">
+            <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
           </>
@@ -1617,7 +1619,7 @@ export default function BuyerInvoices() {
               className="h-9 w-32"
             />
           </div>
-          <Button onClick={loadRows} disabled={loading} className="gap-2">
+          <Button onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
             Apply
           </Button>
@@ -1971,7 +1973,7 @@ export default function BuyerInvoices() {
         </TableShell>
       )}
 
-      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={loadRows} />
+      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} onUpdated={() => loadRows({ force: true })} />
       <CollectionModal
         row={selectedCollectionRow}
         open={!!selectedCollectionRow}

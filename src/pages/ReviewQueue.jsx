@@ -135,16 +135,16 @@ export default function ReviewQueue() {
     selectedMonths.length === 12 ? [THIS_MONTH] : MONTHS.map(m => m.value)
   );
 
-  const load = async (yrs = selectedYears, mos = selectedMonths) => {
+  const load = async (yrs = selectedYears, mos = selectedMonths, options = {}) => {
     setLoading(true);
     setError(null);
     const where = buildDeliveryWhere(yrs, mos);
-    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR });
+    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR }, { cache: true, force: options.force });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
       setData(res.data);
-      setLastRefresh(new Date());
+      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
     }
     setLoading(false);
   };
@@ -222,7 +222,7 @@ export default function ReviewQueue() {
             <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className="gap-2">
               <Download className="w-3.5 h-3.5" /> Export CSV
             </Button>
-            <Button variant="outline" onClick={() => load()} disabled={loading} className="gap-2">
+            <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, { force: true })} disabled={loading} className="gap-2">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
               Refresh
             </Button>
@@ -404,7 +404,7 @@ export default function ReviewQueue() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths)}
+        onUpdated={() => load(selectedYears, selectedMonths, { force: true })}
       />
     </div>
   );

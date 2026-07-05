@@ -71,7 +71,7 @@ export default function DashboardSettings() {
     const loadPortCountries = async () => {
       const res = await appClient.functions.invoke('salesforceQuery', {
         soql: 'SELECT Country__c c, COUNT(Id) total FROM Port__c WHERE Country__c != null GROUP BY Country__c ORDER BY Country__c'
-      });
+      }, { cache: true });
       if (cancelled || res.data?.error) return;
       const countries = [...new Set((res.data?.records || []).map((row) => row.c).filter(Boolean))];
       setPortCountryOptions(countries);
@@ -91,7 +91,7 @@ export default function DashboardSettings() {
         : `SELECT Buyer_Name__c, Account__r.Group_Name__c, Account__r.Parent.Name FROM stem__c WHERE Buyer_Name__c != null ORDER BY Delivery_Date__c DESC NULLS LAST LIMIT 2000`;
       const res = await appClient.functions.invoke('salesforceQuery', {
         soql
-      });
+      }, { cache: true });
       if (cancelled || res.data?.error) return;
       const names = isSupplier
         ? [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
@@ -122,6 +122,7 @@ export default function DashboardSettings() {
     country = portCountry,
     mode = counterpartyMode,
     company = companyKeyword,
+    options = {},
   ) => {
     setLoading(true);
     setError(null);
@@ -135,12 +136,12 @@ export default function DashboardSettings() {
       portCountry: normalizedCountry || null,
       companyFilterMode: mode,
       companyKeyword: normalizedCompany || null,
-    });
+    }, { cache: true, force: options.force });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
       setData(res.data);
-      setLastRefresh(new Date());
+      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
     }
     setLoading(false);
   };
@@ -255,7 +256,7 @@ export default function DashboardSettings() {
         description="Review STEM performance, delivery-date filters, gross profit trends, and exceptions from Salesforce."
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}
         actions={(
-          <Button variant="outline" onClick={() => load()} disabled={loading} className="gap-2">
+          <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })} disabled={loading} className="gap-2">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Refresh
           </Button>
@@ -652,7 +653,7 @@ export default function DashboardSettings() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword)}
+        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })}
       />
     </div>
   );

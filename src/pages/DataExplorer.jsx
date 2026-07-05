@@ -55,7 +55,7 @@ export default function DataExplorer() {
   });
 
   useEffect(() => {
-    appClient.functions.invoke('salesforceSchema', {}).then(res => {
+    appClient.functions.invoke('salesforceSchema', {}, { cache: true }).then(res => {
       setObjects(res.data?.objects || []);
       setLoadingObjects(false);
     });
@@ -67,7 +67,7 @@ export default function DataExplorer() {
     setFields([]);
     setSelectedFields([]);
     setRecords([]);
-    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }).then(res => {
+    appClient.functions.invoke('salesforceObjectFields', { objectName: selectedObject }, { cache: true }).then(res => {
       const f = res.data?.fields || [];
       setFields(f);
       const defaults = f.filter(x => !x.name.endsWith('Id') && x.name !== 'IsDeleted' && x.name !== 'SystemModstamp').slice(0, 8).map(x => x.name);
