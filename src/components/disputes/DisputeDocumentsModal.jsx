@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
@@ -265,6 +266,8 @@ function ProductPartyList({ pairs, supplierFallback, productFallback }) {
 
 function DocumentPreview({ document, onClose }) {
   const previewKind = documentPreviewKind(document);
+  const downloadAuthToken = useDownloadAuthToken(Boolean(document?.downloadUrl));
+  const documentUrl = (url) => withDownloadAuth(url, downloadAuthToken);
   if (!document || !previewKind) return null;
 
   return (
@@ -277,7 +280,7 @@ function DocumentPreview({ document, onClose }) {
           </div>
           <div className="flex items-center gap-2">
             <a
-              href={document.downloadUrl}
+              href={documentUrl(document.downloadUrl)}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
@@ -297,7 +300,7 @@ function DocumentPreview({ document, onClose }) {
           {previewKind === 'image' ? (
             <div className="flex h-full items-center justify-center overflow-auto p-3">
               <img
-                src={document.downloadUrl}
+                src={documentUrl(document.downloadUrl)}
                 alt={document.fileName || document.title || 'Document preview'}
                 className="max-h-full max-w-full rounded-md object-contain"
               />
@@ -305,7 +308,7 @@ function DocumentPreview({ document, onClose }) {
           ) : (
             <iframe
               title={document.fileName || document.title || 'Document preview'}
-              src={document.downloadUrl}
+              src={documentUrl(document.downloadUrl)}
               className="h-full w-full border-0 bg-background"
             />
           )}
@@ -318,6 +321,8 @@ function DocumentPreview({ document, onClose }) {
 export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispute, onStatusUpdated }) {
   const fileInputRef = useRef(null);
   const [documents, setDocuments] = useState([]);
+  const downloadAuthToken = useDownloadAuthToken(open && documents.length > 0);
+  const documentUrl = (url) => withDownloadAuth(url, downloadAuthToken);
   const [activeTab, setActiveTab] = useState('disputeFlow');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -875,7 +880,7 @@ export default function DisputeDocumentsModal({ stem, open, onClose, onEditDispu
                                   </Button>
                                 ) : (
                                   <a
-                                    href={document.downloadUrl}
+                                    href={documentUrl(document.downloadUrl)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"

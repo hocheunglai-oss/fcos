@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { format } from 'date-fns';
 import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Search, Eye, X, CheckCircle2 } from 'lucide-react';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { readDocumentSettings } from '@/lib/documentSettings';
 
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
@@ -211,6 +212,8 @@ function DocumentsSection({
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [previewDocument, setPreviewDocument] = useState(null);
+  const downloadAuthToken = useDownloadAuthToken(documents.length > 0);
+  const documentUrl = (url) => withDownloadAuth(url, downloadAuthToken);
   const relevantGroups = new Set(settings.relevantSourceGroups || []);
   const baseDocuments = settings.showOnlyRelevant && !showAll
     ? documents.filter((document) => relevantGroups.has(document.sourceGroup))
@@ -370,7 +373,7 @@ function DocumentsSection({
                         </button>
                       ) : (
                         <a
-                          href={document.downloadUrl}
+                          href={documentUrl(document.downloadUrl)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
@@ -403,7 +406,7 @@ function DocumentsSection({
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href={previewDocument.downloadUrl}
+                  href={documentUrl(previewDocument.downloadUrl)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
@@ -423,7 +426,7 @@ function DocumentsSection({
               {previewKind === 'image' ? (
                 <div className="flex h-full items-center justify-center overflow-auto p-4">
                   <img
-                    src={previewDocument.downloadUrl}
+                    src={documentUrl(previewDocument.downloadUrl)}
                     alt={previewDocument.fileName || previewDocument.title || 'Document preview'}
                     className="max-h-full max-w-full rounded-md object-contain"
                   />
@@ -431,7 +434,7 @@ function DocumentsSection({
               ) : (
                 <iframe
                   title={previewDocument.fileName || previewDocument.title || 'Document preview'}
-                  src={previewDocument.downloadUrl}
+                  src={documentUrl(previewDocument.downloadUrl)}
                   className="h-full w-full border-0 bg-background"
                 />
               )}

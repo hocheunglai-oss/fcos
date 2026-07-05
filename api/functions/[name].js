@@ -49,6 +49,18 @@ function appError(message, status = 500) {
   return error;
 }
 
+function redactedRequestUrl(req) {
+  try {
+    const url = new URL(req?.url || '', 'http://localhost');
+    url.searchParams.delete('access_token');
+    url.searchParams.delete('token');
+    const query = url.searchParams.toString();
+    return `${url.pathname}${query ? `?${query}` : ''}`;
+  } catch {
+    return String(req?.url || '').replace(/([?&](?:access_token|token)=)[^&]+/gi, '$1[redacted]');
+  }
+}
+
 function supabaseUrl() {
   return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 }
@@ -75,7 +87,14 @@ function supabaseAdminClient() {
 function bearerToken(req) {
   const header = req?.headers?.authorization || req?.headers?.Authorization || '';
   const match = String(header).match(/^Bearer\s+(.+)$/i);
-  return match?.[1] || null;
+  if (match?.[1]) return match[1];
+
+  try {
+    const url = new URL(req?.url || '', 'http://localhost');
+    return url.searchParams.get('access_token') || url.searchParams.get('token') || null;
+  } catch {
+    return null;
+  }
 }
 
 async function requireAdministrator(req) {
@@ -88,7 +107,7 @@ async function requireAdministrator(req) {
 
   const { data: profile, error: profileError } = await client
     .from('user_profiles')
-    .select('id,email,full_name,user_type,active')
+    .select('id,email,full_name,user_type,active,use_type_defaults')
     .eq('id', userData.user.id)
     .maybeSingle();
   if (profileError) throw profileError;
@@ -117,7 +136,7 @@ async function requireActiveUser(req) {
 
   const { data: profile, error: profileError } = await client
     .from('user_profiles')
-    .select('id,email,full_name,user_type,active')
+    .select('id,email,full_name,user_type,active,use_type_defaults')
     .eq('id', userData.user.id)
     .maybeSingle();
   if (profileError) throw profileError;
@@ -185,6 +204,85 @@ async function listAccessModel(client) {
     typePermissions[type.id] = normalizeUserTypePermissions(type.id, typePermissions[type.id]);
   }
   return { userTypes, typePermissions };
+}
+
+const AUTH_EXEMPT_HANDLERS = new Set([
+  'adminBootstrap',
+  'outstandingBuyerInvoicesEmailCron',
+]);
+
+const HANDLER_MODULE_ACCESS = {
+  salesforceDashboard: ['dashboard'],
+  salesforceDashboardFiltered: ['dashboard', 'review'],
+  salesforceTopBuyers: ['dashboard'],
+  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'pnl', 'brokers'],
+  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'pnl', 'brokers'],
+  salesforceStemDocumentUpload: ['disputes'],
+  salesforceDocumentRename: ['disputes'],
+  salesforceDocumentDelete: ['disputes'],
+  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'pnl', 'brokers'],
+  salesforceDisputeStems: ['disputes'],
+  salesforceDisputePartyUpdate: ['disputes'],
+  salesforceBuyerInvoicesDue: ['buyer_invoices'],
+  buyerInvoiceCollectionList: ['buyer_invoices'],
+  buyerInvoiceCollectionSave: ['buyer_invoices'],
+  buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
+  buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
+  buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
+  buyerInvoicePaymentReminderPrepare: ['buyer_invoices'],
+  buyerInvoicePaymentReminderSend: ['buyer_invoices'],
+  outstandingBuyerInvoicesEmailReport: ['buyer_invoices'],
+  stemPnl: ['pnl'],
+  salesforceBrokerRegister: ['brokers'],
+  frankfurterUsdCnyRate: ['brokers'],
+  salesforceSchema: ['reports', 'explorer', 'settings'],
+  salesforceObjectFields: ['reports', 'explorer', 'settings'],
+  salesforceFullSchema: ['reports', 'explorer', 'settings'],
+  salesforceQuery: ['dashboard', 'reports', 'explorer', 'settings'],
+  salesforceDescribeChildren: ['reports', 'explorer', 'settings'],
+  adminUsersList: ['admin'],
+  adminAuditLogs: ['admin'],
+  adminUserSave: ['admin'],
+  adminUserDelete: ['admin'],
+  adminUserTypeSave: ['admin'],
+  adminUserTypeDelete: ['admin'],
+};
+
+async function userHasAnyModuleAccess(client, profile, moduleIds) {
+  if (!moduleIds?.length) return true;
+  if (profile?.user_type === 'administrator') return true;
+
+  const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
+  if (!validModuleIds.length) return false;
+
+  if (profile?.use_type_defaults === false) {
+    const { data, error } = await client
+      .from('user_module_permissions')
+      .select('module_id,can_view')
+      .eq('user_id', profile.id)
+      .in('module_id', validModuleIds);
+    if (error) throw error;
+    return (data || []).some((row) => row.can_view === true);
+  }
+
+  const { data, error } = await client
+    .from('user_type_module_permissions')
+    .select('module_id,can_view')
+    .eq('user_type_id', profile.user_type)
+    .in('module_id', validModuleIds);
+  if (error) throw error;
+  if ((data || []).some((row) => row.can_view === true)) return true;
+
+  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
+  return validModuleIds.some((moduleId) => fallback[moduleId] === true);
+}
+
+async function requireHandlerAccess(name, req) {
+  if (AUTH_EXEMPT_HANDLERS.has(name)) return null;
+  const context = await requireActiveUser(req);
+  const allowed = await userHasAnyModuleAccess(context.client, context.profile, HANDLER_MODULE_ACCESS[name] || []);
+  if (!allowed) throw appError('You do not have access to this module.', 403);
+  return context;
 }
 
 async function sanitizeManagedUserPayload(client, body = {}) {
@@ -4507,18 +4605,24 @@ export default async function handler(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
     const name = url.pathname.split('/').pop();
-    if (name === 'salesforceDocumentDownload') return salesforceDocumentDownload(req, res);
+    if (name === 'salesforceDocumentDownload') {
+      await requireHandlerAccess(name, req);
+      return salesforceDocumentDownload(req, res);
+    }
     const fn = handlers[name];
     if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
+    await requireHandlerAccess(name, req);
     const body = await readBody(req);
     const data = await fn(body, req);
     return sendJson(res, data);
   } catch (error) {
-    console.error(`[api/functions] ${req?.url || ''} failed`, {
+    const status = error.status || error.statusCode || 500;
+    const logPayload = {
       message: error.message,
-      status: error.status || error.statusCode || 500,
-      stack: error.stack,
-    });
-    return sendJson(res, { error: error.message }, error.status || error.statusCode || 500);
+      status,
+    };
+    if (status >= 500) logPayload.stack = error.stack;
+    console.error(`[api/functions] ${redactedRequestUrl(req)} failed`, logPayload);
+    return sendJson(res, { error: error.message }, status);
   }
 }
