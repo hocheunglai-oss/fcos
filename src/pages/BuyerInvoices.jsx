@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CalendarClock, Check, Copy, Eye, Loader2, Mail, MessageSquareText, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
-import { format } from 'date-fns';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
@@ -26,6 +25,8 @@ const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
+const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
 const DEFAULT_EMAIL_SETTINGS = {
   enabled: true,
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
@@ -109,15 +110,60 @@ const fmtMoney = (value) => {
   return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+function parseDateValue(value) {
+  if (!value) return null;
+  if (typeof value === 'object' && !(value instanceof Date)) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function hongKongDateKey(value = new Date()) {
+  const date = parseDateValue(value);
+  if (!date) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: HONG_KONG_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
 const fmtDate = (value) => {
   if (!value) return '-';
-  if (typeof value === 'object') return textValue(value);
-  try { return format(new Date(value), 'dd MMM yyyy'); } catch { return textValue(value); }
+  const date = parseDateValue(value);
+  if (!date) return textValue(value);
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: HONG_KONG_TIME_ZONE,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(date);
+  } catch {
+    return textValue(value);
+  }
 };
 
 const fmtDateTime = (value) => {
   if (!value) return '-';
-  try { return format(new Date(value), 'dd MMM yyyy HH:mm'); } catch { return textValue(value); }
+  const date = parseDateValue(value);
+  if (!date) return textValue(value);
+  try {
+    const label = new Intl.DateTimeFormat('en-GB', {
+      timeZone: HONG_KONG_TIME_ZONE,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date);
+    return `${label} ${HONG_KONG_TIME_LABEL}`;
+  } catch {
+    return textValue(value);
+  }
 };
 
 function splitBuyerTraderNames(value) {
@@ -377,34 +423,20 @@ function collectionPill(status) {
   return 'bg-background text-foreground border-border';
 }
 
-function hongKongDateKey(value = new Date()) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Hong_Kong',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${byType.year}-${byType.month}-${byType.day}`;
-}
-
 function isPaymentReminderSentEvent(event) {
   return /^Payment reminder sent\b/i.test(textValue(event?.note, ''));
 }
 
-function latestPaymentReminderSentAt(row) {
+function latestPaymentReminderSentEvent(row) {
   const events = Array.isArray(row?.collectionEvents) ? row.collectionEvents : [];
-  const latestEvent = events
+  return events
     .filter(isPaymentReminderSentEvent)
     .filter((event) => event.createdAt)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-  if (latestEvent) return latestEvent.createdAt;
-  if (isPaymentReminderSentEvent({ note: row?.collection?.latestNote })) {
-    return row?.collection?.lastEventAt || row?.collection?.updatedAt || null;
-  }
-  return null;
+}
+
+function latestPaymentReminderSentAt(row) {
+  return latestPaymentReminderSentEvent(row)?.createdAt || null;
 }
 
 function wasPaymentReminderSentToday(row, todayKey = hongKongDateKey()) {
@@ -737,6 +769,9 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const selectedReceivable = useMemo(() => (
     selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0)
   ), [selectedRows]);
+  const reminderHistoryRow = data?.selected || candidates.find((candidate) => candidate.stemId === row?.stemId) || row;
+  const lastReminderSentAt = latestPaymentReminderSentAt(reminderHistoryRow) || latestPaymentReminderSentAt(row);
+  const lastReminderSentToday = wasPaymentReminderSentToday(reminderHistoryRow) || wasPaymentReminderSentToday(row);
 
   if (!open || !row) return null;
 
@@ -832,6 +867,33 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
 
           {!loading && data && (
             <div className="space-y-4">
+              <div
+                className={cn(
+                  'rounded-xl border p-4 shadow-sm',
+                  lastReminderSentToday
+                    ? 'border-zinc-700 bg-zinc-900 text-white'
+                    : lastReminderSentAt
+                      ? 'border-amber-300 bg-amber-50 text-amber-950'
+                      : 'border-border bg-muted/20 text-foreground',
+                )}
+              >
+                <p className={cn(
+                  'text-xs font-semibold uppercase tracking-wide',
+                  lastReminderSentToday ? 'text-zinc-200' : 'text-muted-foreground',
+                )}>
+                  Last Payment Reminder Sent
+                </p>
+                <div className="mt-1 text-lg font-semibold">
+                  {lastReminderSentAt ? fmtDateTime(lastReminderSentAt) : 'Not sent yet'}
+                </div>
+                <p className={cn(
+                  'mt-1 text-xs',
+                  lastReminderSentToday ? 'text-zinc-300' : 'text-muted-foreground',
+                )}>
+                  All reminder dates and times use Hong Kong time, GMT+8.
+                </p>
+              </div>
+
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
                 <div>
                   <div className="font-semibold text-foreground">
@@ -1169,7 +1231,7 @@ function PaymentReminderTemplateModal({
 
 export default function BuyerInvoices() {
   const initialFilters = useMemo(() => readInitialFilters(), []);
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => hongKongDateKey(), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(null);
