@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CalendarClock, Check, Copy, Eye, Loader2, Mail, MessageSquareText, RefreshCw, ReceiptText, Save, Send, X } from 'lucide-react';
-import ReactQuill from 'react-quill';
-import 'react-quill/dist/quill.snow.css';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
