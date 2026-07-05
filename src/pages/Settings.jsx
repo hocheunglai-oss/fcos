@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { appClient } from '@/api/appClient';
-import { Settings, Search, Loader2, Check, Mail, CircleDollarSign, FileText } from 'lucide-react';
+import { Settings, Search, Loader2, Check, Mail, CircleDollarSign, FileText, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import ObjectSchemaTree from '@/components/settings/ObjectSchemaTree';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
@@ -20,6 +21,37 @@ import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/d
 
 const SETTINGS_KEY = 'report_builder_config';
 const SETTINGS_DRAFT_KEY = 'settings:page';
+const SETTINGS_TAB_KEY = 'settings:active-tab';
+
+const SETTINGS_TABS = [
+  { id: 'access', label: 'Salesforce Access', icon: ShieldCheck },
+  { id: 'email', label: 'Email Senders', icon: Mail },
+  { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
+  { id: 'documents', label: 'STEM Documents', icon: FileText },
+  { id: 'defaults', label: 'Report Defaults', icon: SlidersHorizontal },
+];
+
+function SettingsPanel({ title, description, icon: Icon, meta, children }) {
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          {Icon && (
+            <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
+              <Icon className="h-4 w-4" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+            {description && <p className="mt-1 max-w-3xl text-xs text-muted-foreground">{description}</p>}
+          </div>
+        </div>
+        {meta && <div className="shrink-0 text-xs text-muted-foreground">{meta}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
 
 async function loadSettingsRecord() {
   const records = await appClient.entities.AppSettings.filter({ key: SETTINGS_KEY });
@@ -30,7 +62,7 @@ function SmtpAccountCard({ title, description, settings, onChange, enableLabel }
   const patch = (updates) => onChange((prev) => ({ ...prev, ...updates }));
 
   return (
-    <div className="bg-card rounded-xl border border-border p-5 mb-6">
+    <div className="rounded-xl border border-border bg-background/50 p-5">
       <div className="mb-4 flex items-start gap-3">
         <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
           <Mail className="h-4 w-4" />
@@ -139,6 +171,7 @@ export default function SettingsPage() {
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
   const [baseSettings, setBaseSettings] = useState(null);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem(SETTINGS_TAB_KEY) || 'access');
 
   const settingsDraftValue = useMemo(() => ({
     allowedMap,
@@ -156,6 +189,11 @@ export default function SettingsPage() {
     dirty: settingsDirty,
     message: 'Autosaved Settings draft. Save or discard it before leaving.',
   });
+
+  const changeTab = (tab) => {
+    setActiveTab(tab);
+    localStorage.setItem(SETTINGS_TAB_KEY, tab);
+  };
 
   // Load schema + settings from DB in parallel
   useEffect(() => {
@@ -298,220 +336,235 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-4xl mx-auto">
+    <div className="mx-auto max-w-6xl p-6 lg:p-8">
       <PageHeader
         icon={Settings}
         eyebrow="Admin / Reporting"
         title="Settings"
-        description="Configure report builder access, allowed Salesforce objects, and default query behavior."
+        description="Configure application modules without scrolling through unrelated settings."
         actions={(
           <Button onClick={saveAll} disabled={saving || loading} className="gap-2">
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
-          {saved ? 'Saved!' : 'Save All Settings'}
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
+            {saved ? 'Saved!' : 'Save All Settings'}
           </Button>
         )}
       />
 
       <DraftNotice restoredAt={draftRestoredAt} label="Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />
 
-      {/* ── Allowed Objects & Fields ── */}
-      <div className="bg-card rounded-xl border border-border p-5 mb-6">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-sm font-semibold text-foreground">Report Builder — Allowed Objects & Fields</h2>
-          {!loading && (
-            <span className="text-xs text-muted-foreground">{enabledCount} of {allObjects.length} objects enabled</span>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          Expand any object to configure which fields and child objects are accessible. Drill down into child objects to configure grandchildren, and so on.
-        </p>
-
-        <div className="flex items-center gap-2 mb-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Filter objects…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="pl-8 h-8 text-xs"
-            />
-          </div>
-          <Button
-            variant="outline" size="sm" className="text-xs h-8 shrink-0"
-            onClick={() => {
-              const next = { ...allowedMap };
-              filteredObjects.forEach(o => { next[o.name] = true; });
-              setAllowedMap(next);
-            }}
-          >All</Button>
-          <Button
-            variant="outline" size="sm" className="text-xs h-8 shrink-0"
-            onClick={() => {
-              const next = { ...allowedMap };
-              filteredObjects.forEach(o => { next[o.name] = false; });
-              setAllowedMap(next);
-            }}
-          >None</Button>
+      <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
+        <div className="rounded-2xl border border-border bg-card/70 p-2">
+          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
+            {SETTINGS_TABS.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <TabsTrigger
+                  key={tab.id}
+                  value={tab.id}
+                  className="h-9 gap-2 px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {tab.label}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading schema…
-          </div>
-        ) : (
-          <ObjectSchemaTree
-            allObjects={filteredObjects}
-            allowedMap={allowedMap}
-            onChange={setAllowedMap}
-          />
-        )}
-      </div>
-
-      <SmtpAccountCard
-        title="Internal Email Reminder Sender"
-        description="Used by Send Now for the internal Outstanding Buyer Invoices report. The password is saved in this browser's app settings."
-        settings={smtpSettings}
-        onChange={setSmtpSettings}
-        enableLabel="Use this SMTP account for Internal Email Reminder Send Now"
-      />
-
-      <SmtpAccountCard
-        title="Payment Reminder Sender"
-        description="Used only by customer-facing payment reminder emails. Keep this separate from the internal report sender."
-        settings={paymentReminderSmtpSettings}
-        onChange={setPaymentReminderSmtpSettings}
-        enableLabel="Use this SMTP account for Payment Reminder emails"
-      />
-
-      {/* ── Exchange Rate API ── */}
-      <div className="bg-card rounded-xl border border-border p-5 mb-6">
-        <div className="mb-4 flex items-start gap-3">
-          <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
-            <CircleDollarSign className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">Exchange Rate API</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Used by Broker's Commission to convert USD payable and receivable summaries into CNY.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Mid-Rate Source</Label>
-            <Select
-              value={exchangeRateSettings.provider}
-              onValueChange={(provider) => setExchangeRateSettings((prev) => ({ ...prev, provider }))}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {RATE_PROVIDER_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-            <div><span className="font-semibold text-foreground">Source:</span> Frankfurter API</div>
-            <div><span className="font-semibold text-foreground">Rate treatment:</span> API rate is mid-rate</div>
-            <div><span className="font-semibold text-foreground">Bank buy rate:</span> mid-rate less 0.2%</div>
-            <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
-            <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── STEM Documents ── */}
-      <div className="bg-card rounded-xl border border-border p-5 mb-6">
-        <div className="mb-4 flex items-start gap-3">
-          <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
-            <FileText className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">STEM Documents</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Choose which discovered Salesforce document sources are relevant. Stem Detail will use this list when browsing documents.
-            </p>
-          </div>
-        </div>
-
-        <label className="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
-          <input
-            type="checkbox"
-            checked={documentSettings.showOnlyRelevant}
-            onChange={(event) => setDocumentSettings((prev) => ({ ...prev, showOnlyRelevant: event.target.checked }))}
-          />
-          Show only relevant document sources by default
-        </label>
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          {DOCUMENT_SOURCE_GROUPS.map((group) => {
-            const checked = documentSettings.relevantSourceGroups?.includes(group);
-            return (
-              <label key={group} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/50 px-3 py-2 text-sm">
-                <span className="font-medium text-foreground">{group}</span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggleDocumentSourceGroup(group)}
+        <TabsContent value="access" className="mt-0">
+          <SettingsPanel
+            icon={ShieldCheck}
+            title="Report Builder Access"
+            description="Choose which Salesforce objects, fields, and child objects are available to reporting users."
+            meta={!loading ? `${enabledCount} of ${allObjects.length} objects enabled` : null}
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Filter objects..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="h-8 pl-8 text-xs"
                 />
-              </label>
-            );
-          })}
-        </div>
-      </div>
+              </div>
+              <Button
+                variant="outline" size="sm" className="h-8 shrink-0 text-xs"
+                onClick={() => {
+                  const next = { ...allowedMap };
+                  filteredObjects.forEach(o => { next[o.name] = true; });
+                  setAllowedMap(next);
+                }}
+              >All</Button>
+              <Button
+                variant="outline" size="sm" className="h-8 shrink-0 text-xs"
+                onClick={() => {
+                  const next = { ...allowedMap };
+                  filteredObjects.forEach(o => { next[o.name] = false; });
+                  setAllowedMap(next);
+                }}
+              >None</Button>
+            </div>
 
-      {/* ── Report Builder Defaults ── */}
-      <div className="bg-card rounded-xl border border-border p-5">
-        <h2 className="text-sm font-semibold text-foreground mb-1">Report Builder — Defaults</h2>
-        <p className="text-xs text-muted-foreground mb-4">
-          Default Salesforce object, sort field, and row limit when opening the Report Builder.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Default Object</label>
             {loading ? (
-              <div className="h-9 rounded-md border border-input bg-muted animate-pulse" />
+              <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading schema...
+              </div>
             ) : (
-              <Select value={defaultObject} onValueChange={v => { setDefaultObject(v); setDefaultOrderBy(''); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {allObjects.map(o => <SelectItem key={o.name} value={o.name}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="max-h-[calc(100vh-330px)] min-h-[420px] overflow-auto rounded-lg border border-border bg-background/40 p-2">
+                <ObjectSchemaTree
+                  allObjects={filteredObjects}
+                  allowedMap={allowedMap}
+                  onChange={setAllowedMap}
+                />
+              </div>
             )}
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Default Order By</label>
-            {rbFieldsLoading ? (
-              <div className="h-9 rounded-md border border-input bg-muted animate-pulse" />
-            ) : (
-              <Select value={defaultOrderBy} onValueChange={setDefaultOrderBy}>
-                <SelectTrigger><SelectValue placeholder="Select field…" /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {rbFields.map(f => <SelectItem key={f.name} value={f.name}>{f.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 block">Default Row Limit</label>
-            <Select value={defaultLimit} onValueChange={setDefaultLimit}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {[25, 50, 100, 200, 500, 1000, 2000].map(n => (
-                  <SelectItem key={n} value={String(n)}>{n} rows</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
+          </SettingsPanel>
+        </TabsContent>
 
-      <div className="mt-6 flex justify-end">
+        <TabsContent value="email" className="mt-0">
+          <SettingsPanel
+            icon={Mail}
+            title="Email Senders"
+            description="Manage sender accounts for internal AR reports and customer-facing payment reminders."
+          >
+            <div className="space-y-4">
+              <SmtpAccountCard
+                title="Internal Email Reminder Sender"
+                description="Used by Send Now for the internal Outstanding Buyer Invoices report. The password is saved in this browser's app settings."
+                settings={smtpSettings}
+                onChange={setSmtpSettings}
+                enableLabel="Use this SMTP account for Internal Email Reminder Send Now"
+              />
+
+              <SmtpAccountCard
+                title="Payment Reminder Sender"
+                description="Used only by customer-facing payment reminder emails. Keep this separate from the internal report sender."
+                settings={paymentReminderSmtpSettings}
+                onChange={setPaymentReminderSmtpSettings}
+                enableLabel="Use this SMTP account for Payment Reminder emails"
+              />
+            </div>
+          </SettingsPanel>
+        </TabsContent>
+
+        <TabsContent value="exchange" className="mt-0">
+          <SettingsPanel
+            icon={CircleDollarSign}
+            title="Exchange Rate API"
+            description="Used by Broker's Commission to convert USD payable and receivable summaries into CNY."
+          >
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Mid-Rate Source</Label>
+                <Select
+                  value={exchangeRateSettings.provider}
+                  onValueChange={(provider) => setExchangeRateSettings((prev) => ({ ...prev, provider }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {RATE_PROVIDER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
+                <div><span className="font-semibold text-foreground">Source:</span> Frankfurter API</div>
+                <div><span className="font-semibold text-foreground">Rate treatment:</span> API rate is mid-rate</div>
+                <div><span className="font-semibold text-foreground">Bank buy rate:</span> mid-rate less 0.2%</div>
+                <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
+                <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
+              </div>
+            </div>
+          </SettingsPanel>
+        </TabsContent>
+
+        <TabsContent value="documents" className="mt-0">
+          <SettingsPanel
+            icon={FileText}
+            title="STEM Documents"
+            description="Choose which discovered Salesforce document sources are relevant for Stem Detail and dispute document browsing."
+          >
+            <label className="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={documentSettings.showOnlyRelevant}
+                onChange={(event) => setDocumentSettings((prev) => ({ ...prev, showOnlyRelevant: event.target.checked }))}
+              />
+              Show only relevant document sources by default
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              {DOCUMENT_SOURCE_GROUPS.map((group) => {
+                const checked = documentSettings.relevantSourceGroups?.includes(group);
+                return (
+                  <label key={group} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/50 px-3 py-2 text-sm">
+                    <span className="font-medium text-foreground">{group}</span>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleDocumentSourceGroup(group)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          </SettingsPanel>
+        </TabsContent>
+
+        <TabsContent value="defaults" className="mt-0">
+          <SettingsPanel
+            icon={SlidersHorizontal}
+            title="Report Builder Defaults"
+            description="Set the default Salesforce object, sort field, and row limit when opening the Report Builder."
+          >
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Object</label>
+                {loading ? (
+                  <div className="h-9 animate-pulse rounded-md border border-input bg-muted" />
+                ) : (
+                  <Select value={defaultObject} onValueChange={v => { setDefaultObject(v); setDefaultOrderBy(''); }}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {allObjects.map(o => <SelectItem key={o.name} value={o.name}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Order By</label>
+                {rbFieldsLoading ? (
+                  <div className="h-9 animate-pulse rounded-md border border-input bg-muted" />
+                ) : (
+                  <Select value={defaultOrderBy} onValueChange={setDefaultOrderBy}>
+                    <SelectTrigger><SelectValue placeholder="Select field..." /></SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {rbFields.map(f => <SelectItem key={f.name} value={f.name}>{f.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Row Limit</label>
+                <Select value={defaultLimit} onValueChange={setDefaultLimit}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[25, 50, 100, 200, 500, 1000, 2000].map(n => (
+                      <SelectItem key={n} value={String(n)}>{n} rows</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </SettingsPanel>
+        </TabsContent>
+      </Tabs>
+
+      <div className="mt-4 flex justify-end rounded-xl border border-border bg-card/70 p-3">
         <Button onClick={saveAll} disabled={saving || loading} className="gap-2">
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
           {saved ? 'Saved!' : 'Save All Settings'}
         </Button>
       </div>
