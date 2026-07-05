@@ -100,8 +100,8 @@ export const AuthProvider = ({ children }) => {
     setIsLoadingAuth(false);
   }, []);
 
-  const checkUserAuth = useCallback(async () => {
-    setIsLoadingAuth(true);
+  const checkUserAuth = useCallback(async ({ showLoader = true } = {}) => {
+    if (showLoader) setIsLoadingAuth(true);
     setAuthError(null);
     try {
       if (!isSupabaseConfigured) {
@@ -121,7 +121,7 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(false);
       setAuthChecked(true);
     } finally {
-      setIsLoadingAuth(false);
+      if (showLoader) setIsLoadingAuth(false);
     }
   }, [applyLocalAdmin]);
 
@@ -131,8 +131,18 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
-    const { data } = supabase.auth.onAuthStateChange(() => {
-      checkUserAuth();
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setModuleAccess({});
+        setIsAuthenticated(false);
+        setAuthError({ type: 'auth_required' });
+        setAuthChecked(true);
+        setIsLoadingAuth(false);
+        return;
+      }
+      checkUserAuth({ showLoader: false });
     });
     return () => data?.subscription?.unsubscribe();
   }, [checkUserAuth]);
@@ -144,7 +154,7 @@ export const AuthProvider = ({ children }) => {
     }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    await checkUserAuth();
+    await checkUserAuth({ showLoader: true });
   };
 
   const logout = async () => {
@@ -156,8 +166,8 @@ export const AuthProvider = ({ children }) => {
     if (!isSupabaseConfigured) applyLocalAdmin();
   };
 
-  const navigateToLogin = () => checkUserAuth();
-  const checkAppState = () => checkUserAuth();
+  const navigateToLogin = () => checkUserAuth({ showLoader: true });
+  const checkAppState = () => checkUserAuth({ showLoader: false });
   const hasModuleAccess = useCallback((moduleId) => {
     if (!moduleId) return true;
     if (user?.user_type === 'administrator') return true;
