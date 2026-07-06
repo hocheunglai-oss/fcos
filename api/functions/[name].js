@@ -1418,27 +1418,82 @@ function fieldMatchesAny(field, exactTokens = [], includeTokens = []) {
   return values.some((value) => includeTokens.some((token) => value.includes(token)));
 }
 
-function accountInvoiceFormatField(accountFields = []) {
-  return accountFields.find((field) => fieldMatchesAny(field, ['invoiceformat', 'invoiceformatc'], ['invoiceformat']))?.name || null;
+function accountInvoiceFormatFields(accountFields = []) {
+  return accountFields
+    .filter((field) => {
+      const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
+      return fieldMatchesAny(field, [
+        'invoiceformat',
+        'invoiceformatc',
+        'invoiceemailsetting',
+        'invoiceemailsettingc',
+        'invoiceemailformat',
+        'invoiceemailformatc',
+        'invoiceemailrouting',
+        'invoiceemailroutingc',
+      ], [
+        'invoiceformat',
+        'invoiceemailsetting',
+        'invoiceemailformat',
+        'invoiceemailrouting',
+        'brokerinvoiceformat',
+        'brokerinvoiceemail',
+      ])
+        || (token.includes('invoiceemail') && ['picklist', 'multipicklist', 'string'].includes(field?.type));
+    })
+    .map((field) => field.name);
 }
 
-function accountBrokerEmailField(accountFields = []) {
+function accountBrokerEmailFields(accountFields = []) {
   const excluded = (field) => {
     const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
     return token.includes('invoice') || token.includes('accounts') || token.includes('accounting');
   };
-  const exact = accountFields.find((field) => !excluded(field) && fieldMatchesAny(field, [
-    'email',
-    'emailc',
-    'emailaddress',
-    'emailaddressc',
-    'brokeremail',
-    'brokeremailc',
-    'brokeremailaddress',
-    'brokeremailaddressc',
-  ]));
-  if (exact) return exact.name;
-  return accountFields.find((field) => !excluded(field) && field.type === 'email')?.name || null;
+  return accountFields
+    .filter((field) => {
+      if (excluded(field)) return false;
+      const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
+      return fieldMatchesAny(field, [
+        'email',
+        'emailc',
+        'emailaddress',
+        'emailaddressc',
+        'brokeremail',
+        'brokeremailc',
+        'brokeremailaddress',
+        'brokeremailaddressc',
+      ])
+        || field.type === 'email'
+        || token.includes('email')
+        || token.includes('mail');
+    })
+    .map((field) => field.name);
+}
+
+function emailTokensFromValue(value) {
+  if (Array.isArray(value)) return value.flatMap(emailTokensFromValue);
+  return [...String(value || '').matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)]
+    .map((match) => match[0]);
+}
+
+function routingFormatValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const text = raw.toLowerCase().replace(/[./_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (
+    text.includes('buyer only')
+    || text.includes('broker only')
+    || /^to broker\b/.test(text)
+    || text.includes('buyer c o broker')
+    || text.includes('buyer co broker')
+    || text.includes('buyer cc broker')
+    || text.includes('cc broker')
+    || text.includes('copy broker')
+    || text.includes('c o broker')
+  ) {
+    return raw;
+  }
+  return null;
 }
 
 function buyerBrokerRoutingMode(format, brokerEmails = []) {
@@ -2809,8 +2864,8 @@ async function salesforceBuyerInvoicesDue(body) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
-  const brokerInvoiceFormatField = accountInvoiceFormatField(accountDescribe.fields || []);
-  const brokerEmailField = accountBrokerEmailField(accountDescribe.fields || []);
+  const brokerInvoiceFormatFields = accountInvoiceFormatFields(accountDescribe.fields || []);
+  const brokerEmailFields = accountBrokerEmailFields(accountDescribe.fields || []);
 
   const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
   if (!dueFields.length) return { rows: [], today, dueThrough, daysAhead };
@@ -2968,8 +3023,7 @@ async function salesforceBuyerInvoicesDue(body) {
     const brokerAccountMap = {};
     if (brokerIds.length) {
       const brokerAccountFields = ['Id', 'Name'];
-      if (brokerInvoiceFormatField) brokerAccountFields.push(brokerInvoiceFormatField);
-      if (brokerEmailField) brokerAccountFields.push(brokerEmailField);
+      brokerAccountFields.push(...brokerInvoiceFormatFields, ...brokerEmailFields);
       if (accountFieldNames.includes('Hidden_Broker__c')) brokerAccountFields.push('Hidden_Broker__c');
       if (accountFieldNames.includes('Hidden_Broker_Company__c')) brokerAccountFields.push('Hidden_Broker_Company__c');
       const brokerAccountChunks = await Promise.all(chunkIds(brokerIds).map((chunk) => {
@@ -2986,8 +3040,8 @@ async function salesforceBuyerInvoicesDue(body) {
         const detail = {
           id: account.Id,
           name: account.Name || account.Id,
-          invoiceFormat: brokerInvoiceFormatField ? account[brokerInvoiceFormatField] || null : null,
-          emails: brokerEmailField ? uniqueEmailList(account[brokerEmailField]) : [],
+          invoiceFormat: brokerInvoiceFormatFields.map((field) => routingFormatValue(account[field])).find(Boolean) || null,
+          emails: uniqueEmailList(...brokerEmailFields.flatMap((field) => emailTokensFromValue(account[field]))),
         };
         brokerAccountMap[account.Id] = detail;
         brokerAccountMap[String(account.Id).slice(0, 15)] = detail;
