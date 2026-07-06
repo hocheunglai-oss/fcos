@@ -1,6 +1,28 @@
-export const APP_VERSION = '1.0.0.2';
+export const APP_VERSION = '1.0.0.4';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.4',
+    releasedAt: '2026-07-06',
+    title: 'Dashboard KPI and payment details',
+    changes: [
+      'Added Turnover KPI to the dashboard using filtered buyer invoice total.',
+      'Standardized the Product Volume KPI layout with the other dashboard KPI cards.',
+      'Added a wide-view toggle for the dashboard Filtered STEMs table.',
+      'Added supplier invoice paid dates and buyer invoice received dates to Stem Detail.',
+    ],
+  },
+  {
+    version: '1.0.0.3',
+    releasedAt: '2026-07-06',
+    title: 'Buyer broker reminder routing',
+    changes: [
+      'Added buyer broker routing metadata to Outstanding Buyer Invoices.',
+      'Payment reminders now route buyer-only, broker-only, or buyer-with-broker-copied based on Salesforce broker Invoice Format.',
+      'Broker reminders use the broker Account email field, not broker invoice email or accounts email.',
+      'Added routing details and warnings to the payment reminder selection workflow.',
+    ],
+  },
   {
     version: '1.0.0.2',
     releasedAt: '2026-07-06',

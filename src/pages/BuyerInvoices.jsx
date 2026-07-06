@@ -45,7 +45,7 @@ const DEFAULT_EMAIL_SETTINGS = {
   paymentReminderCc: '',
   paymentReminderBcc: '',
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
-  paymentReminderBody: `<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>${INVOICE_TABLE_TOKEN}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>`,
+  paymentReminderBody: `<p>Dear {{primaryRecipientName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>${INVOICE_TABLE_TOKEN}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>`,
 };
 
 const QUILL_MODULES = {
@@ -66,6 +66,7 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
       { label: 'Stem name', token: '{{stemName}}' },
       { label: 'Key stem', token: '{{keyStem}}' },
       { label: 'Buyer name', token: '{{buyerName}}' },
+      { label: 'Primary recipient', token: '{{primaryRecipientName}}' },
       { label: 'Buyer group', token: '{{buyerGroupName}}' },
       { label: 'Invoice amount', token: '{{invoiceAmount}}' },
       { label: 'Receivable balance', token: '{{receivableBalance}}' },
@@ -75,6 +76,9 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
       { label: 'Trader emails', token: '{{buyerTraderEmail}}' },
       { label: 'Payment handler', token: '{{paymentHandlerName}}' },
       { label: 'Payment handler email', token: '{{paymentHandlerEmail}}' },
+      { label: 'Buyer broker names', token: '{{buyerBrokerNames}}' },
+      { label: 'Buyer broker emails', token: '{{buyerBrokerEmails}}' },
+      { label: 'Buyer broker formats', token: '{{buyerBrokerInvoiceFormats}}' },
       { label: 'To recipients', token: '{{toRecipients}}' },
       { label: 'PSPRS status', token: '{{psprsStatus}}' },
       { label: 'Invoice status', token: '{{invoiceStatus}}' },
@@ -182,6 +186,25 @@ function splitBuyerTraderNames(value) {
 
 function arrayToInput(value) {
   return Array.isArray(value) ? value.join(', ') : textValue(value, '');
+}
+
+function uniqueEmailList(...values) {
+  const seen = new Set();
+  const emails = [];
+  const add = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(add);
+      return;
+    }
+    String(value || '').split(/[,\n;]/).map((item) => item.trim()).filter(Boolean).forEach((email) => {
+      const key = email.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      emails.push(email);
+    });
+  };
+  values.forEach(add);
+  return emails;
 }
 
 function richTemplateValue(value) {
@@ -293,6 +316,9 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
   const merged = { ...DEFAULT_EMAIL_SETTINGS, ...settings };
   if (String(merged.from || '').includes('admin@fcuno.com')) merged.from = DEFAULT_EMAIL_SETTINGS.from;
   if (!merged.intro || merged.intro === OLD_DEFAULT_EMAIL_INTRO) merged.intro = DEFAULT_EMAIL_SETTINGS.intro;
+  const paymentReminderBody = textValue(merged.paymentReminderBody, DEFAULT_EMAIL_SETTINGS.paymentReminderBody)
+    .replace(/Dear\s+\{\{\s*buyerName\s*\}\}/i, 'Dear {{primaryRecipientName}}')
+    .replace(/To\s+\{\{\s*buyerName\s*\}\}/i, 'To {{primaryRecipientName}}');
   return {
     ...merged,
     to: arrayToInput(merged.to),
@@ -301,7 +327,7 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
     weekdays: Array.isArray(merged.weekdays) ? merged.weekdays : WEEKDAYS,
     paymentReminderCc: arrayToInput(merged.paymentReminderCc),
     paymentReminderBcc: arrayToInput(merged.paymentReminderBcc),
-    paymentReminderBody: richTemplateValue(merged.paymentReminderBody),
+    paymentReminderBody: richTemplateValue(paymentReminderBody),
   };
 }
 
@@ -518,6 +544,18 @@ function matchesInvoiceKeyword(row, keyword) {
   if (!terms.length) return true;
   const searchable = `${row?.stemName || ''} ${row?.buyerName || ''}`.toLowerCase();
   return terms.every((term) => searchable.includes(term));
+}
+
+function brokerRoutingLabel(mode) {
+  if (mode === 'broker_only') return 'Broker only';
+  if (mode === 'buyer_cc_broker') return 'Buyer CC broker';
+  return 'Buyer only';
+}
+
+function brokerRoutingTone(mode) {
+  if (mode === 'broker_only') return 'border-purple-200 bg-purple-50 text-purple-700';
+  if (mode === 'buyer_cc_broker') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-border bg-background text-muted-foreground';
 }
 
 async function writeClipboardTable({ html, text }) {
@@ -839,6 +877,20 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const selectedReceivable = useMemo(() => (
     selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0)
   ), [selectedRows]);
+  const selectedRoutingGroups = useMemo(() => {
+    const selected = new Set(selectedIds);
+    return (data?.routingGroups || [])
+      .map((group) => ({
+        ...group,
+        stemIds: (group.stemIds || []).filter((id) => selected.has(id)),
+      }))
+      .filter((group) => group.stemIds.length);
+  }, [data?.routingGroups, selectedIds]);
+  const selectedAutoTo = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.to || [])), [selectedRoutingGroups]);
+  const selectedAutoCc = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.cc || [])), [selectedRoutingGroups]);
+  const selectedRoutingWarnings = useMemo(() => (
+    [...new Set(selectedRows.flatMap((candidate) => candidate.buyerBrokerRoutingWarnings || []))]
+  ), [selectedRows]);
   const reminderHistoryRow = data?.selected || candidates.find((candidate) => candidate.stemId === row?.stemId) || row;
   const lastReminderSentAt = latestPaymentReminderSentAt(reminderHistoryRow) || latestPaymentReminderSentAt(row);
   const lastReminderSentToday = wasPaymentReminderSentToday(reminderHistoryRow) || wasPaymentReminderSentToday(row);
@@ -884,10 +936,6 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const sendReminder = async () => {
     if (!selectedRows.length) {
       setError('Select at least one invoice to include.');
-      return;
-    }
-    if (!form.to.trim()) {
-      setError('Payment reminder recipient is required.');
       return;
     }
     setSending(true);
@@ -988,10 +1036,19 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     {selectedRows.length.toLocaleString()} selected · {fmtMoney(selectedReceivable)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    To: buyer account accounts email + buyer trader in charge email + payment handler email
+                    {selectedRoutingGroups.length.toLocaleString()} email batch{selectedRoutingGroups.length === 1 ? '' : 'es'} · To: {selectedAutoTo.join(', ') || '-'}
+                    {selectedAutoCc.length ? ` · Broker CC: ${selectedAutoCc.join(', ')}` : ''}
                   </div>
                 </div>
               </div>
+              {selectedRoutingWarnings.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  <div className="font-semibold">Buyer broker routing warnings</div>
+                  <ul className="mt-1 list-disc space-y-1 pl-4">
+                    {selectedRoutingWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+                  </ul>
+                </div>
+              )}
 
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1006,7 +1063,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </Button>
                 </div>
                 <div className="max-h-[34vh] overflow-auto rounded-lg border border-border">
-                  <table className="w-full min-w-[1240px] text-sm">
+                  <table className="w-full min-w-[1500px] text-sm">
                     <thead>
                       <tr className="border-b border-border bg-muted/40">
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
@@ -1015,6 +1072,8 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Group</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
+                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Broker</th>
+                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Routing</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recipient</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
@@ -1035,7 +1094,27 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                           <td className="px-3 py-2 text-muted-foreground">{candidate.buyerGroupName || '-'}</td>
                           <td className="px-3 py-2 text-right font-semibold text-foreground">{fmtMoney(candidate.receivableBalance)}</td>
                           <td className="px-3 py-2 text-foreground">{fmtDate(candidate.buyerInvoiceDueDate)}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{candidate.paymentReminderRecipient || '-'}</td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            <div className="font-medium text-foreground">{candidate.buyerBrokerNames || '-'}</div>
+                            {candidate.buyerBrokerInvoiceFormats && <div className="text-[11px] text-muted-foreground">{candidate.buyerBrokerInvoiceFormats}</div>}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${brokerRoutingTone(candidate.buyerBrokerRoutingMode)}`}>
+                              {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {candidate.buyerBrokerRoutingMode === 'broker_only'
+                              ? candidate.buyerBrokerEmails || '-'
+                              : (
+                                <>
+                                  <div>{candidate.paymentReminderRecipient || '-'}</div>
+                                  {candidate.buyerBrokerRoutingMode === 'buyer_cc_broker' && candidate.buyerBrokerEmails && (
+                                    <div className="text-[11px] text-blue-700">CC broker: {candidate.buyerBrokerEmails}</div>
+                                  )}
+                                </>
+                              )}
+                          </td>
                           <td className="px-3 py-2">
                             <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(candidate))}`}>
                               {collectionStatus(candidate)}
@@ -1060,15 +1139,16 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className="space-y-1.5 md:col-span-3">
-                    <Label className="text-xs text-muted-foreground">To</Label>
+                    <Label className="text-xs text-muted-foreground">Automatic To</Label>
                     <Input
-                      value={form.to}
-                      onChange={(event) => updateForm('to', event.target.value)}
-                      placeholder="buyer@example.com"
+                      value={selectedAutoTo.join(', ')}
+                      readOnly
+                      placeholder="Resolved from buyer broker routing"
+                      className="bg-muted/30"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">CC</Label>
+                    <Label className="text-xs text-muted-foreground">Additional CC</Label>
                     <Input value={form.cc} onChange={(event) => updateForm('cc', event.target.value)} />
                   </div>
                   <div className="space-y-1.5">
@@ -1223,9 +1303,9 @@ function PaymentReminderTemplateModal({
             <DraftNotice restoredAt={draftRestoredAt} label="Payment reminder template draft restored" onDiscard={onDiscardDraft} />
             <div className="rounded-xl border border-border bg-muted/20 p-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">To</div>
-              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer account emails, buyer trader email, and payment handler email</div>
+              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer broker invoice format routing</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Uses <span className="font-mono">Account.Accounts_Email__c</span>, <span className="font-mono">Nomination__c.BT_ST_Email_Address__c</span>, and the saved Payment Handler name. You can still edit the final To field before sending a reminder.
+                No broker: buyer account emails, buyer trader email, and payment handler email. Broker Only: broker Account email only. Buyer CC Broker: buyer remains To and broker Account email is copied.
               </p>
             </div>
 
@@ -1727,7 +1807,7 @@ export default function BuyerInvoices() {
 
   const handleReminderSent = (result) => {
     mergeCollectionResults(result.collectionResults || []);
-    setEmailMessage(`Payment reminder sent to ${result.to?.join(', ') || 'recipient'} for ${result.rows ?? 0} invoice rows.`);
+    setEmailMessage(`Payment reminder sent in ${(result.emails ?? result.batches?.length ?? 1).toLocaleString()} email batch${(result.emails ?? result.batches?.length ?? 1) === 1 ? '' : 'es'} to ${result.to?.join(', ') || 'recipient'} for ${result.rows ?? 0} invoice rows.`);
     setEmailError(null);
   };
 

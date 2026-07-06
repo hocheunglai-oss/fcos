@@ -10,7 +10,7 @@ import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
 import TableShell from '@/components/common/TableShell';
-import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent } from 'lucide-react';
+import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -52,6 +52,7 @@ export default function DashboardSettings() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [tableSearch, setTableSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [filteredTableWide, setFilteredTableWide] = useState(false);
   const debounceRef = useRef(null);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
@@ -273,7 +274,7 @@ export default function DashboardSettings() {
   const monthlyTrendIsVolume = monthlyTrendMode === 'volume';
 
   return (
-    <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+    <div className={`p-6 lg:p-8 mx-auto transition-[max-width] duration-200 ${filteredTableWide ? 'max-w-none' : 'max-w-7xl'}`}>
       <PageHeader
         icon={SlidersHorizontal}
         eyebrow="Dashboard"
@@ -497,6 +498,13 @@ export default function DashboardSettings() {
               color="green"
             />
             <StatCard
+              label="Turnover"
+              value={data.turnoverTotal != null ? `$${data.turnoverTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              sub="Buyer Invoice total"
+              icon={DollarSign}
+              color="teal"
+            />
+            <StatCard
               label="Gross Profit Total"
               value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
               sub={data.totalInvoicedProfit != null ? `Gross Profit Total (Invoiced) $${data.totalInvoicedProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : undefined}
@@ -519,7 +527,7 @@ export default function DashboardSettings() {
               icon={AlertCircle}
               color="red"
             />
-            <div className="glass-surface bg-card rounded-xl border border-border p-5 flex flex-col gap-3 col-span-2">
+            <div className="glass-surface bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
               <div className="flex items-start justify-between">
                 <p className="text-sm font-medium text-muted-foreground">Product Volume</p>
                 <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-cyan-50 text-cyan-600">
@@ -527,25 +535,18 @@ export default function DashboardSettings() {
                 </div>
               </div>
               <div>
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Total</span>
-                  <span className="text-2xl font-bold text-foreground font-dm tracking-tight">
-                    {formatQuantity(productVolumeKpi.totalQuantity)} {productVolumeKpi.unitOfMeasure}
-                  </span>
-                </div>
+                <p className="text-2xl font-bold text-foreground font-dm tracking-tight">
+                  {formatQuantity(productVolumeKpi.totalQuantity)} {productVolumeKpi.unitOfMeasure}
+                </p>
                 <p className="text-xs text-muted-foreground mt-0.5">Line-item BDN qty or fallback mid-range qty</p>
               </div>
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 {productVolumeKpi.breakdown.map((item) => (
-                  <div key={item.family} className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
-                      <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: PRODUCT_VOLUME_COLORS[item.family] }} />
-                      {item.family}
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-foreground">
-                      {formatQuantity(item.quantity)} {item.unitOfMeasure || 'MT'}
-                    </div>
-                  </div>
+                  <span key={item.family} className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: PRODUCT_VOLUME_COLORS[item.family] }} />
+                    <span>{item.family}</span>
+                    <span className="font-semibold text-foreground">{formatQuantity(item.quantity)} {item.unitOfMeasure || 'MT'}</span>
+                  </span>
                 ))}
               </div>
             </div>
@@ -728,20 +729,32 @@ export default function DashboardSettings() {
               className="flex h-[calc(100vh-7rem)] min-h-[360px] flex-col"
               bodyClassName="min-h-0 flex-1 p-2"
               actions={(
-                <div className="relative w-full sm:w-80">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    placeholder={`Search by vessel, stem name, or ${activeCounterparty.label.toLowerCase()}…`}
-                    value={tableSearch}
-                    onChange={e => setTableSearch(e.target.value)}
-                    className="pl-8 h-8 text-xs"
-                  />
-                  {tableSearch && (
-                    <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={() => setFilteredTableWide((current) => !current)}
+                  >
+                    {filteredTableWide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                    {filteredTableWide ? 'Normal width' : 'Wide view'}
+                  </Button>
+                  <div className="relative w-full sm:w-80">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                    <Input
+                      placeholder={`Search by vessel, stem name, or ${activeCounterparty.label.toLowerCase()}…`}
+                      value={tableSearch}
+                      onChange={e => setTableSearch(e.target.value)}
+                      className="pl-8 h-8 text-xs"
+                    />
+                    {tableSearch && (
+                      <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
             >
               <PnlTable

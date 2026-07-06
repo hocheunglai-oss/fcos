@@ -542,11 +542,75 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   );
 }
 
+function PaymentRowsTable({ rows, type }) {
+  const isSupplier = type === 'supplier';
+  if (!rows.length) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/10 px-3 py-4 text-sm text-muted-foreground">
+        {isSupplier ? 'No supplier invoice paid dates found.' : 'No buyer invoice received dates found.'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-h-[220px] overflow-auto rounded-lg border border-border">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-border bg-muted/40">
+            {isSupplier && <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">Supplier Invoice</th>}
+            <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">Payment</th>
+            <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right font-semibold text-muted-foreground">Amount</th>
+            <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">
+              {isSupplier ? 'Paid Date' : 'Received Date'}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((payment, index) => (
+            <tr key={payment.Id || `${type}-${index}`} className={`border-b border-border/40 ${index % 2 ? 'bg-muted/10' : ''}`}>
+              {isSupplier && <td className="px-3 py-2 font-medium text-foreground">{payment._Supplier_Invoice_Name || payment.Supplier_Invoice__c || '—'}</td>}
+              <td className="px-3 py-2 text-foreground">{payment.Name || payment.Id || '—'}</td>
+              <td className="px-3 py-2 text-right font-medium text-foreground">{payment._Payment_Amount != null ? fmtMoney(payment._Payment_Amount) : '—'}</td>
+              <td className="px-3 py-2 text-foreground">{fmtDate(payment.Date__c)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PaymentDatesSection({ supplierPayments, buyerPayments }) {
+  return (
+    <div>
+      <SectionHeader title="Payment Dates" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-xl bg-muted/20 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h4 className="text-sm font-semibold text-foreground">Supplier Invoice Paid Dates</h4>
+            <span className="text-xs text-muted-foreground">{supplierPayments.length} payment{supplierPayments.length === 1 ? '' : 's'}</span>
+          </div>
+          <PaymentRowsTable rows={supplierPayments} type="supplier" />
+        </div>
+        <div className="rounded-xl bg-muted/20 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h4 className="text-sm font-semibold text-foreground">Buyer Invoice Received Dates</h4>
+            <span className="text-xs text-muted-foreground">{buyerPayments.length} payment{buyerPayments.length === 1 ? '' : 's'}</span>
+          </div>
+          <PaymentRowsTable rows={buyerPayments} type="buyer" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function StemDetailModal({ stemId, open, onClose }) {
   const [record, setRecord] = useState(null);
   const [lineItems, setLineItems] = useState([]);
   const [extraCosts, setExtraCosts] = useState([]);
   const [buyerBrokers, setBuyerBrokers] = useState([]);
+  const [supplierInvoicePayments, setSupplierInvoicePayments] = useState([]);
+  const [buyerInvoicePayments, setBuyerInvoicePayments] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState(null);
@@ -561,6 +625,8 @@ export default function StemDetailModal({ stemId, open, onClose }) {
     setLineItems([]);
     setExtraCosts([]);
     setBuyerBrokers([]);
+    setSupplierInvoicePayments([]);
+    setBuyerInvoicePayments([]);
     setDocuments([]);
     setDocumentsError(null);
     setDocumentsLoading(true);
@@ -575,6 +641,8 @@ export default function StemDetailModal({ stemId, open, onClose }) {
         setLineItems(res.data.lineItems || []);
         setExtraCosts(res.data.extraCosts || []);
         setBuyerBrokers(res.data.buyerBrokers || []);
+        setSupplierInvoicePayments(res.data.supplierInvoicePayments || []);
+        setBuyerInvoicePayments(res.data.buyerInvoicePayments || []);
       }
       setLoading(false);
     });
@@ -705,6 +773,8 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                     );
                   })}
                 </div>
+
+                <PaymentDatesSection supplierPayments={supplierInvoicePayments} buyerPayments={buyerInvoicePayments} />
 
                 {/* Line Items */}
                 {lineItems.length > 0 && (

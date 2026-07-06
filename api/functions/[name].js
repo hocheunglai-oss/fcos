@@ -865,6 +865,7 @@ async function salesforceDashboardFiltered(body) {
     accountCount: null,
     totalAmount: totalBuyer,
     totalBuyer,
+    turnoverTotal: totalBuyer,
     totalSupplier,
     totalCosts,
     totalProfit,
@@ -1193,7 +1194,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   paymentReminderCc: [],
   paymentReminderBcc: [],
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
-  paymentReminderBody: '<p>Dear {{buyerName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>{{invoiceTable}}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
+  paymentReminderBody: '<p>Dear {{primaryRecipientName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>{{invoiceTable}}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
 };
 const BUYER_INVOICE_COLLECTION_STATUSES = [
   'Not Started',
@@ -1393,6 +1394,140 @@ function uniqueEmailList(...values) {
   return emails;
 }
 
+function uniqueTextList(values = []) {
+  const seen = new Set();
+  const items = [];
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(text);
+  }
+  return items;
+}
+
+function normalizedFieldToken(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function fieldMatchesAny(field, exactTokens = [], includeTokens = []) {
+  const values = [field?.name, field?.label].map(normalizedFieldToken).filter(Boolean);
+  if (values.some((value) => exactTokens.includes(value))) return true;
+  return values.some((value) => includeTokens.some((token) => value.includes(token)));
+}
+
+function accountInvoiceFormatField(accountFields = []) {
+  return accountFields.find((field) => fieldMatchesAny(field, ['invoiceformat', 'invoiceformatc'], ['invoiceformat']))?.name || null;
+}
+
+function accountBrokerEmailField(accountFields = []) {
+  const excluded = (field) => {
+    const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
+    return token.includes('invoice') || token.includes('accounts') || token.includes('accounting');
+  };
+  const exact = accountFields.find((field) => !excluded(field) && fieldMatchesAny(field, [
+    'email',
+    'emailc',
+    'emailaddress',
+    'emailaddressc',
+    'brokeremail',
+    'brokeremailc',
+    'brokeremailaddress',
+    'brokeremailaddressc',
+  ]));
+  if (exact) return exact.name;
+  return accountFields.find((field) => !excluded(field) && field.type === 'email')?.name || null;
+}
+
+function buyerBrokerRoutingMode(format, brokerEmails = []) {
+  const raw = String(format || '').trim();
+  const text = raw.toLowerCase().replace(/[./_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const hasBrokerEmail = uniqueEmailList(brokerEmails).length > 0;
+  if (!raw) {
+    return {
+      mode: 'buyer_only',
+      label: 'Buyer Only',
+      warnings: ['Broker invoice format is blank; routed to buyer only.'],
+    };
+  }
+  if (text.includes('buyer only')) {
+    return { mode: 'buyer_only', label: raw, warnings: [] };
+  }
+  if (text.includes('broker only') || /^to broker\b/.test(text)) {
+    return {
+      mode: hasBrokerEmail ? 'broker_only' : 'buyer_only',
+      label: raw,
+      warnings: hasBrokerEmail ? [] : [`Broker email is missing for ${raw}; routed to buyer only.`],
+    };
+  }
+  if (
+    text.includes('buyer c o broker')
+    || text.includes('buyer co broker')
+    || text.includes('buyer cc broker')
+    || text.includes('cc broker')
+    || text.includes('copy broker')
+    || text.includes('c o broker')
+  ) {
+    return {
+      mode: hasBrokerEmail ? 'buyer_cc_broker' : 'buyer_only',
+      label: raw,
+      warnings: hasBrokerEmail ? [] : [`Broker email is missing for ${raw}; routed to buyer only.`],
+    };
+  }
+  return {
+    mode: 'buyer_only',
+    label: raw,
+    warnings: [`Unknown broker invoice format "${raw}"; routed to buyer only.`],
+  };
+}
+
+function combineBuyerBrokerRouting(details = []) {
+  if (!details.length) {
+    return {
+      buyerBrokerNames: '',
+      buyerBrokerInvoiceFormats: '',
+      buyerBrokerEmails: '',
+      buyerBrokerRoutingMode: 'buyer_only',
+      buyerBrokerRoutingWarnings: [],
+      buyerBrokerDetails: [],
+    };
+  }
+  const warnings = [];
+  const brokerEmails = [];
+  const modes = [];
+  for (const detail of details) {
+    const routing = buyerBrokerRoutingMode(detail.invoiceFormat, detail.emails);
+    modes.push(routing.mode);
+    warnings.push(...routing.warnings.map((warning) => `${detail.name || 'Buyer broker'}: ${warning}`));
+    if (routing.mode !== 'buyer_only') brokerEmails.push(...(detail.emails || []));
+  }
+  const validModes = modes.filter((mode) => mode !== 'buyer_only');
+  const routingMode = validModes.includes('broker_only') && !validModes.includes('buyer_cc_broker')
+    ? 'broker_only'
+    : validModes.includes('buyer_cc_broker')
+      ? 'buyer_cc_broker'
+      : 'buyer_only';
+  if (new Set(validModes).size > 1) {
+    warnings.push('Multiple buyer broker routing formats found on this invoice; buyer with broker copied is used.');
+  }
+  return {
+    buyerBrokerNames: uniqueTextList(details.map((detail) => detail.name)).join(', '),
+    buyerBrokerInvoiceFormats: uniqueTextList(details.map((detail) => detail.invoiceFormat)).join(', '),
+    buyerBrokerEmails: uniqueEmailList(brokerEmails).join(', '),
+    buyerBrokerRoutingMode: routingMode,
+    buyerBrokerRoutingWarnings: warnings,
+    buyerBrokerDetails: details.map((detail) => ({
+      brokerId: detail.id,
+      name: detail.name,
+      invoiceFormat: detail.invoiceFormat || null,
+      emails: detail.emails || [],
+      routingMode: buyerBrokerRoutingMode(detail.invoiceFormat, detail.emails).mode,
+    })),
+  };
+}
+
 function parseStringList(value, fallback = []) {
   if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
   if (typeof value !== 'string') return fallback;
@@ -1533,6 +1668,9 @@ function normalizeCollectionUpdates(updates = {}, profile = {}) {
 }
 
 function normalizeBuyerInvoiceEmailSettings(input = {}, defaults = DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS) {
+  const reminderBody = String(input.paymentReminderBody ?? defaults.paymentReminderBody)
+    .replace(/Dear\s+\{\{\s*buyerName\s*\}\}/i, 'Dear {{primaryRecipientName}}')
+    .replace(/To\s+\{\{\s*buyerName\s*\}\}/i, 'To {{primaryRecipientName}}');
   return {
     ...defaults,
     ...input,
@@ -1553,7 +1691,7 @@ function normalizeBuyerInvoiceEmailSettings(input = {}, defaults = DEFAULT_BUYER
     paymentReminderCc: parseEmailList(input.paymentReminderCc, defaults.paymentReminderCc),
     paymentReminderBcc: parseEmailList(input.paymentReminderBcc, defaults.paymentReminderBcc),
     paymentReminderSubject: String(input.paymentReminderSubject ?? defaults.paymentReminderSubject),
-    paymentReminderBody: String(input.paymentReminderBody ?? defaults.paymentReminderBody),
+    paymentReminderBody: reminderBody,
   };
 }
 
@@ -2671,6 +2809,8 @@ async function salesforceBuyerInvoicesDue(body) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
+  const brokerInvoiceFormatField = accountInvoiceFormatField(accountDescribe.fields || []);
+  const brokerEmailField = accountBrokerEmailField(accountDescribe.fields || []);
 
   const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
   if (!dueFields.length) return { rows: [], today, dueThrough, daysAhead };
@@ -2726,8 +2866,9 @@ async function salesforceBuyerInvoicesDue(body) {
   const traderByStem = {};
   const traderEmailByName = {};
   const prpspUploadDateByStem = {};
+  const buyerBrokerDetailsByStem = {};
   if (stemIds.length) {
-    const [nominationArrays, supplierInvoiceArrays] = await Promise.all([
+    const [nominationArrays, supplierInvoiceArrays, brokerLineItemArrays, buyerBrokerArrays] = await Promise.all([
       Promise.all(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
         return queryRows(`
@@ -2744,6 +2885,24 @@ async function salesforceBuyerInvoicesDue(body) {
           SELECT Id, STEM__c, PSPRS_Upload_Date__c
           FROM Supplier_Invoice__c
           WHERE STEM__c IN (${inList}) AND PSPRS_Upload_Date__c != null
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+      })),
+      Promise.all(chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT Id, STEM__c, Buyers_Broker__c, Buyer_Broker__c, Cancelled__c
+          FROM STEM_Line_Item__c
+          WHERE STEM__c IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+      })),
+      Promise.all(chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT Id, STEM__c, Buyer_Broker__c
+          FROM STEM_Buyer_Broker__c
+          WHERE STEM__c IN (${inList})
           LIMIT 5000
         `, { limit: 5000, softFail: true });
       })),
@@ -2788,6 +2947,59 @@ async function salesforceBuyerInvoicesDue(body) {
         invoice.PSPRS_Upload_Date__c,
       ]);
     }
+
+    const brokerLinksByStem = {};
+    const addBrokerLink = (stemId, brokerId) => {
+      if (!stemId || !brokerId) return;
+      if (!brokerLinksByStem[stemId]) brokerLinksByStem[stemId] = [];
+      if (!brokerLinksByStem[stemId].some((id) => String(id).slice(0, 15) === String(brokerId).slice(0, 15))) {
+        brokerLinksByStem[stemId].push(brokerId);
+      }
+    };
+    for (const item of brokerLineItemArrays.flat()) {
+      if (item.Cancelled__c) continue;
+      addBrokerLink(item.STEM__c, item.Buyers_Broker__c || item.Buyer_Broker__c);
+    }
+    for (const broker of buyerBrokerArrays.flat()) {
+      addBrokerLink(broker.STEM__c, broker.Buyer_Broker__c);
+    }
+
+    const brokerIds = [...new Set(Object.values(brokerLinksByStem).flat().filter(Boolean))];
+    const brokerAccountMap = {};
+    if (brokerIds.length) {
+      const brokerAccountFields = ['Id', 'Name'];
+      if (brokerInvoiceFormatField) brokerAccountFields.push(brokerInvoiceFormatField);
+      if (brokerEmailField) brokerAccountFields.push(brokerEmailField);
+      const brokerAccountChunks = await Promise.all(chunkIds(brokerIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT ${[...new Set(brokerAccountFields)].join(', ')}
+          FROM Account
+          WHERE Id IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+      }));
+      for (const account of brokerAccountChunks.flat()) {
+        const detail = {
+          id: account.Id,
+          name: account.Name || account.Id,
+          invoiceFormat: brokerInvoiceFormatField ? account[brokerInvoiceFormatField] || null : null,
+          emails: brokerEmailField ? uniqueEmailList(account[brokerEmailField]) : [],
+        };
+        brokerAccountMap[account.Id] = detail;
+        brokerAccountMap[String(account.Id).slice(0, 15)] = detail;
+      }
+    }
+    for (const [stemId, ids] of Object.entries(brokerLinksByStem)) {
+      buyerBrokerDetailsByStem[stemId] = ids.map((id) => (
+        brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || {
+          id,
+          name: id,
+          invoiceFormat: null,
+          emails: [],
+        }
+      ));
+    }
   }
 
   const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(body, 'buyerTraders');
@@ -2813,6 +3025,7 @@ async function salesforceBuyerInvoicesDue(body) {
       const paymentReminderRecipients = uniqueEmailList(account.Accounts_Email__c, buyerTraderEmails);
       const prpspUploadDate = prpspUploadDateByStem[stem.Id] || null;
       const rawPsprsStatus = stem.PSPRS__c || null;
+      const brokerRouting = combineBuyerBrokerRouting(buyerBrokerDetailsByStem[stem.Id] || []);
       return {
         id: stem.Id,
         stemId: stem.Id,
@@ -2830,6 +3043,7 @@ async function salesforceBuyerInvoicesDue(body) {
         buyerTraderEmailByName: traderInfo.emailByName || {},
         paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
         paymentReminderRecipients,
+        ...brokerRouting,
         prpspStatus: prpspDisplayStatus(rawPsprsStatus, prpspUploadDate),
         prpspUploadDate,
         rawPsprsStatus,
@@ -3221,23 +3435,102 @@ function isPaymentReminderCandidate(row, selected) {
   return Boolean(selectedGroup && rowGroup && selectedGroup === rowGroup);
 }
 
-function paymentReminderRecipients(rows) {
-  return uniqueEmailList(...(rows || []).flatMap((row) => [
-    row.paymentReminderRecipients || [],
-    row.paymentReminderRecipient || '',
-    row.buyerAccountsEmail || '',
-    row.buyerTraderEmail || '',
-    row.paymentHandlerEmail || '',
-  ]));
+function rowBuyerReminderRecipients(row) {
+  return uniqueEmailList(
+    row?.paymentReminderRecipients || [],
+    row?.paymentReminderRecipient || '',
+    row?.buyerAccountsEmail || '',
+    row?.buyerTraderEmail || '',
+    row?.paymentHandlerEmail || '',
+  );
 }
 
-function paymentReminderTemplateContext(report, rows, selected) {
+function rowBrokerReminderEmails(row) {
+  return uniqueEmailList(row?.buyerBrokerEmails || '');
+}
+
+function paymentReminderRowRouting(row) {
+  const buyerRecipients = rowBuyerReminderRecipients(row);
+  const brokerEmails = rowBrokerReminderEmails(row);
+  const brokerNames = uniqueTextList(String(row?.buyerBrokerNames || '').split(','));
+  const mode = row?.buyerBrokerRoutingMode || 'buyer_only';
+  if (mode === 'broker_only' && brokerEmails.length) {
+    return {
+      mode,
+      to: brokerEmails,
+      cc: [],
+      primaryRecipientName: brokerNames[0] || row?.buyerBrokerNames || 'Broker',
+      warnings: row?.buyerBrokerRoutingWarnings || [],
+    };
+  }
+  if (mode === 'buyer_cc_broker' && brokerEmails.length) {
+    return {
+      mode,
+      to: buyerRecipients,
+      cc: brokerEmails,
+      primaryRecipientName: row?.buyerName || 'Customer',
+      warnings: row?.buyerBrokerRoutingWarnings || [],
+    };
+  }
+  return {
+    mode: 'buyer_only',
+    to: buyerRecipients,
+    cc: [],
+    primaryRecipientName: row?.buyerName || 'Customer',
+    warnings: row?.buyerBrokerRoutingWarnings || [],
+  };
+}
+
+function paymentReminderRoutingForRows(rows = []) {
+  const groups = new Map();
+  for (const row of rows) {
+    const routing = paymentReminderRowRouting(row);
+    const key = JSON.stringify({
+      mode: routing.mode,
+      to: routing.to.map((item) => item.toLowerCase()).sort(),
+      cc: routing.cc.map((item) => item.toLowerCase()).sort(),
+      primaryRecipientName: routing.primaryRecipientName,
+    });
+    if (!groups.has(key)) {
+      groups.set(key, {
+        mode: routing.mode,
+        to: routing.to,
+        cc: routing.cc,
+        primaryRecipientName: routing.primaryRecipientName,
+        warnings: [],
+        rows: [],
+      });
+    }
+    const group = groups.get(key);
+    group.rows.push(row);
+    group.warnings.push(...(routing.warnings || []));
+  }
+  const resultGroups = [...groups.values()].map((group) => ({
+    ...group,
+    warnings: uniqueTextList(group.warnings),
+  }));
+  return {
+    groups: resultGroups,
+    to: uniqueEmailList(...resultGroups.map((group) => group.to)),
+    cc: uniqueEmailList(...resultGroups.map((group) => group.cc)),
+    warnings: uniqueTextList(resultGroups.flatMap((group) => group.warnings)),
+  };
+}
+
+function paymentReminderRecipients(rows) {
+  return paymentReminderRoutingForRows(rows).to;
+}
+
+function paymentReminderTemplateContext(report, rows, selected, routing = null) {
   const totalReceivable = (rows || []).reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0);
   const selectedRow = selected || {};
+  const brokerRows = rows?.length ? rows : [selectedRow];
+  const routingInfo = routing || paymentReminderRoutingForRows(rows || []).groups[0] || null;
   return {
     stemName: selectedRow.stemName || '',
     keyStem: selectedRow.keyStem || '',
     buyerName: selectedRow.buyerName || 'Customer',
+    primaryRecipientName: routingInfo?.primaryRecipientName || selectedRow.buyerName || 'Customer',
     buyerGroupName: selectedRow.buyerGroupName || '',
     invoiceAmount: money(selectedRow.invoiceAmount),
     receivableBalance: money(selectedRow.receivableBalance),
@@ -3247,7 +3540,10 @@ function paymentReminderTemplateContext(report, rows, selected) {
     buyerTraderEmail: selectedRow.buyerTraderEmail || '',
     paymentHandlerName: selectedRow.paymentHandlerName || selectedRow.collection?.ownerName || '',
     paymentHandlerEmail: selectedRow.paymentHandlerEmail || '',
-    toRecipients: paymentReminderRecipients(rows).join(', '),
+    buyerBrokerNames: uniqueTextList(brokerRows.map((row) => row.buyerBrokerNames)).join(', '),
+    buyerBrokerEmails: uniqueEmailList(...brokerRows.map((row) => row.buyerBrokerEmails || '')).join(', '),
+    buyerBrokerInvoiceFormats: uniqueTextList(brokerRows.map((row) => row.buyerBrokerInvoiceFormats)).join(', '),
+    toRecipients: routingInfo ? routingInfo.to.join(', ') : paymentReminderRecipients(rows).join(', '),
     psprsStatus: selectedRow.prpspStatus || '',
     overdue: overdueDisplayValue(selectedRow.daysUntilDue),
     invoiceStatus: selectedRow.status || '',
@@ -3346,9 +3642,9 @@ function insertInvoiceTable(content, insertContent) {
   return insertAfterAttentionSentence(source, insertContent);
 }
 
-function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, overrides = {}) {
+function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, overrides = {}, routing = null) {
   const selectedRows = rows || [];
-  const context = paymentReminderTemplateContext(report, selectedRows, selected);
+  const context = paymentReminderTemplateContext(report, selectedRows, selected, routing);
   const subject = renderPaymentReminderTemplate(overrides.subject || settings.paymentReminderSubject, context);
   const body = renderPaymentReminderTemplate(overrides.body || settings.paymentReminderBody, context);
   const tableRows = selectedRows.map((row) => {
@@ -3425,20 +3721,31 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}) {
 async function buyerInvoicePaymentReminderPrepare(body, req) {
   await requireActiveUser(req);
   const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body);
-  const recipients = paymentReminderRecipients(candidates);
-  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, selected, candidates);
-  const context = paymentReminderTemplateContext(report, candidates, selected);
+  const routing = paymentReminderRoutingForRows(candidates);
+  const firstGroup = routing.groups[0] || { rows: candidates, to: [], cc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
+  const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
+  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
+  const context = paymentReminderTemplateContext(report, firstGroup.rows, firstSelected, firstGroup);
   return {
     selected,
     candidates,
-    to: recipients,
+    to: routing.to,
     cc: renderPaymentReminderEmailList(settings.paymentReminderCc, context),
     bcc: renderPaymentReminderEmailList(settings.paymentReminderBcc, context),
-    subject: email.subject,
-    body: email.body,
+    subject: settings.paymentReminderSubject,
+    body: settings.paymentReminderBody,
     preview: { html: email.html, text: email.text },
+    routingGroups: routing.groups.map((group) => ({
+      mode: group.mode,
+      to: group.to,
+      cc: group.cc,
+      primaryRecipientName: group.primaryRecipientName,
+      warnings: group.warnings,
+      stemIds: group.rows.map((row) => row.stemId),
+    })),
+    routingWarnings: routing.warnings,
     settings: {
-      paymentReminderToSource: 'Account.Accounts_Email__c + Nomination__c.BT_ST_Email_Address__c',
+      paymentReminderToSource: 'Buyer account/trader/payment handler plus buyer broker Account.Email by Invoice Format',
       emailDelivery: serverEmailDeliveryStatus(),
       from: settings.from,
       daysAhead: report.daysAhead,
@@ -3455,90 +3762,107 @@ async function buyerInvoicePaymentReminderSend(body, req) {
   const rows = candidates.filter((row) => selectedStemIds.has(row.stemId));
   if (!rows.length) throw appError('Select at least one invoice to include in the payment reminder.', 400);
 
-  const sendContext = paymentReminderTemplateContext(report, rows, selected);
-  const to = parseEmailList(body.to, []);
-  const cc = renderPaymentReminderEmailList(body.cc, sendContext);
-  const bcc = renderPaymentReminderEmailList(body.bcc, sendContext);
-  if (!to.length) throw appError('Payment reminder recipient is required.', 400);
-
-  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, {
-    subject: body.subject,
-    body: body.body,
-  });
+  const routing = paymentReminderRoutingForRows(rows);
+  if (!routing.groups.length) throw appError('No payment reminder recipient group could be built.', 400);
   const credentials = body.credentials || {};
   const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
   const smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
-  let result;
-  try {
-    result = useSmtp
-      ? await sendWithSmtp({
-          smtp: credentials.smtp || credentials,
-          from: smtpFrom,
-          to,
-          cc,
-          bcc,
-          subject: email.subject,
-          html: email.html,
-          text: email.text,
-        })
-      : await sendWithResend({
-          from: settings.from,
-          to,
-          cc,
-          bcc,
-          subject: email.subject,
-          html: email.html,
-          text: email.text,
-        });
-  } catch (error) {
-    console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
-      message: error.message,
-      provider: useSmtp ? 'smtp' : 'resend',
-      hasRequestSmtp: Boolean(credentials.method === 'smtp' || credentials.smtp),
-      hasResendEnv: Boolean(process.env.RESEND_API_KEY),
-      hasSmtpEnv: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD),
-      toCount: to.length,
-      ccCount: cc.length,
-      bccCount: bcc.length,
-      rows: rows.length,
-    });
-    throw error;
-  }
-
+  const sendResults = [];
   const collectionResults = [];
-  const note = [
-    `Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`,
-    `Subject: ${email.subject}`,
-    `Included invoices: ${rows.length}`,
-  ].join('\n');
-  for (const row of rows) {
-    const currentStatus = row.collection?.status || 'Not Started';
-    const nextStatus = currentStatus === 'Not Started' ? 'Reminder Sent' : currentStatus;
-    const ownerName = row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
-    const collectionResult = await persistBuyerInvoiceCollection({
-      stemId: row.stemId,
-      updates: {
-        status: nextStatus,
-        ownerName,
-        latestNote: note,
-      },
-      event: {
-        eventType: currentStatus === 'Not Started' ? 'status_change' : 'note',
-        status: nextStatus,
-        ownerName,
-        note,
-      },
-    }, req);
-    collectionResults.push(collectionResult);
+  for (const group of routing.groups) {
+    const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
+    const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, group);
+    const to = group.to;
+    const cc = uniqueEmailList(group.cc, renderPaymentReminderEmailList(body.cc, groupContext));
+    const bcc = renderPaymentReminderEmailList(body.bcc, groupContext);
+    if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
+    const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, {
+      subject: body.subject,
+      body: body.body,
+    }, group);
+    let result;
+    try {
+      result = useSmtp
+        ? await sendWithSmtp({
+            smtp: credentials.smtp || credentials,
+            from: smtpFrom,
+            to,
+            cc,
+            bcc,
+            subject: email.subject,
+            html: email.html,
+            text: email.text,
+          })
+        : await sendWithResend({
+            from: settings.from,
+            to,
+            cc,
+            bcc,
+            subject: email.subject,
+            html: email.html,
+            text: email.text,
+          });
+    } catch (error) {
+      console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
+        message: error.message,
+        provider: useSmtp ? 'smtp' : 'resend',
+        hasRequestSmtp: Boolean(credentials.method === 'smtp' || credentials.smtp),
+        hasResendEnv: Boolean(process.env.RESEND_API_KEY),
+        hasSmtpEnv: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD),
+        toCount: to.length,
+        ccCount: cc.length,
+        bccCount: bcc.length,
+        rows: group.rows.length,
+        routingMode: group.mode,
+      });
+      throw error;
+    }
+    sendResults.push({ result, to, cc, bcc, subject: email.subject, rows: group.rows.length, mode: group.mode });
+
+    const note = [
+      `Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`,
+      `Subject: ${email.subject}`,
+      `Routing: ${group.mode}`,
+      `Included invoices: ${group.rows.length}`,
+    ].join('\n');
+    for (const row of group.rows) {
+      const currentStatus = row.collection?.status || 'Not Started';
+      const nextStatus = currentStatus === 'Not Started' ? 'Reminder Sent' : currentStatus;
+      const ownerName = row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
+      const collectionResult = await persistBuyerInvoiceCollection({
+        stemId: row.stemId,
+        updates: {
+          status: nextStatus,
+          ownerName,
+          latestNote: note,
+        },
+        event: {
+          eventType: currentStatus === 'Not Started' ? 'status_change' : 'note',
+          status: nextStatus,
+          ownerName,
+          note,
+        },
+      }, req);
+      collectionResults.push(collectionResult);
+    }
   }
 
   return {
     sent: true,
-    id: result.id,
-    to,
-    cc,
-    bcc,
-    subject: email.subject,
+    id: sendResults[0]?.result?.id || sendResults[0]?.result?.messageId || null,
+    emails: sendResults.length,
+    batches: sendResults.map((item) => ({
+      to: item.to,
+      cc: item.cc,
+      bcc: item.bcc,
+      subject: item.subject,
+      rows: item.rows,
+      mode: item.mode,
+    })),
+    to: uniqueEmailList(...sendResults.map((item) => item.to)),
+    cc: uniqueEmailList(...sendResults.map((item) => item.cc)),
+    bcc: uniqueEmailList(...sendResults.map((item) => item.bcc)),
+    subject: sendResults[0]?.subject || null,
     rows: rows.length,
     collectionResults,
   };
@@ -4204,6 +4528,71 @@ async function salesforceStemDetailFull(body) {
     queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
     queryRows(`SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
   ]);
+  const supplierInvoiceIds = [...new Set([
+    ...lineItems.map((item) => item.Supplier_Invoice__c),
+    ...extraCosts.map((item) => item.Supplier_Invoice__c),
+  ].filter(isSalesforceId))];
+  const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
+
+  let supplierInvoicePayments = [];
+  let buyerInvoicePayments = [];
+  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentFieldNames = new Set((paymentDescribe.fields || []).map((field) => field.name));
+  const paymentAmountField = [
+    'Amount__c',
+    'Payment_Amount__c',
+    'Paid_Amount__c',
+    'Received_Amount__c',
+    'Total_Amount__c',
+    'Amount_Paid__c',
+    'Payment_Value__c',
+  ].find((field) => paymentFieldNames.has(field));
+  const paymentSelectFields = [
+    'Id',
+    paymentFieldNames.has('Name') ? 'Name' : null,
+    paymentFieldNames.has('Date__c') ? 'Date__c' : null,
+    paymentFieldNames.has('STEM__c') ? 'STEM__c' : null,
+    paymentFieldNames.has('Supplier_Invoice__c') ? 'Supplier_Invoice__c' : null,
+    paymentAmountField,
+  ].filter(Boolean);
+  const paymentOrder = paymentFieldNames.has('Date__c') ? 'Date__c DESC NULLS LAST, CreatedDate DESC' : 'CreatedDate DESC';
+  if (paymentSelectFields.length > 1) {
+    if (supplierInvoiceIds.length && paymentFieldNames.has('Supplier_Invoice__c')) {
+      const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return queryRows(`
+          SELECT ${paymentSelectFields.join(', ')}
+          FROM Payment__c
+          WHERE Supplier_Invoice__c IN (${inList})
+          ORDER BY ${paymentOrder}
+          LIMIT 2000
+        `, { limit: 2000, softFail: true });
+      }));
+      supplierInvoicePayments = paymentChunks.flat().map((payment) => ({
+        ...payment,
+        _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
+        _Payment_Amount_Field: paymentAmountField || null,
+        _Supplier_Invoice_Name: supplierInvoiceNameMap[payment.Supplier_Invoice__c] || payment.Supplier_Invoice__c || null,
+      }));
+    }
+    if (paymentFieldNames.has('STEM__c')) {
+      const buyerPaymentWhere = paymentFieldNames.has('Supplier_Invoice__c')
+        ? `STEM__c = '${escapeSoql(actualStemId)}' AND Supplier_Invoice__c = null`
+        : `STEM__c = '${escapeSoql(actualStemId)}'`;
+      buyerInvoicePayments = await queryRows(`
+        SELECT ${paymentSelectFields.join(', ')}
+        FROM Payment__c
+        WHERE ${buyerPaymentWhere}
+        ORDER BY ${paymentOrder}
+        LIMIT 2000
+      `, { limit: 2000, softFail: true });
+      buyerInvoicePayments = buyerInvoicePayments.map((payment) => ({
+        ...payment,
+        _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
+        _Payment_Amount_Field: paymentAmountField || null,
+      }));
+    }
+  }
 
   const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([
     recordRaw.Vessel__c ? resolveViaQuery('Vessel__c', recordRaw.Vessel__c, 'Name') : Promise.resolve(null),
@@ -4295,7 +4684,14 @@ async function salesforceStemDetailFull(body) {
     _Factoring_Invoice_Name: factoringInvoiceName,
   };
 
-  return { record, lineItems: lineItemsWithNames, extraCosts: extraCostsWithNames, buyerBrokers: buyerBrokersWithNames };
+  return {
+    record,
+    lineItems: lineItemsWithNames,
+    extraCosts: extraCostsWithNames,
+    buyerBrokers: buyerBrokersWithNames,
+    supplierInvoicePayments,
+    buyerInvoicePayments,
+  };
 }
 
 function uniquePresentValues(values) {
