@@ -1120,7 +1120,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     <thead>
                       <tr className="border-b border-border bg-muted/40">
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
+                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Group</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
@@ -1510,7 +1510,7 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Group</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
@@ -1941,7 +1941,7 @@ export default function BuyerInvoices() {
           {buyerTraderOptions.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge / Payment Handler</Label>
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader / Payment Handler</Label>
                 <button type="button" onClick={toggleAllBuyerTraders} className="text-xs text-primary hover:underline">
                   {selectedBuyerTraders.length === buyerTraderOptions.length ? 'Clear all' : 'Select all'}
                 </button>
@@ -2165,17 +2165,18 @@ export default function BuyerInvoices() {
         <TableShell title="Buyer Invoice Due List" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
           {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
-              <table className="w-full min-w-[1540px] text-sm">
+              <table className="w-full min-w-[1680px] text-sm">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem Name</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Broker</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader in Charge</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">PSPRS</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection / Payment Handler</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Collection Handler</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
@@ -2194,6 +2195,7 @@ export default function BuyerInvoices() {
                       >
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '-'}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '-'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{row.buyerBrokerNames || '-'}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
                       <td className="px-4 py-3 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>

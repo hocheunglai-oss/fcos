@@ -3319,7 +3319,7 @@ function buyerTraderFilterHtml(report, settings) {
   }).join('');
   return `
     <div style="margin:0 0 12px">
-      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Open filtered view by Buyer Trader in Charge</div>
+      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Open filtered view by Buyer Trader / Payment Handler</div>
       <div>${allChip}${chips}</div>
     </div>`;
 }
@@ -3357,6 +3357,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     <tr style="${severity.row}">
       <td style="${cellStyle};font-weight:600;white-space:nowrap">${escapeHtml(row.stemName)}</td>
       <td style="${cellStyle};min-width:180px">${escapeHtml(row.buyerName || '-')}</td>
+      <td style="${cellStyle};min-width:150px">${escapeHtml(row.buyerBrokerNames || '-')}</td>
       <td style="${cellStyle};text-align:right;white-space:nowrap">${money(row.invoiceAmount)}</td>
       <td style="${cellStyle};text-align:right;font-weight:600;white-space:nowrap">${money(row.receivableBalance)}</td>
       <td style="${cellStyle};white-space:nowrap">${prettyDate(row.buyerInvoiceDueDate)}</td>
@@ -3371,21 +3372,22 @@ function buildBuyerInvoiceReportEmail(report, settings) {
   const tableHtml = settings.includeTable ? `
     ${buyerTraderFilterHtml(report, settings)}
     <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
-      <table style="border-collapse:collapse;width:100%;min-width:1120px;font-size:13px">
+      <table style="border-collapse:collapse;width:100%;min-width:1260px;font-size:13px">
         <thead>
           <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Stem Name</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Name</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Stem</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Broker</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Invoice Amount</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Receivable Balance</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Due Date</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Trader</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">PSPRS</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Status</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Overdue Volume</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Overdue</th>
           </tr>
         </thead>
-        <tbody>${tableRows || '<tr><td colspan="9" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
+        <tbody>${tableRows || '<tr><td colspan="10" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
       </table>
     </div>` : '';
   const contentHtml = emailContentHtml(content);
@@ -3397,7 +3399,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${reportBodyHtml}
     </div>`;
-  const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue Volume ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
+  const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
   const introText = hasAttentionMarker && tableText
     ? insertAfterAttentionSentence(content, `\n\n${tableText}\n\n`)
     : content;
@@ -3408,7 +3410,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`,
     ...((report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`)),
     '',
-    ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue Volume ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`)),
+    ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`)),
   ];
   return { subject, html, text: textLines.join('\n'), totals };
 }
@@ -3669,8 +3671,8 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
         <thead>
           <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem Name</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer Name</th>
+	            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem</th>
+	            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Invoice</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
@@ -3685,7 +3687,7 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
     </div>`;
   const bodyHtml = paymentReminderContentHtml(body);
   const htmlWithTable = insertInvoiceTable(bodyHtml, tableHtml);
-  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue Volume ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
+  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
   const bodyText = hasHtmlMarkup(body) ? htmlToPlainText(body) : body;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
