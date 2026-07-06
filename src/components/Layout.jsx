@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, Link, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle, ListFilter, ShieldCheck, LogOut, History } from 'lucide-react';
+import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle, ListFilter, ShieldCheck, LogOut, History, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 const navItems = [
   {
@@ -26,6 +27,7 @@ const navItems = [
   { to: '/settings', label: 'Settings', icon: Settings, moduleId: 'settings' },
   { to: '/admin', label: 'Admin Control', icon: ShieldCheck, moduleId: 'admin' },
 ];
+const VERSION_CHECK_INTERVAL_MS = 60_000;
 
 export default function Layout() {
   const location = useLocation();
@@ -34,6 +36,8 @@ export default function Layout() {
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
+  const [versionUpdate, setVersionUpdate] = useState(null);
+  const currentBuildIdRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.density = density;
@@ -60,6 +64,42 @@ export default function Layout() {
     return () => window.clearTimeout(timeout);
   }, [location.hash, location.pathname]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkVersion = async () => {
+      try {
+        const response = await fetch(`/app-version.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const latest = await response.json();
+        const latestBuildId = latest?.buildId || latest?.commit || latest?.version;
+        if (!latestBuildId || cancelled) return;
+        if (!currentBuildIdRef.current) {
+          currentBuildIdRef.current = latestBuildId;
+          return;
+        }
+        if (latestBuildId !== currentBuildIdRef.current) {
+          setVersionUpdate(latest);
+        }
+      } catch {
+        // Version checks must never interrupt normal app usage.
+      }
+    };
+
+    const checkWhenVisible = () => {
+      if (document.visibilityState === 'visible') checkVersion();
+    };
+
+    checkVersion();
+    const interval = window.setInterval(checkVersion, VERSION_CHECK_INTERVAL_MS);
+    document.addEventListener('visibilitychange', checkWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', checkWhenVisible);
+    };
+  }, []);
+
   const unsaved = Object.values(dirtyState).find((state) => state?.dirty);
   const confirmLeaveWithUnsavedChanges = () => {
     if (!unsaved) return true;
@@ -82,6 +122,17 @@ export default function Layout() {
     }
     const leave = window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
     if (!leave) event.preventDefault();
+  };
+  const updateToLatestVersion = async () => {
+    if (!confirmLeaveWithUnsavedChanges()) return;
+    try {
+      if ('caches' in window) {
+        const cacheNames = await window.caches.keys();
+        await Promise.all(cacheNames.map((cacheName) => window.caches.delete(cacheName)));
+      }
+    } finally {
+      window.location.reload();
+    }
   };
 
   return (
@@ -219,6 +270,22 @@ export default function Layout() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
+        {versionUpdate && (
+          <div className="sticky top-0 z-40 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+              <div className="text-sm">
+                <span className="font-semibold">New version available</span>
+                <span className="ml-2 text-amber-800">
+                  Version {versionUpdate.version || APP_VERSION} is ready. Refresh to load the latest app.
+                </span>
+              </div>
+              <Button size="sm" onClick={updateToLatestVersion} className="gap-2 bg-amber-600 text-white hover:bg-amber-700">
+                <RefreshCw className="h-3.5 w-3.5" />
+                Update Now
+              </Button>
+            </div>
+          </div>
+        )}
         <Outlet />
       </main>
 

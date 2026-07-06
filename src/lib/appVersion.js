@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.1';
+export const APP_VERSION = '1.0.0.2';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.2',
+    releasedAt: '2026-07-06',
+    title: 'Live update notification',
+    changes: [
+      'Added top-of-app notification when a newer Vercel deployment is available.',
+      'Added Update Now action to clear browser caches and refresh the app to the latest deployment.',
+      'Added build metadata generation so open browser sessions can detect new deployments.',
+    ],
+  },
   {
     version: '1.0.0.1',
     releasedAt: '2026-07-06',
