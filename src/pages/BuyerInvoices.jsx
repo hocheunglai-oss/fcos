@@ -290,6 +290,13 @@ function emailBodyPreviewHtml(body, selectedCount) {
   return `${html.slice(0, afterMarker)}${marker}${html.slice(afterMarker)}`;
 }
 
+function renderReminderPreviewTemplate(template, context) {
+  const values = context || {};
+  return textValue(template, '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
+  ));
+}
+
 function removeInvoiceTableTokenHtml(value) {
   const tokenPattern = /\{\{\s*invoiceTable\s*\}\}/gi;
   return textValue(value, '')
@@ -891,6 +898,48 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const selectedRoutingWarnings = useMemo(() => (
     [...new Set(selectedRows.flatMap((candidate) => candidate.buyerBrokerRoutingWarnings || []))]
   ), [selectedRows]);
+  const selectedPreviewGroup = useMemo(() => (
+    selectedRoutingGroups.find((group) => (group.stemIds || []).includes(row?.stemId))
+    || selectedRoutingGroups[0]
+    || null
+  ), [row?.stemId, selectedRoutingGroups]);
+  const previewSelectedRow = useMemo(() => (
+    selectedRows.find((candidate) => candidate.stemId === row?.stemId)
+    || selectedRows[0]
+    || row
+    || {}
+  ), [row, selectedRows]);
+  const previewContext = useMemo(() => {
+    const totalReceivable = selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0);
+    return {
+      stemName: previewSelectedRow?.stemName || '',
+      keyStem: previewSelectedRow?.keyStem || '',
+      buyerName: previewSelectedRow?.buyerName || 'Customer',
+      primaryRecipientName: selectedPreviewGroup?.primaryRecipientName || previewSelectedRow?.buyerName || 'Customer',
+      buyerGroupName: previewSelectedRow?.buyerGroupName || '',
+      invoiceAmount: fmtMoney(previewSelectedRow?.invoiceAmount),
+      receivableBalance: fmtMoney(previewSelectedRow?.receivableBalance),
+      buyerInvoiceDueDate: fmtDate(previewSelectedRow?.buyerInvoiceDueDate),
+      buyerTraderInCharge: previewSelectedRow?.buyerTraderInCharge || '',
+      buyerAccountsEmail: previewSelectedRow?.buyerAccountsEmail || '',
+      buyerTraderEmail: previewSelectedRow?.buyerTraderEmail || '',
+      paymentHandlerName: previewSelectedRow?.paymentHandlerName || previewSelectedRow?.collection?.ownerName || '',
+      paymentHandlerEmail: previewSelectedRow?.paymentHandlerEmail || '',
+      buyerBrokerNames: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerNames).filter(Boolean))].join(', '),
+      buyerBrokerEmails: uniqueEmailList(...selectedRows.map((candidate) => candidate.buyerBrokerEmails || '')).join(', '),
+      buyerBrokerInvoiceFormats: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerInvoiceFormats).filter(Boolean))].join(', '),
+      toRecipients: form.to || selectedPreviewGroup?.to?.join(', ') || '',
+      psprsStatus: previewSelectedRow?.prpspStatus || '',
+      overdue: overdueDisplayValue(previewSelectedRow?.daysUntilDue),
+      invoiceStatus: previewSelectedRow?.status || '',
+      daysAhead: String(daysAhead ?? DEFAULT_EMAIL_SETTINGS.daysAhead),
+      invoiceCount: String(selectedRows.length),
+      totalReceivable: fmtMoney(totalReceivable),
+    };
+  }, [daysAhead, form.to, previewSelectedRow, selectedPreviewGroup, selectedRows]);
+  const renderedPreviewBody = useMemo(() => (
+    renderReminderPreviewTemplate(form.body, previewContext)
+  ), [form.body, previewContext]);
   const reminderHistoryRow = data?.selected || candidates.find((candidate) => candidate.stemId === row?.stemId) || row;
   const lastReminderSentAt = latestPaymentReminderSentAt(reminderHistoryRow) || latestPaymentReminderSentAt(row);
   const lastReminderSentToday = wasPaymentReminderSentToday(reminderHistoryRow) || wasPaymentReminderSentToday(row);
@@ -936,6 +985,10 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const sendReminder = async () => {
     if (!selectedRows.length) {
       setError('Select at least one invoice to include.');
+      return;
+    }
+    if ((selectedPreviewGroup?.stemIds || []).includes(row?.stemId) && !uniqueEmailList(form.to).length) {
+      setError(`Payment reminder recipient is required for ${selectedPreviewGroup.primaryRecipientName || 'recipient group'}. Enter the To email before sending.`);
       return;
     }
     setSending(true);
@@ -1139,13 +1192,15 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className="space-y-1.5 md:col-span-3">
-                    <Label className="text-xs text-muted-foreground">Automatic To</Label>
+                    <Label className="text-xs text-muted-foreground">To</Label>
                     <Input
-                      value={selectedAutoTo.join(', ')}
-                      readOnly
-                      placeholder="Resolved from buyer broker routing"
-                      className="bg-muted/30"
+                      value={form.to}
+                      onChange={(event) => updateForm('to', event.target.value)}
+                      placeholder="Resolved from buyer broker routing; enter manually if blank"
                     />
+                    <p className="text-[11px] text-muted-foreground">
+                      Editable for the batch containing the selected stem. Other batches use their automatic routing.
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Additional CC</Label>
@@ -1190,7 +1245,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </div>
                   <div
                     className="max-h-72 overflow-auto rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
-                    dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(form.body, selectedRows.length) }}
+                    dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows.length) }}
                   />
                 </div>
 
