@@ -199,10 +199,11 @@ export default function DashboardSettings() {
     );
   }, [data?.recentStems, tableSearch, selectedYears, selectedMonths, counterpartyMode]);
 
+  const dashboardTurnover = data?.turnoverTotal ?? data?.totalBuyer ?? null;
   const kpiMetrics = useMemo(() => {
-    const grossMarginPct = data?.totalBuyer ? (data.totalProfit / data.totalBuyer) * 100 : null;
+    const grossMarginPct = dashboardTurnover ? (data.totalProfit / dashboardTurnover) * 100 : null;
     return { grossMarginPct };
-  }, [data]);
+  }, [data, dashboardTurnover]);
 
   const productFamilyKpis = useMemo(() => {
     const quantityByFamily = new Map(
@@ -499,22 +500,22 @@ export default function DashboardSettings() {
             />
             <StatCard
               label="Turnover"
-              value={data.turnoverTotal != null ? `$${data.turnoverTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-              sub="Buyer Invoice total"
+              value={dashboardTurnover != null ? `$${dashboardTurnover.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+              sub="Including un-invoiced STEMs"
               icon={DollarSign}
               color="teal"
             />
             <StatCard
               label="Gross Profit Total"
               value={data.totalProfit != null ? `$${data.totalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
-              sub={data.totalInvoicedProfit != null ? `Gross Profit Total (Invoiced) $${data.totalInvoicedProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : undefined}
+              sub="Including un-invoiced STEMs"
               icon={DollarSign}
               color="amber"
             />
             <StatCard
               label="Gross Margin %"
               value={kpiMetrics.grossMarginPct != null ? `${kpiMetrics.grossMarginPct.toFixed(1)}%` : '—'}
-              sub="Gross Profit ÷ Buyer Invoice"
+              sub="Gross Profit ÷ Turnover"
               icon={Percent}
               color="purple"
             />
@@ -538,7 +539,7 @@ export default function DashboardSettings() {
                 <p className="text-2xl font-bold text-foreground font-dm tracking-tight">
                   {formatQuantity(productVolumeKpi.totalQuantity)} {productVolumeKpi.unitOfMeasure}
                 </p>
-                <p className="text-xs text-muted-foreground mt-0.5">Line-item BDN qty or fallback mid-range qty</p>
+                <p className="text-xs text-muted-foreground mt-0.5">BDN Quantity or fallback mid-range</p>
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 {productVolumeKpi.breakdown.map((item) => (

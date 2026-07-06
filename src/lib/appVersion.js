@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.0.5';
+export const APP_VERSION = '1.0.0.6';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.6',
+    releasedAt: '2026-07-06',
+    title: 'Dashboard KPI wording fix',
+    changes: [
+      'Fixed Turnover KPI display by falling back to the existing buyer invoice total when needed.',
+      'Updated dashboard KPI notes for Turnover, Gross Profit Total, Gross Margin, and Product Volume.',
+    ],
+  },
   {
     version: '1.0.0.5',
     releasedAt: '2026-07-06',
