@@ -419,7 +419,7 @@ export default function BrokerRegister() {
     ] : [];
     const detailRows = filteredRows.map((row) => ({
       stemName: row.stemName,
-      productQuantity: spreadsheetText(row.productQuantityLabel || row.productName),
+      productQuantity: spreadsheetText(row.productQuantityLabel || row.productFamily || row.productName),
       deliveryDate: fmtDate(row.deliveryDate),
       brokerType: row.brokerType,
       commissionUnit: spreadsheetText(row.commissionUnitPriceLabel || fmtUnit(row.commissionUnitPrice)),

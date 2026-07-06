@@ -4273,12 +4273,13 @@ function latestIsoDate(values) {
 }
 
 function addBrokerProductQuantity(group, row) {
-  const productName = row.productName || '—';
+  const productName = row.productFamily || row.productName || '—';
   const unit = row.quantityUnit || 'MT';
   const key = `${productName}::${unit}`;
   if (!group._productMap.has(key)) {
     group._productMap.set(key, {
       productName,
+      productFamily: row.productFamily || productName,
       quantity: 0,
       hasQuantity: false,
       unit,
@@ -4314,7 +4315,7 @@ function combineBrokerCommissionRows(rows) {
     group.commissionAmount += Number(row.commissionAmount || 0);
     if (row.commissionUnitPrice != null) group._commissionUnitPrices.push(Number(row.commissionUnitPrice));
     group._commissionUnitLines.push({
-      productName: row.productName || '—',
+      productName: row.productFamily || row.productName || '—',
       value: numericValue(row.commissionUnitPrice),
     });
     if (row.paymentDate) group._paymentDates.push(row.paymentDate);
@@ -4334,9 +4335,10 @@ function combineBrokerCommissionRows(rows) {
     }));
     const productQuantities = [...group._productMap.values()].map((item) => ({
       productName: item.productName,
+      productFamily: item.productFamily || item.productName,
       quantity: item.hasQuantity ? item.quantity : null,
       quantityUnit: item.unit,
-      label: item.hasQuantity ? `${item.productName} ${formatQuantityLabel(item.quantity, item.unit)}` : item.productName,
+      label: item.hasQuantity ? `${item.productName} - ${formatQuantityLabel(item.quantity, item.unit)}` : item.productName,
     }));
     return {
       ...group,
@@ -4486,6 +4488,7 @@ async function salesforceBrokerRegisterFull(body) {
         stemName: stem.Name,
         brokerId: item.Supplier_Broker__c,
         productName: item['Product__r']?.Name || item.Name || '—',
+        productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || '—',
         bdnQuantity: qty || null,
         quantityUnit: 'MT',
         deliveryDate: stem.Delivery_Date__c,
@@ -4512,6 +4515,7 @@ async function salesforceBrokerRegisterFull(body) {
         stemName: stem.Name,
         brokerId: buyerBrokerId,
         productName: item['Product__r']?.Name || item.Name || '—',
+        productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || '—',
         bdnQuantity: qty || null,
         quantityUnit: 'MT',
         deliveryDate: stem.Delivery_Date__c,
@@ -4541,6 +4545,7 @@ async function salesforceBrokerRegisterFull(body) {
           stemName: stem.Name,
           brokerId: broker.Buyer_Broker__c || null,
           productName: item['Product__r']?.Name || item.Name || '—',
+          productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || '—',
           bdnQuantity: qty || null,
           quantityUnit: 'MT',
           deliveryDate: stem.Delivery_Date__c,

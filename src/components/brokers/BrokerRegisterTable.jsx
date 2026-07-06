@@ -32,19 +32,27 @@ const receivableAmount = (row) => {
   const amount = Number(row.commissionAmount || 0);
   return amount < 0 ? Math.abs(amount) : null;
 };
+const productQuantityLabel = (item) => {
+  if (item.label) return item.label;
+  const product = textValue(item.productFamily || item.productName, '—');
+  const qty = numericValue(item.quantity);
+  return qty != null
+    ? `${product} - ${qty.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${item.quantityUnit || 'MT'}`
+    : product;
+};
 
 function ProductQuantityCell({ row }) {
   const items = row.productQuantities?.length
     ? row.productQuantities
     : row.productQuantityLabel
       ? row.productQuantityLabel.split('; ').map((label) => ({ label }))
-      : [{ label: row.productName || '—' }];
+      : [{ productFamily: row.productFamily, productName: row.productName, quantity: row.bdnQuantity, quantityUnit: row.quantityUnit }];
 
   return (
     <div className="min-w-56 space-y-1">
       {items.map((item, index) => (
-        <div key={`${item.productName || item.label}-${index}`} className="text-muted-foreground">
-          {item.label || `${textValue(item.productName, '')} ${item.quantity != null ? `${Number(item.quantity).toLocaleString(undefined, { maximumFractionDigits: 3 })} ${item.quantityUnit || 'MT'}` : ''}`}
+        <div key={`${item.productFamily || item.productName || item.label}-${index}`} className="text-muted-foreground">
+          {productQuantityLabel(item)}
         </div>
       ))}
     </div>
