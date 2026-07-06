@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import BrokerDatePicker from '@/components/brokers/BrokerDatePicker';
 
-const TYPES = ['Supplier Broker', 'Buyer Broker', 'Secondary Buyer Broker'];
+const TYPES = ['Supplier Broker', 'Buyer Broker'];
 const HIDDEN_BROKER_FLAGS = [
   { key: 'individual', label: 'Hidden Broker Individual' },
   { key: 'company', label: 'Hidden Broker Company' },

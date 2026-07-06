@@ -98,6 +98,38 @@ const cleanBrokerFilePart = (value) => {
     .toUpperCase();
   return cleaned || 'BROKER';
 };
+const brokerTypeLabel = (value) => value === 'Secondary Buyer Broker' ? 'Buyer Broker' : textValue(value, '');
+const brokerNameValue = (row) => textValue(row?.brokerName, '');
+const stemNameValue = (row) => textValue(row?.stemName, '');
+const sortText = (value) => textValue(value, '').toLocaleLowerCase();
+const compareText = (a, b) => sortText(a).localeCompare(sortText(b), undefined, { numeric: true, sensitivity: 'base' });
+const compareDateDesc = (a, b) => {
+  const left = textValue(a, '');
+  const right = textValue(b, '');
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return right.localeCompare(left);
+};
+const brokerSortCriteria = (brokerCount) => brokerCount > 1
+  ? ['brokerName', 'stemName', 'deliveryDate', 'brokerType']
+  : ['stemName', 'brokerName', 'deliveryDate', 'brokerType'];
+const brokerSortPriority = (criteria) => Object.fromEntries(criteria.map((key, index) => [key, index + 1]));
+const compareBrokerRows = (criteria) => (a, b) => {
+  for (const key of criteria) {
+    let result = 0;
+    if (key === 'brokerName') result = compareText(a.brokerName, b.brokerName);
+    if (key === 'stemName') result = compareText(a.stemName, b.stemName);
+    if (key === 'deliveryDate') result = compareDateDesc(a.deliveryDate, b.deliveryDate);
+    if (key === 'brokerType') result = compareText(brokerTypeLabel(a.brokerType), brokerTypeLabel(b.brokerType));
+    if (result !== 0) return result;
+  }
+  return compareText(a.id, b.id);
+};
+const matchesBrokerType = (row, selectedTypes) => {
+  if (!selectedTypes.length) return true;
+  return selectedTypes.includes(row.brokerType) || selectedTypes.includes(brokerTypeLabel(row.brokerType));
+};
 
 export default function BrokerRegister() {
   const [rows, setRows] = useState([]);
@@ -129,7 +161,7 @@ export default function BrokerRegister() {
 
   const brokerNames = useMemo(() => {
     const visibleRows = rows.filter(row => {
-      const typeMatch = !selectedTypes.length || selectedTypes.includes(row.brokerType);
+      const typeMatch = matchesBrokerType(row, selectedTypes);
       const hiddenBrokerMatch = !selectedHiddenBrokerFlags.length || selectedHiddenBrokerFlags.some(flag => flag === 'individual' ? row.hiddenBrokerIndividual : row.hiddenBrokerCompany);
       const date = row.paymentDateSort || row.paymentDate || '';
       const fromMatch = !fromDate || date >= fromDate;
@@ -143,7 +175,7 @@ export default function BrokerRegister() {
     const q = search.trim().toLowerCase();
     const textMatch = !q || [row.stemName, row.brokerName, row.productQuantityLabel]
       .some(value => textValue(value, '').toLowerCase().includes(q));
-    const typeMatch = !selectedTypes.length || selectedTypes.includes(row.brokerType);
+    const typeMatch = matchesBrokerType(row, selectedTypes);
     const brokerMatch = !selectedBrokerNames.length || selectedBrokerNames.includes(textValue(row.brokerName, ''));
     const hiddenBrokerMatch = !selectedHiddenBrokerFlags.length || selectedHiddenBrokerFlags.some(flag => flag === 'individual' ? row.hiddenBrokerIndividual : row.hiddenBrokerCompany);
     const date = row.paymentDateSort || row.paymentDate || '';
@@ -152,16 +184,21 @@ export default function BrokerRegister() {
     return textMatch && typeMatch && brokerMatch && hiddenBrokerMatch && fromMatch && toMatch;
   }), [rows, search, selectedTypes, selectedBrokerNames, selectedHiddenBrokerFlags, fromDate, toDate]);
 
-  const total = filteredRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
+  const visibleBrokerCount = useMemo(() => new Set(filteredRows.map(brokerNameValue).filter(Boolean)).size, [filteredRows]);
+  const sortCriteria = useMemo(() => brokerSortCriteria(visibleBrokerCount), [visibleBrokerCount]);
+  const sortPriority = useMemo(() => brokerSortPriority(sortCriteria), [sortCriteria]);
+  const sortedRows = useMemo(() => [...filteredRows].sort(compareBrokerRows(sortCriteria)), [filteredRows, sortCriteria]);
+
+  const total = sortedRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
   const exchangeRateTargetDate = useMemo(() => {
-    const basisDate = toDate || fromDate || latestRowDate(filteredRows) || isoDate(new Date());
+    const basisDate = toDate || fromDate || latestRowDate(sortedRows) || isoDate(new Date());
     return lastWorkingDayOfQuarter(basisDate);
-  }, [filteredRows, fromDate, toDate]);
+  }, [sortedRows, fromDate, toDate]);
 
   const exportFileName = useMemo(() => {
-    const basisDate = toDate || fromDate || latestRowDate(filteredRows) || isoDate(new Date());
+    const basisDate = toDate || fromDate || latestRowDate(sortedRows) || isoDate(new Date());
     const selectedCleanNames = selectedBrokerNames.map(cleanBrokerFilePart).filter(Boolean);
-    const filteredCleanNames = [...new Set(filteredRows.map(row => cleanBrokerFilePart(row.brokerName)).filter(Boolean))];
+    const filteredCleanNames = [...new Set(sortedRows.map(row => cleanBrokerFilePart(row.brokerName)).filter(Boolean))];
     const brokerName = selectedCleanNames.length === 1
       ? selectedCleanNames[0]
       : filteredCleanNames.length === 1
@@ -170,7 +207,7 @@ export default function BrokerRegister() {
           ? 'MULTIPLE_BROKERS'
           : 'ALL_BROKERS';
     return `COMM_${quarterLabel(basisDate)}_${brokerName}.xls`;
-  }, [filteredRows, fromDate, selectedBrokerNames, toDate]);
+  }, [sortedRows, fromDate, selectedBrokerNames, toDate]);
 
   useEffect(() => {
     if (!showCny) {
@@ -199,14 +236,15 @@ export default function BrokerRegister() {
     return () => { cancelled = true; };
   }, [exchangeRateProvider, exchangeRateTargetDate, showCny]);
 
-  const commissionPayableTotal = filteredRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
-  const commissionReceivableTotal = filteredRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+  const commissionPayableTotal = sortedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+  const commissionReceivableTotal = sortedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
   const bankBuyRate = bankBuyRateFrom(exchangeRate);
   const exchangeRateSummary = exchangeRate
     ? `Mid-rate ${Number(exchangeRate.rate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; bank buy rate ${Number(bankBuyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; applied rate date ${fmtDate(exchangeRate.date)}`
     : exchangeRateError || 'USD/CNY rate unavailable';
   const filterSummaryRows = [
     ['Broker Name', selectedBrokerNames.length ? selectedBrokerNames.join(', ') : 'All'],
+    ['Broker Type', selectedTypes.length ? selectedTypes.map(brokerTypeLabel).join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
   ];
   const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
@@ -393,7 +431,7 @@ export default function BrokerRegister() {
     const exportNoteZh = '所有佣金金额均来自导出时应用程序中已筛选的 Broker\'s Commission 行。';
     const methodologyRows = showCny ? [
       ['Generated At', generatedAt],
-      ['Rows Exported', filteredRows.length.toLocaleString()],
+      ['Rows Exported', sortedRows.length.toLocaleString()],
       ['Source', exchangeRate?.source || 'Frankfurter API'],
       ['API URL', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
       ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
@@ -406,7 +444,7 @@ export default function BrokerRegister() {
     ] : [];
     const methodologyRowsZh = showCny ? [
       ['生成时间', generatedAt],
-      ['导出行数', filteredRows.length.toLocaleString()],
+      ['导出行数', sortedRows.length.toLocaleString()],
       ['来源', exchangeRate?.source || 'Frankfurter API'],
       ['API 地址', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
       ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
@@ -417,33 +455,63 @@ export default function BrokerRegister() {
       ['银行买入价方法', bankBuyRateMethodologyZh],
       ['目标日期方法', targetDateMethodologyZh],
     ] : [];
-    const detailRows = filteredRows.map((row) => ({
+    const detailRows = sortedRows.map((row) => ({
+      brokerName: brokerNameValue(row),
       stemName: row.stemName,
       productQuantity: spreadsheetText(row.productQuantityLabel || row.productFamily || row.productName),
       deliveryDate: fmtDate(row.deliveryDate),
-      brokerType: row.brokerType,
+      brokerType: brokerTypeLabel(row.brokerType),
       commissionUnit: spreadsheetText(row.commissionUnitPriceLabel || fmtUnit(row.commissionUnitPrice)),
       commissionPayable: payableAmount(row),
       commissionReceivable: receivableAmount(row),
       paymentDateLabel: row.paymentDateLabel,
       paymentDate: fmtDate(row.paymentDate),
-      paymentDelay: row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
+      paymentDelay: row.paymentDelayLabel || (brokerTypeLabel(row.brokerType) === 'Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
     }));
     const hasCommissionPayable = detailRows.some((row) => numericValue(row.commissionPayable) != null);
     const hasCommissionReceivable = detailRows.some((row) => numericValue(row.commissionReceivable) != null);
     const hasPaymentDelay = detailRows.some((row) => textValue(row.paymentDelay, '').trim());
+    const priorityHeader = (label, key) => sortPriority[key] ? `${sortPriority[key]} ${label}` : label;
     const detailColumns = [
-      { header: 'Stem Name', value: (row) => row.stemName, cell: (row) => workbookCell(row.stemName), minWidth: 110, maxWidth: 280 },
-      { header: 'Products / Quantity', value: (row) => row.productQuantity, cell: (row) => workbookCell(row.productQuantity), minWidth: 110, maxWidth: 280 },
-      { header: 'Delivery Date', value: (row) => row.deliveryDate, cell: (row) => workbookCell(row.deliveryDate), minWidth: 85, maxWidth: 180 },
-      { header: 'Broker Type', value: (row) => row.brokerType, cell: (row) => workbookCell(row.brokerType), minWidth: 85, maxWidth: 180 },
-      { header: 'Commission / Unit', value: (row) => row.commissionUnit, cell: (row) => workbookCell(row.commissionUnit, 'TextRight'), minWidth: 85, maxWidth: 180 },
-      ...(hasCommissionPayable ? [{ header: 'Commission Payable', value: (row) => row.commissionPayable, cell: (row) => workbookCurrencyCell(row.commissionPayable), minWidth: 105, maxWidth: 180 }] : []),
-      ...(hasCommissionReceivable ? [{ header: 'Commission Receivable', value: (row) => row.commissionReceivable, cell: (row) => workbookCurrencyCell(row.commissionReceivable), minWidth: 105, maxWidth: 190 }] : []),
-      { header: 'Payment Date Label', value: (row) => row.paymentDateLabel, cell: (row) => workbookCell(row.paymentDateLabel), minWidth: 85, maxWidth: 180 },
-      { header: 'Payment Date', value: (row) => row.paymentDate, cell: (row) => workbookCell(row.paymentDate), minWidth: 85, maxWidth: 180 },
-      ...(hasPaymentDelay ? [{ header: 'Payment Delay', value: (row) => row.paymentDelay, cell: (row) => workbookCell(row.paymentDelay, 'TextRight'), minWidth: 85, maxWidth: 180 }] : []),
+      { key: 'stemName', header: priorityHeader('Stem Name', 'stemName'), value: (row) => row.stemName, cell: (row) => workbookCell(row.stemName), minWidth: 110, maxWidth: 280 },
+      { key: 'brokerName', header: priorityHeader('Broker Name', 'brokerName'), value: (row) => row.brokerName, cell: (row) => workbookCell(row.brokerName), minWidth: 120, maxWidth: 280 },
+      { key: 'productQuantity', header: 'Products / Quantity', value: (row) => row.productQuantity, cell: (row) => workbookCell(row.productQuantity), minWidth: 110, maxWidth: 280 },
+      { key: 'deliveryDate', header: priorityHeader('Delivery Date', 'deliveryDate'), value: (row) => row.deliveryDate, cell: (row) => workbookCell(row.deliveryDate), minWidth: 85, maxWidth: 180 },
+      { key: 'brokerType', header: priorityHeader('Broker Type', 'brokerType'), value: (row) => row.brokerType, cell: (row) => workbookCell(row.brokerType), minWidth: 85, maxWidth: 180 },
+      { key: 'commissionUnit', header: 'Commission / Unit', value: (row) => row.commissionUnit, cell: (row) => workbookCell(row.commissionUnit, 'TextRight'), minWidth: 85, maxWidth: 180 },
+      ...(hasCommissionPayable ? [{ key: 'commissionPayable', header: 'Commission Payable', value: (row) => row.commissionPayable, cell: (row) => workbookCurrencyCell(row.commissionPayable), minWidth: 105, maxWidth: 180 }] : []),
+      ...(hasCommissionReceivable ? [{ key: 'commissionReceivable', header: 'Commission Receivable', value: (row) => row.commissionReceivable, cell: (row) => workbookCurrencyCell(row.commissionReceivable), minWidth: 105, maxWidth: 190 }] : []),
+      { key: 'paymentDateLabel', header: 'Payment Date Label', value: (row) => row.paymentDateLabel, cell: (row) => workbookCell(row.paymentDateLabel), minWidth: 85, maxWidth: 180 },
+      { key: 'paymentDate', header: 'Payment Date', value: (row) => row.paymentDate, cell: (row) => workbookCell(row.paymentDate), minWidth: 85, maxWidth: 180 },
+      ...(hasPaymentDelay ? [{ key: 'paymentDelay', header: 'Payment Delay', value: (row) => row.paymentDelay, cell: (row) => workbookCell(row.paymentDelay, 'TextRight'), minWidth: 85, maxWidth: 180 }] : []),
     ];
+    const detailBrokerSections = [];
+    for (const row of detailRows) {
+      const brokerName = row.brokerName || 'Unknown Broker';
+      const current = detailBrokerSections.at(-1);
+      if (current && current.brokerName === brokerName) {
+        current.rows.push(row);
+      } else {
+        detailBrokerSections.push({ brokerName, rows: [row] });
+      }
+    }
+    const brokerSummaryCells = (label, rowsForBroker, cny = false) => {
+      const payable = rowsForBroker.reduce((sum, row) => sum + Number(row.commissionPayable || 0), 0);
+      const receivable = rowsForBroker.reduce((sum, row) => sum + Number(row.commissionReceivable || 0), 0);
+      const payableValue = cny ? (bankBuyRate != null ? payable * bankBuyRate : null) : payable;
+      const receivableValue = cny ? (bankBuyRate != null ? receivable * bankBuyRate : null) : receivable;
+      return detailColumns.map((column, index) => {
+        if (index === 0) return workbookCell(label, 'SummaryLabel');
+        if (column.key === 'commissionPayable') return workbookCurrencyCell(payableValue, cny ? 'SummaryCny' : 'SummaryCurrency');
+        if (column.key === 'commissionReceivable') return workbookCurrencyCell(receivableValue, cny ? 'SummaryCny' : 'SummaryCurrency');
+        return workbookCell('', 'SummaryText');
+      });
+    };
+    const detailBodyRows = detailBrokerSections.flatMap((section) => [
+      ...section.rows.map((row) => workbookRow(detailColumns.map((column) => column.cell(row)))),
+      workbookRow(brokerSummaryCells(`Broker Summary - ${section.brokerName}`, section.rows)),
+      ...(showCny ? [workbookRow(brokerSummaryCells(`Broker Summary in CNY - ${section.brokerName}`, section.rows, true))] : []),
+    ]);
     const detailColumnCount = detailColumns.length;
     const detailMergeAcross = Math.max(0, detailColumnCount - 1);
     const labelValueMergeAcross = Math.max(0, detailColumnCount - 2);
@@ -454,7 +522,7 @@ export default function BrokerRegister() {
     ]);
     const brokerRows = [
       workbookRow([workbookCell('Broker\'s Commission', 'Title', detailMergeAcross)]),
-      workbookRow([workbookCell(`Generated ${generatedAt} · ${filteredRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', detailMergeAcross)]),
+      workbookRow([workbookCell(`Generated ${generatedAt} · ${sortedRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', detailMergeAcross)]),
       workbookRow([workbookCell('Applied Filters', 'Section', detailMergeAcross)]),
       ...filterSummaryRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text', labelValueMergeAcross)])),
       workbookRow([workbookCell('Summary', 'Section', detailMergeAcross)]),
@@ -470,7 +538,7 @@ export default function BrokerRegister() {
       workbookRow([workbookCell('Broker Commission Rows', 'Section', detailMergeAcross)]),
       workbookRow(detailColumns.map((column) => workbookCell(column.header, 'Header'))),
       ...(detailRows.length
-        ? detailRows.map((row) => workbookRow(detailColumns.map((column) => column.cell(row))))
+        ? detailBodyRows
         : [workbookRow([workbookCell('No broker commissions found.', 'Text', detailMergeAcross)])]),
     ];
     const settingsColumnValues = showCny ? [
@@ -565,12 +633,13 @@ export default function BrokerRegister() {
       {!loading && !error && (
         <TableShell title="Broker Commission Rows" meta={`${filteredRows.length.toLocaleString()} matching rows`} bodyClassName="p-0">
           <BrokerRegisterTable
-            rows={filteredRows}
+            rows={sortedRows}
             onRowClick={setSelectedStemId}
             exchangeRate={exchangeRate}
             exchangeRateLoading={exchangeRateLoading}
             exchangeRateError={exchangeRateError}
             showCny={showCny}
+            sortPriority={sortPriority}
           />
         </TableShell>
       )}

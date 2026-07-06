@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { format } from 'date-fns';
 import { BrokerTypeBadge } from './BrokerBadges';
 import { numericValue, textValue } from '@/lib/displayValue';
@@ -32,6 +33,8 @@ const receivableAmount = (row) => {
   const amount = Number(row.commissionAmount || 0);
   return amount < 0 ? Math.abs(amount) : null;
 };
+const brokerTypeLabel = (value) => value === 'Secondary Buyer Broker' ? 'Buyer Broker' : textValue(value);
+const brokerNameValue = (row) => textValue(row?.brokerName, 'Unknown Broker');
 const productQuantityLabel = (item) => {
   if (item.label) return item.label;
   const product = textValue(item.productFamily || item.productName, '—');
@@ -77,9 +80,37 @@ function CommissionUnitCell({ row }) {
   );
 }
 
-export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, exchangeRateLoading, exchangeRateError, showCny = false }) {
+function SortHeader({ children, priority, align = 'left' }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
+      {priority && (
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/10 px-1.5 text-[11px] font-bold text-primary">
+          {priority}
+        </span>
+      )}
+      <span>{children}</span>
+    </span>
+  );
+}
+
+function brokerSectionsFrom(rows) {
+  const sections = [];
+  for (const row of rows) {
+    const brokerName = brokerNameValue(row);
+    const current = sections.at(-1);
+    if (current && current.brokerName === brokerName) {
+      current.rows.push(row);
+    } else {
+      sections.push({ brokerName, rows: [row] });
+    }
+  }
+  return sections;
+}
+
+export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, exchangeRateLoading, exchangeRateError, showCny = false, sortPriority = {} }) {
   const payableTotal = rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
   const receivableTotal = rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+  const brokerSections = brokerSectionsFrom(rows);
   const exchangeRateValue = numericValue(exchangeRate?.rate);
   const bankBuyRate = exchangeRateValue != null ? exchangeRateValue * 0.998 : null;
   const exchangeRateLabel = exchangeRate
@@ -94,11 +125,11 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-muted/40 border-b border-border">
-              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Stem Name</th>
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.stemName}>Stem Name</SortHeader></th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Products / Quantity</th>
-              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Delivery Date</th>
-              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Type</th>
-              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Broker Name</th>
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.deliveryDate}>Delivery Date</SortHeader></th>
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.brokerType}>Broker Type</SortHeader></th>
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.brokerName}>Broker Name</SortHeader></th>
               <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission / Unit</th>
               <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission Payable</th>
               <th className="sticky top-0 z-10 bg-card text-right py-3 px-4 font-semibold text-muted-foreground">Commission Receivable</th>
@@ -107,20 +138,45 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, idx) => (
-              <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer hover:bg-muted/30 transition-colors ${idx % 2 ? 'bg-muted/10' : ''}`}>
-                <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">{textValue(row.stemName)}</td>
-                <td className="py-3 px-4"><ProductQuantityCell row={row} /></td>
-                <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
-                <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={row.brokerType} /></td>
-                <td className="py-3 px-4 text-foreground">{textValue(row.brokerName)}</td>
-                <td className="py-3 px-4 whitespace-nowrap"><CommissionUnitCell row={row} /></td>
-                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{payableAmount(row) != null ? fmtMoney(payableAmount(row)) : '—'}</td>
-                <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{receivableAmount(row) != null ? fmtMoney(receivableAmount(row)) : '—'}</td>
-                <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
-                <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.paymentDelayLabel || (row.brokerType === 'Buyer Broker' || row.brokerType === 'Secondary Buyer Broker' ? fmtDelay(row.paymentDelay) : '—')}</td>
-              </tr>
-            ))}
+            {brokerSections.map((section, sectionIndex) => {
+              const sectionPayable = section.rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+              const sectionReceivable = section.rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+              const rowOffset = brokerSections.slice(0, sectionIndex).reduce((sum, item) => sum + item.rows.length, 0);
+              return (
+                <Fragment key={`section-${section.brokerName}-${sectionIndex}`}>
+                  {section.rows.map((row, idx) => (
+                    <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer hover:bg-muted/30 transition-colors ${(rowOffset + idx) % 2 ? 'bg-muted/10' : ''}`}>
+                      <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">{textValue(row.stemName)}</td>
+                      <td className="py-3 px-4"><ProductQuantityCell row={row} /></td>
+                      <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
+                      <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={brokerTypeLabel(row.brokerType)} /></td>
+                      <td className="py-3 px-4 text-foreground">{textValue(row.brokerName)}</td>
+                      <td className="py-3 px-4 whitespace-nowrap"><CommissionUnitCell row={row} /></td>
+                      <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{payableAmount(row) != null ? fmtMoney(payableAmount(row)) : '—'}</td>
+                      <td className="py-3 px-4 text-right font-semibold text-foreground whitespace-nowrap">{receivableAmount(row) != null ? fmtMoney(receivableAmount(row)) : '—'}</td>
+                      <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
+                      <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.paymentDelayLabel || (brokerTypeLabel(row.brokerType) === 'Buyer Broker' ? fmtDelay(row.paymentDelay) : '—')}</td>
+                    </tr>
+                  ))}
+                  <tr key={`summary-${section.brokerName}`} className="border-b border-border bg-emerald-50/70 font-semibold text-emerald-950">
+                    <td colSpan="6" className="py-2.5 px-4 text-right">Broker Summary - {section.brokerName}</td>
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">{fmtMoney(sectionPayable)}</td>
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">{fmtMoney(sectionReceivable)}</td>
+                    <td colSpan="2" className="py-2.5 px-4" />
+                  </tr>
+                  {showCny && (
+                    <tr key={`summary-cny-${section.brokerName}`} className="border-b border-border bg-emerald-50/40 text-emerald-950">
+                      <td colSpan="6" className="py-2.5 px-4 text-right">
+                        <div className="font-semibold">Broker Summary in CNY - {section.brokerName}</div>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-semibold whitespace-nowrap">{bankBuyRate != null ? fmtCny(sectionPayable * bankBuyRate) : '—'}</td>
+                      <td className="py-2.5 px-4 text-right font-semibold whitespace-nowrap">{bankBuyRate != null ? fmtCny(sectionReceivable * bankBuyRate) : '—'}</td>
+                      <td colSpan="2" className="py-2.5 px-4" />
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
             {!rows.length && <tr><td colSpan="10" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
           </tbody>
           {rows.length > 0 && (
