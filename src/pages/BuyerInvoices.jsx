@@ -94,16 +94,13 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
   },
 ];
 
-const COPY_COLUMNS = [
-  { header: 'Stem Name', value: (row) => row.stemName || '-' },
-  { header: 'Buyer Name', value: (row) => row.buyerName || '-' },
-  { header: 'Invoice Amount', value: (row) => fmtMoney(row.invoiceAmount), align: 'right' },
-  { header: 'Receivable Balance', value: (row) => fmtMoney(row.receivableBalance), align: 'right' },
-  { header: 'Buyer Invoice Due Date', value: (row) => fmtDate(row.buyerInvoiceDueDate) },
-  { header: 'Buyer Trader in Charge', value: (row) => row.buyerTraderInCharge || '-' },
-  { header: 'PSPRS', value: (row) => row.prpspStatus || '-' },
-  { header: 'Status', value: (row) => row.status || '-' },
-  { header: 'Overdue Volume', value: (row) => overdueDisplayValue(row.daysUntilDue), align: 'right' },
+const COPY_ROW_FIELDS = [
+  (row) => row.stemName || '-',
+  (row) => row.buyerName || '-',
+  (row) => fmtMoney(row.receivableBalance),
+  () => 'Due Date',
+  (row) => fmtDate(row.buyerInvoiceDueDate),
+  (row) => overdueCopyStatus(row.daysUntilDue),
 ];
 
 const fmtMoney = (value) => {
@@ -453,6 +450,17 @@ function overdueDisplayValue(daysUntilDue) {
   return `${value.toLocaleString()} Days`;
 }
 
+function overdueCopyStatus(daysUntilDue) {
+  if (daysUntilDue == null) return '-';
+  const days = Number(daysUntilDue);
+  if (!Number.isFinite(days)) return '-';
+  if (days <= 0) {
+    const overdueDays = Object.is(-days, -0) ? 0 : Math.abs(days);
+    return `Overdue ${overdueDays.toLocaleString()} Days`;
+  }
+  return 'Due Soon';
+}
+
 function copyCell(value) {
   return textValue(value, '-').replace(/\s+/g, ' ').trim() || '-';
 }
@@ -467,29 +475,11 @@ function escapeHtml(value) {
 }
 
 function invoiceRecordPlainText(row) {
-  return [
-    COPY_COLUMNS.map((column) => copyCell(column.header)).join('\t'),
-    COPY_COLUMNS.map((column) => copyCell(column.value(row))).join('\t'),
-  ].join('\n');
+  return COPY_ROW_FIELDS.map((getValue) => copyCell(getValue(row))).join(' - ');
 }
 
 function invoiceRecordHtml(row) {
-  const border = 'border:1px solid #cbd5e1;';
-  const cell = `${border}padding:6px 8px;font-family:Arial,sans-serif;font-size:12px;vertical-align:top;`;
-  return `
-    <table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;color:#111827;">
-      <thead>
-        <tr>
-          ${COPY_COLUMNS.map((column) => `<th style="${cell}background:#f1f5f9;font-weight:700;text-align:${column.align || 'left'};">${escapeHtml(column.header)}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          ${COPY_COLUMNS.map((column) => `<td style="${cell}text-align:${column.align || 'left'};">${escapeHtml(column.value(row))}</td>`).join('')}
-        </tr>
-      </tbody>
-    </table>
-  `.trim();
+  return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111827;">${escapeHtml(invoiceRecordPlainText(row))}</div>`;
 }
 
 async function writeClipboardTable({ html, text }) {
@@ -989,7 +979,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recipient</th>
                         <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue Volume</th>
+                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1871,7 +1861,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection / Payment Handler</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue Volume</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
                   </tr>
                 </thead>
