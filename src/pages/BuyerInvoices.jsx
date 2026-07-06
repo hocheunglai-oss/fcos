@@ -97,7 +97,7 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
 const COPY_ROW_FIELDS = [
   (row) => row.stemName || '-',
   (row) => row.buyerName || '-',
-  (row) => fmtMoney(row.receivableBalance),
+  (row) => copiedReceivableBalance(row),
   () => 'Due Date',
   (row) => fmtDate(row.buyerInvoiceDueDate),
   (row) => overdueCopyStatus(row.daysUntilDue),
@@ -108,6 +108,15 @@ const fmtMoney = (value) => {
   if (number == null) return '-';
   return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+
+function copiedReceivableBalance(row) {
+  const receivable = numericValue(row?.receivableBalance);
+  const invoice = numericValue(row?.invoiceAmount);
+  const value = fmtMoney(row?.receivableBalance);
+  return receivable != null && invoice != null && Math.abs(receivable - invoice) > 0.005
+    ? `Balance ${value}`
+    : value;
+}
 
 function parseDateValue(value) {
   if (!value) return null;
