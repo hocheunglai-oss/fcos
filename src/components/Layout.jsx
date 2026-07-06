@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Outlet, Link, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle, ListFilter, ShieldCheck, LogOut } from 'lucide-react';
+import { LayoutDashboard, FileBarChart2, Database, PanelLeftClose, PanelLeftOpen, Settings, TrendingUp, DollarSign, ClipboardCheck, ReceiptText, AlertTriangle, ListFilter, ShieldCheck, LogOut, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
+import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 const navItems = [
   {
@@ -31,6 +33,7 @@ export default function Layout() {
   const [collapsed, setCollapsed] = useState(true);
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
+  const [versionOpen, setVersionOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.density = density;
@@ -180,6 +183,17 @@ export default function Layout() {
             {collapsed ? (density === 'compact' ? 'C' : 'Co') : `${density === 'compact' ? 'Compact' : 'Comfort'} view`}
           </button>
           <button
+            type="button"
+            onClick={() => setVersionOpen(true)}
+            className={cn(
+              'rounded-md border border-white/10 bg-white/5 font-semibold text-sidebar-foreground/70 shadow-sm transition-colors hover:bg-white/10 hover:text-sidebar-foreground',
+              collapsed ? 'h-8 w-10 px-0 text-[9px]' : 'w-full px-3 py-2 text-xs'
+            )}
+            title={`Version ${APP_VERSION}`}
+          >
+            {APP_VERSION}
+          </button>
+          <button
             onClick={() => {
               if (!confirmLeaveWithUnsavedChanges()) return;
               logout();
@@ -207,6 +221,43 @@ export default function Layout() {
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
+
+      <Dialog open={versionOpen} onOpenChange={setVersionOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="h-5 w-5" />
+              Version Audit Trail
+            </DialogTitle>
+            <DialogDescription>
+              Current version {APP_VERSION}. This log records released app changes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[62vh] space-y-4 overflow-auto pr-1">
+            {APP_VERSION_HISTORY.map((entry) => (
+              <section key={entry.version} className="rounded-lg border border-border bg-card/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">Version {entry.version}</div>
+                    <div className="mt-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{entry.title}</div>
+                  </div>
+                  <div className="rounded-md border border-border bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground">
+                    {entry.releasedAt}
+                  </div>
+                </div>
+                <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
+                  {entry.changes.map((change) => (
+                    <li key={change} className="flex gap-2">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                      <span>{change}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
