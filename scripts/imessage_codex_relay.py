@@ -34,6 +34,7 @@ DEFAULT_MESSAGES_DB = HOME / "Library" / "Messages" / "chat.db"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "allowed_handles": [],
+    "reply_handles": [],
     "command_prefix": "codex run:",
     "workspace_path": str(DEFAULT_WORKSPACE),
     "codex_path": str(DEFAULT_CODEX),
@@ -309,6 +310,23 @@ end run
         return False
 
 
+def reply_targets(sender: str, config: Dict[str, Any]) -> List[str]:
+    targets: List[str] = []
+    for handle in [sender, *list(config.get("reply_handles") or [])]:
+        value = str(handle or "").strip()
+        if value and normalize_handle(value) not in {normalize_handle(item) for item in targets}:
+            targets.append(value)
+    return targets
+
+
+def send_reply(sender: str, body: str, config: Dict[str, Any]) -> bool:
+    targets = reply_targets(sender, config)
+    sent_any = False
+    for handle in targets:
+        sent_any = send_imessage(handle, body, config) or sent_any
+    return sent_any
+
+
 class TaskLock:
     def __init__(self, lock_path: Path) -> None:
         self.lock_path = lock_path
@@ -418,29 +436,29 @@ def process_message(config: Dict[str, Any], state: sqlite3.Connection, message: 
     if not is_allowed_sender(sender, config.get("allowed_handles", [])):
         logging.warning("Rejected command from non-allowlisted sender %s", sender)
         record_message(state, message, command, "rejected", 403, "Sender is not allowlisted.")
-        send_imessage(sender, "Codex relay rejected this command: sender is not allowlisted.", config)
+        send_reply(sender, "Codex relay rejected this command: sender is not allowlisted.", config)
         return
 
     if not command:
         record_message(state, message, command, "rejected", 400, "Missing command after prefix.")
-        send_imessage(sender, f"Codex relay rejected this command: add text after `{prefix}`.", config)
+        send_reply(sender, f"Codex relay rejected this command: add text after `{prefix}`.", config)
         return
 
     lock = TaskLock(Path(config["lock_file"]).expanduser())
     if not lock.acquire():
         record_message(state, message, command, "busy", 409, "Another Codex task is already running.")
-        send_imessage(sender, "Codex is busy with another iMessage task. Please retry after it finishes.", config)
+        send_reply(sender, "Codex is busy with another iMessage task. Please retry after it finishes.", config)
         return
 
     try:
         record_message(state, message, command, "running")
-        send_imessage(sender, f"Codex received and is running:\n{truncate_reply(command, 500)}", config)
+        send_reply(sender, f"Codex received and is running:\n{truncate_reply(command, 500)}", config)
         result = run_codex(command, sender, config)
         status = "completed" if int(result["exit_code"]) == 0 else "failed"
         summary = truncate_reply(str(result.get("summary") or "No Codex summary returned."), limit)
         record_message(state, message, command, status, int(result["exit_code"]), summary)
         prefix_text = "Codex completed." if status == "completed" else f"Codex failed with exit code {result['exit_code']}."
-        send_imessage(sender, f"{prefix_text}\n\n{summary}", config)
+        send_reply(sender, f"{prefix_text}\n\n{summary}", config)
     finally:
         lock.release()
 
