@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.6';
+export const APP_VERSION = '1.0.0.7';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.7',
+    releasedAt: '2026-07-06',
+    title: 'Dashboard analytics toggle',
+    changes: [
+      'Added a dashboard Show analytics / Hide analytics toggle.',
+      'Dashboard KPIs and chart areas are hidden by default while the filtered STEM table remains visible.',
+      'Analytics visibility is saved locally without refreshing Salesforce data.',
+    ],
+  },
   {
     version: '1.0.0.6',
     releasedAt: '2026-07-06',

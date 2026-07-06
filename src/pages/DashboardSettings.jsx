@@ -10,7 +10,7 @@ import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
 import TableShell from '@/components/common/TableShell';
-import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2 } from 'lucide-react';
+import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff } from 'lucide-react';
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -53,6 +53,7 @@ export default function DashboardSettings() {
   const [tableSearch, setTableSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [filteredTableWide, setFilteredTableWide] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(savedFilters.showAnalytics === true);
   const debounceRef = useRef(null);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
@@ -158,13 +159,19 @@ export default function DashboardSettings() {
   };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword }));
+    const stored = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored, selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword }));
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
     }, 400);
     return () => clearTimeout(debounceRef.current);
   }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword]);
+
+  useEffect(() => {
+    const stored = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored, showAnalytics }));
+  }, [showAnalytics]);
 
   useEffect(() => {
     if (location.hash !== '#filtered-stems' || loading || !data) return undefined;
@@ -282,10 +289,21 @@ export default function DashboardSettings() {
         title="Dashboard"
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}
         actions={(
-          <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })} disabled={loading} className="gap-2">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            Refresh
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant={showAnalytics ? 'default' : 'outline'}
+              onClick={() => setShowAnalytics((current) => !current)}
+              className="gap-2"
+            >
+              {showAnalytics ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {showAnalytics ? 'Hide analytics' : 'Show analytics'}
+            </Button>
+            <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })} disabled={loading} className="gap-2">
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Refresh
+            </Button>
+          </>
         )}
       />
 
@@ -480,7 +498,7 @@ export default function DashboardSettings() {
 
 
 
-      {loading && (
+      {loading && showAnalytics && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {[...Array(8)].map((_, i) => <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
         </div>
@@ -488,6 +506,8 @@ export default function DashboardSettings() {
 
       {data && !loading && (
         <>
+          {showAnalytics && (
+          <>
           {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard label="Matching STEMs" value={data.stemTotal?.toLocaleString() ?? '—'} icon={Package} color="blue" />
@@ -720,6 +740,8 @@ export default function DashboardSettings() {
               })()}
             </div>
           </div>
+          )}
+          </>
           )}
 
           {/* P&L Report */}
