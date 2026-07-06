@@ -253,7 +253,6 @@ export default function DashboardSettings() {
         icon={SlidersHorizontal}
         eyebrow="Dashboard"
         title="Dashboard"
-        description="Review STEM performance, delivery-date filters, gross profit trends, and exceptions from Salesforce."
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}
         actions={(
           <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })} disabled={loading} className="gap-2">
@@ -622,6 +621,8 @@ export default function DashboardSettings() {
             <TableShell
               title="Filtered STEMs"
               meta={`${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
+              className="flex h-[calc(100vh-7rem)] min-h-[360px] flex-col"
+              bodyClassName="min-h-0 flex-1 p-2"
               actions={(
                 <div className="relative w-full sm:w-80">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -642,7 +643,7 @@ export default function DashboardSettings() {
               <PnlTable
                 records={filteredStems}
                 counterpartyMode={counterpartyMode}
-                scrollClassName="max-h-[calc(100vh-15rem)] min-h-[280px]"
+                scrollClassName="h-full min-h-0"
                 onRowClick={(row) => setSelectedStemId(row.Id)}
               />
             </TableShell>
