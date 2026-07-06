@@ -55,6 +55,8 @@ export default function DashboardSettings() {
   const [filteredTableWide, setFilteredTableWide] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(savedFilters.showAnalytics === true);
   const debounceRef = useRef(null);
+  const filteredStemsSectionRef = useRef(null);
+  const [filteredTableHeight, setFilteredTableHeight] = useState(null);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
     prev.includes(yr) ? (prev.length > 1 ? prev.filter(y => y !== yr) : prev) : [...prev, yr]
@@ -280,6 +282,30 @@ export default function DashboardSettings() {
       LSMGO: 0,
     }));
   const monthlyTrendIsVolume = monthlyTrendMode === 'volume';
+
+  useEffect(() => {
+    if (showAnalytics) {
+      setFilteredTableHeight(null);
+      return undefined;
+    }
+    const measure = () => {
+      window.requestAnimationFrame(() => {
+        const element = filteredStemsSectionRef.current;
+        if (!element) return;
+        const bottomPadding = window.innerWidth >= 1024 ? 32 : 24;
+        const rect = element.getBoundingClientRect();
+        const available = Math.floor(window.innerHeight - rect.top - bottomPadding);
+        setFilteredTableHeight(Math.max(180, available));
+      });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [showAnalytics, data, loading, error, filteredStems.length, filteredTableWide]);
 
   return (
     <div className={`p-6 lg:p-8 mx-auto transition-[max-width] duration-200 ${filteredTableWide ? 'max-w-none' : 'max-w-7xl'}`}>
@@ -745,11 +771,16 @@ export default function DashboardSettings() {
           )}
 
           {/* P&L Report */}
-          <div id="filtered-stems" className="scroll-mt-6">
+          <div
+            id="filtered-stems"
+            ref={filteredStemsSectionRef}
+            className="scroll-mt-6"
+            style={!showAnalytics && filteredTableHeight ? { height: `${filteredTableHeight}px` } : undefined}
+          >
             <TableShell
               title="Filtered STEMs"
               meta={`${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
-              className="flex h-[calc(100vh-7rem)] min-h-[360px] flex-col"
+              className={`flex flex-col ${showAnalytics ? 'h-[calc(100vh-7rem)] min-h-[360px]' : 'h-full min-h-0'}`}
               bodyClassName="min-h-0 flex-1 p-2"
               actions={(
                 <>

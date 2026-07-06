@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.0.7';
+export const APP_VERSION = '1.0.0.8';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.8',
+    releasedAt: '2026-07-06',
+    title: 'Dashboard table auto-fit',
+    changes: [
+      'Filtered STEMs now auto-fits to the remaining browser height when analytics are hidden.',
+      'The dashboard table scrolls internally so the browser window does not need vertical scrolling in hidden analytics mode.',
+    ],
+  },
   {
     version: '1.0.0.7',
     releasedAt: '2026-07-06',
