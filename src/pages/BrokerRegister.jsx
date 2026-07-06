@@ -130,6 +130,7 @@ const matchesBrokerType = (row, selectedTypes) => {
   if (!selectedTypes.length) return true;
   return selectedTypes.includes(row.brokerType) || selectedTypes.includes(brokerTypeLabel(row.brokerType));
 };
+const rowIdValue = (row) => textValue(row?.id, '');
 
 export default function BrokerRegister() {
   const [rows, setRows] = useState([]);
@@ -147,6 +148,7 @@ export default function BrokerRegister() {
   const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
   const [exchangeRateError, setExchangeRateError] = useState(null);
   const [showCny, setShowCny] = useState(false);
+  const [excludedRowIds, setExcludedRowIds] = useState([]);
 
   const loadRows = async (options = {}) => {
     setLoading(true);
@@ -158,6 +160,10 @@ export default function BrokerRegister() {
   };
 
   useEffect(() => { loadRows(); }, []);
+  useEffect(() => {
+    const validRowIds = new Set(rows.map(rowIdValue).filter(Boolean));
+    setExcludedRowIds((current) => current.filter((id) => validRowIds.has(id)));
+  }, [rows]);
 
   const brokerNames = useMemo(() => {
     const visibleRows = rows.filter(row => {
@@ -188,17 +194,33 @@ export default function BrokerRegister() {
   const sortCriteria = useMemo(() => brokerSortCriteria(visibleBrokerCount), [visibleBrokerCount]);
   const sortPriority = useMemo(() => brokerSortPriority(sortCriteria), [sortCriteria]);
   const sortedRows = useMemo(() => [...filteredRows].sort(compareBrokerRows(sortCriteria)), [filteredRows, sortCriteria]);
+  const excludedRowIdSet = useMemo(() => new Set(excludedRowIds), [excludedRowIds]);
+  const includedSortedRows = useMemo(() => sortedRows.filter((row) => !excludedRowIdSet.has(rowIdValue(row))), [sortedRows, excludedRowIdSet]);
+  const visibleExcludedCount = sortedRows.length - includedSortedRows.length;
+  const toggleRowExcluded = (rowId) => {
+    const id = textValue(rowId, '');
+    if (!id) return;
+    setExcludedRowIds((current) => (
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    ));
+  };
+  const clearVisibleExclusions = () => {
+    const visibleIds = new Set(sortedRows.map(rowIdValue).filter(Boolean));
+    setExcludedRowIds((current) => current.filter((id) => !visibleIds.has(id)));
+  };
 
-  const total = sortedRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
+  const total = includedSortedRows.reduce((sum, row) => sum + Number(row.commissionAmount || 0), 0);
   const exchangeRateTargetDate = useMemo(() => {
-    const basisDate = toDate || fromDate || latestRowDate(sortedRows) || isoDate(new Date());
+    const basisDate = toDate || fromDate || latestRowDate(includedSortedRows) || latestRowDate(sortedRows) || isoDate(new Date());
     return lastWorkingDayOfQuarter(basisDate);
-  }, [sortedRows, fromDate, toDate]);
+  }, [includedSortedRows, sortedRows, fromDate, toDate]);
 
   const exportFileName = useMemo(() => {
-    const basisDate = toDate || fromDate || latestRowDate(sortedRows) || isoDate(new Date());
+    const basisDate = toDate || fromDate || latestRowDate(includedSortedRows) || latestRowDate(sortedRows) || isoDate(new Date());
     const selectedCleanNames = selectedBrokerNames.map(cleanBrokerFilePart).filter(Boolean);
-    const filteredCleanNames = [...new Set(sortedRows.map(row => cleanBrokerFilePart(row.brokerName)).filter(Boolean))];
+    const filteredCleanNames = [...new Set(includedSortedRows.map(row => cleanBrokerFilePart(row.brokerName)).filter(Boolean))];
     const brokerName = selectedCleanNames.length === 1
       ? selectedCleanNames[0]
       : filteredCleanNames.length === 1
@@ -207,7 +229,7 @@ export default function BrokerRegister() {
           ? 'MULTIPLE_BROKERS'
           : 'ALL_BROKERS';
     return `COMM_${quarterLabel(basisDate)}_${brokerName}.xls`;
-  }, [sortedRows, fromDate, selectedBrokerNames, toDate]);
+  }, [includedSortedRows, sortedRows, fromDate, selectedBrokerNames, toDate]);
 
   useEffect(() => {
     if (!showCny) {
@@ -236,8 +258,8 @@ export default function BrokerRegister() {
     return () => { cancelled = true; };
   }, [exchangeRateProvider, exchangeRateTargetDate, showCny]);
 
-  const commissionPayableTotal = sortedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
-  const commissionReceivableTotal = sortedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+  const commissionPayableTotal = includedSortedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+  const commissionReceivableTotal = includedSortedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
   const bankBuyRate = bankBuyRateFrom(exchangeRate);
   const exchangeRateSummary = exchangeRate
     ? `Mid-rate ${Number(exchangeRate.rate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; bank buy rate ${Number(bankBuyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}; applied rate date ${fmtDate(exchangeRate.date)}`
@@ -246,6 +268,7 @@ export default function BrokerRegister() {
     ['Broker Name', selectedBrokerNames.length ? selectedBrokerNames.join(', ') : 'All'],
     ['Broker Type', selectedTypes.length ? selectedTypes.map(brokerTypeLabel).join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
+    ['Excluded Rows', visibleExcludedCount ? `${visibleExcludedCount.toLocaleString()} excluded from totals and export` : 'None'],
   ];
   const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
     const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
@@ -431,7 +454,7 @@ export default function BrokerRegister() {
     const exportNoteZh = '所有佣金金额均来自导出时应用程序中已筛选的 Broker\'s Commission 行。';
     const methodologyRows = showCny ? [
       ['Generated At', generatedAt],
-      ['Rows Exported', sortedRows.length.toLocaleString()],
+      ['Rows Exported', includedSortedRows.length.toLocaleString()],
       ['Source', exchangeRate?.source || 'Frankfurter API'],
       ['API URL', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
       ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
@@ -444,7 +467,7 @@ export default function BrokerRegister() {
     ] : [];
     const methodologyRowsZh = showCny ? [
       ['生成时间', generatedAt],
-      ['导出行数', sortedRows.length.toLocaleString()],
+      ['导出行数', includedSortedRows.length.toLocaleString()],
       ['来源', exchangeRate?.source || 'Frankfurter API'],
       ['API 地址', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
       ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
@@ -455,7 +478,7 @@ export default function BrokerRegister() {
       ['银行买入价方法', bankBuyRateMethodologyZh],
       ['目标日期方法', targetDateMethodologyZh],
     ] : [];
-    const detailRows = sortedRows.map((row) => ({
+    const detailRows = includedSortedRows.map((row) => ({
       brokerName: brokerNameValue(row),
       stemName: row.stemName,
       productQuantity: spreadsheetText(row.productQuantityLabel || row.productFamily || row.productName),
@@ -522,7 +545,7 @@ export default function BrokerRegister() {
     ]);
     const brokerRows = [
       workbookRow([workbookCell('Broker\'s Commission', 'Title', detailMergeAcross)]),
-      workbookRow([workbookCell(`Generated ${generatedAt} · ${sortedRows.length.toLocaleString()} rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', detailMergeAcross)]),
+      workbookRow([workbookCell(`Generated ${generatedAt} · ${includedSortedRows.length.toLocaleString()} included rows · ${visibleExcludedCount.toLocaleString()} excluded rows · Filtered commission total ${fmtMoney(total)}`, 'Subtitle', detailMergeAcross)]),
       workbookRow([workbookCell('Applied Filters', 'Section', detailMergeAcross)]),
       ...filterSummaryRows.map(([label, value]) => workbookRow([workbookCell(label, 'Label'), workbookCell(value, 'Text', labelValueMergeAcross)])),
       workbookRow([workbookCell('Summary', 'Section', detailMergeAcross)]),
@@ -598,7 +621,7 @@ export default function BrokerRegister() {
           <Button type="button" size="sm" variant={showCny ? 'default' : 'outline'} onClick={() => setShowCny(value => !value)} className="gap-2 w-fit">
             CNY
           </Button>
-          <Button variant="outline" onClick={exportXls} disabled={loading || !filteredRows.length} className="gap-2 w-fit">
+          <Button variant="outline" onClick={exportXls} disabled={loading || !includedSortedRows.length} className="gap-2 w-fit">
             <Download className="w-4 h-4" /> Export XLS
           </Button>
           <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
@@ -611,8 +634,12 @@ export default function BrokerRegister() {
       <BrokerFilters search={search} setSearch={setSearch} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes} brokerNames={brokerNames} selectedBrokerNames={selectedBrokerNames} setSelectedBrokerNames={setSelectedBrokerNames} selectedHiddenBrokerFlags={selectedHiddenBrokerFlags} setSelectedHiddenBrokerFlags={setSelectedHiddenBrokerFlags} fromDate={fromDate} setFromDate={setFromDate} toDate={toDate} setToDate={setToDate} />
 
       <div className="rounded-xl border border-border bg-card px-5 py-4 flex flex-wrap gap-6">
-        <div><div className="text-xs text-muted-foreground uppercase tracking-wide">Rows</div><div className="text-xl font-bold">{filteredRows.length.toLocaleString()}</div></div>
+        <div><div className="text-xs text-muted-foreground uppercase tracking-wide">Rows</div><div className="text-xl font-bold">{includedSortedRows.length.toLocaleString()} / {filteredRows.length.toLocaleString()}</div></div>
         <div><div className="text-xs text-muted-foreground uppercase tracking-wide">Commission Total</div><div className="text-xl font-bold">{fmtMoney(total)}</div></div>
+        <div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wide">Excluded</div>
+          <div className="text-xl font-bold">{visibleExcludedCount.toLocaleString()}</div>
+        </div>
         {showCny && (
           <div className="min-w-72 flex-1">
             <div className="text-xs text-muted-foreground uppercase tracking-wide">USD/CNY Exchange Rate</div>
@@ -631,7 +658,16 @@ export default function BrokerRegister() {
       {loading && <StateBlock icon={Loader2} title="Loading broker commissions..." description="Fetching commissions, payment timing, and broker flags from Salesforce." />}
       {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
       {!loading && !error && (
-        <TableShell title="Broker Commission Rows" meta={`${filteredRows.length.toLocaleString()} matching rows`} bodyClassName="p-0">
+        <TableShell
+          title="Broker Commission Rows"
+          meta={`${includedSortedRows.length.toLocaleString()} included · ${visibleExcludedCount.toLocaleString()} excluded · ${filteredRows.length.toLocaleString()} matching rows`}
+          bodyClassName="p-0"
+          actions={visibleExcludedCount ? (
+            <Button type="button" variant="outline" size="sm" onClick={clearVisibleExclusions}>
+              Clear exclusions
+            </Button>
+          ) : null}
+        >
           <BrokerRegisterTable
             rows={sortedRows}
             onRowClick={setSelectedStemId}
@@ -640,6 +676,8 @@ export default function BrokerRegister() {
             exchangeRateError={exchangeRateError}
             showCny={showCny}
             sortPriority={sortPriority}
+            excludedRowIds={excludedRowIdSet}
+            onToggleExcluded={toggleRowExcluded}
           />
         </TableShell>
       )}

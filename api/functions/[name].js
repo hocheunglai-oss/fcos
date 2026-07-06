@@ -2970,6 +2970,8 @@ async function salesforceBuyerInvoicesDue(body) {
       const brokerAccountFields = ['Id', 'Name'];
       if (brokerInvoiceFormatField) brokerAccountFields.push(brokerInvoiceFormatField);
       if (brokerEmailField) brokerAccountFields.push(brokerEmailField);
+      if (accountFieldNames.includes('Hidden_Broker__c')) brokerAccountFields.push('Hidden_Broker__c');
+      if (accountFieldNames.includes('Hidden_Broker_Company__c')) brokerAccountFields.push('Hidden_Broker_Company__c');
       const brokerAccountChunks = await Promise.all(chunkIds(brokerIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
         return queryRows(`
@@ -2980,6 +2982,7 @@ async function salesforceBuyerInvoicesDue(body) {
         `, { limit: 5000, softFail: true });
       }));
       for (const account of brokerAccountChunks.flat()) {
+        if (account.Hidden_Broker__c === true || account.Hidden_Broker_Company__c === true) continue;
         const detail = {
           id: account.Id,
           name: account.Name || account.Id,
@@ -2991,14 +2994,9 @@ async function salesforceBuyerInvoicesDue(body) {
       }
     }
     for (const [stemId, ids] of Object.entries(brokerLinksByStem)) {
-      buyerBrokerDetailsByStem[stemId] = ids.map((id) => (
-        brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || {
-          id,
-          name: id,
-          invoiceFormat: null,
-          emails: [],
-        }
-      ));
+      buyerBrokerDetailsByStem[stemId] = ids
+        .map((id) => brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || null)
+        .filter(Boolean);
     }
   }
 

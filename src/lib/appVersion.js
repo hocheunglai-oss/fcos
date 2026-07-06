@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.4';
+export const APP_VERSION = '1.0.0.5';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.5',
+    releasedAt: '2026-07-06',
+    title: 'Broker routing and commission exclusions',
+    changes: [
+      'Outstanding buyer invoice reminders no longer route to hidden broker individual or hidden broker company accounts.',
+      'Added broker commission row inclusion checkboxes so selected rows can be excluded from totals.',
+      'Broker summary, page summary, CNY summary, and XLS export now use only included broker commission rows.',
+    ],
+  },
   {
     version: '1.0.0.4',
     releasedAt: '2026-07-06',

@@ -35,6 +35,7 @@ const receivableAmount = (row) => {
 };
 const brokerTypeLabel = (value) => value === 'Secondary Buyer Broker' ? 'Buyer Broker' : textValue(value);
 const brokerNameValue = (row) => textValue(row?.brokerName, 'Unknown Broker');
+const rowIdValue = (row) => textValue(row?.id, '');
 const productQuantityLabel = (item) => {
   if (item.label) return item.label;
   const product = textValue(item.productFamily || item.productName, '—');
@@ -107,9 +108,21 @@ function brokerSectionsFrom(rows) {
   return sections;
 }
 
-export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, exchangeRateLoading, exchangeRateError, showCny = false, sortPriority = {} }) {
-  const payableTotal = rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
-  const receivableTotal = rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+export default function BrokerRegisterTable({
+  rows,
+  onRowClick,
+  exchangeRate,
+  exchangeRateLoading,
+  exchangeRateError,
+  showCny = false,
+  sortPriority = {},
+  excludedRowIds = new Set(),
+  onToggleExcluded,
+}) {
+  const isExcluded = (row) => excludedRowIds.has(rowIdValue(row));
+  const includedRows = rows.filter((row) => !isExcluded(row));
+  const payableTotal = includedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+  const receivableTotal = includedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
   const brokerSections = brokerSectionsFrom(rows);
   const exchangeRateValue = numericValue(exchangeRate?.rate);
   const bankBuyRate = exchangeRateValue != null ? exchangeRateValue * 0.998 : null;
@@ -125,6 +138,7 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-muted/40 border-b border-border">
+              <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Include</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.stemName}>Stem Name</SortHeader></th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground">Products / Quantity</th>
               <th className="sticky top-0 z-10 bg-card text-left py-3 px-4 font-semibold text-muted-foreground"><SortHeader priority={sortPriority.deliveryDate}>Delivery Date</SortHeader></th>
@@ -139,14 +153,30 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
           </thead>
           <tbody>
             {brokerSections.map((section, sectionIndex) => {
-              const sectionPayable = section.rows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
-              const sectionReceivable = section.rows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
+              const includedSectionRows = section.rows.filter((row) => !isExcluded(row));
+              const sectionPayable = includedSectionRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
+              const sectionReceivable = includedSectionRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
               const rowOffset = brokerSections.slice(0, sectionIndex).reduce((sum, item) => sum + item.rows.length, 0);
               return (
                 <Fragment key={`section-${section.brokerName}-${sectionIndex}`}>
-                  {section.rows.map((row, idx) => (
-                    <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer hover:bg-muted/30 transition-colors ${(rowOffset + idx) % 2 ? 'bg-muted/10' : ''}`}>
-                      <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">{textValue(row.stemName)}</td>
+                  {section.rows.map((row, idx) => {
+                    const excluded = isExcluded(row);
+                    return (
+                    <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer transition-colors ${excluded ? 'bg-slate-100/70 text-muted-foreground opacity-70 hover:bg-slate-100' : `hover:bg-muted/30 ${(rowOffset + idx) % 2 ? 'bg-muted/10' : ''}`}`}>
+                      <td className="py-3 px-4">
+                        <input
+                          type="checkbox"
+                          checked={!excluded}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={() => onToggleExcluded?.(row.id)}
+                          aria-label={`${excluded ? 'Include' : 'Exclude'} ${row.stemName || 'broker commission row'} in totals and export`}
+                          className="h-4 w-4 rounded border-border"
+                        />
+                      </td>
+                      <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
+                        <div>{textValue(row.stemName)}</div>
+                        {excluded && <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Excluded from totals/export</div>}
+                      </td>
                       <td className="py-3 px-4"><ProductQuantityCell row={row} /></td>
                       <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{fmtDate(row.deliveryDate)}</td>
                       <td className="py-3 px-4 whitespace-nowrap"><BrokerTypeBadge type={brokerTypeLabel(row.brokerType)} /></td>
@@ -157,16 +187,17 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
                       <td className="py-3 px-4 text-muted-foreground whitespace-nowrap"><span className="block text-[11px] uppercase tracking-wide">{row.paymentDateLabel}</span>{fmtDate(row.paymentDate)}</td>
                       <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{row.paymentDelayLabel || (brokerTypeLabel(row.brokerType) === 'Buyer Broker' ? fmtDelay(row.paymentDelay) : '—')}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   <tr key={`summary-${section.brokerName}`} className="border-b border-border bg-emerald-50/70 font-semibold text-emerald-950">
-                    <td colSpan="6" className="py-2.5 px-4 text-right">Broker Summary - {section.brokerName}</td>
+                    <td colSpan="7" className="py-2.5 px-4 text-right">Broker Summary - {section.brokerName}</td>
                     <td className="py-2.5 px-4 text-right whitespace-nowrap">{fmtMoney(sectionPayable)}</td>
                     <td className="py-2.5 px-4 text-right whitespace-nowrap">{fmtMoney(sectionReceivable)}</td>
                     <td colSpan="2" className="py-2.5 px-4" />
                   </tr>
                   {showCny && (
                     <tr key={`summary-cny-${section.brokerName}`} className="border-b border-border bg-emerald-50/40 text-emerald-950">
-                      <td colSpan="6" className="py-2.5 px-4 text-right">
+                      <td colSpan="7" className="py-2.5 px-4 text-right">
                         <div className="font-semibold">Broker Summary in CNY - {section.brokerName}</div>
                       </td>
                       <td className="py-2.5 px-4 text-right font-semibold whitespace-nowrap">{bankBuyRate != null ? fmtCny(sectionPayable * bankBuyRate) : '—'}</td>
@@ -177,19 +208,19 @@ export default function BrokerRegisterTable({ rows, onRowClick, exchangeRate, ex
                 </Fragment>
               );
             })}
-            {!rows.length && <tr><td colSpan="10" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
+            {!rows.length && <tr><td colSpan="11" className="py-12 text-center text-muted-foreground">No broker commissions found.</td></tr>}
           </tbody>
           {rows.length > 0 && (
             <tfoot>
               <tr className="border-t-2 border-border bg-muted/50 font-bold">
-                <td colSpan="6" className="py-3 px-4 text-right text-foreground">Summary</td>
+                <td colSpan="7" className="py-3 px-4 text-right text-foreground">Summary</td>
                 <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtMoney(payableTotal)}</td>
                 <td className="py-3 px-4 text-right text-foreground whitespace-nowrap">{fmtMoney(receivableTotal)}</td>
                 <td colSpan="2" className="py-3 px-4" />
               </tr>
               {showCny && (
                 <tr className="border-t border-border bg-muted/30">
-                  <td colSpan="6" className="py-3 px-4 text-right text-foreground">
+                  <td colSpan="7" className="py-3 px-4 text-right text-foreground">
                     <div className="font-semibold">Summary in CNY using Bank Buy Rate</div>
                     <div className="text-xs font-normal text-muted-foreground">
                       {exchangeRateLoading ? 'Loading USD/CNY exchange rate...' : exchangeRateLabel}
