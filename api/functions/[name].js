@@ -19,6 +19,7 @@ const ADMIN_APP_MODULES = [
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
   { id: 'disputes', label: 'Dispute Management', path: '/disputes', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
+  { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
   { id: 'reports', label: 'Report Builder', path: '/reports', sortOrder: 50 },
   { id: 'pnl', label: 'Stem P&L', path: '/pnl', sortOrder: 60 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
@@ -41,10 +42,10 @@ const DEFAULT_USER_TYPES = [
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
   administrator: ADMIN_FULL_ACCESS,
-  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: true, admin: false },
-  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: false, admin: false },
-  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, reports: true, pnl: true, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
-  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, reports: false, pnl: false, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
+  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: true, admin: false },
+  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: false, admin: false },
+  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, reports: true, pnl: true, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
+  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, reports: false, pnl: false, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
 };
 
 function reportArchiveAccessLevel(value, canView = undefined) {
@@ -286,6 +287,10 @@ const HANDLER_MODULE_ACCESS = {
   buyerInvoicePaymentReminderPrepare: ['buyer_invoices'],
   buyerInvoicePaymentReminderSend: ['buyer_invoices'],
   outstandingBuyerInvoicesEmailReport: ['buyer_invoices'],
+  incomingPaymentsList: ['incoming_payments'],
+  incomingPaymentSettingsGet: ['incoming_payments'],
+  incomingPaymentSettingsSave: ['incoming_payments'],
+  incomingPaymentAllocationConfirm: ['incoming_payments'],
   stemPnl: ['pnl'],
   salesforceBrokerRegister: ['brokers'],
   frankfurterUsdCnyRate: ['brokers'],
@@ -3708,6 +3713,393 @@ async function salesforceBuyerInvoicesDue(body) {
   return { rows, today, dueThrough, daysAhead, buyerTraderOptions, selectedBuyerTraders: activeBuyerTraders, hasBuyerTraderFilter };
 }
 
+const INCOMING_PAYMENT_SETTINGS_ID = 'default';
+const DEFAULT_INCOMING_PAYMENT_SETTINGS = {
+  fullyPaidThreshold: 50,
+};
+
+function serializeIncomingPaymentSettings(row = null) {
+  return {
+    fullyPaidThreshold: Number(row?.fully_paid_threshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold),
+    updatedAt: row?.updated_at || null,
+    updatedByEmail: row?.updated_by_email || null,
+  };
+}
+
+async function loadIncomingPaymentSettings() {
+  const client = safeSupabaseAdminClient();
+  if (!client) return serializeIncomingPaymentSettings(null);
+  const { data, error } = await client
+    .from('incoming_payment_settings')
+    .select('id,fully_paid_threshold,updated_by_email,updated_at')
+    .eq('id', INCOMING_PAYMENT_SETTINGS_ID)
+    .maybeSingle();
+  if (error) return serializeIncomingPaymentSettings(null);
+  return serializeIncomingPaymentSettings(data);
+}
+
+async function incomingPaymentSettingsGet(body, req) {
+  await requireActiveUser(req);
+  return { settings: await loadIncomingPaymentSettings() };
+}
+
+async function incomingPaymentSettingsSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  const threshold = Number(body.fullyPaidThreshold ?? body.fully_paid_threshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1000000) {
+    throw appError('Fully paid threshold must be a number between 0 and 1,000,000.', 400);
+  }
+  const payload = {
+    id: INCOMING_PAYMENT_SETTINGS_ID,
+    fully_paid_threshold: Number(threshold.toFixed(2)),
+    updated_by: profile.id,
+    updated_by_email: profile.email,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await client
+    .from('incoming_payment_settings')
+    .upsert(payload, { onConflict: 'id' })
+    .select('id,fully_paid_threshold,updated_by_email,updated_at')
+    .single();
+  if (error) throw error;
+  return { settings: serializeIncomingPaymentSettings(data) };
+}
+
+function incomingPaymentNumber(value) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstAvailableField(fieldNames, candidates) {
+  return candidates.find((field) => fieldNames.has(field)) || null;
+}
+
+function soqlDateValue(dateField, dateType, isoDate, endOfDay = false) {
+  if (!isoDate) return null;
+  if (dateField === 'CreatedDate' || dateType === 'datetime') {
+    return `${isoDate}T${endOfDay ? '23:59:59' : '00:00:00'}Z`;
+  }
+  return isoDate;
+}
+
+function selectedFields(fieldNames, fields) {
+  return fields.filter((field) => field && fieldNames.has(field));
+}
+
+function incomingPaymentReference(payment, referenceFields = []) {
+  return referenceFields
+    .map((field) => payment[field])
+    .find((value) => value != null && value !== '') || null;
+}
+
+function incomingPaymentBuyerGroup(stem) {
+  const account = stem?.['Account__r'] || {};
+  return account.Group_Name__c || account.Parent?.Name || stem?.Buyer_Name__c || account.Name || stem?.Buyer__c || null;
+}
+
+function incomingPaymentBuyerName(stem) {
+  const account = stem?.['Account__r'] || {};
+  return stem?.Buyer_Name__c || account.Name || stem?.Buyer__c || null;
+}
+
+function incomingPaymentStatus({ type, amount, stem, supplierInvoice, threshold }) {
+  if (!stem && !supplierInvoice) return { label: 'Needs review', tone: 'amber' };
+  if (type === 'Supplier Refund') return { label: 'Supplier refund', tone: 'green' };
+  if (type === 'Supplier Payment') return { label: 'Supplier payment', tone: 'slate' };
+  const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
+  if (receivable != null && receivable < 0) return { label: 'Overpaid / available balance', tone: 'purple' };
+  if (receivable != null && Math.abs(receivable) <= threshold) return { label: 'Fully paid', tone: 'green' };
+  if (amount == null) return { label: 'Amount missing', tone: 'amber' };
+  return { label: 'Partially paid', tone: 'blue' };
+}
+
+function supplierInvoicePartyName(invoice, supplierRelationships = []) {
+  return invoice?.Supplier_Name__c
+    || invoice?.['Supplier__r']?.Name
+    || invoice?.['Expected_Supplier__r']?.Name
+    || invoice?.['Substitute_Supplier__r']?.Name
+    || supplierRelationships.map((relationship) => invoice?.[relationship]?.Name).find(Boolean)
+    || null;
+}
+
+async function incomingPaymentsList(body) {
+  const settings = await loadIncomingPaymentSettings();
+  const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
+  const today = dateOnly(new Date());
+  const currentYear = today ? Number(today.slice(0, 4)) : new Date().getFullYear();
+  const dateFrom = dateOnly(body.dateFrom || body.date_from || `${currentYear}-01-01`);
+  const dateTo = dateOnly(body.dateTo || body.date_to || today);
+  const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
+
+  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentFields = paymentDescribe.fields || [];
+  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
+  const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
+  if (!paymentFieldNames.size) return { rows: [], availableBalances: [], summary: {}, settings, schemaWarnings: ['Payment__c is not queryable.'] };
+
+  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const amountField = firstAvailableField(paymentFieldNames, [
+    'Amount__c',
+    'Payment_Amount__c',
+    'Paid_Amount__c',
+    'Received_Amount__c',
+    'Total_Amount__c',
+    'Amount_Paid__c',
+    'Payment_Value__c',
+    'Actual_Amount__c',
+  ]);
+  const referenceFields = selectedFields(paymentFieldNames, [
+    'Bank_Reference__c',
+    'Reference__c',
+    'Payment_Reference__c',
+    'Transaction_Reference__c',
+    'Description__c',
+    'Remarks__c',
+  ]);
+  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
+  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
+  const paymentSelectFields = [
+    'Id',
+    ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'Supplier_Invoice__c', 'CurrencyIsoCode', 'Currency__c']),
+    dateField,
+    amountField,
+    ...referenceFields,
+    ...statusFields,
+    ...typeFields,
+  ].filter(Boolean);
+
+  const dateType = paymentFieldByName[dateField]?.type || null;
+  const whereParts = [];
+  if (dateField && dateFrom) whereParts.push(`${dateField} >= ${soqlDateValue(dateField, dateType, dateFrom, false)}`);
+  if (dateField && dateTo) whereParts.push(`${dateField} <= ${soqlDateValue(dateField, dateType, dateTo, true)}`);
+  const orderBy = dateField ? `${dateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
+  const payments = await queryRows(`
+    SELECT ${[...new Set(paymentSelectFields)].join(', ')}
+    FROM Payment__c
+    ${whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : ''}
+    ORDER BY ${orderBy}
+    LIMIT ${limit}
+  `, { limit, softFail: true });
+
+  const directStemIds = payments.map((payment) => payment.STEM__c).filter(Boolean);
+  const supplierInvoiceIds = payments.map((payment) => payment.Supplier_Invoice__c).filter(Boolean);
+  const supplierInvoiceDescribe = supplierInvoiceIds.length
+    ? await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
+  const supplierInvoiceFieldNames = new Set(supplierInvoiceFields.map((field) => field.name));
+  const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
+  const supplierInvoicePayableField = firstAvailableField(supplierInvoiceFieldNames, ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']);
+  const supplierInvoiceAmountField = firstAvailableField(supplierInvoiceFieldNames, ['Invoice_Amount__c', 'Calculated_Amount__c', 'Amount__c', 'Total_Amount__c']);
+  const supplierInvoiceSupplierFields = selectedFields(supplierInvoiceFieldNames, ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']);
+  const supplierInvoiceSupplierRelationships = supplierInvoiceSupplierFields
+    .map((field) => supplierInvoiceFieldByName[field]?.relationshipName)
+    .filter(Boolean);
+  const supplierInvoiceMap = {};
+  if (supplierInvoiceIds.length && supplierInvoiceFieldNames.size) {
+    const supplierInvoiceSelectFields = [
+      'Id',
+      'Name',
+      ...selectedFields(supplierInvoiceFieldNames, ['STEM__c', 'Supplier_Name__c']),
+      supplierInvoiceAmountField,
+      supplierInvoicePayableField,
+      ...supplierInvoiceSupplierFields,
+      ...supplierInvoiceSupplierRelationships.map((relationship) => `${relationship}.Name`),
+    ].filter(Boolean);
+    const invoiceChunks = await Promise.all(chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`
+        SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
+        FROM Supplier_Invoice__c
+        WHERE Id IN (${inList})
+        LIMIT 5000
+      `, { limit: 5000, softFail: true });
+    }));
+    for (const invoice of invoiceChunks.flat()) supplierInvoiceMap[invoice.Id] = invoice;
+  }
+
+  const stemIds = [...new Set([
+    ...directStemIds,
+    ...Object.values(supplierInvoiceMap).map((invoice) => invoice.STEM__c).filter(Boolean),
+  ])];
+  const stemDescribe = stemIds.length
+    ? await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const stemFields = stemDescribe.fields || [];
+  const stemFieldNames = new Set(stemFields.map((field) => field.name));
+  const accountDescribe = stemFieldNames.has('Account__c')
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const stemSelectFields = [
+    'Id',
+    'Name',
+    ...selectedFields(stemFieldNames, [
+      'KeyStem__c',
+      'Buyer_Name__c',
+      'Buyer__c',
+      'Account__c',
+      'Total_Invoice_Amount__c',
+      'Receivable_Balance__c',
+      'Payable_Balance__c',
+      'Payment_Date__c',
+      'Invoice_Due_Date__c',
+      'Buyer_Pay_Term_Date__c',
+      'Due_Date__c',
+      'Delivery_Date__c',
+      'Expected_Delivery_Date__c',
+    ]),
+  ];
+  if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
+  if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
+  if (stemFieldNames.has('Account__c')) {
+    stemSelectFields.push('Account__r.Name');
+    if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
+    if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
+  }
+  const stemMap = {};
+  if (stemIds.length && stemFieldNames.size) {
+    const stemChunks = await Promise.all(chunkIds(stemIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`
+        SELECT ${[...new Set(stemSelectFields)].join(', ')}
+        FROM stem__c
+        WHERE Id IN (${inList})
+        LIMIT 5000
+      `, { limit: 5000, softFail: true });
+    }));
+    for (const stem of stemChunks.flat()) stemMap[stem.Id] = stem;
+  }
+
+  const availableStemKeys = new Set();
+  const availableBalancesByGroup = {};
+  const rows = payments.map((payment) => {
+    const supplierInvoice = payment.Supplier_Invoice__c ? supplierInvoiceMap[payment.Supplier_Invoice__c] || null : null;
+    const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
+    const stem = stemId ? stemMap[stemId] || null : null;
+    const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
+    let type = 'Unmatched';
+    let incomingAmount = amount;
+    if (supplierInvoice) {
+      type = amount != null && amount < 0 ? 'Supplier Refund' : 'Supplier Payment';
+      incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
+    } else if (stem) {
+      type = 'Buyer Payment';
+    }
+    const status = incomingPaymentStatus({ type, amount, stem, supplierInvoice, threshold });
+    const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
+    const buyerName = incomingPaymentBuyerName(stem);
+    const buyerGroupName = incomingPaymentBuyerGroup(stem);
+    const partyName = type.startsWith('Supplier')
+      ? supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships)
+      : buyerName;
+    if (stem?.Id && receivable != null && receivable < 0) {
+      const key = stem.Id;
+      if (!availableStemKeys.has(key)) {
+        availableStemKeys.add(key);
+        const groupKey = buyerGroupName || buyerName || 'Ungrouped buyer';
+        if (!availableBalancesByGroup[groupKey]) {
+          availableBalancesByGroup[groupKey] = {
+            buyerGroupName: groupKey,
+            buyerNames: new Set(),
+            totalAvailableBalance: 0,
+            stems: [],
+          };
+        }
+        if (buyerName) availableBalancesByGroup[groupKey].buyerNames.add(buyerName);
+        availableBalancesByGroup[groupKey].totalAvailableBalance += Math.abs(receivable);
+        availableBalancesByGroup[groupKey].stems.push({
+          stemId: stem.Id,
+          stemName: formatStemName(stem),
+          buyerName,
+          availableBalance: Math.abs(receivable),
+          receivableBalance: receivable,
+          paymentDate: stem.Payment_Date__c || payment[dateField] || payment.CreatedDate || null,
+        });
+      }
+    }
+    return {
+      id: payment.Id,
+      paymentId: payment.Id,
+      paymentName: payment.Name || payment.Id,
+      paymentDate: dateField ? payment[dateField] || null : payment.CreatedDate || null,
+      type,
+      isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',
+      amount,
+      incomingAmount,
+      currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
+      reference: incomingPaymentReference(payment, referenceFields),
+      salesforceStatus: statusFields.map((field) => payment[field]).find(Boolean) || null,
+      salesforceType: typeFields.map((field) => payment[field]).find(Boolean) || null,
+      stemId,
+      stemName: stem ? formatStemName(stem) : null,
+      keyStem: stem?.KeyStem__c || null,
+      buyerName,
+      buyerGroupName,
+      supplierInvoiceId: supplierInvoice?.Id || null,
+      supplierInvoiceName: supplierInvoice?.Name || null,
+      supplierName: supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships),
+      partyName,
+      invoiceAmount: incomingPaymentNumber(stem?.Total_Invoice_Amount__c),
+      receivableBalance: receivable,
+      payableBalance: supplierInvoicePayableField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoicePayableField]) : incomingPaymentNumber(stem?.Payable_Balance__c),
+      supplierInvoiceAmount: supplierInvoiceAmountField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoiceAmountField]) : null,
+      status: status.label,
+      statusTone: status.tone,
+      paymentObjectAmountField: amountField,
+    };
+  });
+
+  const includedIncomingRows = rows.filter((row) => row.isIncoming);
+  const availableBalances = Object.values(availableBalancesByGroup)
+    .map((group) => ({
+      buyerGroupName: group.buyerGroupName,
+      buyerNames: [...group.buyerNames].sort((a, b) => a.localeCompare(b)),
+      totalAvailableBalance: group.totalAvailableBalance,
+      stems: group.stems.sort((a, b) => String(b.paymentDate || '').localeCompare(String(a.paymentDate || ''))),
+    }))
+    .sort((a, b) => b.totalAvailableBalance - a.totalAvailableBalance);
+
+  return {
+    rows,
+    availableBalances,
+    settings,
+    dateFrom,
+    dateTo,
+    schema: {
+      paymentDateField: dateField,
+      paymentAmountField: amountField,
+      paymentReferenceFields: referenceFields,
+      supplierInvoicePayableField,
+      supplierInvoiceAmountField,
+    },
+    schemaWarnings: [
+      amountField ? null : 'No amount-like field was found on Payment__c.',
+      dateField ? null : 'No date-like field was found on Payment__c.',
+      'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.',
+    ].filter(Boolean),
+    summary: {
+      totalRows: rows.length,
+      incomingRows: includedIncomingRows.length,
+      totalIncomingAmount: includedIncomingRows.reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
+      buyerPaymentTotal: rows.filter((row) => row.type === 'Buyer Payment').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
+      supplierRefundTotal: rows.filter((row) => row.type === 'Supplier Refund').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
+      unmatchedCount: rows.filter((row) => row.type === 'Unmatched' || row.status === 'Needs review').length,
+      fullyPaidCount: rows.filter((row) => row.status === 'Fully paid').length,
+      availableBalanceTotal: availableBalances.reduce((sum, group) => sum + Number(group.totalAvailableBalance || 0), 0),
+      availableBalanceCount: availableBalances.reduce((sum, group) => sum + (group.stems?.length || 0), 0),
+    },
+  };
+}
+
+async function incomingPaymentAllocationConfirm(body, req) {
+  await requireAdministrator(req);
+  const buyerGroupName = String(body.buyerGroupName || body.buyer_group_name || '').trim();
+  if (!buyerGroupName) throw appError('Buyer group is required.', 400);
+  throw appError('Salesforce payment allocation write-back is not enabled yet. Confirm the Salesforce object and fields for applying available buyer balances to another STEM.', 501);
+}
+
 function buyerInvoiceEmailSettings(input = {}) {
   const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(input, 'buyerTraders');
   const defaults = {
@@ -6370,6 +6762,10 @@ const handlers = {
   buyerInvoicePaymentReminderSend,
   outstandingBuyerInvoicesEmailReport,
   outstandingBuyerInvoicesEmailCron,
+  incomingPaymentsList,
+  incomingPaymentSettingsGet,
+  incomingPaymentSettingsSave,
+  incomingPaymentAllocationConfirm,
   salesforceDisputeStems,
   salesforceDisputePartyUpdate,
   disputeBetaList,

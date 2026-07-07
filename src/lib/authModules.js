@@ -11,6 +11,7 @@ export const APP_MODULES = [
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
   { id: 'disputes', label: 'Dispute Management', path: '/disputes', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
+  { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
   { id: 'reports', label: 'Report Builder', path: '/reports', sortOrder: 50 },
   { id: 'pnl', label: 'Stem P&L', path: '/pnl', sortOrder: 60 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },

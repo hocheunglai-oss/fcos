@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.0.20';
+export const APP_VERSION = '1.0.0.21';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.21',
+    releasedAt: '2026-07-08',
+    title: 'Incoming Payment workspace',
+    changes: [
+      'Added an Incoming Payment page for buyer payments received and supplier refunds from Salesforce Payment__c records.',
+      'Added buyer-group available balance tracking based on overpaid STEM receivable balances.',
+      'Added a global fully paid threshold setting with administrator-only editing.',
+      'Added conservative administrator-only allocation preparation that blocks Salesforce write-back until target allocation fields are confirmed.',
+    ],
+  },
   {
     version: '1.0.0.20',
     releasedAt: '2026-07-08',
