@@ -3787,10 +3787,92 @@ function selectedFields(fieldNames, fields) {
   return fields.filter((field) => field && fieldNames.has(field));
 }
 
+function incomingPaymentReferenceFields(paymentFields = []) {
+  const fieldNames = new Set(paymentFields.map((field) => field.name));
+  const exactFields = [
+    'Bank_Reference__c',
+    'Reference__c',
+    'Payment_Reference__c',
+    'Transaction_Reference__c',
+    'Description__c',
+    'Remarks__c',
+  ].filter((field) => fieldNames.has(field));
+  const allowedTypes = new Set(['string', 'textarea', 'picklist', 'email', 'phone', 'url']);
+  const dynamicFields = paymentFields
+    .filter((field) => (
+      field?.name &&
+      field.name !== 'Name' &&
+      !field.name.endsWith('__c__r') &&
+      allowedTypes.has(field.type) &&
+      fieldMatchesAny(field, [
+        'bankreference',
+        'bankreferencec',
+        'paymentreference',
+        'paymentreferencec',
+        'transactionreference',
+        'transactionreferencec',
+        'reference',
+        'referencec',
+        'description',
+        'descriptionc',
+        'remarks',
+        'remarksc',
+        'narration',
+        'narrationc',
+        'paymentdetails',
+        'paymentdetailsc',
+        'receiptreference',
+        'receiptreferencec',
+      ], [
+        'bankref',
+        'reference',
+        'transaction',
+        'remittance',
+        'description',
+        'remark',
+        'narration',
+        'receipt',
+        'cheque',
+        'check',
+        'details',
+        'payer',
+        'payor',
+      ])
+    ))
+    .map((field) => field.name);
+  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 10);
+}
+
 function incomingPaymentReference(payment, referenceFields = []) {
-  return referenceFields
+  const value = referenceFields
     .map((field) => payment[field])
-    .find((value) => value != null && value !== '') || null;
+    .find((item) => item != null && item !== '');
+  return value == null ? null : String(value).trim() || null;
+}
+
+function generatedPaymentName(value) {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  return /^pay(?:ment)?[-_\s]?\d+$/i.test(text)
+    || /^p[-_\s]?\d+$/i.test(text)
+    || /^[a-z]{0,4}\d{5,}$/i.test(text)
+    || /^[a-z0-9]{15,18}$/i.test(text);
+}
+
+function incomingPaymentDisplayName({ payment, referenceFields = [], stem, supplierInvoice, type }) {
+  const reference = incomingPaymentReference(payment, referenceFields);
+  if (reference) return reference;
+
+  const rawName = String(payment?.Name || '').trim();
+  if (rawName && !generatedPaymentName(rawName)) return rawName;
+
+  if (supplierInvoice?.Name) {
+    return `${type === 'Supplier Refund' ? 'Supplier refund' : 'Supplier payment'} - ${supplierInvoice.Name}`;
+  }
+  if (stem) {
+    return `${type === 'Buyer Payment' ? 'Buyer payment' : 'Payment'} - ${formatStemName(stem)}`;
+  }
+  return rawName || payment?.Id || 'Payment';
 }
 
 function incomingPaymentBuyerGroup(stem) {
@@ -3849,14 +3931,7 @@ async function incomingPaymentsList(body) {
     'Payment_Value__c',
     'Actual_Amount__c',
   ]);
-  const referenceFields = selectedFields(paymentFieldNames, [
-    'Bank_Reference__c',
-    'Reference__c',
-    'Payment_Reference__c',
-    'Transaction_Reference__c',
-    'Description__c',
-    'Remarks__c',
-  ]);
+  const referenceFields = incomingPaymentReferenceFields(paymentFields);
   const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
   const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const paymentSelectFields = [
@@ -4022,7 +4097,9 @@ async function incomingPaymentsList(body) {
     return {
       id: payment.Id,
       paymentId: payment.Id,
-      paymentName: payment.Name || payment.Id,
+      paymentName: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice, type }),
+      paymentDisplayName: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice, type }),
+      salesforcePaymentName: payment.Name || null,
       paymentDate: dateField ? payment[dateField] || null : payment.CreatedDate || null,
       type,
       isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',

@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.21';
+export const APP_VERSION = '1.0.0.22';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.22',
+    releasedAt: '2026-07-08',
+    title: 'Incoming Payment display refinement',
+    changes: [
+      'Changed Incoming Payment records to show meaningful payment details from reference, description, remittance, bank, and transaction fields.',
+      'Kept the raw Salesforce payment name as secondary text only when it differs from the payment details.',
+      'Updated Incoming Payment CSV export to include both payment details and Salesforce payment name.',
+    ],
+  },
   {
     version: '1.0.0.21',
     releasedAt: '2026-07-08',

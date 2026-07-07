@@ -86,13 +86,14 @@ function csvSafe(value) {
 }
 
 function downloadCsv(rows) {
-  const headers = ['Date', 'Type', 'Payment', 'Party', 'STEM', 'Buyer Group', 'Amount', 'Receivable Balance', 'Payable Balance', 'Status', 'Reference'];
+  const headers = ['Date', 'Type', 'Payment Details', 'Salesforce Payment Name', 'Party', 'STEM', 'Buyer Group', 'Amount', 'Receivable Balance', 'Payable Balance', 'Status', 'Reference'];
   const lines = [
     headers.map(csvSafe).join(','),
     ...rows.map((row) => [
       row.paymentDate || '',
       row.type || '',
-      row.paymentName || '',
+      row.paymentDisplayName || row.paymentName || '',
+      row.salesforcePaymentName || '',
       row.partyName || '',
       row.stemName || '',
       row.buyerGroupName || '',
@@ -170,6 +171,8 @@ export default function IncomingPayments() {
     if (query) {
       result = result.filter((row) => [
         row.paymentName,
+        row.paymentDisplayName,
+        row.salesforcePaymentName,
         row.partyName,
         row.stemName,
         row.keyStem,
@@ -332,7 +335,7 @@ export default function IncomingPayments() {
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Date</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead>Payment</TableHead>
+                    <TableHead>Payment Details</TableHead>
                     <TableHead>Party</TableHead>
                     <TableHead>STEM</TableHead>
                     <TableHead>Buyer Group</TableHead>
@@ -362,7 +365,12 @@ export default function IncomingPayments() {
                     <TableRow key={row.id} className="hover:bg-muted/40">
                       <TableCell className="whitespace-nowrap text-sm">{fmtDate(row.paymentDate)}</TableCell>
                       <TableCell className="whitespace-nowrap text-sm font-medium">{row.type}</TableCell>
-                      <TableCell className="max-w-[180px] truncate text-sm">{row.paymentName}</TableCell>
+                      <TableCell className="max-w-[240px] text-sm">
+                        <div className="truncate font-medium text-foreground">{row.paymentDisplayName || row.paymentName || '-'}</div>
+                        {row.salesforcePaymentName && row.salesforcePaymentName !== (row.paymentDisplayName || row.paymentName) && (
+                          <div className="truncate text-xs text-muted-foreground">SF: {row.salesforcePaymentName}</div>
+                        )}
+                      </TableCell>
                       <TableCell className="max-w-[220px] text-sm">
                         <div className="font-medium text-foreground">{row.partyName || '-'}</div>
                         {row.supplierInvoiceName && <div className="text-xs text-muted-foreground">{row.supplierInvoiceName}</div>}
