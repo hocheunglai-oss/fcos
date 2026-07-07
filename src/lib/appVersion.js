@@ -1,8 +1,8 @@
-export const APP_VERSION = '1.0.0.23';
+export const APP_VERSION = '1.0.1';
 
 export const APP_VERSION_HISTORY = [
   {
-    version: '1.0.0.23',
+    version: '1.0.1',
     releasedAt: '2026-07-08',
     title: 'Incoming Payment table workflow',
     changes: [
