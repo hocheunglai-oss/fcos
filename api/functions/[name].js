@@ -30,6 +30,8 @@ const ADMIN_APP_MODULES = [
 
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));
+const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
+const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
 const DEFAULT_USER_TYPES = [
   { id: 'administrator', label: 'Administrator', description: 'Full system administration access.', is_system: true, sort_order: 10 },
   { id: 'manager', label: 'Manager', description: 'Operational management access without user administration.', is_system: true, sort_order: 20 },
@@ -44,6 +46,39 @@ const FALLBACK_TYPE_PERMISSIONS = {
   operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, reports: true, pnl: true, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
   viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, reports: false, pnl: false, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
 };
+
+function reportArchiveAccessLevel(value, canView = undefined) {
+  if (value === 'full' || value === true) return 'full';
+  if (value === 'read') return 'read';
+  if (canView === true) return 'full';
+  return 'none';
+}
+
+function permissionCanView(moduleId, value) {
+  if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccessLevel(value) !== 'none';
+  return value === true;
+}
+
+function permissionValueFromRow(row) {
+  return row?.can_view === true;
+}
+
+function normalizedPermissionForModule(moduleId, permissions = {}, fallback = undefined) {
+  const raw = Object.prototype.hasOwnProperty.call(permissions, moduleId)
+    ? permissions[moduleId]
+    : fallback;
+  if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccessLevel(raw);
+  return raw === true;
+}
+
+function reportArchiveAccessFromRows(rows = [], fallback = false) {
+  const reportRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MODULE_ID);
+  const manageRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID);
+  const canViewArchive = reportRow ? reportRow.can_view === true : fallback === true;
+  if (!canViewArchive) return 'none';
+  if (!manageRow) return 'full';
+  return manageRow.can_view === true ? 'full' : 'read';
+}
 
 function appError(message, status = 500) {
   const error = new Error(message);
@@ -151,7 +186,7 @@ function normalizePermissions(userType, permissions = {}) {
   if (userType === 'administrator') return ADMIN_FULL_ACCESS;
   const normalized = {};
   for (const module of ADMIN_APP_MODULES) {
-    normalized[module.id] = permissions?.[module.id] === true;
+    normalized[module.id] = normalizedPermissionForModule(module.id, permissions, false);
   }
   return normalized;
 }
@@ -170,7 +205,7 @@ function normalizeUserTypePermissions(userTypeId, permissions = {}) {
   const base = FALLBACK_TYPE_PERMISSIONS[userTypeId] || {};
   const normalized = {};
   for (const module of ADMIN_APP_MODULES) {
-    normalized[module.id] = permissions?.[module.id] ?? base[module.id] ?? false;
+    normalized[module.id] = normalizedPermissionForModule(module.id, permissions, base[module.id] ?? false);
   }
   return normalized;
 }
@@ -197,12 +232,22 @@ async function listAccessModel(client) {
     sort_order: Number(type.sort_order ?? 100),
   }));
   const typePermissions = Object.fromEntries(userTypes.map((type) => [type.id, normalizeUserTypePermissions(type.id)]));
+  const manageRowsByType = {};
   for (const row of permissionsRes.data || []) {
+    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
+      manageRowsByType[row.user_type_id] = row.can_view === true;
+      continue;
+    }
     if (!ADMIN_MODULE_IDS.has(row.module_id)) continue;
     if (!typePermissions[row.user_type_id]) typePermissions[row.user_type_id] = normalizeUserTypePermissions(row.user_type_id);
-    typePermissions[row.user_type_id][row.module_id] = row.can_view === true;
+    typePermissions[row.user_type_id][row.module_id] = permissionValueFromRow(row);
   }
   for (const type of userTypes) {
+    if (typePermissions[type.id]?.[REPORT_ARCHIVE_MODULE_ID] === true) {
+      typePermissions[type.id][REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByType, type.id)
+        ? (manageRowsByType[type.id] ? 'full' : 'read')
+        : 'full';
+    }
     typePermissions[type.id] = normalizeUserTypePermissions(type.id, typePermissions[type.id]);
   }
   return { userTypes, typePermissions };
@@ -284,6 +329,37 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
   return validModuleIds.some((moduleId) => fallback[moduleId] === true);
 }
 
+async function reportArchiveAccessForUser(client, profile) {
+  if (profile?.user_type === 'administrator') return 'full';
+
+  if (profile?.use_type_defaults === false) {
+    const { data, error } = await client
+      .from('user_module_permissions')
+      .select('module_id,can_view')
+      .eq('user_id', profile.id)
+      .in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
+    if (error) throw error;
+    return reportArchiveAccessFromRows(data || []);
+  }
+
+  const { data, error } = await client
+    .from('user_type_module_permissions')
+    .select('module_id,can_view')
+    .eq('user_type_id', profile?.user_type)
+    .in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
+  if (error) throw error;
+
+  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
+  return reportArchiveAccessFromRows(data || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
+}
+
+async function requireReportArchiveFullAccess(client, profile) {
+  const accessLevel = await reportArchiveAccessForUser(client, profile);
+  if (accessLevel !== 'full') {
+    throw appError('Full Reports Archive access is required for this action.', 403);
+  }
+}
+
 async function requireHandlerAccess(name, req) {
   if (AUTH_EXEMPT_HANDLERS.has(name)) return null;
   const context = await requireActiveUser(req);
@@ -344,6 +420,19 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
   };
   const { error } = await client.from('admin_audit_logs').insert(row);
   if (error) console.error('Failed to write admin audit log', error.message);
+}
+
+async function ensureReportArchiveManageModule(client) {
+  const { error } = await client
+    .from('app_modules')
+    .upsert({
+      id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
+      label: 'Reports Archive Management',
+      path: '/report-archive',
+      sort_order: 76,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+  if (error) throw error;
 }
 
 async function persistManagedUser(client, body, actor = null) {
@@ -408,12 +497,19 @@ async function persistManagedUser(client, body, actor = null) {
   if (deletePermissionError) throw deletePermissionError;
 
   if (!payload.use_type_defaults) {
+    await ensureReportArchiveManageModule(client);
     const permissionRows = ADMIN_APP_MODULES.map((module) => ({
       user_id: authUser.id,
       module_id: module.id,
-      can_view: payload.permissions[module.id] === true,
+      can_view: permissionCanView(module.id, payload.permissions[module.id]),
       updated_at: nowIso,
     }));
+    permissionRows.push({
+      user_id: authUser.id,
+      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
+      can_view: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
+      updated_at: nowIso,
+    });
     const { error: insertPermissionError } = await client
       .from('user_module_permissions')
       .insert(permissionRows);
@@ -424,7 +520,12 @@ async function persistManagedUser(client, body, actor = null) {
     user_type: payload.user_type,
     active: payload.active,
     use_type_defaults: payload.use_type_defaults,
-    modules: Object.entries(payload.permissions).filter(([, enabled]) => enabled).map(([moduleId]) => moduleId),
+    modules: Object.entries(payload.permissions)
+      .filter(([moduleId, value]) => permissionCanView(moduleId, value))
+      .map(([moduleId]) => moduleId),
+    access_levels: {
+      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]),
+    },
   });
 
   return {
@@ -459,10 +560,22 @@ async function adminUsersList(body, req) {
   }
 
   const permissionsByUser = {};
+  const manageRowsByUser = {};
   for (const row of permissionRows) {
+    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
+      manageRowsByUser[row.user_id] = row.can_view === true;
+      continue;
+    }
     if (!ADMIN_MODULE_IDS.has(row.module_id)) continue;
     if (!permissionsByUser[row.user_id]) permissionsByUser[row.user_id] = {};
-    permissionsByUser[row.user_id][row.module_id] = row.can_view === true;
+    permissionsByUser[row.user_id][row.module_id] = permissionValueFromRow(row);
+  }
+  for (const [userId, permissions] of Object.entries(permissionsByUser)) {
+    if (permissions[REPORT_ARCHIVE_MODULE_ID] === true) {
+      permissions[REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByUser, userId)
+        ? (manageRowsByUser[userId] ? 'full' : 'read')
+        : 'full';
+    }
   }
 
   const users = (profiles || []).map((profile) => ({
@@ -549,6 +662,7 @@ async function adminUserTypeSave(body, req) {
   if (typeError) throw typeError;
 
   const permissions = normalizeUserTypePermissions(id, body.permissions || {});
+  await ensureReportArchiveManageModule(client);
   const { error: deletePermissionError } = await client
     .from('user_type_module_permissions')
     .delete()
@@ -556,17 +670,30 @@ async function adminUserTypeSave(body, req) {
   if (deletePermissionError) throw deletePermissionError;
   const { error: insertPermissionError } = await client
     .from('user_type_module_permissions')
-    .insert(ADMIN_APP_MODULES.map((module) => ({
-      user_type_id: id,
-      module_id: module.id,
-      can_view: permissions[module.id] === true,
-      updated_at: new Date().toISOString(),
-    })));
+    .insert([
+      ...ADMIN_APP_MODULES.map((module) => ({
+        user_type_id: id,
+        module_id: module.id,
+        can_view: permissionCanView(module.id, permissions[module.id]),
+        updated_at: new Date().toISOString(),
+      })),
+      {
+        user_type_id: id,
+        module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
+        can_view: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
+        updated_at: new Date().toISOString(),
+      },
+    ]);
   if (insertPermissionError) throw insertPermissionError;
 
   await writeAdminAudit(client, profile, existing ? 'user_type_updated' : 'user_type_created', null, id, {
     label,
-    modules: Object.entries(permissions).filter(([, enabled]) => enabled).map(([moduleId]) => moduleId),
+    modules: Object.entries(permissions)
+      .filter(([moduleId, value]) => permissionCanView(moduleId, value))
+      .map(([moduleId]) => moduleId),
+    access_levels: {
+      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]),
+    },
   });
 
   return { userType: { ...userType, permissions } };
@@ -932,6 +1059,7 @@ async function loadReportExportForAction(client, id) {
 
 async function reportExportRename(body, req) {
   const { client, profile } = await requireActiveUser(req);
+  await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
   const fileName = safeReportFileName(body.fileName || body.file_name);
@@ -958,6 +1086,7 @@ async function reportExportRename(body, req) {
 
 async function reportExportDelete(body, req) {
   const { client, profile } = await requireActiveUser(req);
+  await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
   const current = await loadReportExportForAction(client, id);

@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.9';
+export const APP_VERSION = '1.0.0.10';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.10',
+    releasedAt: '2026-07-07',
+    title: 'Reports Archive access levels',
+    changes: [
+      'Added Read Only and Full Access levels for Reports Archive in Admin Control.',
+      'Read-only archive users can view audit history, open Drive files, and download XLS reports.',
+      'Rename and delete actions now require Full Access and are enforced by the server.',
+    ],
+  },
   {
     version: '1.0.0.9',
     releasedAt: '2026-07-07',

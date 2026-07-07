@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, ExternalLink, FileSpreadsheet, History, Loader2, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { useAuth } from '@/lib/AuthContext';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -85,6 +86,7 @@ function filterSummary(metadata = {}) {
 
 export default function ReportArchive() {
   const { toast } = useToast();
+  const { isAdministrator, moduleAccessLevels } = useAuth();
   const [reports, setReports] = useState([]);
   const [showDeleted, setShowDeleted] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -116,13 +118,22 @@ export default function ReportArchive() {
   }, [showDeleted]);
 
   const activeCount = useMemo(() => reports.filter((report) => report.status === 'active').length, [reports]);
+  const canManageArchive = isAdministrator || moduleAccessLevels?.report_archive === 'full';
 
   const startRename = (report) => {
+    if (!canManageArchive) {
+      toast({ title: 'Read-only access', description: 'Full Reports Archive access is required to rename reports.' });
+      return;
+    }
     setRenameTarget(report);
     setRenameValue(report.fileName || '');
   };
 
   const renameReport = async () => {
+    if (!canManageArchive) {
+      toast({ title: 'Read-only access', description: 'Full Reports Archive access is required to rename reports.' });
+      return;
+    }
     const fileName = normalizeFileName(renameValue);
     if (!renameTarget || !fileName) return;
     setActionLoading(`rename:${renameTarget.id}`);
@@ -142,6 +153,10 @@ export default function ReportArchive() {
   };
 
   const deleteReport = async () => {
+    if (!canManageArchive) {
+      toast({ title: 'Read-only access', description: 'Full Reports Archive access is required to delete reports.' });
+      return;
+    }
     if (!deleteTarget) return;
     setActionLoading(`delete:${deleteTarget.id}`);
     const res = await appClient.functions.invoke('reportExportDelete', { id: deleteTarget.id });
@@ -176,7 +191,7 @@ export default function ReportArchive() {
         eyebrow="Google Drive report archive"
         title="Reports Archive"
         description="Review exported XLS reports, audit trail, and Google Drive file actions."
-        meta={`${activeCount.toLocaleString()} active reports · ${reports.length.toLocaleString()} shown`}
+        meta={`${activeCount.toLocaleString()} active reports · ${reports.length.toLocaleString()} shown · ${canManageArchive ? 'Full access' : 'Read only'}`}
         actions={(
           <>
             <Button type="button" variant={showDeleted ? 'default' : 'outline'} size="sm" onClick={() => setShowDeleted((value) => !value)}>
@@ -245,12 +260,16 @@ export default function ReportArchive() {
                       <Button type="button" variant="ghost" size="icon" title="Download XLS" disabled={report.status !== 'active' || actionLoading === `download:${report.id}`} onClick={() => downloadReport(report)}>
                         {actionLoading === `download:${report.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                       </Button>
-                      <Button type="button" variant="ghost" size="icon" title="Rename" disabled={report.status !== 'active'} onClick={() => startRename(report)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" title="Delete" disabled={report.status !== 'active'} onClick={() => setDeleteTarget(report)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canManageArchive && (
+                        <>
+                          <Button type="button" variant="ghost" size="icon" title="Rename" disabled={report.status !== 'active'} onClick={() => startRename(report)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button type="button" variant="ghost" size="icon" title="Delete" disabled={report.status !== 'active'} onClick={() => setDeleteTarget(report)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

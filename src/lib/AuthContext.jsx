@@ -13,6 +13,9 @@ const LOCAL_ADMIN_USER = {
   active: true,
 };
 
+const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
+const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
+
 function profileToUser(profile, authUser) {
   return {
     id: authUser.id,
@@ -25,29 +28,48 @@ function profileToUser(profile, authUser) {
   };
 }
 
+function fullAccessLevels() {
+  return { [REPORT_ARCHIVE_MODULE_ID]: 'full' };
+}
+
 function normalizeAccess(permissionRows = []) {
   const access = Object.fromEntries(APP_MODULES.map((module) => [module.id, false]));
+  const accessLevels = { [REPORT_ARCHIVE_MODULE_ID]: 'none' };
+  let hasReportArchivePermission = false;
+  let hasManageArchivePermission = false;
+  let canManageArchive = false;
   for (const row of permissionRows || []) {
+    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
+      hasManageArchivePermission = true;
+      canManageArchive = row.can_view === true;
+      continue;
+    }
     access[row.module_id] = row.can_view === true;
+    if (row.module_id === REPORT_ARCHIVE_MODULE_ID) {
+      hasReportArchivePermission = row.can_view === true;
+    }
   }
-  return access;
+  if (hasReportArchivePermission) {
+    accessLevels[REPORT_ARCHIVE_MODULE_ID] = !hasManageArchivePermission || canManageArchive ? 'full' : 'read';
+  }
+  return { access, accessLevels };
 }
 
 async function loadSupabaseUser() {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw sessionError;
-  if (!sessionData?.session) return { user: null, access: {}, error: { type: 'auth_required' } };
+  if (!sessionData?.session) return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
 
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) {
     const message = String(userError.message || '').toLowerCase();
     if (message.includes('session missing') || message.includes('auth session missing')) {
-      return { user: null, access: {}, error: { type: 'auth_required' } };
+      return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
     }
     throw userError;
   }
   const authUser = userData?.user;
-  if (!authUser) return { user: null, access: {}, error: { type: 'auth_required' } };
+  if (!authUser) return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
 
   const { data: profile, error: profileError } = await supabase
     .from('user_profiles')
@@ -55,11 +77,11 @@ async function loadSupabaseUser() {
     .eq('id', authUser.id)
     .maybeSingle();
   if (profileError) throw profileError;
-  if (!profile) return { user: null, access: {}, error: { type: 'user_not_registered' } };
-  if (!profile.active) return { user: null, access: {}, error: { type: 'user_inactive' } };
+  if (!profile) return { user: null, access: {}, accessLevels: {}, error: { type: 'user_not_registered' } };
+  if (!profile.active) return { user: null, access: {}, accessLevels: {}, error: { type: 'user_inactive' } };
 
   if (profile.user_type === 'administrator') {
-    return { user: profileToUser(profile, authUser), access: FULL_ACCESS, error: null };
+    return { user: profileToUser(profile, authUser), access: FULL_ACCESS, accessLevels: fullAccessLevels(), error: null };
   }
 
   if (profile.use_type_defaults !== false) {
@@ -69,7 +91,8 @@ async function loadSupabaseUser() {
       .eq('user_type_id', profile.user_type);
     if (permissionsError) throw permissionsError;
 
-    return { user: profileToUser(profile, authUser), access: normalizeAccess(permissions), error: null };
+    const normalized = normalizeAccess(permissions);
+    return { user: profileToUser(profile, authUser), access: normalized.access, accessLevels: normalized.accessLevels, error: null };
   }
 
   const { data: permissions, error: permissionsError } = await supabase
@@ -78,12 +101,14 @@ async function loadSupabaseUser() {
     .eq('user_id', authUser.id);
   if (permissionsError) throw permissionsError;
 
-  return { user: profileToUser(profile, authUser), access: normalizeAccess(permissions), error: null };
+  const normalized = normalizeAccess(permissions);
+  return { user: profileToUser(profile, authUser), access: normalized.access, accessLevels: normalized.accessLevels, error: null };
 }
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
+  const [moduleAccessLevels, setModuleAccessLevels] = useState({});
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingPublicSettings] = useState(false);
@@ -94,6 +119,7 @@ export const AuthProvider = ({ children }) => {
   const applyLocalAdmin = useCallback(() => {
     setUser(LOCAL_ADMIN_USER);
     setModuleAccess(FULL_ACCESS);
+    setModuleAccessLevels(fullAccessLevels());
     setIsAuthenticated(true);
     setAuthError(null);
     setAuthChecked(true);
@@ -111,12 +137,14 @@ export const AuthProvider = ({ children }) => {
       const result = await loadSupabaseUser();
       setUser(result.user);
       setModuleAccess(result.access || {});
+      setModuleAccessLevels(result.accessLevels || {});
       setIsAuthenticated(Boolean(result.user));
       setAuthError(result.error);
       setAuthChecked(true);
     } catch (error) {
       setUser(null);
       setModuleAccess({});
+      setModuleAccessLevels({});
       setAuthError({ type: 'local_auth_error', message: error.message });
       setIsAuthenticated(false);
       setAuthChecked(true);
@@ -136,6 +164,7 @@ export const AuthProvider = ({ children }) => {
       if (event === 'SIGNED_OUT') {
         setUser(null);
         setModuleAccess({});
+        setModuleAccessLevels({});
         setIsAuthenticated(false);
         setAuthError({ type: 'auth_required' });
         setAuthChecked(true);
@@ -161,6 +190,7 @@ export const AuthProvider = ({ children }) => {
     if (isSupabaseConfigured) await supabase.auth.signOut();
     setUser(null);
     setModuleAccess({});
+    setModuleAccessLevels({});
     setIsAuthenticated(false);
     setAuthChecked(true);
     if (!isSupabaseConfigured) applyLocalAdmin();
@@ -178,6 +208,7 @@ export const AuthProvider = ({ children }) => {
   const value = useMemo(() => ({
     user,
     moduleAccess,
+    moduleAccessLevels,
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,
@@ -196,6 +227,7 @@ export const AuthProvider = ({ children }) => {
   }), [
     user,
     moduleAccess,
+    moduleAccessLevels,
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,

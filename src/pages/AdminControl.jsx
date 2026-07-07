@@ -36,8 +36,31 @@ const emptyTypeForm = {
   permissions: { dashboard: true },
 };
 
+const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
+const REPORT_ARCHIVE_ACCESS_OPTIONS = [
+  { value: 'none', label: 'No Access' },
+  { value: 'read', label: 'Read Only' },
+  { value: 'full', label: 'Full Access' },
+];
+
+function reportArchiveAccess(value) {
+  if (value === 'full' || value === true) return 'full';
+  if (value === 'read') return 'read';
+  return 'none';
+}
+
+function permissionCanView(moduleId, value) {
+  if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccess(value) !== 'none';
+  return value === true;
+}
+
 function normalizedPermissions(modules, permissions = {}) {
-  return Object.fromEntries(modules.map((module) => [module.id, permissions?.[module.id] === true]));
+  return Object.fromEntries(modules.map((module) => [
+    module.id,
+    module.id === REPORT_ARCHIVE_MODULE_ID
+      ? reportArchiveAccess(permissions?.[module.id])
+      : permissions?.[module.id] === true,
+  ]));
 }
 
 function typeLabel(type) {
@@ -49,7 +72,7 @@ function compareText(a, b) {
 }
 
 function permissionSummary(modules, permissions = {}) {
-  const count = modules.filter((module) => permissions?.[module.id] === true).length;
+  const count = modules.filter((module) => permissionCanView(module.id, permissions?.[module.id])).length;
   if (count === modules.length) return 'All modules';
   if (count === 0) return 'No modules';
   return `${count} modules`;
@@ -82,23 +105,54 @@ function SegmentButton({ active, children, icon: Icon, onClick }) {
   );
 }
 
-function ModuleGrid({ modules, permissions, locked = false, onToggle }) {
+function ModuleGrid({ modules, permissions, locked = false, onToggle, onSetAccess }) {
   return (
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-      {modules.map((module) => (
-        <label
-          key={module.id}
-          className={`flex min-h-10 items-center justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-sm ${locked ? 'opacity-75' : ''}`}
-        >
-          <span className="font-medium text-foreground">{module.label}</span>
-          <input
-            type="checkbox"
-            checked={permissions?.[module.id] === true}
-            disabled={locked}
-            onChange={() => onToggle?.(module.id)}
-          />
-        </label>
-      ))}
+      {modules.map((module) => {
+        if (module.id === REPORT_ARCHIVE_MODULE_ID) {
+          const currentAccess = reportArchiveAccess(permissions?.[module.id]);
+          return (
+            <div
+              key={module.id}
+              className={`min-h-10 rounded-md border border-border bg-background/60 px-3 py-2 text-sm ${locked ? 'opacity-75' : ''}`}
+            >
+              <div className="mb-2 font-medium text-foreground">{module.label}</div>
+              <div className="grid grid-cols-3 overflow-hidden rounded-md border border-border">
+                {REPORT_ARCHIVE_ACCESS_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => onSetAccess?.(module.id, option.value)}
+                    className={`h-8 px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed ${
+                      currentAccess === option.value
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <label
+            key={module.id}
+            className={`flex min-h-10 items-center justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-sm ${locked ? 'opacity-75' : ''}`}
+          >
+            <span className="font-medium text-foreground">{module.label}</span>
+            <input
+              type="checkbox"
+              checked={permissions?.[module.id] === true}
+              disabled={locked}
+              onChange={() => onToggle?.(module.id)}
+            />
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -278,11 +332,22 @@ export default function AdminControl() {
   };
 
   const toggleUserModule = (moduleId) => {
+    if (moduleId === REPORT_ARCHIVE_MODULE_ID) return;
     setUserForm((prev) => ({
       ...prev,
       permissions: {
         ...prev.permissions,
         [moduleId]: !prev.permissions?.[moduleId],
+      },
+    }));
+  };
+
+  const setUserModuleAccess = (moduleId, access) => {
+    setUserForm((prev) => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        [moduleId]: moduleId === REPORT_ARCHIVE_MODULE_ID ? reportArchiveAccess(access) : access === true,
       },
     }));
   };
@@ -375,11 +440,22 @@ export default function AdminControl() {
   };
 
   const toggleTypeModule = (moduleId) => {
+    if (moduleId === REPORT_ARCHIVE_MODULE_ID) return;
     setTypeForm((prev) => ({
       ...prev,
       permissions: {
         ...prev.permissions,
         [moduleId]: !prev.permissions?.[moduleId],
+      },
+    }));
+  };
+
+  const setTypeModuleAccess = (moduleId, access) => {
+    setTypeForm((prev) => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        [moduleId]: moduleId === REPORT_ARCHIVE_MODULE_ID ? reportArchiveAccess(access) : access === true,
       },
     }));
   };
@@ -708,6 +784,7 @@ export default function AdminControl() {
                   permissions={effectiveUserPermissions}
                   locked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
                   onToggle={toggleUserModule}
+                  onSetAccess={setUserModuleAccess}
                 />
               </div>
             </div>
@@ -797,6 +874,7 @@ export default function AdminControl() {
                   permissions={activeTypePermissions}
                   locked={typeForm.id === 'administrator'}
                   onToggle={toggleTypeModule}
+                  onSetAccess={setTypeModuleAccess}
                 />
               </div>
             </div>
