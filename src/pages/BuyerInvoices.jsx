@@ -895,6 +895,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   }, [data?.routingGroups, selectedIds]);
   const selectedAutoTo = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.to || [])), [selectedRoutingGroups]);
   const selectedAutoCc = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.cc || [])), [selectedRoutingGroups]);
+  const selectedAutoBcc = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.bcc || [])), [selectedRoutingGroups]);
   const selectedRoutingWarnings = useMemo(() => (
     [...new Set(selectedRows.flatMap((candidate) => candidate.buyerBrokerRoutingWarnings || []))]
   ), [selectedRows]);
@@ -1091,6 +1092,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   <div className="text-xs text-muted-foreground">
                     {selectedRoutingGroups.length.toLocaleString()} email batch{selectedRoutingGroups.length === 1 ? '' : 'es'} · To: {selectedAutoTo.join(', ') || '-'}
                     {selectedAutoCc.length ? ` · Broker CC: ${selectedAutoCc.join(', ')}` : ''}
+                    {selectedAutoBcc.length ? ` · Broker BCC: ${selectedAutoBcc.join(', ')}` : ''}
                   </div>
                 </div>
               </div>

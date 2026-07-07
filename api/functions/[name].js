@@ -4024,6 +4024,7 @@ function paymentReminderRowRouting(row) {
       mode,
       to: brokerEmails,
       cc: [],
+      bcc: brokerEmails,
       primaryRecipientName: brokerNames[0] || row?.buyerBrokerNames || 'Broker',
       warnings: row?.buyerBrokerRoutingWarnings || [],
     };
@@ -4033,6 +4034,7 @@ function paymentReminderRowRouting(row) {
       mode,
       to: buyerRecipients,
       cc: brokerEmails,
+      bcc: [],
       primaryRecipientName: row?.buyerName || 'Customer',
       warnings: row?.buyerBrokerRoutingWarnings || [],
     };
@@ -4041,6 +4043,7 @@ function paymentReminderRowRouting(row) {
     mode: 'buyer_only',
     to: buyerRecipients,
     cc: [],
+    bcc: [],
     primaryRecipientName: row?.buyerName || 'Customer',
     warnings: row?.buyerBrokerRoutingWarnings || [],
   };
@@ -4054,6 +4057,7 @@ function paymentReminderRoutingForRows(rows = []) {
       mode: routing.mode,
       to: routing.to.map((item) => item.toLowerCase()).sort(),
       cc: routing.cc.map((item) => item.toLowerCase()).sort(),
+      bcc: routing.bcc.map((item) => item.toLowerCase()).sort(),
       primaryRecipientName: routing.primaryRecipientName,
     });
     if (!groups.has(key)) {
@@ -4061,6 +4065,7 @@ function paymentReminderRoutingForRows(rows = []) {
         mode: routing.mode,
         to: routing.to,
         cc: routing.cc,
+        bcc: routing.bcc,
         primaryRecipientName: routing.primaryRecipientName,
         warnings: [],
         rows: [],
@@ -4078,6 +4083,7 @@ function paymentReminderRoutingForRows(rows = []) {
     groups: resultGroups,
     to: uniqueEmailList(...resultGroups.map((group) => group.to)),
     cc: uniqueEmailList(...resultGroups.map((group) => group.cc)),
+    bcc: uniqueEmailList(...resultGroups.map((group) => group.bcc)),
     warnings: uniqueTextList(resultGroups.flatMap((group) => group.warnings)),
   };
 }
@@ -4300,6 +4306,7 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
     allTo: routing.to,
     cc: renderPaymentReminderEmailList(settings.paymentReminderCc, context),
     bcc: renderPaymentReminderEmailList(settings.paymentReminderBcc, context),
+    autoBcc: firstGroup.bcc,
     subject: settings.paymentReminderSubject,
     body: settings.paymentReminderBody,
     preview: { html: email.html, text: email.text },
@@ -4307,6 +4314,7 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
       mode: group.mode,
       to: group.to,
       cc: group.cc,
+      bcc: group.bcc,
       primaryRecipientName: group.primaryRecipientName,
       warnings: group.warnings,
       stemIds: group.rows.map((row) => row.stemId),
@@ -4346,7 +4354,7 @@ async function buyerInvoicePaymentReminderSend(body, req) {
     const effectiveGroup = { ...group, to };
     const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, effectiveGroup);
     const cc = uniqueEmailList(group.cc, renderPaymentReminderEmailList(body.cc, groupContext));
-    const bcc = renderPaymentReminderEmailList(body.bcc, groupContext);
+    const bcc = uniqueEmailList(group.bcc, renderPaymentReminderEmailList(body.bcc, groupContext));
     if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
     const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, {
       subject: body.subject,
