@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.0.12';
+export const APP_VERSION = '1.0.0.13';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.13',
+    releasedAt: '2026-07-07',
+    title: 'Buyer-only broker email retention',
+    changes: [
+      'Explicit Buyer Only broker reminder routing now keeps broker email addresses so they can be added to automatic BCC.',
+      'Blank or unknown broker invoice formats continue to avoid silent broker BCC routing.',
+    ],
+  },
   {
     version: '1.0.0.12',
     releasedAt: '2026-07-07',

@@ -2062,12 +2062,17 @@ function combineBuyerBrokerRouting(details = []) {
   }
   const warnings = [];
   const brokerEmails = [];
+  const buyerOnlyBrokerEmails = [];
   const modes = [];
   for (const detail of details) {
     const routing = buyerBrokerRoutingMode(detail.invoiceFormat, detail.emails);
     modes.push(routing.mode);
     warnings.push(...routing.warnings.map((warning) => `${detail.name || 'Buyer broker'}: ${warning}`));
-    if (routing.mode !== 'buyer_only') brokerEmails.push(...(detail.emails || []));
+    if (routing.mode !== 'buyer_only') {
+      brokerEmails.push(...(detail.emails || []));
+    } else if (/\bbuyer\s+only\b/i.test(String(routing.label || detail.invoiceFormat || ''))) {
+      buyerOnlyBrokerEmails.push(...(detail.emails || []));
+    }
   }
   const validModes = modes.filter((mode) => mode !== 'buyer_only');
   const routingMode = validModes.includes('broker_only') && !validModes.includes('buyer_cc_broker')
@@ -2081,7 +2086,7 @@ function combineBuyerBrokerRouting(details = []) {
   return {
     buyerBrokerNames: uniqueTextList(details.map((detail) => detail.name)).join(', '),
     buyerBrokerInvoiceFormats: uniqueTextList(details.map((detail) => detail.invoiceFormat)).join(', '),
-    buyerBrokerEmails: uniqueEmailList(brokerEmails).join(', '),
+    buyerBrokerEmails: uniqueEmailList(routingMode === 'buyer_only' ? buyerOnlyBrokerEmails : brokerEmails).join(', '),
     buyerBrokerRoutingMode: routingMode,
     buyerBrokerRoutingWarnings: warnings,
     buyerBrokerDetails: details.map((detail) => ({
