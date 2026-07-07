@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
-import { endOfQuarter, format } from 'date-fns';
+import { endOfQuarter, format, startOfQuarter, subQuarters } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import BrokerFilters from '@/components/brokers/BrokerFilters';
@@ -47,6 +47,13 @@ const receivableAmount = (row) => {
   return amount < 0 ? Math.abs(amount) : null;
 };
 const isoDate = (date) => format(date, ISO_FORMAT);
+const previousQuarterRange = () => {
+  const previousQuarter = subQuarters(new Date(), 1);
+  return {
+    from: isoDate(startOfQuarter(previousQuarter)),
+    to: isoDate(endOfQuarter(previousQuarter)),
+  };
+};
 const parseIsoDate = (value) => {
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -133,6 +140,7 @@ const matchesBrokerType = (row, selectedTypes) => {
 const rowIdValue = (row) => textValue(row?.id, '');
 
 export default function BrokerRegister() {
+  const [initialDateRange] = useState(() => previousQuarterRange());
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -140,8 +148,8 @@ export default function BrokerRegister() {
   const [selectedTypes, setSelectedTypes] = useState([]);
   const [selectedBrokerNames, setSelectedBrokerNames] = useState([]);
   const [selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags] = useState([]);
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(() => initialDateRange.from);
+  const [toDate, setToDate] = useState(() => initialDateRange.to);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [exchangeRateProvider] = useState(() => readExchangeRateSettings().provider);
   const [exchangeRate, setExchangeRate] = useState(null);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -23,9 +23,19 @@ const QUARTER_OPTIONS = [
   { key: 'q4', label: 'Q4', startMonth: 9, endMonth: 11 },
 ];
 const YEAR_OPTIONS = Array.from({ length: 8 }, (_, index) => new Date().getFullYear() - index);
+const yearFromIsoDate = (value) => {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date.getFullYear();
+};
 
 export default function BrokerFilters({ search, setSearch, selectedTypes, setSelectedTypes, brokerNames, selectedBrokerNames, setSelectedBrokerNames, selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags, fromDate, setFromDate, toDate, setToDate }) {
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedYear, setSelectedYear] = useState(() => yearFromIsoDate(fromDate) || new Date().getFullYear());
+
+  useEffect(() => {
+    const year = yearFromIsoDate(fromDate);
+    if (year) setSelectedYear(year);
+  }, [fromDate]);
 
   const toggleType = (type) => {
     setSelectedTypes(selectedTypes.includes(type)
