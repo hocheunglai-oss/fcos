@@ -86,6 +86,46 @@ const stemBasePnl = (stem) => {
 
 const supplierDueRows = (row) => Array.isArray(row?._Supplier_Invoice_Due_Rows) ? row._Supplier_Invoice_Due_Rows : [];
 
+const fallbackList = (value) => textValue(value, '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+function queueDetailLines(row) {
+  const rows = supplierDueRows(row);
+  if (rows.length) {
+    const seenSupplierGroups = new Set();
+    return rows.map((dueRow, index) => {
+      const supplierName = dueRow.supplierName || 'Supplier';
+      const dueDate = dueRow.dueDate || null;
+      const invoiceName = dueRow.invoiceName || '';
+      const groupKey = `${supplierName}\u0000${dueDate || ''}\u0000${invoiceName}`;
+      const showSupplier = !seenSupplierGroups.has(groupKey);
+      seenSupplierGroups.add(groupKey);
+      return {
+        key: `${groupKey}\u0000${dueRow.productQuantityLabel || dueRow.productName || index}`,
+        productLabel: dueRow.productQuantityLabel || dueRow.productName || '—',
+        supplierName,
+        dueDate,
+        invoiceName,
+        showSupplier,
+      };
+    });
+  }
+
+  const products = fallbackList(row?._Product_Names);
+  const suppliers = fallbackList(row?._Supplier_Names);
+  const count = Math.max(products.length, suppliers.length, 1);
+  return Array.from({ length: count }, (_, index) => ({
+    key: `fallback-${index}`,
+    productLabel: products[index] || (index === 0 ? '—' : ''),
+    supplierName: suppliers[index] || '',
+    dueDate: null,
+    invoiceName: '',
+    showSupplier: Boolean(suppliers[index]),
+  }));
+}
+
 function Metric({ label, value, tone = 'default' }) {
   const toneClass = tone === 'red' ? 'text-red-600' : tone === 'green' ? 'text-emerald-600' : tone === 'amber' ? 'text-amber-600' : 'text-foreground';
   return (
@@ -747,7 +787,7 @@ export default function DisputeBeta() {
         row._Product_Names,
         row.Delivery_Date__c,
         row._Buyer_Invoice_Due_Date,
-        supplierDueRows(row).map((dueRow) => [dueRow.supplierName, dueRow.invoiceName, dueRow.productQuantityLabel, dueRow.dueDate].filter(Boolean).join(' ')).join(' '),
+        queueDetailLines(row).map((line) => [line.supplierName, line.invoiceName, line.productLabel, line.dueDate].filter(Boolean).join(' ')).join(' '),
         row.Dispute_Status__c,
         beta.case?.latestNote,
       ].some((value) => textValue(value, '').toLowerCase().includes(q));
@@ -841,16 +881,14 @@ export default function DisputeBeta() {
           <StateBlock icon={Loader2} title="Loading Dispute Beta..." description="Fetching disputed STEMs and workflow state." />
         ) : filteredRows.length ? (
           <div className="max-h-[68vh] overflow-auto">
-            <table className="w-full min-w-[1680px] text-xs">
+            <table className="w-full min-w-[1380px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery Date</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier(s)</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice Due / Product</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer / Invoice Due</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Products</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier / Invoice Due</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Salesforce Status</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Dispute P&L</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Approval</th>
@@ -861,35 +899,50 @@ export default function DisputeBeta() {
                 {filteredRows.map((row, index) => {
                   const beta = workflowFromRow(row);
                   const stage = beta.case?.workflowStatus || 'Draft';
+                  const detailLines = queueDetailLines(row);
                   return (
                     <tr
                       key={row.Id}
                       className={cn('cursor-pointer border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}
                       onClick={() => setSelectedStemId(row.Id)}
                     >
-                      <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">
+                        <div className="font-medium text-foreground">{row._Display_Name || row.Name || '—'}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">Delivery {fmtDate(row.Delivery_Date__c)}</div>
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2.5">
                         <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span>
                       </td>
-                      <td className="max-w-[220px] truncate px-3 py-2.5 text-muted-foreground" title={row._Buyer_Name || ''}>{row._Buyer_Name || '—'}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{fmtDate(row.Delivery_Date__c)}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{fmtDate(row._Buyer_Invoice_Due_Date || row.Buyer_Pay_Term_Date__c)}</td>
-                      <td className="max-w-[260px] truncate px-3 py-2.5 text-muted-foreground" title={row._Supplier_Names || ''}>{row._Supplier_Names || '—'}</td>
+                      <td className="max-w-[240px] px-3 py-2.5">
+                        <div className="truncate font-medium text-foreground" title={row._Buyer_Name || ''}>{row._Buyer_Name || '—'}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">Due {fmtDate(row._Buyer_Invoice_Due_Date || row.Buyer_Pay_Term_Date__c)}</div>
+                      </td>
                       <td className="px-3 py-2.5 text-muted-foreground">
-                        <div className="max-w-[360px] space-y-1">
-                          {supplierDueRows(row).slice(0, 4).map((dueRow, dueIndex) => (
-                            <div key={`${dueRow.supplierInvoiceId || dueRow.supplierName || dueIndex}-${dueIndex}`} className="leading-tight">
-                              <div className="font-medium text-foreground">
-                                {fmtDate(dueRow.dueDate)}
-                                {dueRow.supplierName ? <span className="text-muted-foreground"> · {dueRow.supplierName}</span> : null}
-                              </div>
-                              <div className="truncate text-[11px]" title={dueRow.productQuantityLabel || dueRow.invoiceName || ''}>
-                                {[dueRow.productQuantityLabel, dueRow.invoiceName].filter(Boolean).join(' · ') || '—'}
-                              </div>
+                        <div className="max-w-[340px] space-y-1">
+                          {detailLines.slice(0, 5).map((line) => (
+                            <div key={`product-${line.key}`} className="min-h-[30px] truncate leading-tight" title={line.productLabel}>
+                              {line.productLabel || '—'}
                             </div>
                           ))}
-                          {supplierDueRows(row).length > 4 && <div className="text-[11px] text-muted-foreground">+{supplierDueRows(row).length - 4} more</div>}
-                          {!supplierDueRows(row).length && <span>—</span>}
+                          {detailLines.length > 5 && <div className="text-[11px] text-muted-foreground">+{detailLines.length - 5} more</div>}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground">
+                        <div className="max-w-[340px] space-y-1">
+                          {detailLines.slice(0, 5).map((line) => (
+                            <div key={`supplier-${line.key}`} className="min-h-[30px] leading-tight">
+                              {line.showSupplier ? (
+                                <>
+                                  <div className="truncate font-medium text-foreground" title={line.supplierName}>{line.supplierName || 'Supplier'}</div>
+                                  <div className="text-[11px] text-muted-foreground">
+                                    {line.dueDate ? `Due ${fmtDate(line.dueDate)}` : 'Due —'}
+                                    {line.invoiceName ? ` · ${line.invoiceName}` : ''}
+                                  </div>
+                                </>
+                              ) : <span className="sr-only">Same supplier</span>}
+                            </div>
+                          ))}
+                          {detailLines.length > 5 && <div className="text-[11px] text-muted-foreground">+{detailLines.length - 5} more</div>}
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{row.Dispute_Status__c || '—'}</td>

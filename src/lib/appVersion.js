@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.0.19';
+export const APP_VERSION = '1.0.0.20';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.20',
+    releasedAt: '2026-07-08',
+    title: 'Dispute Beta queue readability',
+    changes: [
+      'Combined buyer and buyer invoice due date into one two-line queue column.',
+      'Moved product and quantity details into a separate Products column between buyer and supplier details.',
+      'Grouped supplier invoice due details so supplier names are not repeated for every product line.',
+      'Moved delivery date under the STEM name to reduce queue table width.',
+    ],
+  },
   {
     version: '1.0.0.19',
     releasedAt: '2026-07-08',
