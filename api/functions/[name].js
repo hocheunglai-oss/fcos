@@ -4067,6 +4067,7 @@ function paymentReminderRoutingForRows(rows = []) {
     });
     if (!groups.has(key)) {
       groups.set(key, {
+        key,
         mode: routing.mode,
         to: routing.to,
         cc: routing.cc,
@@ -4300,10 +4301,23 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
   const routing = paymentReminderRoutingForRows(candidates);
   const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
     || routing.groups[0]
-    || { rows: candidates, to: [], cc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
+    || { key: 'default', rows: candidates, to: [], cc: [], bcc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
   const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
   const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
-  const context = paymentReminderTemplateContext(report, firstGroup.rows, firstSelected, firstGroup);
+  const preparedGroups = routing.groups.map((group) => {
+    const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
+    const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, group);
+    return {
+      mode: group.mode,
+      key: group.key,
+      to: group.to,
+      cc: uniqueEmailList(group.cc, renderPaymentReminderEmailList(settings.paymentReminderCc, groupContext)),
+      bcc: uniqueEmailList(group.bcc, renderPaymentReminderEmailList(settings.paymentReminderBcc, groupContext)),
+      primaryRecipientName: group.primaryRecipientName,
+      warnings: group.warnings,
+      stemIds: group.rows.map((row) => row.stemId),
+    };
+  });
   return {
     selected,
     candidates,
@@ -4315,15 +4329,7 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
     subject: settings.paymentReminderSubject,
     body: settings.paymentReminderBody,
     preview: { html: email.html, text: email.text },
-    routingGroups: routing.groups.map((group) => ({
-      mode: group.mode,
-      to: group.to,
-      cc: group.cc,
-      bcc: group.bcc,
-      primaryRecipientName: group.primaryRecipientName,
-      warnings: group.warnings,
-      stemIds: group.rows.map((row) => row.stemId),
-    })),
+    routingGroups: preparedGroups,
     routingWarnings: routing.warnings,
     settings: {
       paymentReminderToSource: 'Buyer account/trader/payment handler plus buyer broker Account.Email by Invoice Format',
@@ -4345,8 +4351,12 @@ async function buyerInvoicePaymentReminderSend(body, req) {
 
   const routing = paymentReminderRoutingForRows(rows);
   if (!routing.groups.length) throw appError('No payment reminder recipient group could be built.', 400);
-  const hasManualToOverride = Object.prototype.hasOwnProperty.call(body, 'to');
-  const manualToOverride = hasManualToOverride ? uniqueEmailList(body.to || '') : null;
+  if (!Array.isArray(body.recipientBatches)) {
+    throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
+  }
+  const reviewedRecipientBatches = new Map(body.recipientBatches
+    .filter((batch) => batch?.key)
+    .map((batch) => [batch.key, batch]));
   const credentials = body.credentials || {};
   const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
   const smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
@@ -4354,12 +4364,14 @@ async function buyerInvoicePaymentReminderSend(body, req) {
   const collectionResults = [];
   for (const group of routing.groups) {
     const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
-    const isSelectedStemGroup = group.rows.some((row) => row.stemId === selected.stemId);
-    const to = hasManualToOverride && isSelectedStemGroup ? manualToOverride : group.to;
+    const reviewedBatch = reviewedRecipientBatches.get(group.key);
+    if (!reviewedBatch) {
+      throw appError(`Reviewed recipient fields are missing for ${group.primaryRecipientName || 'recipient group'}. Reopen the preview and confirm recipients before sending.`, 400);
+    }
+    const to = uniqueEmailList(reviewedBatch.to || '');
     const effectiveGroup = { ...group, to };
-    const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, effectiveGroup);
-    const cc = uniqueEmailList(group.cc, renderPaymentReminderEmailList(body.cc, groupContext));
-    const bcc = uniqueEmailList(group.bcc, renderPaymentReminderEmailList(body.bcc, groupContext));
+    const cc = uniqueEmailList(reviewedBatch.cc || '');
+    const bcc = uniqueEmailList(reviewedBatch.bcc || '');
     if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
     const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, {
       subject: body.subject,

@@ -188,6 +188,14 @@ function arrayToInput(value) {
   return Array.isArray(value) ? value.join(', ') : textValue(value, '');
 }
 
+function routingGroupRecipients(group = {}) {
+  return {
+    to: arrayToInput(group.to || []),
+    cc: arrayToInput(group.cc || []),
+    bcc: arrayToInput(group.bcc || []),
+  };
+}
+
 function uniqueEmailList(...values) {
   const seen = new Set();
   const emails = [];
@@ -821,9 +829,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const reminderBodyEditorRef = useRef(null);
   const [form, setForm] = useState({
-    to: '',
-    cc: '',
-    bcc: '',
+    recipientBatches: {},
     subject: '',
     body: '',
   });
@@ -846,10 +852,12 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
         setData(null);
       } else {
         const candidates = res.data.candidates || [];
+        const baseRecipientBatches = Object.fromEntries((res.data.routingGroups || []).map((group) => [
+          group.key,
+          routingGroupRecipients(group),
+        ]));
         const baseForm = {
-          to: arrayToInput(res.data.to || []),
-          cc: arrayToInput(res.data.cc || []),
-          bcc: arrayToInput(res.data.bcc || []),
+          recipientBatches: baseRecipientBatches,
           subject: res.data.subject || '',
           body: richTemplateValue(res.data.body || ''),
         };
@@ -859,7 +867,17 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
         const draftSelectedIds = Array.isArray(draft?.data?.selectedIds)
           ? draft.data.selectedIds.filter((id) => candidateIds.has(id))
           : baseSelectedIds;
-        const nextForm = draft?.data?.form ? { ...baseForm, ...draft.data.form } : baseForm;
+        const draftForm = draft?.data?.form || null;
+        const nextForm = draftForm
+          ? {
+              ...baseForm,
+              ...draftForm,
+              recipientBatches: {
+                ...baseRecipientBatches,
+                ...(draftForm.recipientBatches || {}),
+              },
+            }
+          : baseForm;
         setData(res.data);
         setSelectedIds(draftSelectedIds.length ? draftSelectedIds : baseSelectedIds);
         setForm(nextForm);
@@ -893,9 +911,13 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       }))
       .filter((group) => group.stemIds.length);
   }, [data?.routingGroups, selectedIds]);
-  const selectedAutoTo = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.to || [])), [selectedRoutingGroups]);
-  const selectedAutoCc = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.cc || [])), [selectedRoutingGroups]);
-  const selectedAutoBcc = useMemo(() => uniqueEmailList(...selectedRoutingGroups.map((group) => group.bcc || [])), [selectedRoutingGroups]);
+  const selectedRecipientBatches = useMemo(() => selectedRoutingGroups.map((group) => ({
+    ...group,
+    recipients: form.recipientBatches?.[group.key] || routingGroupRecipients(group),
+  })), [form.recipientBatches, selectedRoutingGroups]);
+  const selectedFinalTo = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.to || '')), [selectedRecipientBatches]);
+  const selectedFinalCc = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.cc || '')), [selectedRecipientBatches]);
+  const selectedFinalBcc = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.bcc || '')), [selectedRecipientBatches]);
   const selectedRoutingWarnings = useMemo(() => (
     [...new Set(selectedRows.flatMap((candidate) => candidate.buyerBrokerRoutingWarnings || []))]
   ), [selectedRows]);
@@ -904,6 +926,11 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     || selectedRoutingGroups[0]
     || null
   ), [row?.stemId, selectedRoutingGroups]);
+  const selectedPreviewRecipients = useMemo(() => (
+    selectedPreviewGroup
+      ? form.recipientBatches?.[selectedPreviewGroup.key] || routingGroupRecipients(selectedPreviewGroup)
+      : { to: '', cc: '', bcc: '' }
+  ), [form.recipientBatches, selectedPreviewGroup]);
   const previewSelectedRow = useMemo(() => (
     selectedRows.find((candidate) => candidate.stemId === row?.stemId)
     || selectedRows[0]
@@ -929,7 +956,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       buyerBrokerNames: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerNames).filter(Boolean))].join(', '),
       buyerBrokerEmails: uniqueEmailList(...selectedRows.map((candidate) => candidate.buyerBrokerEmails || '')).join(', '),
       buyerBrokerInvoiceFormats: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerInvoiceFormats).filter(Boolean))].join(', '),
-      toRecipients: form.to || selectedPreviewGroup?.to?.join(', ') || '',
+      toRecipients: selectedPreviewRecipients.to || '',
       psprsStatus: previewSelectedRow?.prpspStatus || '',
       overdue: overdueDisplayValue(previewSelectedRow?.daysUntilDue),
       invoiceStatus: previewSelectedRow?.status || '',
@@ -937,7 +964,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       invoiceCount: String(selectedRows.length),
       totalReceivable: fmtMoney(totalReceivable),
     };
-  }, [daysAhead, form.to, previewSelectedRow, selectedPreviewGroup, selectedRows]);
+  }, [daysAhead, previewSelectedRow, selectedPreviewGroup, selectedPreviewRecipients.to, selectedRows]);
   const renderedPreviewBody = useMemo(() => (
     renderReminderPreviewTemplate(form.body, previewContext)
   ), [form.body, previewContext]);
@@ -955,6 +982,18 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   if (!open || !row) return null;
 
   const updateForm = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const updateBatchRecipient = (groupKey, field, value) => {
+    setForm((prev) => ({
+      ...prev,
+      recipientBatches: {
+        ...(prev.recipientBatches || {}),
+        [groupKey]: {
+          ...(prev.recipientBatches?.[groupKey] || {}),
+          [field]: value,
+        },
+      },
+    }));
+  };
   const discardDraft = () => {
     clearDraft(draftKey);
     if (baseDraftValue) {
@@ -988,8 +1027,17 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       setError('Select at least one invoice to include.');
       return;
     }
-    if ((selectedPreviewGroup?.stemIds || []).includes(row?.stemId) && !uniqueEmailList(form.to).length) {
-      setError(`Payment reminder recipient is required for ${selectedPreviewGroup.primaryRecipientName || 'recipient group'}. Enter the To email before sending.`);
+    const reviewedRecipientBatches = selectedRecipientBatches.map((group) => ({
+      key: group.key,
+      stemIds: group.stemIds || [],
+      to: group.recipients.to || '',
+      cc: group.recipients.cc || '',
+      bcc: group.recipients.bcc || '',
+    }));
+    const missingRecipientBatch = reviewedRecipientBatches.find((batch) => !uniqueEmailList(batch.to).length);
+    if (missingRecipientBatch) {
+      const missingGroup = selectedRecipientBatches.find((group) => group.key === missingRecipientBatch.key);
+      setError(`Payment reminder recipient is required for ${missingGroup?.primaryRecipientName || 'recipient group'}. Enter the To email before sending.`);
       return;
     }
     setSending(true);
@@ -1009,9 +1057,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       stemId: row.stemId,
       invoiceStemIds: selectedIds,
       daysAhead,
-      to: form.to,
-      cc: form.cc,
-      bcc: form.bcc,
+      recipientBatches: reviewedRecipientBatches,
       subject: form.subject,
       body: form.body,
       credentials,
@@ -1090,9 +1136,9 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     {selectedRows.length.toLocaleString()} selected · {fmtMoney(selectedReceivable)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {selectedRoutingGroups.length.toLocaleString()} email batch{selectedRoutingGroups.length === 1 ? '' : 'es'} · To: {selectedAutoTo.join(', ') || '-'}
-                    {selectedAutoCc.length ? ` · Broker CC: ${selectedAutoCc.join(', ')}` : ''}
-                    {selectedAutoBcc.length ? ` · Broker BCC: ${selectedAutoBcc.join(', ')}` : ''}
+                    {selectedRecipientBatches.length.toLocaleString()} email batch{selectedRecipientBatches.length === 1 ? '' : 'es'} · To: {selectedFinalTo.join(', ') || '-'}
+                    {selectedFinalCc.length ? ` · CC: ${selectedFinalCc.join(', ')}` : ''}
+                    {selectedFinalBcc.length ? ` · BCC: ${selectedFinalBcc.join(', ')}` : ''}
                   </div>
                 </div>
               </div>
@@ -1193,24 +1239,45 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                   </p>
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
-                  <div className="space-y-1.5 md:col-span-3">
-                    <Label className="text-xs text-muted-foreground">To</Label>
-                    <Input
-                      value={form.to}
-                      onChange={(event) => updateForm('to', event.target.value)}
-                      placeholder="Resolved from buyer broker routing; enter manually if blank"
-                    />
-                    <p className="text-[11px] text-muted-foreground">
-                      Editable for the batch containing the selected stem. Other batches use their automatic routing.
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Additional CC</Label>
-                    <Input value={form.cc} onChange={(event) => updateForm('cc', event.target.value)} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">BCC</Label>
-                    <Input value={form.bcc} onChange={(event) => updateForm('bcc', event.target.value)} />
+                  <div className="space-y-3 md:col-span-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Email batches</Label>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Only the addresses shown below will be used. Remove an address here to exclude it from sending.
+                      </p>
+                    </div>
+                    {selectedRecipientBatches.map((group, index) => (
+                      <div key={group.key} className="rounded-lg border border-border bg-card p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-semibold text-foreground">
+                              Batch {index + 1}: {group.primaryRecipientName || 'Recipient group'}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {group.stemIds.length.toLocaleString()} invoice{group.stemIds.length === 1 ? '' : 's'} · {brokerRoutingLabel(group.mode)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div className="space-y-1.5 md:col-span-3">
+                            <Label className="text-xs text-muted-foreground">To</Label>
+                            <Input
+                              value={group.recipients.to}
+                              onChange={(event) => updateBatchRecipient(group.key, 'to', event.target.value)}
+                              placeholder="Enter recipient email"
+                            />
+                          </div>
+                          <div className="space-y-1.5 md:col-span-3">
+                            <Label className="text-xs text-muted-foreground">CC</Label>
+                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} />
+                          </div>
+                          <div className="space-y-1.5 md:col-span-3">
+                            <Label className="text-xs text-muted-foreground">BCC</Label>
+                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                   <div className="space-y-1.5 md:col-span-3">
                     <Label className="text-xs text-muted-foreground">Subject</Label>

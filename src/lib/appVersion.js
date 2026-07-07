@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.14';
+export const APP_VERSION = '1.0.0.15';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.15',
+    releasedAt: '2026-07-07',
+    title: 'Explicit reminder batch recipients',
+    changes: [
+      'Outstanding payment reminder preview now shows editable To, CC, and BCC fields for every selected email batch.',
+      'Payment reminder sending now uses only the final reviewed recipient fields shown in the preview.',
+      'The server now rejects payment reminder sends without reviewed recipient batches to prevent hidden automatic routing.',
+    ],
+  },
   {
     version: '1.0.0.14',
     releasedAt: '2026-07-07',
