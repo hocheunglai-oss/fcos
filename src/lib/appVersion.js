@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.0.8';
+export const APP_VERSION = '1.0.0.9';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.9',
+    releasedAt: '2026-07-07',
+    title: 'Google Drive archive setup',
+    changes: [
+      'Completed Google Drive OAuth production setup for archived XLS exports.',
+      'Fixed notification close buttons so XLS archive success and failure messages can be dismissed.',
+    ],
+  },
   {
     version: '1.0.0.8',
     releasedAt: '2026-07-06',
