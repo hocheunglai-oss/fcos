@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.0.17';
+export const APP_VERSION = '1.0.0.18';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.18',
+    releasedAt: '2026-07-08',
+    title: 'Dispute Beta settlement refinement',
+    changes: [
+      'Dispute Beta now treats buyer and supplier settlement credit notes as lump-sum amounts instead of unit-price spreads.',
+      'The manage modal now shows buyer receivable and every supplier invoice/payable row even when that party is not under dispute.',
+      'Dispute Beta queue rows now open the standard Stem Detail modal, while Manage opens the workflow modal.',
+    ],
+  },
   {
     version: '1.0.0.17',
     releasedAt: '2026-07-07',

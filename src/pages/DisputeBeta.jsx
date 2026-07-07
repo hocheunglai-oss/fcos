@@ -5,6 +5,7 @@ import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -95,7 +96,8 @@ function stageTone(stage) {
 function settlementFinancials(actions = []) {
   let buyerImpact = 0;
   let supplierImpact = 0;
-  let specialPricePnl = 0;
+  let buyerCreditNoteImpact = 0;
+  let supplierCreditNoteImpact = 0;
   const lines = [];
 
   for (const action of actions) {
@@ -108,21 +110,27 @@ function settlementFinancials(actions = []) {
       supplierImpact += amount;
       lines.push({ label: 'Supplier deduction', impact: amount });
     }
-    const sell = numberOrNull(action.specialSellPrice);
-    const buy = numberOrNull(action.specialBuyPrice);
-    const quantity = numberOrNull(action.quantity);
-    if (sell != null && buy != null && quantity != null && quantity > 0) {
-      const impact = (sell - buy) * quantity;
-      specialPricePnl += impact;
-      lines.push({ label: 'Special price spread', sell, buy, quantity, impact });
+    const buyerCreditNote = numberOrNull(action.specialSellPrice);
+    if (buyerCreditNote != null && buyerCreditNote > 0) {
+      const impact = -buyerCreditNote;
+      buyerCreditNoteImpact += impact;
+      lines.push({ label: 'Buyer agreed credit note', buyerCreditNote, impact });
+    }
+    const supplierCreditNote = numberOrNull(action.specialBuyPrice);
+    if (supplierCreditNote != null && supplierCreditNote > 0) {
+      const impact = supplierCreditNote;
+      supplierCreditNoteImpact += impact;
+      lines.push({ label: 'Supplier agreed credit note', supplierCreditNote, impact });
     }
   }
 
   return {
     buyerImpact,
     supplierImpact,
-    specialPricePnl,
-    settlementPnl: buyerImpact + supplierImpact + specialPricePnl,
+    buyerCreditNoteImpact,
+    supplierCreditNoteImpact,
+    specialPricePnl: buyerCreditNoteImpact + supplierCreditNoteImpact,
+    settlementPnl: buyerImpact + supplierImpact + buyerCreditNoteImpact + supplierCreditNoteImpact,
     lines,
   };
 }
@@ -148,7 +156,11 @@ function partyOptions(stem, type) {
       label: stem._Buyer_Name || 'Buyer',
     }];
   }
-  const supplierRows = Array.isArray(stem._Supplier_Dispute_Rows) ? stem._Supplier_Dispute_Rows : [];
+  const supplierRows = Array.isArray(stem._Supplier_Finance_Rows_All) && stem._Supplier_Finance_Rows_All.length
+    ? stem._Supplier_Finance_Rows_All
+    : Array.isArray(stem._Supplier_Dispute_Rows)
+      ? stem._Supplier_Dispute_Rows
+      : [];
   if (supplierRows.length) {
     return supplierRows.map((row, index) => ({
       key: `supplier-${index}-${row.supplierName || 'supplier'}`,
@@ -294,22 +306,22 @@ function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
         )}
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-4">
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Special sell price</Label>
-          <Input type="number" step="0.000001" value={draftAction.specialSellPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialSellPrice: event.target.value }))} disabled={disabled} />
+      <div className="mt-3 rounded-lg border border-border bg-card/70 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Settlement credit notes</div>
+            <div className="text-[11px] text-muted-foreground">Lump-sum agreed credit notes only. Quantity is not used for settlement P&L.</div>
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Special buy price</Label>
-          <Input type="number" step="0.000001" value={draftAction.specialBuyPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialBuyPrice: event.target.value }))} disabled={disabled} />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Quantity</Label>
-          <Input type="number" step="0.000001" value={draftAction.quantity} onChange={(event) => setDraftAction((prev) => ({ ...prev, quantity: event.target.value }))} disabled={disabled} />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Unit</Label>
-          <Input value={draftAction.quantityUnit} onChange={(event) => setDraftAction((prev) => ({ ...prev, quantityUnit: event.target.value }))} disabled={disabled} />
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Buyer credit note amount</Label>
+            <Input type="number" min="0" step="0.01" value={draftAction.specialSellPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialSellPrice: event.target.value }))} disabled={disabled} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Supplier credit note amount</Label>
+            <Input type="number" min="0" step="0.01" value={draftAction.specialBuyPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialBuyPrice: event.target.value }))} disabled={disabled} />
+          </div>
         </div>
       </div>
 
@@ -329,6 +341,87 @@ function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function StepHeading({ step, title, description }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10 text-xs font-bold text-primary">{step}</div>
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+      </div>
+    </div>
+  );
+}
+
+function FinancialExposureSection({ stem }) {
+  const buyerExposure = stem?._Buyer_Finance_Row || {
+    buyerName: stem?._Buyer_Name,
+    buyerInvoiceAmount: stem?.Total_Invoice_Amount__c,
+    receivableBalance: stem?.Receivable_Balance__c,
+    status: stem?._Buyer_Dispute_Label,
+  };
+  const supplierRows = Array.isArray(stem?._Supplier_Finance_Rows_All) && stem._Supplier_Finance_Rows_All.length
+    ? stem._Supplier_Finance_Rows_All
+    : Array.isArray(stem?._Supplier_Dispute_Rows)
+      ? stem._Supplier_Dispute_Rows
+      : [];
+
+  return (
+    <section className="space-y-3 rounded-xl border border-border bg-muted/10 p-4">
+      <StepHeading
+        step="1"
+        title="Financial Exposure"
+        description="Receivable from buyer and payable to every supplier invoice are shown even when that party is not currently under dispute."
+      />
+      <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+        <div className="rounded-lg border border-border bg-card p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer receivable</div>
+          <div className="mt-2 text-sm font-semibold text-foreground">{buyerExposure.buyerName || stem?._Buyer_Name || 'Buyer'}</div>
+          <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 text-sm">
+            <div className="text-muted-foreground">Buyer invoice amount</div>
+            <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.buyerInvoiceAmount)}</div>
+            <div className="text-muted-foreground">Receivable balance</div>
+            <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.receivableBalance)}</div>
+            <div className="text-muted-foreground">Buyer dispute status</div>
+            <div className="max-w-[220px] whitespace-pre-line text-right text-xs text-muted-foreground">{buyerExposure.status || 'Not under buyer dispute'}</div>
+          </div>
+          {buyerExposure.description && <div className="mt-3 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">{buyerExposure.description}</div>}
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <table className="w-full min-w-[620px] text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier</th>
+                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
+                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable</th>
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Dispute</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supplierRows.map((row, index) => (
+                <tr key={`${row.supplierName || 'supplier'}-${index}`} className="border-b border-border/40">
+                  <td className="px-3 py-2 font-medium text-foreground">{row.supplierName || 'Supplier'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.supplierInvoiceAmount)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.payableBalance)}</td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    <div>{row.status || 'Not under supplier dispute'}</div>
+                    {row.description && <div className="mt-0.5 text-[11px]">{row.description}</div>}
+                    {Array.isArray(row.disputeIds) && row.disputeIds.length > 1 && <div className="mt-0.5 text-[11px]">{row.disputeIds.length} linked records</div>}
+                  </td>
+                </tr>
+              ))}
+              {!supplierRows.length && (
+                <tr><td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">No supplier invoice or payable rows found for this STEM.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -446,7 +539,7 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
           <Summary label="Buyer" value={stem._Buyer_Name || '—'} />
           <Summary label="Supplier(s)" value={stem._Supplier_Names || '—'} />
           <Summary label="Receivable" value={fmtMoney(stem.Receivable_Balance__c)} align="right" />
-          <Summary label="Settlement P&L" value={fmtMoney(financials.settlementPnl)} align="right" strong tone={financials.settlementPnl >= 0 ? 'green' : 'red'} />
+          <Summary label="Net Settlement P&L" value={fmtMoney(financials.settlementPnl)} align="right" strong tone={financials.settlementPnl >= 0 ? 'green' : 'red'} />
         </div>
 
         <div className="space-y-4 overflow-y-auto px-5 py-4">
@@ -458,12 +551,15 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
             </div>
           )}
 
+          <FinancialExposureSection stem={stem} />
+
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">Trader Actions</h3>
-                <p className="text-xs text-muted-foreground">Draft actions are Supabase-only. Salesforce summary writeback happens after approval.</p>
-              </div>
+              <StepHeading
+                step="2"
+                title="Trader Actions"
+                description="Add one action per supplier or buyer side. Many suppliers can be linked to one buyer case, and buyer-side action is optional."
+              />
               {!canEdit && <span className="text-xs text-muted-foreground">Actions are locked after submission.</span>}
             </div>
             <ActionForm stem={stem} draftAction={draftAction} setDraftAction={setDraftAction} onAdd={addAction} disabled={!canEdit || busy} />
@@ -485,8 +581,12 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
                       <td className="px-3 py-2">
                         <div className="font-medium text-foreground">{action.actionLabel || actionLabel(action.actionType)}</div>
                         {action.description && <div className="mt-0.5 text-muted-foreground">{action.description}</div>}
-                        {(action.specialSellPrice || action.specialBuyPrice || action.quantity) && (
-                          <div className="mt-0.5 text-[11px] text-muted-foreground">Special: sell {action.specialSellPrice || '—'} / buy {action.specialBuyPrice || '—'} x {action.quantity || '—'} {action.quantityUnit || 'MT'}</div>
+                        {(action.specialSellPrice || action.specialBuyPrice) && (
+                          <div className="mt-0.5 text-[11px] text-muted-foreground">
+                            {action.specialSellPrice ? `Buyer CN ${fmtMoney(action.specialSellPrice)}` : null}
+                            {action.specialSellPrice && action.specialBuyPrice ? ' / ' : null}
+                            {action.specialBuyPrice ? `Supplier CN ${fmtMoney(action.specialBuyPrice)}` : null}
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{action.partyName || '—'}</td>
@@ -521,11 +621,16 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
 
           <section className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-muted/10 p-4">
-              <h3 className="text-sm font-semibold text-foreground">Settlement P&L</h3>
+              <StepHeading
+                step="3"
+                title="Settlement Credit Notes & P&L"
+                description="Buyer credit notes reduce P&L. Supplier credit notes and supplier deductions increase P&L."
+              />
               <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 text-sm">
-                <div className="text-muted-foreground">Buyer impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerImpact)}</div>
-                <div className="text-muted-foreground">Supplier impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierImpact)}</div>
-                <div className="text-muted-foreground">Special price spread</div><div className="font-semibold tabular-nums">{fmtMoney(financials.specialPricePnl)}</div>
+                <div className="text-muted-foreground">Buyer instruction impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerImpact)}</div>
+                <div className="text-muted-foreground">Supplier deduction impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierImpact)}</div>
+                <div className="text-muted-foreground">Buyer credit note impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerCreditNoteImpact)}</div>
+                <div className="text-muted-foreground">Supplier credit note impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierCreditNoteImpact)}</div>
                 <div className="border-t border-border pt-2 font-semibold">Net settlement P&L</div><div className="border-t border-border pt-2 font-semibold tabular-nums">{fmtMoney(financials.settlementPnl)}</div>
               </div>
             </div>
@@ -536,7 +641,11 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
           </section>
 
           <section className="rounded-xl border border-border bg-muted/10 p-4">
-            <h3 className="text-sm font-semibold text-foreground">Approval & Audit Trail</h3>
+            <StepHeading
+              step="4"
+              title="Approval & Audit Trail"
+              description="Dispute administrators approve before accounts/admin proceed with supplier payment or buyer credit note execution."
+            />
             <div className="mt-3 space-y-2">
               {events.map((event) => (
                 <div key={event.id} className="grid gap-2 rounded-lg border border-border bg-card p-2 text-xs md:grid-cols-[150px_160px_1fr]">
@@ -586,6 +695,7 @@ export default function DisputeBeta() {
   const [search, setSearch] = useState('');
   const [selectedStages, setSelectedStages] = useState(['Draft', 'Pending Approval', 'Approved - Pending Execution', 'Revision Requested']);
   const [managedStem, setManagedStem] = useState(null);
+  const [selectedStemId, setSelectedStemId] = useState(null);
   const [isDisputeAdmin, setIsDisputeAdmin] = useState(false);
   const [fieldWarning, setFieldWarning] = useState('');
 
@@ -733,7 +843,11 @@ export default function DisputeBeta() {
                   const beta = workflowFromRow(row);
                   const stage = beta.case?.workflowStatus || 'Draft';
                   return (
-                    <tr key={row.Id} className={cn('border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}>
+                    <tr
+                      key={row.Id}
+                      className={cn('cursor-pointer border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}
+                      onClick={() => setSelectedStemId(row.Id)}
+                    >
                       <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{row._Display_Name || row.Name || '—'}</td>
                       <td className="whitespace-nowrap px-3 py-2.5">
                         <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span>
@@ -756,7 +870,16 @@ export default function DisputeBeta() {
                         ) : '—'}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-right">
-                        <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setManagedStem(row)}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1.5"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setManagedStem(row);
+                          }}
+                        >
                           <CircleDollarSign className="h-3.5 w-3.5" /> Manage
                         </Button>
                       </td>
@@ -771,6 +894,7 @@ export default function DisputeBeta() {
         )}
       </TableShell>
 
+      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} />
       <ManageBetaModal
         stem={managedStem}
         open={!!managedStem}

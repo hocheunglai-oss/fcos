@@ -5064,9 +5064,18 @@ async function salesforceDisputeStems(body) {
             supplierInvoiceAmount: finance.supplierInvoiceAmount,
             payableBalance: finance.payableBalance,
           }));
+        const supplierFinanceRowsAll = [...supplierDisputeRows, ...supplierFinanceOnlyRows];
         const supplierFinanceRows = supplierDisputeRows.length
           ? supplierDisputeRows
           : supplierFinanceOnlyRows;
+        const buyerFinanceRow = {
+          buyerName: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
+          buyerInvoiceAmount: stem.Total_Invoice_Amount__c ?? null,
+          receivableBalance: stem.Receivable_Balance__c ?? null,
+          disputeRows: groupedBuyerDisputes,
+          status: groupedBuyerDisputes.map((dispute) => dispute.status).filter(Boolean).join('\n') || null,
+          description: groupedBuyerDisputes.map((dispute) => dispute.description).filter(Boolean).join('\n') || null,
+        };
 
         return {
           ...stem,
@@ -5076,8 +5085,10 @@ async function salesforceDisputeStems(body) {
           _Supplier_Product_Pairs: supplierProductPairs,
           _Buyer_Disputes: groupedBuyerDisputes,
           _Buyer_Dispute_Rows: groupedBuyerDisputes,
+          _Buyer_Finance_Row: buyerFinanceRow,
           _Supplier_Disputes: supplierDisputes,
           _Supplier_Dispute_Rows: supplierFinanceRows,
+          _Supplier_Finance_Rows_All: supplierFinanceRowsAll,
           _Buyer_Dispute_Label: groupedBuyerDisputes.map((dispute) => [dispute.buyerName, dispute.status, dispute.description].filter(Boolean).join(': ')).join('\n') || null,
           _Supplier_Dispute_Label: supplierFinanceRows.map((dispute) => [
             dispute.supplierName,
@@ -5299,7 +5310,8 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}) {
 function calculateDisputeBetaSettlement(actions = []) {
   let buyerImpact = 0;
   let supplierImpact = 0;
-  let specialPricePnl = 0;
+  let buyerCreditNoteImpact = 0;
+  let supplierCreditNoteImpact = 0;
   const lines = [];
 
   for (const action of actions) {
@@ -5313,27 +5325,36 @@ function calculateDisputeBetaSettlement(actions = []) {
       lines.push({ label: action.action_label || action.actionLabel || 'Supplier deduction', impact: amount });
     }
 
-    const sell = Number(action.special_sell_price ?? action.specialSellPrice);
-    const buy = Number(action.special_buy_price ?? action.specialBuyPrice);
-    const quantity = Number(action.quantity);
-    if (Number.isFinite(sell) && Number.isFinite(buy) && Number.isFinite(quantity) && quantity > 0) {
-      const impact = (sell - buy) * quantity;
-      specialPricePnl += impact;
+    const buyerCreditNote = Number(action.special_sell_price ?? action.specialSellPrice);
+    if (Number.isFinite(buyerCreditNote) && buyerCreditNote > 0) {
+      const impact = -buyerCreditNote;
+      buyerCreditNoteImpact += impact;
       lines.push({
-        label: `Special price spread (${action.quantity_unit || action.quantityUnit || 'MT'})`,
-        sell,
-        buy,
-        quantity,
+        label: 'Buyer agreed credit note',
+        buyerCreditNote,
+        impact,
+      });
+    }
+
+    const supplierCreditNote = Number(action.special_buy_price ?? action.specialBuyPrice);
+    if (Number.isFinite(supplierCreditNote) && supplierCreditNote > 0) {
+      const impact = supplierCreditNote;
+      supplierCreditNoteImpact += impact;
+      lines.push({
+        label: 'Supplier agreed credit note',
+        supplierCreditNote,
         impact,
       });
     }
   }
 
-  const settlementPnl = buyerImpact + supplierImpact + specialPricePnl;
+  const settlementPnl = buyerImpact + supplierImpact + buyerCreditNoteImpact + supplierCreditNoteImpact;
   return {
     buyerImpact,
     supplierImpact,
-    specialPricePnl,
+    buyerCreditNoteImpact,
+    supplierCreditNoteImpact,
+    specialPricePnl: buyerCreditNoteImpact + supplierCreditNoteImpact,
     settlementPnl,
     lines,
   };
