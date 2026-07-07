@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.0.13';
+export const APP_VERSION = '1.0.0.14';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.0.14',
+    releasedAt: '2026-07-07',
+    title: 'Broker routing warning in preview',
+    changes: [
+      'Payment reminder email preview now shows broker routing warnings before sending.',
+      'Blank or unknown broker invoice/email formats now explicitly warn that broker email is not automatically added to BCC.',
+    ],
+  },
   {
     version: '1.0.0.13',
     releasedAt: '2026-07-07',

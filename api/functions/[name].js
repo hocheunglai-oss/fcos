@@ -2015,7 +2015,7 @@ function buyerBrokerRoutingMode(format, brokerEmails = []) {
     return {
       mode: 'buyer_only',
       label: 'Buyer Only',
-      warnings: ['Broker invoice format is blank; routed to buyer only.'],
+      warnings: ['Broker invoice/email format is blank; broker email is not automatically added to BCC.'],
     };
   }
   if (text.includes('buyer only')) {
@@ -2045,7 +2045,7 @@ function buyerBrokerRoutingMode(format, brokerEmails = []) {
   return {
     mode: 'buyer_only',
     label: raw,
-    warnings: [`Unknown broker invoice format "${raw}"; routed to buyer only.`],
+    warnings: [`Unknown broker invoice/email format "${raw}"; broker email is not automatically added to BCC.`],
   };
 }
 

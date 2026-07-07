@@ -1245,6 +1245,14 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                       The outstanding invoice table is inserted at the marker below when the email is sent.
                     </p>
                   </div>
+                  {selectedRoutingWarnings.length > 0 && (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <div className="font-semibold">Check broker routing before sending</div>
+                      <ul className="mt-1 list-disc space-y-1 pl-4">
+                        {selectedRoutingWarnings.map((warning) => <li key={`preview-${warning}`}>{warning}</li>)}
+                      </ul>
+                    </div>
+                  )}
                   <div
                     className="max-h-72 overflow-auto rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
                     dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows.length) }}
