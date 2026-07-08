@@ -24,7 +24,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/lib/AuthContext';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
-import { hasUsableSmtpSettings, readSmtpSettings, smtpFromAddress } from '@/lib/smtpSettings';
+import { hasUsableSmtpSettings, readPaymentReminderSmtpSettings, readSmtpSettings, smtpFromAddress } from '@/lib/smtpSettings';
 import { cn } from '@/lib/utils';
 
 const PAGE_STATE_KEY = 'incoming-payments:v1';
@@ -114,6 +114,30 @@ function readEmailSettings() {
 
 function saveEmailSettings(settings) {
   localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_EMAIL_SETTINGS, ...settings }));
+}
+
+function incomingPaymentSmtpCredentials(from) {
+  const internalSettings = readSmtpSettings();
+  if (hasUsableSmtpSettings(internalSettings)) {
+    return {
+      label: 'Internal Email Reminder Sender',
+      credentials: {
+        method: 'smtp',
+        smtp: { ...internalSettings, port: Number(internalSettings.port || 587), from: smtpFromAddress(internalSettings, from) },
+      },
+    };
+  }
+  const paymentReminderSettings = readPaymentReminderSmtpSettings();
+  if (hasUsableSmtpSettings(paymentReminderSettings)) {
+    return {
+      label: 'Payment Reminder Sender',
+      credentials: {
+        method: 'smtp',
+        smtp: { ...paymentReminderSettings, port: Number(paymentReminderSettings.port || 587), from: smtpFromAddress(paymentReminderSettings, from) },
+      },
+    };
+  }
+  return { label: '', credentials: undefined };
 }
 
 export default function IncomingPayments() {
@@ -391,16 +415,13 @@ export default function IncomingPayments() {
     setEmailMessage('');
     try {
       if (!preview) saveEmailSettings(emailSettings);
-      const smtpSettings = readSmtpSettings();
-      const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
-        ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587), from: smtpFromAddress(smtpSettings, emailSettings.from) } }
-        : undefined;
+      const delivery = preview ? { credentials: undefined, label: '' } : incomingPaymentSmtpCredentials(emailSettings.from);
       const res = await appClient.functions.invoke('incomingPaymentEmailReport', {
         dateFrom,
         dateTo,
         search,
         settings: emailSettings,
-        credentials,
+        credentials: delivery.credentials,
         preview,
       });
       if (res.data?.error) {
@@ -415,8 +436,9 @@ export default function IncomingPayments() {
         setEmailMessage(`Preview ready: ${res.data.report?.receivableRows ?? 0} receivable payments and ${res.data.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
       } else {
         setEmailPreview(res.data.email || null);
-        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to}.`);
-        toast({ title: 'Incoming Payment report sent', description: `Sent to ${res.data.to?.join(', ') || emailSettings.to}.` });
+        const senderNote = delivery.label ? ` using ${delivery.label}` : '';
+        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to}${senderNote}.`);
+        toast({ title: 'Incoming Payment report sent', description: `Sent to ${res.data.to?.join(', ') || emailSettings.to}${senderNote}.` });
       }
     } catch (error) {
       const message = error?.message || 'Unexpected error while sending Incoming Payment report.';

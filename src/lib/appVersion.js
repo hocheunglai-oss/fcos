@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.8';
+export const APP_VERSION = '1.0.9';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.9',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment sender reuse',
+    changes: [
+      'Changed Incoming Payment report sending to reuse the saved app email sender chain.',
+      'Uses Internal Email Reminder Sender first and Payment Reminder Sender as fallback before server-side Resend.',
+      'Shows which saved sender was used after a successful Incoming Payment report send.',
+    ],
+  },
   {
     version: '1.0.8',
     releasedAt: '2026-07-08',
