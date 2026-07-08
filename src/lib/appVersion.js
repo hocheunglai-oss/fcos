@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.19';
+export const APP_VERSION = '1.0.20';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.20',
+    releasedAt: '2026-07-08',
+    title: 'Settings email sender tabs',
+    changes: [
+      'Changed Settings > Email Senders to use separate tabs for Internal and External Payment Reminder SMTP accounts.',
+      'Preserved the existing Save All Settings and autosaved draft behavior for both sender accounts.',
+    ],
+  },
   {
     version: '1.0.19',
     releasedAt: '2026-07-08',

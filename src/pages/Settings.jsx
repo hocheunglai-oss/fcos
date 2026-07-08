@@ -22,6 +22,7 @@ import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/d
 const SETTINGS_KEY = 'report_builder_config';
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SETTINGS_TAB_KEY = 'settings:active-tab';
+const EMAIL_SENDER_TAB_KEY = 'settings:email-sender-tab';
 
 const SETTINGS_TABS = [
   { id: 'access', label: 'Salesforce Access', icon: ShieldCheck },
@@ -172,6 +173,7 @@ export default function SettingsPage() {
   const [baseSettings, setBaseSettings] = useState(null);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem(SETTINGS_TAB_KEY) || 'access');
+  const [activeEmailSenderTab, setActiveEmailSenderTab] = useState(() => localStorage.getItem(EMAIL_SENDER_TAB_KEY) || 'internal');
 
   const settingsDraftValue = useMemo(() => ({
     allowedMap,
@@ -193,6 +195,11 @@ export default function SettingsPage() {
   const changeTab = (tab) => {
     setActiveTab(tab);
     localStorage.setItem(SETTINGS_TAB_KEY, tab);
+  };
+
+  const changeEmailSenderTab = (tab) => {
+    setActiveEmailSenderTab(tab);
+    localStorage.setItem(EMAIL_SENDER_TAB_KEY, tab);
   };
 
   // Load schema + settings from DB in parallel
@@ -428,23 +435,38 @@ export default function SettingsPage() {
             title="Email Senders"
             description="Manage sender accounts for internal AR reports and customer-facing payment reminders."
           >
-            <div className="space-y-4">
-              <SmtpAccountCard
-                title="Internal"
-                description="Used by internal reports and late payment interest request emails. The password is saved in this browser's app settings."
-                settings={smtpSettings}
-                onChange={setSmtpSettings}
-                enableLabel="Use this SMTP account for Internal emails"
-              />
+            <Tabs value={activeEmailSenderTab} onValueChange={changeEmailSenderTab} className="space-y-4">
+              <TabsList className="grid h-auto w-full grid-cols-1 gap-1 bg-muted/50 p-1 sm:w-fit sm:grid-cols-2">
+                <TabsTrigger value="internal" className="gap-2 px-4 data-[state=active]:bg-background">
+                  <Mail className="h-3.5 w-3.5" />
+                  Internal
+                </TabsTrigger>
+                <TabsTrigger value="external-payment-reminder" className="gap-2 px-4 data-[state=active]:bg-background">
+                  <Mail className="h-3.5 w-3.5" />
+                  External Payment Reminder
+                </TabsTrigger>
+              </TabsList>
 
-              <SmtpAccountCard
-                title="External Payment Reminder"
-                description="Used only by customer-facing payment reminder emails. Keep this separate from the internal report sender."
-                settings={paymentReminderSmtpSettings}
-                onChange={setPaymentReminderSmtpSettings}
-                enableLabel="Use this SMTP account for External Payment Reminder emails"
-              />
-            </div>
+              <TabsContent value="internal" className="mt-0">
+                <SmtpAccountCard
+                  title="Internal"
+                  description="Used by internal reports and late payment interest request emails. The password is saved in this browser's app settings."
+                  settings={smtpSettings}
+                  onChange={setSmtpSettings}
+                  enableLabel="Use this SMTP account for Internal emails"
+                />
+              </TabsContent>
+
+              <TabsContent value="external-payment-reminder" className="mt-0">
+                <SmtpAccountCard
+                  title="External Payment Reminder"
+                  description="Used only by customer-facing payment reminder emails. Keep this separate from the internal report sender."
+                  settings={paymentReminderSmtpSettings}
+                  onChange={setPaymentReminderSmtpSettings}
+                  enableLabel="Use this SMTP account for External Payment Reminder emails"
+                />
+              </TabsContent>
+            </Tabs>
           </SettingsPanel>
         </TabsContent>
 
