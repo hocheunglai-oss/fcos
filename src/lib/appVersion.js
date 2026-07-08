@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.14';
+export const APP_VERSION = '1.0.15';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.15',
+    releasedAt: '2026-07-08',
+    title: 'Late payment interest calculation',
+    changes: [
+      'Changed late payment interest request emails to send to Louisa and the requesting user.',
+      'Added buyer account interest-rate lookup for late payment interest calculation.',
+      'Added partial-payment interest calculation details and formula to the request email.',
+    ],
+  },
   {
     version: '1.0.14',
     releasedAt: '2026-07-08',

@@ -4873,12 +4873,360 @@ async function fetchIncomingPaymentInterestNotification(client, paymentId) {
   return serializeIncomingPaymentInterestNotification(data);
 }
 
-function buildIncomingPaymentInterestEmail(body, profile) {
+function incomingPaymentInterestRateField(accountFields = []) {
+  const allowedTypes = new Set(['double', 'percent', 'currency', 'int', 'string', 'picklist']);
+  const matches = accountFields
+    .filter((field) => (
+      field?.name &&
+      allowedTypes.has(field.type) &&
+      fieldMatchesAny(field, [
+        'latepaymentinterestrate',
+        'latepaymentinterestratec',
+        'paymentinterestrate',
+        'paymentinterestratec',
+        'overdueinterestrate',
+        'overdueinterestratec',
+        'interestrate',
+        'interestratec',
+        'financechargerate',
+        'financechargeratec',
+      ], [
+        'latepaymentinterest',
+        'overdueinterest',
+        'interestrate',
+        'financecharge',
+      ])
+    ));
+  return matches[0] || null;
+}
+
+function parseIncomingPaymentInterestRate(value) {
+  if (value == null || value === '') return null;
+  const match = String(value).replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const number = Number(match[0]);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return Math.abs(number) > 1 ? number / 100 : number;
+}
+
+function incomingPaymentInterestRateLabel(rateDecimal) {
+  if (rateDecimal == null) return '-';
+  return `${(Number(rateDecimal) * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% per month`;
+}
+
+function interestFormulaText(balance, rateDecimal, days) {
+  return `${money(balance)} x ${incomingPaymentInterestRateLabel(rateDecimal)} x ${days} / 30`;
+}
+
+async function incomingPaymentInterestCalculation(body = {}) {
+  const stemId = String(body.stemId || body.stem_id || '').trim();
+  if (!isSalesforceId(stemId)) throw appError('Valid stemId is required for late payment interest calculation.', 400);
+
+  const [stemDescribe, paymentDescribe] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] })),
+  ]);
+  const stemFields = stemDescribe.fields || [];
+  const stemFieldNames = new Set(stemFields.map((field) => field.name));
+  const paymentFields = paymentDescribe.fields || [];
+  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
+  if (!paymentFieldNames.size) throw appError('Payment__c is not queryable, so interest cannot be calculated.', 500);
+
+  const accountDescribe = stemFieldNames.has('Account__c')
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const accountFields = accountDescribe.fields || [];
+  const accountFieldNames = new Set(accountFields.map((field) => field.name));
+  const interestField = incomingPaymentInterestRateField(accountFields);
+
+  const stemSelectFields = [
+    'Id',
+    'Name',
+    ...selectedFields(stemFieldNames, [
+      'KeyStem__c',
+      'Buyer_Name__c',
+      'Buyer__c',
+      'Account__c',
+      'Total_Invoice_Amount__c',
+      'Receivable_Balance__c',
+      'Payment_Term__c',
+      'Invoice_Due_Date__c',
+      'Buyer_Pay_Term_Date__c',
+      'Due_Date__c',
+      'Delivery_Date__c',
+      'Delivery_Date_Or_Expected__c',
+      'Expected_Delivery_Date__c',
+    ]),
+  ];
+  if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
+  if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
+  if (stemFieldNames.has('Account__c')) {
+    stemSelectFields.push('Account__r.Name');
+    if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
+    if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
+    if (interestField?.name) stemSelectFields.push(`Account__r.${interestField.name}`);
+  }
+
+  const stemRows = await queryRows(`
+    SELECT ${[...new Set(stemSelectFields)].join(', ')}
+    FROM stem__c
+    WHERE Id = '${escapeSoql(stemId)}'
+    LIMIT 1
+  `, { limit: 1, softFail: true });
+  const stem = stemRows[0];
+  if (!stem) throw appError('STEM was not found in Salesforce.', 404);
+
+  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const amountField = firstAvailableField(paymentFieldNames, [
+    'Amount__c',
+    'Payment_Amount__c',
+    'Paid_Amount__c',
+    'Received_Amount__c',
+    'Total_Amount__c',
+    'Amount_Paid__c',
+    'Payment_Value__c',
+    'Actual_Amount__c',
+  ]);
+  if (!dateField || !amountField) throw appError('Payment date or amount field was not found on Payment__c.', 500);
+
+  const referenceFields = incomingPaymentReferenceFields(paymentFields);
+  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
+  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
+  const directionFields = incomingPaymentDirectionFields(paymentFields);
+  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
+  const paymentSelectFields = [
+    'Id',
+    ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']),
+    ...supplierInvoiceLookupFields,
+    dateField,
+    amountField,
+    ...referenceFields,
+    ...statusFields,
+    ...typeFields,
+    ...directionFields,
+  ].filter(Boolean);
+
+  const [lineItems, buyerBrokers, payments] = await Promise.all([
+    queryRows(`
+      SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
+             Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+             Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
+             Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
+             Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c
+      FROM STEM_Line_Item__c
+      WHERE STEM__c = '${escapeSoql(stemId)}'
+      LIMIT 5000
+    `, { limit: 5000, softFail: true }),
+    queryRows(`
+      SELECT Id, STEM__c, Buyer_Broker__c
+      FROM STEM_Buyer_Broker__c
+      WHERE STEM__c = '${escapeSoql(stemId)}'
+      LIMIT 5000
+    `, { limit: 5000, softFail: true }),
+    queryRows(`
+      SELECT ${[...new Set(paymentSelectFields)].join(', ')}
+      FROM Payment__c
+      WHERE STEM__c = '${escapeSoql(stemId)}'
+      ORDER BY ${dateField} ASC NULLS LAST, CreatedDate ASC
+      LIMIT 5000
+    `, { limit: 5000, softFail: true }),
+  ]);
+
+  const brokerAccountIds = [...new Set([
+    ...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean),
+    ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
+    ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean),
+  ])];
+  const brokerAccountMap = await namesByIds('Account', brokerAccountIds);
+  for (const [id, name] of Object.entries(brokerAccountMap)) brokerAccountMap[String(id).slice(0, 15)] = name;
+  const brokerGroups = buildBrokerCommissionGroups({
+    stemMap: { [stem.Id]: stem },
+    lineItems,
+    buyerBrokers,
+    accountMap: brokerAccountMap,
+  })[stem.Id] || [];
+
+  const buyerPayments = payments
+    .map((payment) => {
+      const amount = incomingPaymentNumber(payment[amountField]);
+      const paymentDate = payment[dateField] || payment.CreatedDate || null;
+      const brokerCommissionMatch = findBrokerCommissionPaymentMatch(payment, amount, brokerGroups, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]);
+      const type = brokerCommissionMatch
+        ? 'Broker Commission'
+        : incomingPaymentLooksBankCharge(payment, { referenceFields, directionFields, typeFields, statusFields })
+          ? 'Bank Charge'
+          : incomingPaymentTypeFromContext(payment, {
+              amount,
+              stem,
+              supplierInvoice: null,
+              supplierInvoiceFields: supplierInvoiceLookupFields,
+              directionFields,
+              typeFields,
+              statusFields,
+            });
+      return {
+        id: payment.Id,
+        name: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice: null, type }),
+        amount,
+        paymentDate,
+        dateOnly: dateOnly(paymentDate),
+        type,
+      };
+    })
+    .filter((payment) => payment.type === 'Buyer Payment' && payment.amount != null && payment.amount > 0 && payment.dateOnly)
+    .sort((a, b) => String(a.dateOnly).localeCompare(String(b.dateOnly)) || String(a.id).localeCompare(String(b.id)));
+
+  const rawDueDate = calculatedBuyerPayTermDate(stem)
+    || stem.Invoice_Due_Date__c
+    || stem.Due_Date__c
+    || stem.Buyer_Pay_Term_Date__c
+    || null;
+  const dueDate = dateOnly(rawDueDate);
+  if (!dueDate) throw appError('Buyer invoice due date is missing, so late payment interest cannot be calculated.', 400);
+
+  const rawRate = interestField?.name ? stem['Account__r']?.[interestField.name] : null;
+  const monthlyRate = parseIncomingPaymentInterestRate(rawRate) ?? 0.02;
+  const rateWarning = rawRate == null || rawRate === ''
+    ? 'Buyer account interest rate was not found; defaulted to 2.00% per month.'
+    : null;
+  const invoiceAmount = incomingPaymentNumber(stem.Total_Invoice_Amount__c)
+    ?? incomingPaymentNumber(body.invoiceAmount)
+    ?? (buyerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) + Math.max(0, Number(body.receivableBalance || 0)));
+  if (!invoiceAmount || invoiceAmount <= 0) throw appError('Buyer invoice amount is missing, so late payment interest cannot be calculated.', 400);
+
+  const today = dateOnly(new Date());
+  let balance = invoiceAmount;
+  let lastDate = dueDate;
+  const segments = [];
+  const paymentSchedule = [];
+  for (const payment of buyerPayments) {
+    const paymentAmount = Math.min(Number(payment.amount || 0), Math.max(0, balance));
+    if (payment.dateOnly <= dueDate) {
+      balance = Math.max(0, balance - paymentAmount);
+      paymentSchedule.push({ ...payment, balanceAfter: balance, note: 'Paid on/before due date' });
+      continue;
+    }
+    if (balance > 0 && payment.dateOnly > lastDate) {
+      const days = Math.max(0, daysBetween(lastDate, payment.dateOnly));
+      if (days > 0) {
+        const interest = balance * monthlyRate * (days / 30);
+        segments.push({
+          fromDate: lastDate,
+          toDate: payment.dateOnly,
+          balance,
+          days,
+          rateDecimal: monthlyRate,
+          interest,
+          formula: interestFormulaText(balance, monthlyRate, days),
+        });
+      }
+    }
+    balance = Math.max(0, balance - paymentAmount);
+    paymentSchedule.push({ ...payment, balanceAfter: balance, note: paymentAmount < Number(payment.amount || 0) ? 'Payment exceeds remaining balance' : '' });
+    lastDate = payment.dateOnly;
+  }
+  const currentReceivable = incomingPaymentNumber(stem.Receivable_Balance__c);
+  if (currentReceivable != null && currentReceivable >= 0) balance = Math.min(balance, currentReceivable);
+  if (balance > 0 && today > lastDate) {
+    const days = Math.max(0, daysBetween(lastDate, today));
+    if (days > 0) {
+      const interest = balance * monthlyRate * (days / 30);
+      segments.push({
+        fromDate: lastDate,
+        toDate: today,
+        balance,
+        days,
+        rateDecimal: monthlyRate,
+        interest,
+        formula: interestFormulaText(balance, monthlyRate, days),
+        note: 'Current unpaid balance to request date',
+      });
+    }
+  }
+
+  const totalInterest = segments.reduce((sum, segment) => sum + Number(segment.interest || 0), 0);
+  return {
+    stem,
+    buyerName: incomingPaymentBuyerName(stem),
+    buyerGroupName: incomingPaymentBuyerGroup(stem),
+    stemName: formatStemName(stem),
+    dueDate,
+    invoiceAmount,
+    receivableBalance: currentReceivable,
+    interestRateField: interestField ? { name: interestField.name, label: interestField.label || interestField.name } : null,
+    rawInterestRate: rawRate,
+    monthlyRate,
+    rateWarning,
+    paymentSchedule,
+    segments,
+    totalInterest,
+  };
+}
+
+function incomingPaymentInterestCalculationHtml(calculation) {
+  const segmentRows = (calculation.segments || []).map((segment) => `
+    <tr>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(segment.balance)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${segment.days}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(segment.formula)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;font-weight:700;white-space:nowrap">${money(segment.interest)}</td>
+    </tr>`).join('');
+  const paymentRows = (calculation.paymentSchedule || []).map((payment) => `
+    <tr>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(payment.paymentDate)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(payment.name || payment.id || '-')}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.amount)}</td>
+      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.balanceAfter)}</td>
+    </tr>`).join('');
+  return `
+    <div style="margin-top:16px">
+      <h3 style="margin:0 0 8px;font-size:15px">Late Payment Interest Calculation</h3>
+      ${calculation.rateWarning ? `<p style="margin:0 0 8px;color:#92400e;font-weight:600">${escapeHtml(calculation.rateWarning)}</p>` : ''}
+      <p style="margin:0 0 8px;color:#667085">Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30.</p>
+      <table style="border-collapse:collapse;width:100%;max-width:860px;font-size:12px;margin-bottom:12px">
+        <tbody>
+          <tr><th style="text-align:left;color:#667085;padding:5px 8px;width:210px">Buyer invoice amount</th><td style="padding:5px 8px;font-weight:700">${money(calculation.invoiceAmount)}</td></tr>
+          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Buyer invoice due date</th><td style="padding:5px 8px">${prettyDate(calculation.dueDate)}</td></tr>
+          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Account interest rate</th><td style="padding:5px 8px">${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${escapeHtml(calculation.interestRateField.label)})` : ''}</td></tr>
+          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Calculated interest total</th><td style="padding:5px 8px;font-size:15px;font-weight:800;color:#1f2937">${money(calculation.totalInterest)}</td></tr>
+        </tbody>
+      </table>
+      <table style="border-collapse:collapse;width:100%;max-width:960px;font-size:12px;margin-bottom:12px">
+        <thead><tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px"><th style="text-align:left;padding:7px 8px">Period</th><th style="text-align:right;padding:7px 8px">Balance</th><th style="text-align:right;padding:7px 8px">Days</th><th style="text-align:left;padding:7px 8px">Formula</th><th style="text-align:right;padding:7px 8px">Interest</th></tr></thead>
+        <tbody>${segmentRows || '<tr><td colspan="5" style="padding:12px;text-align:center;color:#667085">No overdue interest segment was calculated.</td></tr>'}</tbody>
+      </table>
+      <table style="border-collapse:collapse;width:100%;max-width:860px;font-size:12px">
+        <thead><tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px"><th style="text-align:left;padding:7px 8px">Payment Date</th><th style="text-align:left;padding:7px 8px">Payment</th><th style="text-align:right;padding:7px 8px">Amount</th><th style="text-align:right;padding:7px 8px">Balance After</th></tr></thead>
+        <tbody>${paymentRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#667085">No buyer payments were found for this STEM.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+function incomingPaymentInterestCalculationText(calculation) {
+  return [
+    'Late Payment Interest Calculation',
+    `Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30`,
+    calculation.rateWarning || '',
+    `Buyer invoice amount: ${money(calculation.invoiceAmount)}`,
+    `Buyer invoice due date: ${prettyDate(calculation.dueDate)}`,
+    `Account interest rate: ${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${calculation.interestRateField.label})` : ''}`,
+    `Calculated interest total: ${money(calculation.totalInterest)}`,
+    '',
+    'Interest segments:',
+    ...((calculation.segments || []).map((segment) => `${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)} | ${segment.formula} = ${money(segment.interest)}`)),
+    '',
+    'Buyer payment schedule:',
+    ...((calculation.paymentSchedule || []).map((payment) => `${prettyDate(payment.paymentDate)} | ${payment.name || payment.id || '-'} | Payment ${money(payment.amount)} | Balance after ${money(payment.balanceAfter)}`)),
+  ].filter((line) => line !== '').join('\n');
+}
+
+function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   const requestedBy = profile?.full_name || profile?.email || 'Logged-in user';
   const paymentName = String(body.paymentName || body.paymentDisplayName || body.salesforcePaymentName || body.paymentId || '').trim();
-  const stemName = String(body.stemName || '').trim();
-  const buyerName = String(body.buyerName || body.partyName || '').trim();
-  const buyerGroupName = String(body.buyerGroupName || '').trim();
+  const stemName = calculation?.stemName || String(body.stemName || '').trim();
+  const buyerName = calculation?.buyerName || String(body.buyerName || body.partyName || '').trim();
+  const buyerGroupName = calculation?.buyerGroupName || String(body.buyerGroupName || '').trim();
   const subject = `Late Payment Interest Invoice Request - ${stemName || paymentName || body.paymentId}`;
   const receivedDate = prettyDate(body.paymentDate || body.receivedDate);
   const insertedDate = body.createdDate && dateOnly(body.createdDate) !== dateOnly(body.paymentDate || body.receivedDate)
@@ -4895,7 +5243,8 @@ function buildIncomingPaymentInterestEmail(body, profile) {
     ...(insertedDate ? [['Inserted on', insertedDate]] : []),
     ['Payment terms delay', delayLabel],
     ['Payment amount', money(body.amount)],
-    ['Receivable balance', money(body.receivableBalance)],
+    ['Receivable balance', money(calculation?.receivableBalance ?? body.receivableBalance)],
+    ['Calculated interest total', money(calculation?.totalInterest)],
   ];
   const tableRows = rows.map(([label, value]) => `
     <tr>
@@ -4907,6 +5256,7 @@ function buildIncomingPaymentInterestEmail(body, profile) {
       <h2 style="margin:0 0 10px;font-size:18px">Late Payment Interest Invoice Request</h2>
       <p style="margin:0 0 12px;color:#667085">${escapeHtml(requestedBy)} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.</p>
       <table style="border-collapse:collapse;width:100%;max-width:760px;font-size:13px">${tableRows}</table>
+      ${calculation ? incomingPaymentInterestCalculationHtml(calculation) : ''}
     </div>`;
   const text = [
     'Late Payment Interest Invoice Request',
@@ -4914,6 +5264,8 @@ function buildIncomingPaymentInterestEmail(body, profile) {
     `${requestedBy} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.`,
     '',
     ...rows.map(([label, value]) => `${label}: ${value}`),
+    '',
+    calculation ? incomingPaymentInterestCalculationText(calculation) : '',
   ].join('\n');
   return { subject, html, text };
 }
@@ -4931,7 +5283,8 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   const existing = await fetchIncomingPaymentInterestNotification(client, paymentId);
   if (existing) return { sent: false, alreadySent: true, notification: existing };
 
-  const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile);
+  const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId });
+  const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile, calculation);
   const credentials = body.credentials || {};
   const from = String(body.from || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from);
   const hasBrowserSmtp = Boolean(credentials.method === 'smtp' || credentials.smtp);
@@ -4942,18 +5295,19 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   }
   const useSmtp = hasBrowserSmtp || hasServerSmtp;
   const smtpFrom = credentials.smtp?.from || credentials.from || from;
+  const recipients = uniqueEmailList(INCOMING_PAYMENT_INTEREST_RECIPIENT, profile.email);
   const result = useSmtp
     ? await sendWithSmtp({
         smtp: credentials.smtp || credentials,
         from: smtpFrom,
-        to: [INCOMING_PAYMENT_INTEREST_RECIPIENT],
+        to: recipients,
         subject: email.subject,
         html: email.html,
         text: email.text,
       })
     : await sendWithResend({
         from,
-        to: [INCOMING_PAYMENT_INTEREST_RECIPIENT],
+        to: recipients,
         subject: email.subject,
         html: email.html,
         text: email.text,
@@ -4963,16 +5317,16 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
     payment_id: paymentId,
     payment_name: String(body.paymentName || body.paymentDisplayName || body.salesforcePaymentName || '').trim() || null,
     stem_id: String(body.stemId || '').trim() || null,
-    stem_name: String(body.stemName || '').trim() || null,
-    buyer_name: String(body.buyerName || body.partyName || '').trim() || null,
-    buyer_group_name: String(body.buyerGroupName || '').trim() || null,
+    stem_name: calculation.stemName || String(body.stemName || '').trim() || null,
+    buyer_name: calculation.buyerName || String(body.buyerName || body.partyName || '').trim() || null,
+    buyer_group_name: calculation.buyerGroupName || String(body.buyerGroupName || '').trim() || null,
     received_date: incomingPaymentDbDate(body.paymentDate || body.receivedDate),
     payment_created_date: incomingPaymentDbDate(body.createdDate),
     delay_days: Math.trunc(delayDays),
     amount: incomingPaymentDbNumber(body.amount),
     currency: String(body.currency || 'USD').trim() || 'USD',
-    receivable_balance: incomingPaymentDbNumber(body.receivableBalance),
-    recipient_email: INCOMING_PAYMENT_INTEREST_RECIPIENT,
+    receivable_balance: incomingPaymentDbNumber(calculation.receivableBalance ?? body.receivableBalance),
+    recipient_email: recipients.join(', '),
     email_subject: email.subject,
     email_message_id: result.id || null,
     email_provider: useSmtp ? 'smtp' : 'resend',
@@ -4983,6 +5337,17 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
       source: 'incoming_payment',
       delayThresholdDays: 3,
       requestedAtTimezone: 'Asia/Hong_Kong',
+      interestCalculation: {
+        invoiceAmount: calculation.invoiceAmount,
+        dueDate: calculation.dueDate,
+        interestRateField: calculation.interestRateField,
+        rawInterestRate: calculation.rawInterestRate,
+        monthlyRate: calculation.monthlyRate,
+        rateWarning: calculation.rateWarning,
+        totalInterest: calculation.totalInterest,
+        segments: calculation.segments,
+        paymentSchedule: calculation.paymentSchedule,
+      },
     },
   };
 
@@ -4999,7 +5364,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   return {
     sent: true,
     alreadySent: false,
-    to: [INCOMING_PAYMENT_INTEREST_RECIPIENT],
+    to: recipients,
     notification: serializeIncomingPaymentInterestNotification(data),
   };
 }

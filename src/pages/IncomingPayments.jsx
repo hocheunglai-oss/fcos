@@ -335,6 +335,7 @@ export default function IncomingPayments() {
         createdDate: row.createdDate,
         delayDays: row.delayDays,
         amount: row.amount,
+        invoiceAmount: row.invoiceAmount,
         currency: row.currency,
         receivableBalance: row.receivableBalance,
         from: emailSettings.from || DEFAULT_EMAIL_SETTINGS.from,
@@ -350,7 +351,7 @@ export default function IncomingPayments() {
         title: res.data?.alreadySent ? 'Interest invoice already requested' : 'Interest invoice request sent',
         description: res.data?.alreadySent
           ? 'This payment already has a recorded request.'
-          : `Louisa has been notified${senderNote}.`,
+          : `Louisa and your email have been notified${senderNote}.`,
       });
     } catch (error) {
       toast({
