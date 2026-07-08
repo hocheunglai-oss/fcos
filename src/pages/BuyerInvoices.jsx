@@ -1058,14 +1058,21 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     }
     setRestoredAt(null);
   };
-  const insertInvoiceTableToken = () => {
-    if (!templateEditing) return;
+  const insertReminderBodyToken = (token) => {
+    if (!templateEditing || !token) return;
     const editor = reminderBodyEditorRef.current?.getEditor?.();
     if (!editor) {
-      updateForm('body', `${removeInvoiceTableTokenHtml(form.body)}<p>${INVOICE_TABLE_TOKEN}</p>`);
+      const current = token === INVOICE_TABLE_TOKEN ? removeInvoiceTableTokenHtml(form.body) : form.body;
+      updateForm('body', `${current}<p>${token}</p>`);
       return;
     }
-    insertTokenIntoQuill(editor, INVOICE_TABLE_TOKEN);
+    insertTokenIntoQuill(editor, token);
+  };
+  const dropReminderBodyToken = (event) => {
+    if (!templateEditing) return;
+    event.preventDefault();
+    const token = event.dataTransfer.getData('application/x-template-variable') || event.dataTransfer.getData('text/plain');
+    insertReminderBodyToken(token);
   };
   const toggleInvoice = (stemId) => {
     setSelectedIds((prev) => (
@@ -1353,9 +1360,17 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,480px)_minmax(0,1fr)]">
-                  <div className="space-y-3">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Email batches</Label>
+	                  <div className="space-y-3">
+	                    {templateEditing && (
+	                      <div className="rounded-lg border border-border bg-muted/20 p-3">
+	                        <PaymentReminderVariablePalette onInsert={insertReminderBodyToken} />
+	                        <p className="mt-2 text-xs text-muted-foreground">
+	                          Drag variables into the email content. Drag <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> to choose where the invoice table appears.
+	                        </p>
+	                      </div>
+	                    )}
+	                    <div>
+	                      <Label className="text-xs text-muted-foreground">Email batches</Label>
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         Only the addresses shown below will be used. Remove an address here to exclude it from sending.
                       </p>
@@ -1422,19 +1437,17 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                       <Label className="text-xs text-muted-foreground">Subject</Label>
                       <Input value={form.subject} onChange={(event) => updateForm('subject', event.target.value)} disabled={!templateEditing} />
                     </div>
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Label className="text-xs text-muted-foreground">Email content</Label>
-                        <Button type="button" variant="outline" size="sm" onClick={insertInvoiceTableToken} disabled={!templateEditing}>
-                          Insert invoice table here
-                        </Button>
-                      </div>
-                      <div className={cn(
-                        'rounded-md border border-input bg-background [&_.ql-container]:min-h-64 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border',
-                        !templateEditing && 'opacity-80',
-                      )}>
-                        <ReactQuill
-                          ref={reminderBodyEditorRef}
+	                    <div className="space-y-1.5">
+	                      <Label className="text-xs text-muted-foreground">Email content</Label>
+	                      <div className={cn(
+	                        'rounded-md border border-input bg-background [&_.ql-container]:min-h-64 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border',
+	                        !templateEditing && 'opacity-80',
+	                      )}
+	                        onDragOver={(event) => templateEditing && event.preventDefault()}
+	                        onDrop={dropReminderBodyToken}
+	                      >
+	                        <ReactQuill
+	                          ref={reminderBodyEditorRef}
                           theme="snow"
                           modules={QUILL_MODULES}
                           value={form.body}

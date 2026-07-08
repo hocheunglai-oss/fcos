@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.21';
+export const APP_VERSION = '1.0.22';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.22',
+    releasedAt: '2026-07-08',
+    title: 'Reminder template variable drag-and-drop',
+    changes: [
+      'Replaced the Insert invoice table button in External payment reminder with the draggable invoice table variable.',
+      'Allowed payment reminder variables to be dragged into the email content editor while editing the template.',
+    ],
+  },
   {
     version: '1.0.21',
     releasedAt: '2026-07-08',
