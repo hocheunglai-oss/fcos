@@ -5222,6 +5222,9 @@ function incomingPaymentInterestCalculationText(calculation) {
 
 const INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN = /\{\{\s*interestCalculationTable\s*\}\}/i;
 const DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE = {
+  to: INCOMING_PAYMENT_INTEREST_RECIPIENT,
+  cc: '{{requesterEmail}}',
+  bcc: '',
   subject: 'Late Payment Interest Invoice Request - {{stemName}}',
   body: `Late Payment Interest Invoice Request
 
@@ -5242,6 +5245,9 @@ Calculated interest total: {{interestTotal}}
 
 function incomingPaymentInterestTemplate(input = {}) {
   return {
+    to: String(input.to ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.to),
+    cc: String(input.cc ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.cc),
+    bcc: String(input.bcc ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.bcc),
     subject: String(input.subject || DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.subject),
     body: String(input.body || input.intro || DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.body),
   };
@@ -5283,6 +5289,9 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
     interestTotal: money(calculation?.totalInterest),
   };
   const template = incomingPaymentInterestTemplate(body.template || body.interestTemplate || {});
+  const to = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.to, context));
+  const cc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.cc, context));
+  const bcc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.bcc, context));
   const subject = renderIncomingPaymentInterestTemplate(template.subject, context);
   const bodyContent = renderIncomingPaymentInterestTemplate(template.body, context);
   const calculationHtml = calculation ? incomingPaymentInterestCalculationHtml(calculation) : '';
@@ -5295,7 +5304,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${htmlBody}
     </div>`;
-  return { subject, html, text: textBody };
+  return { to, cc, bcc, subject, html, text: textBody };
 }
 
 async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
@@ -5321,11 +5330,16 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
     throw appError('Interest invoice request sender is not configured. Save and enable the Internal SMTP sender in Settings > Email Senders, then try again.', 400);
   }
   const smtpFrom = credentials.smtp?.from || credentials.from || from;
-  const recipients = uniqueEmailList(INCOMING_PAYMENT_INTEREST_RECIPIENT, profile.email);
+  const recipients = email.to;
+  if (!recipients.length) {
+    throw appError('Late payment interest request recipient is not configured. Add at least one To recipient in the template.', 400);
+  }
   const result = await sendWithSmtp({
     smtp: credentials.smtp || credentials,
     from: smtpFrom,
     to: recipients,
+    cc: email.cc,
+    bcc: email.bcc,
     subject: email.subject,
     html: email.html,
     text: email.text,
@@ -5344,7 +5358,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
     amount: incomingPaymentDbNumber(body.amount),
     currency: String(body.currency || 'USD').trim() || 'USD',
     receivable_balance: incomingPaymentDbNumber(calculation.receivableBalance ?? body.receivableBalance),
-    recipient_email: recipients.join(', '),
+    recipient_email: uniqueEmailList(recipients, email.cc, email.bcc).join(', '),
     email_subject: email.subject,
     email_message_id: result.id || null,
     email_provider: 'smtp',

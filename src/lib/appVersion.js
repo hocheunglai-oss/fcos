@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.18';
+export const APP_VERSION = '1.0.19';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.19',
+    releasedAt: '2026-07-08',
+    title: 'Email template cleanup',
+    changes: [
+      'Removed the duplicate Payment Reminder Template button from Outstanding Buyer Invoices.',
+      'Renamed the internal report action to Outstanding Buyer Invoices - Internal Daily Report.',
+      'Fixed the internal daily report modal layout so footer actions remain visible.',
+      'Added editable To, Cc, and Bcc fields to the Late Payment Interest Request email template.',
+    ],
+  },
   {
     version: '1.0.18',
     releasedAt: '2026-07-08',

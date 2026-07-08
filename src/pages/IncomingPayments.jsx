@@ -54,6 +54,9 @@ ${BUYER_CIA_TABLE_TOKEN}`,
 };
 
 const DEFAULT_INTEREST_EMAIL_SETTINGS = {
+  to: 'louisa@cosulich.com.hk',
+  cc: '{{requesterEmail}}',
+  bcc: '',
   subject: 'Late Payment Interest Invoice Request - {{stemName}}',
   body: `Late Payment Interest Invoice Request
 
@@ -85,6 +88,7 @@ const EMAIL_TABLE_TOKENS = [
 
 const INTEREST_EMAIL_TOKENS = [
   { label: 'Requested By', token: '{{requestedBy}}' },
+  { label: 'Requester Email', token: '{{requesterEmail}}' },
   { label: 'Buyer', token: '{{buyerName}}' },
   { label: 'Group', token: '{{buyerGroupName}}' },
   { label: 'STEM', token: '{{stemName}}' },
@@ -306,6 +310,9 @@ function buildInterestPreview(settings) {
     interestRateField: 'Late Payment Interest Rate',
     interestTotal: '$374.74',
   };
+  const to = renderInterestTemplate(settings.to ?? DEFAULT_INTEREST_EMAIL_SETTINGS.to, context);
+  const cc = renderInterestTemplate(settings.cc ?? DEFAULT_INTEREST_EMAIL_SETTINGS.cc, context);
+  const bcc = renderInterestTemplate(settings.bcc ?? DEFAULT_INTEREST_EMAIL_SETTINGS.bcc, context);
   const subject = renderInterestTemplate(settings.subject || DEFAULT_INTEREST_EMAIL_SETTINGS.subject, context);
   const body = renderInterestTemplate(settings.body || DEFAULT_INTEREST_EMAIL_SETTINGS.body, context);
   const tokenPattern = /\{\{\s*interestCalculationTable\s*\}\}/i;
@@ -314,7 +321,7 @@ function buildInterestPreview(settings) {
     .replace(tokenParagraphPattern, sampleInterestCalculationHtml())
     .replace(tokenPattern, sampleInterestCalculationHtml());
   const html = `<div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">${htmlContent}</div>`;
-  return { subject, html };
+  return { to, cc, bcc, subject, html };
 }
 
 export default function IncomingPayments() {
@@ -345,8 +352,13 @@ export default function IncomingPayments() {
   const [interestTemplateEditing, setInterestTemplateEditing] = useState(false);
   const [interestPreview, setInterestPreview] = useState(null);
   const [interestTemplateMessage, setInterestTemplateMessage] = useState('');
+  const [interestActiveField, setInterestActiveField] = useState('body');
   const [interestRequestLoading, setInterestRequestLoading] = useState({});
   const emailContentRef = useRef(null);
+  const interestToRef = useRef(null);
+  const interestCcRef = useRef(null);
+  const interestBccRef = useRef(null);
+  const interestSubjectRef = useRef(null);
   const interestContentRef = useRef(null);
 
   const updatePageState = (patch) => {
@@ -785,7 +797,26 @@ export default function IncomingPayments() {
     setInterestPreview(buildInterestPreview(savedInterestEmailSettings));
   };
 
-  const insertInterestToken = (token) => {
+  const insertInterestTextToken = (field, token) => {
+    const refs = {
+      to: interestToRef,
+      cc: interestCcRef,
+      bcc: interestBccRef,
+      subject: interestSubjectRef,
+    };
+    const target = refs[field]?.current;
+    const current = interestEmailSettings[field] || '';
+    const start = target?.selectionStart ?? current.length;
+    const end = target?.selectionEnd ?? start;
+    const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+    updateInterestEmailSetting(field, next);
+    window.requestAnimationFrame(() => {
+      target?.focus();
+      target?.setSelectionRange(start + token.length, start + token.length);
+    });
+  };
+
+  const insertInterestBodyToken = (token) => {
     if (!interestTemplateEditing) return;
     const target = interestContentRef.current;
     const current = interestEmailSettings.body || '';
@@ -800,6 +831,22 @@ export default function IncomingPayments() {
       const cursor = start + separatorBefore.length + token.length + separatorAfter.length;
       target?.setSelectionRange(cursor, cursor);
     });
+  };
+
+  const insertInterestToken = (token) => {
+    if (!interestTemplateEditing) return;
+    if (interestActiveField === 'body') insertInterestBodyToken(token);
+    else insertInterestTextToken(interestActiveField, token);
+  };
+
+  const dropInterestToken = (field, event) => {
+    if (!interestTemplateEditing) return;
+    event.preventDefault();
+    const token = event.dataTransfer.getData('text/plain');
+    if (!token) return;
+    setInterestActiveField(field);
+    if (field === 'body') insertInterestBodyToken(token);
+    else insertInterestTextToken(field, token);
   };
 
   const previewInterestTemplate = () => {
@@ -1255,13 +1302,57 @@ export default function IncomingPayments() {
           </DialogHeader>
           <div className="grid max-h-[70vh] gap-4 overflow-hidden pr-1 lg:grid-cols-[430px_minmax(0,1fr)]">
             <div className="space-y-3 overflow-auto pr-1">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Subject</Label>
-                <Input
-                  value={interestEmailSettings.subject}
-                  onChange={(event) => updateInterestEmailSetting('subject', event.target.value)}
-                  disabled={!interestTemplateEditing}
-                />
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-xs text-muted-foreground">To</Label>
+                  <Input
+                    ref={interestToRef}
+                    value={interestEmailSettings.to}
+                    onFocus={() => setInterestActiveField('to')}
+                    onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
+                    onDrop={(event) => dropInterestToken('to', event)}
+                    onChange={(event) => updateInterestEmailSetting('to', event.target.value)}
+                    disabled={!interestTemplateEditing}
+                    placeholder="louisa@cosulich.com.hk"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Cc</Label>
+                  <Input
+                    ref={interestCcRef}
+                    value={interestEmailSettings.cc}
+                    onFocus={() => setInterestActiveField('cc')}
+                    onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
+                    onDrop={(event) => dropInterestToken('cc', event)}
+                    onChange={(event) => updateInterestEmailSetting('cc', event.target.value)}
+                    disabled={!interestTemplateEditing}
+                    placeholder="{{requesterEmail}}"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Bcc</Label>
+                  <Input
+                    ref={interestBccRef}
+                    value={interestEmailSettings.bcc}
+                    onFocus={() => setInterestActiveField('bcc')}
+                    onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
+                    onDrop={(event) => dropInterestToken('bcc', event)}
+                    onChange={(event) => updateInterestEmailSetting('bcc', event.target.value)}
+                    disabled={!interestTemplateEditing}
+                  />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-xs text-muted-foreground">Subject</Label>
+                  <Input
+                    ref={interestSubjectRef}
+                    value={interestEmailSettings.subject}
+                    onFocus={() => setInterestActiveField('subject')}
+                    onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
+                    onDrop={(event) => dropInterestToken('subject', event)}
+                    onChange={(event) => updateInterestEmailSetting('subject', event.target.value)}
+                    disabled={!interestTemplateEditing}
+                  />
+                </div>
               </div>
               <div className="space-y-1.5">
                 <div className="flex flex-wrap gap-2">
@@ -1289,16 +1380,12 @@ export default function IncomingPayments() {
                 <Textarea
                   ref={interestContentRef}
                   value={interestEmailSettings.body}
+                  onFocus={() => setInterestActiveField('body')}
                   onChange={(event) => updateInterestEmailSetting('body', event.target.value)}
                   disabled={!interestTemplateEditing}
                   className="min-h-80 font-mono text-xs"
                   onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
-                  onDrop={(event) => {
-                    if (!interestTemplateEditing) return;
-                    event.preventDefault();
-                    const token = event.dataTransfer.getData('text/plain');
-                    if (token) insertInterestToken(token);
-                  }}
+                  onDrop={(event) => dropInterestToken('body', event)}
                 />
                 <p className="text-xs text-muted-foreground">
                   Place <span className="font-mono">{INTEREST_CALCULATION_TABLE_TOKEN}</span> where the calculation table should appear.
@@ -1315,8 +1402,15 @@ export default function IncomingPayments() {
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <div>
                   <div className="text-sm font-semibold text-foreground">Preview</div>
-                  <div className="text-xs text-muted-foreground">
-                    {interestPreview?.subject ? `Subject: ${interestPreview.subject}` : 'Generate a preview with the sample payment record.'}
+                  <div className="space-y-0.5 text-xs text-muted-foreground">
+                    {interestPreview?.subject ? (
+                      <>
+                        <div>To: {interestPreview.to || '-'}</div>
+                        <div>Cc: {interestPreview.cc || '-'}</div>
+                        {interestPreview.bcc ? <div>Bcc: {interestPreview.bcc}</div> : null}
+                        <div>Subject: {interestPreview.subject}</div>
+                      </>
+                    ) : 'Generate a preview with the sample payment record.'}
                   </div>
                 </div>
                 <Button variant="outline" size="sm" onClick={previewInterestTemplate}>

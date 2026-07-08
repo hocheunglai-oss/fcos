@@ -1420,192 +1420,6 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   );
 }
 
-function PaymentReminderTemplateModal({
-  open,
-  emailSettings,
-  updateEmailSetting,
-  emailDirty,
-  draftRestoredAt,
-  emailBusy,
-  emailLoading,
-  emailMessage,
-  emailError,
-  onClose,
-  onCancel,
-  onSave,
-  onDiscardDraft,
-}) {
-  const [activeTemplateField, setActiveTemplateField] = useState('body');
-  const ccRef = useRef(null);
-  const bccRef = useRef(null);
-  const subjectRef = useRef(null);
-  const bodyEditorRef = useRef(null);
-
-  const inputRefs = {
-    paymentReminderCc: ccRef,
-    paymentReminderBcc: bccRef,
-    paymentReminderSubject: subjectRef,
-  };
-
-  const insertTextVariable = (key, token) => {
-    const current = emailSettings[key] || '';
-    const node = inputRefs[key]?.current;
-    const start = node?.selectionStart ?? current.length;
-    const end = node?.selectionEnd ?? start;
-    const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
-    updateEmailSetting(key, next);
-    window.setTimeout(() => {
-      node?.focus();
-      node?.setSelectionRange(start + token.length, start + token.length);
-    }, 0);
-  };
-
-  const insertBodyVariable = (token) => {
-    const editor = bodyEditorRef.current?.getEditor?.();
-    if (!editor) {
-      const current = token === INVOICE_TABLE_TOKEN
-        ? removeInvoiceTableTokenHtml(emailSettings.paymentReminderBody)
-        : emailSettings.paymentReminderBody || '';
-      updateEmailSetting('paymentReminderBody', `${current}${token}`);
-      return;
-    }
-    insertTokenIntoQuill(editor, token);
-  };
-
-  const insertVariable = (token) => {
-    if (activeTemplateField === 'body') insertBodyVariable(token);
-    else insertTextVariable(activeTemplateField, token);
-  };
-
-  const dropToken = (key, event) => {
-    event.preventDefault();
-    const token = event.dataTransfer.getData('application/x-template-variable') || event.dataTransfer.getData('text/plain');
-    if (!token) return;
-    setActiveTemplateField(key);
-    if (key === 'body') insertBodyVariable(token);
-    else insertTextVariable(key, token);
-  };
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Payment reminder</p>
-            <h2 className="mt-1 text-lg font-semibold text-foreground">Payment Reminder Template</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Default template used when sending a manual reminder from an invoice row.
-            </p>
-          </div>
-          <Button variant="outline" size="icon" onClick={onClose} disabled={emailBusy}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="max-h-[calc(92vh-76px)] overflow-auto p-4">
-          <div className="space-y-4">
-            <DraftNotice restoredAt={draftRestoredAt} label="Payment reminder template draft restored" onDiscard={onDiscardDraft} />
-            <div className="rounded-xl border border-border bg-muted/20 p-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">To</div>
-              <div className="mt-1 text-sm font-medium text-foreground">Automatic from buyer broker invoice format routing</div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                No broker: buyer account emails, buyer trader email, and payment handler email. Broker Only: broker Account email only. Buyer CC Broker: buyer remains To and broker Account email is copied.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-border bg-muted/10 p-3">
-              <PaymentReminderVariablePalette onInsert={insertVariable} />
-              <p className="mt-2 text-xs text-muted-foreground">
-                Click a variable to insert it into the active template field, drag it into CC, BCC, Subject, or Content, or copy the token.
-              </p>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Reminder CC template</Label>
-              <Input
-                ref={ccRef}
-                value={emailSettings.paymentReminderCc || ''}
-                onFocus={() => setActiveTemplateField('paymentReminderCc')}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => dropToken('paymentReminderCc', event)}
-                onChange={(event) => updateEmailSetting('paymentReminderCc', event.target.value)}
-                placeholder="finance@example.com"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Reminder BCC template</Label>
-              <Input
-                ref={bccRef}
-                value={emailSettings.paymentReminderBcc || ''}
-                onFocus={() => setActiveTemplateField('paymentReminderBcc')}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => dropToken('paymentReminderBcc', event)}
-                onChange={(event) => updateEmailSetting('paymentReminderBcc', event.target.value)}
-                placeholder="archive@example.com"
-              />
-            </div>
-
-            <div className="space-y-1.5 md:col-span-2">
-              <Label className="text-xs text-muted-foreground">Payment reminder subject</Label>
-              <Input
-                ref={subjectRef}
-                value={emailSettings.paymentReminderSubject || ''}
-                onFocus={() => setActiveTemplateField('paymentReminderSubject')}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => dropToken('paymentReminderSubject', event)}
-                onChange={(event) => updateEmailSetting('paymentReminderSubject', event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5 md:col-span-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Label className="text-xs text-muted-foreground">Payment reminder content</Label>
-                <Button type="button" variant="outline" size="sm" onClick={() => insertBodyVariable(INVOICE_TABLE_TOKEN)}>
-                  Insert invoice table position
-                </Button>
-              </div>
-              <div
-                className="rounded-md border border-input bg-background [&_.ql-container]:min-h-72 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border"
-                onFocus={() => setActiveTemplateField('body')}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => dropToken('body', event)}
-              >
-                <ReactQuill
-                  ref={bodyEditorRef}
-                  theme="snow"
-                  modules={QUILL_MODULES}
-                  value={emailSettings.paymentReminderBody || ''}
-                  onChange={(value) => updateEmailSetting('paymentReminderBody', value)}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Move the invoice table by placing <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> where the table should appear. The default template includes a 2.00% per month late payment interest charge warning.
-              </p>
-            </div>
-            </div>
-          </div>
-
-          {emailMessage && <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{emailMessage}</div>}
-          {emailError && <div className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{emailError}</div>}
-
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="outline" onClick={onCancel} disabled={emailBusy} className="gap-2">
-              <X className="h-4 w-4" /> Cancel
-            </Button>
-            <Button onClick={onSave} disabled={!emailDirty || emailBusy || emailLoading} className="gap-2">
-              {emailBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy }) {
   const [selectedIds, setSelectedIds] = useState([]);
 
@@ -1717,7 +1531,6 @@ export default function BuyerInvoices() {
   const [selectedReminderRow, setSelectedReminderRow] = useState(null);
   const [copySelection, setCopySelection] = useState(null);
   const [showEmailSchedule, setShowEmailSchedule] = useState(false);
-  const [showPaymentReminderTemplate, setShowPaymentReminderTemplate] = useState(false);
   const [savedEmailSettings, setSavedEmailSettings] = useState(readLegacyEmailSettings);
   const [emailSettings, setEmailSettings] = useState(savedEmailSettings);
   const [emailMeta, setEmailMeta] = useState(null);
@@ -1982,16 +1795,6 @@ export default function BuyerInvoices() {
     setInternalEmailEditing(false);
   };
 
-  const closePaymentReminderTemplate = () => {
-    if (emailDirty && !window.confirm('Discard unsaved payment reminder template changes?')) return;
-    setShowPaymentReminderTemplate(false);
-  };
-
-  const cancelPaymentReminderTemplate = () => {
-    cancelEmailSettings();
-    setShowPaymentReminderTemplate(false);
-  };
-
   const sendEmailReport = async (preview = false) => {
     setEmailBusy(true);
     setEmailAction(preview ? 'preview' : 'send');
@@ -2052,10 +1855,7 @@ export default function BuyerInvoices() {
         actions={(
           <>
             <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
-              <Mail className="h-4 w-4" /> Internal Email Reminder
-            </Button>
-            <Button variant="outline" onClick={() => setShowPaymentReminderTemplate(true)} className="gap-2 w-fit">
-              <Mail className="h-4 w-4" /> Payment Reminder Template
+              <Mail className="h-4 w-4" /> Outstanding Buyer Invoices - Internal Daily Report
             </Button>
             <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -2194,11 +1994,11 @@ export default function BuyerInvoices() {
 
       {showEmailSchedule && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-          <div className="max-h-[92vh] w-[96vw] max-w-[1500px] overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-            <div className="flex items-start justify-between gap-4 border-b border-border p-4">
+          <div className="flex h-[92vh] w-[96vw] max-w-[1500px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+            <div className="shrink-0 flex items-start justify-between gap-4 border-b border-border p-4">
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outstanding buyer invoices</p>
-                <h2 className="mt-1 text-lg font-semibold text-foreground">Internal Email Reminder</h2>
+                <h2 className="mt-1 text-lg font-semibold text-foreground">Outstanding Buyer Invoices - Internal Daily Report</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Shared server schedule. Production cron runs weekdays at 08:00 and 14:00 Hong Kong time and prevents duplicate sends.
                 </p>
@@ -2208,8 +2008,8 @@ export default function BuyerInvoices() {
               </Button>
             </div>
 
-            <div className="grid max-h-[calc(92vh-140px)] gap-4 overflow-hidden p-4 lg:grid-cols-[430px_minmax(0,1fr)]">
-              <div className="space-y-3 overflow-auto pr-1">
+            <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[430px_minmax(0,1fr)]">
+              <div className="min-h-0 space-y-3 overflow-auto pr-1">
                 <DraftNotice restoredAt={emailDraftRestoredAt} label="Email reminder settings draft restored" onDiscard={cancelEmailSettings} />
 
                 <div className="grid gap-2 md:grid-cols-2">
@@ -2307,8 +2107,8 @@ export default function BuyerInvoices() {
                 {emailError && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{emailError}</div>}
               </div>
 
-              <div className="rounded-xl border border-border bg-background">
-                <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <div className="flex min-h-0 flex-col rounded-xl border border-border bg-background">
+                <div className="shrink-0 flex items-center justify-between border-b border-border px-3 py-2">
                   <div>
                     <div className="text-sm font-semibold text-foreground">Preview</div>
                     <div className="text-xs text-muted-foreground">
@@ -2320,7 +2120,7 @@ export default function BuyerInvoices() {
                     {emailAction === 'preview' ? 'Previewing' : 'Preview'}
                   </Button>
                 </div>
-                <div className="h-[560px] overflow-auto p-4">
+                <div className="min-h-0 flex-1 overflow-auto p-4">
                   {emailPreview?.html ? (
                     <div
                       className="prose prose-sm max-w-none"
@@ -2335,7 +2135,7 @@ export default function BuyerInvoices() {
               </div>
             </div>
 
-            <div className="flex flex-wrap justify-end gap-2 border-t border-border p-4">
+            <div className="shrink-0 flex flex-wrap justify-end gap-2 border-t border-border p-4">
               <Button variant="outline" onClick={closeInternalEmailReminder} disabled={emailBusy}>Close</Button>
               {!internalEmailEditing ? (
                 <Button variant="outline" onClick={() => setInternalEmailEditing(true)} disabled={emailBusy || emailLoading} className="gap-2">
@@ -2526,21 +2326,6 @@ export default function BuyerInvoices() {
         open={!!copySelection}
         onClose={() => setCopySelection(null)}
         onCopy={copyInvoiceRows}
-      />
-      <PaymentReminderTemplateModal
-        open={showPaymentReminderTemplate}
-        emailSettings={emailSettings}
-        updateEmailSetting={updateEmailSetting}
-        emailDirty={emailDirty}
-        draftRestoredAt={emailDraftRestoredAt}
-        emailBusy={emailBusy}
-        emailLoading={emailLoading}
-        emailMessage={emailMessage}
-        emailError={emailError}
-        onClose={closePaymentReminderTemplate}
-        onCancel={cancelPaymentReminderTemplate}
-        onSave={saveEmailSettings}
-        onDiscardDraft={cancelEmailSettings}
       />
     </div>
   );
