@@ -3905,6 +3905,137 @@ function supplierInvoicePartyName(invoice, supplierRelationships = []) {
     || null;
 }
 
+async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
+  const describe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
+  const fields = describe.fields || [];
+  const fieldNames = new Set(fields.map((field) => field.name));
+  if (!fieldNames.has('Payment_Term__c')) return [];
+
+  const accountDescribe = fieldNames.has('Account__c')
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const selectFields = [
+    'Id',
+    'Name',
+    ...selectedFields(fieldNames, [
+      'KeyStem__c',
+      'Buyer_Name__c',
+      'Buyer__c',
+      'Account__c',
+      'Payment_Term__c',
+      'Total_Invoice_Amount__c',
+      'Receivable_Balance__c',
+      'Payment_Date__c',
+      'Delivery_Date__c',
+      'Expected_Delivery_Date__c',
+    ]),
+  ];
+  if (fieldNames.has('Vessel__c')) selectFields.push('Vessel__r.Name');
+  if (fieldNames.has('Port__c')) selectFields.push('Port__r.Name');
+  if (fieldNames.has('Account__c')) {
+    selectFields.push('Account__r.Name');
+    if (accountFieldNames.has('Group_Name__c')) selectFields.push('Account__r.Group_Name__c');
+    if (accountFieldNames.has('ParentId')) selectFields.push('Account__r.Parent.Name');
+  }
+
+  const whereParts = ["Payment_Term__c LIKE '%CIA%'"];
+  if (fieldNames.has('Receivable_Balance__c')) whereParts.push(`Receivable_Balance__c >= ${Number(threshold || 0)}`);
+  if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
+  const orderBy = fieldNames.has('Delivery_Date__c')
+    ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC'
+    : 'CreatedDate DESC';
+
+  const stems = await queryRows(`
+    SELECT ${[...new Set(selectFields)].join(', ')}
+    FROM stem__c
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY ${orderBy}
+    LIMIT 1000
+  `, { limit: 1000, softFail: true });
+  const stemIds = stems.map((stem) => stem.Id).filter(Boolean);
+  if (!stemIds.length) return [];
+
+  const traderByStem = {};
+  const [nominationArrays, lineItemArrays, extraCostArrays] = await Promise.all([
+    Promise.all(chunkIds(stemIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`
+        SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c
+        FROM Nomination__c
+        WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
+        ORDER BY CreatedDate ASC
+        LIMIT 5000
+      `, { limit: 5000, softFail: true });
+    })),
+    Promise.all(chunkIds(stemIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`
+        SELECT STEM__c, Total_Price__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
+               Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+               Price_Per_Unit__c, Unit_Sell_At__c, Offer_Line_Item__r.UnitPrice
+        FROM STEM_Line_Item__c
+        WHERE STEM__c IN (${inList})
+        LIMIT 5000
+      `, { limit: 5000, softFail: true });
+    })),
+    Promise.all(chunkIds(stemIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      return queryRows(`
+        SELECT STEM__c, Line_Total__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
+               Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c
+        FROM STEM_Extra_Cost__c
+        WHERE STEM__c IN (${inList})
+        LIMIT 5000
+      `, { limit: 5000, softFail: true });
+    })),
+  ]);
+
+  for (const nomination of nominationArrays.flat()) {
+    if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
+    if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [] };
+    if (!traderByStem[nomination.STEM__c].all.includes(nomination.Buyer_Supplier_Trader__c)) {
+      traderByStem[nomination.STEM__c].all.push(nomination.Buyer_Supplier_Trader__c);
+    }
+    if (String(nomination.Name || '').startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(nomination.Buyer_Supplier_Trader__c)) {
+      traderByStem[nomination.STEM__c].buyer.push(nomination.Buyer_Supplier_Trader__c);
+    }
+  }
+
+  const calculatedByStem = {};
+  for (const item of lineItemArrays.flat()) {
+    if (!item.STEM__c || item.Cancelled__c) continue;
+    const stem = stems.find((row) => row.Id === item.STEM__c);
+    calculatedByStem[item.STEM__c] = (calculatedByStem[item.STEM__c] || 0) + lineSellAmount(item, !!stem?.Delivery_Date__c);
+  }
+  for (const item of extraCostArrays.flat()) {
+    if (!item.STEM__c || item.Cancelled__c) continue;
+    const stem = stems.find((row) => row.Id === item.STEM__c);
+    calculatedByStem[item.STEM__c] = (calculatedByStem[item.STEM__c] || 0) + extraSellAmount(item, !!stem?.Delivery_Date__c);
+  }
+
+  return stems.map((stem) => {
+    const account = stem['Account__r'] || {};
+    const traderInfo = traderByStem[stem.Id] || {};
+    const calculatedAmount = calculatedByStem[stem.Id] > 0
+      ? calculatedByStem[stem.Id]
+      : incomingPaymentNumber(stem.Total_Invoice_Amount__c);
+    return {
+      id: stem.Id,
+      stemId: stem.Id,
+      stemName: formatStemName(stem),
+      keyStem: stem.KeyStem__c || null,
+      buyerName: incomingPaymentBuyerName(stem),
+      buyerGroupName: account.Group_Name__c || account.Parent?.Name || incomingPaymentBuyerName(stem),
+      buyerTrader: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
+      paymentTerms: stem.Payment_Term__c || null,
+      calculatedAmount,
+      receivableBalance: incomingPaymentNumber(stem.Receivable_Balance__c),
+      deliveryDate: stem.Delivery_Date__c || null,
+    };
+  });
+}
+
 async function incomingPaymentsList(body) {
   const settings = await loadIncomingPaymentSettings();
   const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
@@ -4050,7 +4181,7 @@ async function incomingPaymentsList(body) {
 
   const availableStemKeys = new Set();
   const availableBalancesByGroup = {};
-  const rows = payments.map((payment) => {
+  const allRows = payments.map((payment) => {
     const supplierInvoice = payment.Supplier_Invoice__c ? supplierInvoiceMap[payment.Supplier_Invoice__c] || null : null;
     const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
     const stem = stemId ? stemMap[stemId] || null : null;
@@ -4115,6 +4246,7 @@ async function incomingPaymentsList(body) {
       paymentDate,
       invoiceDueDate: buyerInvoiceDueDate,
       delayDays,
+      paymentTerms: type === 'Buyer Payment' ? stem?.Payment_Term__c || null : null,
       type,
       isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',
       amount,
@@ -4141,8 +4273,10 @@ async function incomingPaymentsList(body) {
       paymentObjectAmountField: amountField,
     };
   });
+  const rows = allRows.filter((row) => row.type !== 'Supplier Payment');
 
   const includedIncomingRows = rows.filter((row) => row.isIncoming);
+  const buyerCiaInvoices = await incomingBuyerCiaInvoices({ threshold });
   const availableBalances = Object.values(availableBalancesByGroup)
     .map((group) => ({
       buyerGroupName: group.buyerGroupName,
@@ -4154,6 +4288,7 @@ async function incomingPaymentsList(body) {
 
   return {
     rows,
+    buyerCiaInvoices,
     availableBalances,
     settings,
     dateFrom,

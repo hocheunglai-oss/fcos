@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { AlertTriangle, Banknote, CheckCircle2, Loader2, RefreshCw, Search, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import ReorderableDataTable from '@/components/common/ReorderableDataTable';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
@@ -19,35 +20,15 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 
-const TYPE_FILTERS = [
-  { value: 'incoming', label: 'Incoming only' },
-  { value: 'all', label: 'All payments' },
-  { value: 'Buyer Payment', label: 'Buyer payments' },
-  { value: 'Supplier Refund', label: 'Supplier refunds' },
-  { value: 'Unmatched', label: 'Needs review' },
-];
-
-const STATUS_FILTERS = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'Fully paid', label: 'Fully paid' },
-  { value: 'Overpaid / available balance', label: 'Overpaid' },
-  { value: 'Partially paid', label: 'Partially paid' },
-  { value: 'Needs review', label: 'Needs review' },
-];
-
-const statusClass = {
-  green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  blue: 'border-blue-200 bg-blue-50 text-blue-700',
-  amber: 'border-amber-200 bg-amber-50 text-amber-800',
-  purple: 'border-violet-200 bg-violet-50 text-violet-700',
-  slate: 'border-slate-200 bg-slate-100 text-slate-700',
+const paymentStatusClass = {
+  'Buyer Payment': 'border-blue-200 bg-blue-50 text-blue-700',
+  'Supplier Refund': 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  Unmatched: 'border-amber-200 bg-amber-50 text-amber-800',
 };
 
 function todayHongKong() {
@@ -83,37 +64,34 @@ function csvSafe(value) {
 }
 
 function downloadCsv(rows) {
-  const headers = ['Type', 'Date', 'Invoice Due Date', 'Delay', 'From', 'Group', 'STEM', 'Amount', 'Receivable Balance', 'Payable Balance', 'Status', 'Reference'];
+  const headers = ['Status', 'Received Date', 'Payment Terms', 'Delay', 'From', 'Group', 'STEM', 'Amount', 'Receivable Balance'];
   const lines = [
     headers.map(csvSafe).join(','),
     ...rows.map((row) => [
       row.type || '',
       row.paymentDate || '',
-      row.invoiceDueDate || (row.type === 'Buyer Payment' ? '' : 'N/A'),
+      row.type === 'Buyer Payment' ? row.paymentTerms || '' : 'N/A',
       row.delayDays == null ? (row.type === 'Buyer Payment' ? '' : 'N/A') : `${row.delayDays} Days`,
       row.partyName || '',
       row.buyerGroupName || '',
       row.stemName || '',
       row.amount ?? '',
       row.receivableBalance ?? '',
-      row.payableBalance ?? '',
-      row.status || '',
-      row.reference || '',
     ].map(csvSafe).join(',')),
   ];
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `incoming_payments_${todayHongKong()}.csv`;
+  link.download = `receivable_payments_${todayHongKong()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }
 
-function StatusBadge({ row }) {
+function PaymentStatusBadge({ row }) {
   return (
-    <Badge variant="outline" className={cn('whitespace-nowrap', statusClass[row.statusTone] || statusClass.slate)}>
-      {row.status || '-'}
+    <Badge variant="outline" className={cn('whitespace-nowrap', paymentStatusClass[row.type] || paymentStatusClass.Unmatched)}>
+      {row.type || '-'}
     </Badge>
   );
 }
@@ -123,8 +101,6 @@ export default function IncomingPayments() {
   const { isAdministrator } = useAuth();
   const [dateFrom, setDateFrom] = useState(todayHongKong);
   const [dateTo, setDateTo] = useState(todayHongKong);
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -160,30 +136,150 @@ export default function IncomingPayments() {
   }, []);
 
   const rows = data?.rows || [];
+  const buyerCiaRows = data?.buyerCiaInvoices || [];
   const visibleRows = useMemo(() => {
-    let result = rows;
-    if (typeFilter === 'incoming') result = result.filter((row) => row.isIncoming);
-    else if (typeFilter !== 'all') result = result.filter((row) => row.type === typeFilter || (typeFilter === 'Unmatched' && row.status === 'Needs review'));
-    if (statusFilter !== 'all') result = result.filter((row) => row.status === statusFilter);
     const query = search.trim().toLowerCase();
-    if (query) {
-      result = result.filter((row) => [
-        row.partyName,
-        row.stemName,
-        row.keyStem,
-        row.buyerName,
-        row.buyerGroupName,
-        row.supplierName,
-        row.supplierInvoiceName,
-        row.reference,
-      ].some((value) => lowerText(value).includes(query)));
-    }
-    return result;
-  }, [rows, search, statusFilter, typeFilter]);
+    if (!query) return rows;
+    return rows.filter((row) => [
+      row.partyName,
+      row.stemName,
+      row.keyStem,
+      row.buyerName,
+      row.buyerGroupName,
+      row.supplierName,
+      row.supplierInvoiceName,
+    ].some((value) => lowerText(value).includes(query)));
+  }, [rows, search]);
 
   const summary = data?.summary || {};
   const threshold = data?.settings?.fullyPaidThreshold ?? 50;
   const lastMeta = data?.dateFrom && data?.dateTo ? `${fmtDate(data.dateFrom)} to ${fmtDate(data.dateTo)}` : null;
+
+  const receivableColumns = useMemo(() => [
+    { id: 'status', header: 'Status', cell: (row) => <PaymentStatusBadge row={row} /> },
+    {
+      id: 'receivedDate',
+      header: 'Received Date',
+      headerClassName: 'whitespace-nowrap',
+      cellClassName: 'whitespace-nowrap text-sm',
+      cell: (row) => fmtDate(row.paymentDate),
+    },
+    {
+      id: 'paymentTerms',
+      header: 'Payment Terms',
+      headerClassName: 'whitespace-nowrap',
+      cellClassName: 'whitespace-nowrap text-sm',
+      cell: (row) => row.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A',
+    },
+    {
+      id: 'delay',
+      header: 'Delay',
+      headerClassName: 'whitespace-nowrap',
+      cellClassName: 'whitespace-nowrap text-sm',
+      cell: (row) => row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${row.delayDays} Days`) : 'N/A',
+    },
+    {
+      id: 'from',
+      header: 'From',
+      cellClassName: 'max-w-[220px] text-sm',
+      cell: (row) => <div className="font-medium text-foreground">{row.partyName || '-'}</div>,
+    },
+    { id: 'group', header: 'Group', cellClassName: 'min-w-[160px] text-sm', cell: (row) => row.buyerGroupName || '-' },
+    { id: 'stem', header: 'STEM', cellClassName: 'min-w-[240px] text-sm', cell: (row) => row.stemName || '-' },
+    {
+      id: 'amount',
+      header: 'Amount',
+      headerClassName: 'text-right',
+      cellClassName: 'whitespace-nowrap text-right font-medium',
+      cell: (row) => fmtMoney(row.amount, row.currency),
+    },
+    {
+      id: 'receivable',
+      header: 'Receivable',
+      headerClassName: 'text-right',
+      cellClassName: 'whitespace-nowrap text-right',
+      cell: (row) => (
+        <span className={cn(Number(row.receivableBalance) < 0 && 'font-semibold text-violet-700')}>
+          {row.receivableBalance == null ? '-' : fmtMoney(row.receivableBalance, row.currency)}
+        </span>
+      ),
+    },
+  ], []);
+
+  const ciaColumns = useMemo(() => [
+    { id: 'buyer', header: 'Buyer', cellClassName: 'min-w-[220px] text-sm font-medium', cell: (row) => row.buyerName || '-' },
+    { id: 'group', header: 'Group', cellClassName: 'min-w-[180px] text-sm', cell: (row) => row.buyerGroupName || '-' },
+    { id: 'buyerTrader', header: 'Buyer Trader', cellClassName: 'min-w-[160px] text-sm', cell: (row) => row.buyerTrader || '-' },
+    { id: 'stem', header: 'STEM', cellClassName: 'min-w-[240px] text-sm', cell: (row) => row.stemName || '-' },
+    {
+      id: 'calculatedAmount',
+      header: 'Calculated Amount',
+      headerClassName: 'text-right',
+      cellClassName: 'whitespace-nowrap text-right font-medium',
+      cell: (row) => fmtMoney(row.calculatedAmount),
+    },
+    {
+      id: 'receivableBalance',
+      header: 'Receivable Balance',
+      headerClassName: 'text-right',
+      cellClassName: 'whitespace-nowrap text-right',
+      cell: (row) => fmtMoney(row.receivableBalance),
+    },
+    {
+      id: 'deliveryDate',
+      header: 'Delivery Date',
+      headerClassName: 'whitespace-nowrap',
+      cellClassName: 'whitespace-nowrap text-sm',
+      cell: (row) => fmtDate(row.deliveryDate),
+    },
+  ], []);
+
+  const availableBalanceColumns = useMemo(() => [
+    { id: 'group', header: 'Buyer Group', cellClassName: 'min-w-[220px] font-medium', cell: (group) => group.buyerGroupName },
+    { id: 'buyers', header: 'Buyers', cellClassName: 'min-w-[220px] text-sm text-muted-foreground', cell: (group) => group.buyerNames?.join(', ') || '-' },
+    {
+      id: 'stems',
+      header: 'Overpaid STEMs',
+      cellClassName: 'min-w-[320px] text-xs',
+      cell: (group) => (
+        <>
+          {(group.stems || []).map((stem) => (
+            <div key={stem.stemId} className="py-0.5">
+              <span className="font-medium text-foreground">{stem.stemName}</span>
+              <span className="ml-2 text-muted-foreground">{fmtMoney(stem.availableBalance)}</span>
+            </div>
+          ))}
+        </>
+      ),
+    },
+    {
+      id: 'balance',
+      header: 'Available Balance',
+      headerClassName: 'text-right',
+      cellClassName: 'whitespace-nowrap text-right font-semibold text-violet-700',
+      cell: (group) => fmtMoney(group.totalAvailableBalance),
+    },
+    {
+      id: 'action',
+      header: 'Action',
+      headerClassName: 'text-right',
+      cellClassName: 'text-right',
+      cell: (group) => (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={(event) => {
+            event.stopPropagation();
+            setAllocationTarget(group);
+            setAllocationDraft({ targetStem: '', amount: String(group.totalAvailableBalance || ''), note: '' });
+          }}
+        >
+          <ShieldCheck className="mr-2 h-4 w-4" />
+          Allocate
+        </Button>
+      ),
+    },
+  ], []);
 
   const saveSettings = async () => {
     if (!isAdministrator) {
@@ -229,8 +325,8 @@ export default function IncomingPayments() {
         icon={Banknote}
         eyebrow="Salesforce payments"
         title="Incoming Payment"
-        description="Manage buyer payments received, supplier refunds, fully paid thresholds, and buyer-group overpayment balances from Salesforce payment records."
-        meta={lastMeta ? `Payment date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
+        description="Manage receivable buyer payments, supplier refunds, fully paid thresholds, and buyer-group overpayment balances from Salesforce payment records."
+        meta={lastMeta ? `Received date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
         actions={(
           <>
             <Button variant="outline" onClick={() => setSettingsOpen(true)}>
@@ -257,12 +353,33 @@ export default function IncomingPayments() {
       </div>
 
       <TableShell
+        title="Buyer CIA Invoices"
+        meta={`${buyerCiaRows.length.toLocaleString()} unpaid CIA buyer invoice stems`}
+        className="mb-4"
+      >
+        <div className="max-h-[32vh] overflow-auto">
+          <ReorderableDataTable
+            tableKey="incoming-payment-cia-invoices"
+            columns={ciaColumns}
+            rows={buyerCiaRows}
+            rowKey={(row) => row.stemId}
+            isReorderEnabled={isAdministrator}
+            emptyIcon={Search}
+            emptyTitle="No unpaid CIA buyer invoices"
+            emptyDescription="No open buyer invoice STEMs with CIA payment terms were found."
+            onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
+            rowClassName="hover:bg-muted/40"
+          />
+        </div>
+      </TableShell>
+
+      <TableShell
         title="Payment Filters"
         meta="Filters use Hong Kong date basis and the selected Payment__c date field."
         bodyClassName="p-4"
         className="mb-4"
       >
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_1fr_2fr_auto] md:items-end">
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto] md:items-end">
           <div>
             <Label className="text-xs text-muted-foreground">From</Label>
             <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
@@ -272,28 +389,10 @@ export default function IncomingPayments() {
             <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Type</Label>
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {TYPE_FILTERS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Status</Label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {STATUS_FILTERS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
             <Label className="text-xs text-muted-foreground">Keyword</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payment, STEM, buyer, group, supplier, reference" />
+              <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search STEM, buyer, group, or supplier" />
             </div>
           </div>
           <Button variant="outline" onClick={() => load({ force: true })} disabled={loading}>
@@ -320,70 +419,25 @@ export default function IncomingPayments() {
       {!error && (
         <>
           <TableShell
-            title="Salesforce Payment Records"
+            title="Receivable Payments"
             meta={`${visibleRows.length.toLocaleString()} visible of ${rows.length.toLocaleString()} records`}
             className="mb-4"
           >
             <div className="max-h-[52vh] overflow-auto">
-              <Table>
-                <TableHeader className="sticky top-0 z-10 bg-card">
-                  <TableRow>
-                    <TableHead>Type</TableHead>
-                    <TableHead className="whitespace-nowrap">Date</TableHead>
-                    <TableHead className="whitespace-nowrap">Invoice Due Date</TableHead>
-                    <TableHead className="whitespace-nowrap">Delay</TableHead>
-                    <TableHead>From</TableHead>
-                    <TableHead>Group</TableHead>
-                    <TableHead>STEM</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="text-right">Receivable</TableHead>
-                    <TableHead className="text-right">Payable</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Reference</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading && (
-                    <TableRow>
-                      <TableCell colSpan={12}>
-                        <StateBlock icon={Loader2} title="Loading payment records" description="Reading Salesforce Payment__c records." />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {!loading && !visibleRows.length && (
-                    <TableRow>
-                      <TableCell colSpan={12}>
-                        <StateBlock icon={Search} title="No payments found" description="Adjust the filters or refresh the Salesforce data." />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {!loading && visibleRows.map((row) => (
-                    <TableRow
-                      key={row.id}
-                      className={cn('hover:bg-muted/40', row.stemId && 'cursor-pointer')}
-                      onClick={() => row.stemId && setSelectedStemId(row.stemId)}
-                    >
-                      <TableCell className="whitespace-nowrap text-sm font-medium">{row.type}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{fmtDate(row.paymentDate)}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{row.type === 'Buyer Payment' ? fmtDate(row.invoiceDueDate) : 'N/A'}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${row.delayDays} Days`) : 'N/A'}</TableCell>
-                      <TableCell className="max-w-[220px] text-sm">
-                        <div className="font-medium text-foreground">{row.partyName || '-'}</div>
-                        {row.supplierInvoiceName && <div className="text-xs text-muted-foreground">{row.supplierInvoiceName}</div>}
-                      </TableCell>
-                      <TableCell className="min-w-[160px] text-sm">{row.buyerGroupName || '-'}</TableCell>
-                      <TableCell className="min-w-[240px] text-sm">{row.stemName || '-'}</TableCell>
-                      <TableCell className="whitespace-nowrap text-right font-medium">{fmtMoney(row.amount, row.currency)}</TableCell>
-                      <TableCell className={cn('whitespace-nowrap text-right', Number(row.receivableBalance) < 0 && 'font-semibold text-violet-700')}>
-                        {row.receivableBalance == null ? '-' : fmtMoney(row.receivableBalance, row.currency)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-right">{row.payableBalance == null ? '-' : fmtMoney(row.payableBalance, row.currency)}</TableCell>
-                      <TableCell><StatusBadge row={row} /></TableCell>
-                      <TableCell className="max-w-[220px] truncate text-xs text-muted-foreground">{row.reference || '-'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <ReorderableDataTable
+                tableKey="incoming-payment-receivable-payments"
+                columns={receivableColumns}
+                rows={visibleRows}
+                rowKey={(row) => row.id}
+                loading={loading}
+                loadingTitle="Loading receivable payments"
+                emptyIcon={Search}
+                emptyTitle="No payments found"
+                emptyDescription="Adjust the filters or refresh the Salesforce data."
+                isReorderEnabled={isAdministrator}
+                onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
+                rowClassName={(row) => cn('hover:bg-muted/40', row.stemId && 'cursor-pointer')}
+              />
             </div>
           </TableShell>
 
@@ -392,54 +446,17 @@ export default function IncomingPayments() {
             meta="Overpaid STEMs are grouped by buyer group. Allocation is limited to the same buyer group."
           >
             <div className="max-h-[36vh] overflow-auto">
-              <Table>
-                <TableHeader className="sticky top-0 z-10 bg-card">
-                  <TableRow>
-                    <TableHead>Buyer Group</TableHead>
-                    <TableHead>Buyers</TableHead>
-                    <TableHead>Overpaid STEMs</TableHead>
-                    <TableHead className="text-right">Available Balance</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {!data?.availableBalances?.length && (
-                    <TableRow>
-                      <TableCell colSpan={5}>
-                        <StateBlock icon={WalletCards} title="No available buyer balances" description="No linked STEM has Receivable_Balance__c below zero in this payment range." />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {data?.availableBalances?.map((group) => (
-                    <TableRow key={group.buyerGroupName} className="hover:bg-muted/40">
-                      <TableCell className="min-w-[220px] font-medium">{group.buyerGroupName}</TableCell>
-                      <TableCell className="min-w-[220px] text-sm text-muted-foreground">{group.buyerNames?.join(', ') || '-'}</TableCell>
-                      <TableCell className="min-w-[320px] text-xs">
-                        {(group.stems || []).map((stem) => (
-                          <div key={stem.stemId} className="py-0.5">
-                            <span className="font-medium text-foreground">{stem.stemName}</span>
-                            <span className="ml-2 text-muted-foreground">{fmtMoney(stem.availableBalance)}</span>
-                          </div>
-                        ))}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-right font-semibold text-violet-700">{fmtMoney(group.totalAvailableBalance)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setAllocationTarget(group);
-                            setAllocationDraft({ targetStem: '', amount: String(group.totalAvailableBalance || ''), note: '' });
-                          }}
-                        >
-                          <ShieldCheck className="mr-2 h-4 w-4" />
-                          Allocate
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <ReorderableDataTable
+                tableKey="incoming-payment-available-balances"
+                columns={availableBalanceColumns}
+                rows={data?.availableBalances || []}
+                rowKey={(group) => group.buyerGroupName}
+                isReorderEnabled={isAdministrator}
+                emptyIcon={WalletCards}
+                emptyTitle="No available buyer balances"
+                emptyDescription="No linked STEM has Receivable_Balance__c below zero in this payment range."
+                rowClassName="hover:bg-muted/40"
+              />
             </div>
           </TableShell>
         </>

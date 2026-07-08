@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.2',
+    releasedAt: '2026-07-08',
+    title: 'Receivable payment cleanup and CIA monitor',
+    changes: [
+      'Excluded outgoing supplier payments from Incoming Payment unless the supplier payment amount is negative as a supplier refund.',
+      'Renamed Salesforce Payment Records to Receivable Payments and simplified columns around status, received date, payment terms, delay, sender, group, STEM, amount, and receivable balance.',
+      'Added Buyer CIA Invoices to monitor unpaid CIA buyer invoice STEMs with buyer, group, buyer trader, STEM, calculated amount, receivable balance, and delivery date.',
+      'Added an administrator-only reusable drag-and-drop column ordering component and applied it to the Incoming Payment tables.',
+    ],
+  },
   {
     version: '1.0.1',
     releasedAt: '2026-07-08',
