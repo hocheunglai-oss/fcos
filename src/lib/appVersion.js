@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.3';
+export const APP_VERSION = '1.0.4';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.4',
+    releasedAt: '2026-07-08',
+    title: 'Stem payment and bank charge refinement',
+    changes: [
+      'Grouped bank charge payments underneath their related Receivable Payments amount line.',
+      'Moved supplier paid dates and buyer received dates into the Stem Detail financial panel.',
+      'Removed the meaningless payment-name column from Stem Detail payment date tables.',
+      'Added receivable and payable balances to Stem Detail financials and removed less useful total fields.',
+    ],
+  },
   {
     version: '1.0.3',
     releasedAt: '2026-07-08',

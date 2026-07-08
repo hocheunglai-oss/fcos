@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 const paymentStatusClass = {
   'Buyer Payment': 'border-blue-200 bg-blue-50 text-blue-700',
   'Supplier Refund': 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  'Bank Charge': 'border-amber-200 bg-amber-50 text-amber-800',
   Unmatched: 'border-amber-200 bg-amber-50 text-amber-800',
 };
 
@@ -75,7 +76,7 @@ function downloadCsv(rows) {
       row.partyName || '',
       row.buyerGroupName || '',
       row.stemName || '',
-      row.amount ?? '',
+      [row.amount ?? '', ...(row.bankCharges || []).map((charge) => `Bank Charge ${charge.amount ?? ''}`)].filter(Boolean).join('\n'),
       row.receivableBalance ?? '',
     ].map(csvSafe).join(',')),
   ];
@@ -191,7 +192,16 @@ export default function IncomingPayments() {
       header: 'Amount',
       headerClassName: 'text-right',
       cellClassName: 'whitespace-nowrap text-right font-medium',
-      cell: (row) => fmtMoney(row.amount, row.currency),
+      cell: (row) => (
+        <div>
+          <div>{fmtMoney(row.amount, row.currency)}</div>
+          {(row.bankCharges || []).map((charge) => (
+            <div key={charge.id || charge.paymentId} className="text-xs font-semibold text-amber-700">
+              Bank Charge {fmtMoney(charge.amount, charge.currency || row.currency)}
+            </div>
+          ))}
+        </div>
+      ),
     },
     {
       id: 'receivable',

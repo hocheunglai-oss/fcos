@@ -79,23 +79,6 @@ const SECTIONS = [
     ],
   },
   {
-    title: 'Financials',
-    fields: [
-      { key: 'Total_Invoice_Amount__c', label: 'Buyer Invoice Amount', fmt: fmtMoney },
-      { key: '_Supplier_Invoice_Amount', label: 'Supplier Invoice Amount', fmt: fmtMoney },
-      { key: 'Costs_Total__c', label: 'Total Costs', fmt: fmtMoney },
-      { key: 'Invoice_Amount__c', label: 'Invoice Amount', fmt: fmtMoney },
-      { key: 'Payment_Amount__c', label: 'Payment Amount', fmt: fmtMoney },
-      { key: 'STEM_Line_Item_Total__c', label: 'Line Item Total', fmt: fmtMoney },
-      { key: 'Total__c', label: 'Total', fmt: fmtMoney },
-      { key: 'Balance__c', label: 'Balance', fmt: fmtMoney },
-      { key: 'Actual_Balance__c', label: 'Actual Balance', fmt: fmtMoney },
-      { key: 'Overdue__c', label: 'Overdue Amount', fmt: fmtMoney },
-      { key: 'Buyer_Paid__c', label: 'Buyer Paid', fmt: fmtMoney },
-      { key: 'Total_Difference__c', label: 'Total Difference', fmt: fmtBool },
-    ],
-  },
-  {
     title: 'Dispute',
     fields: [
       { key: 'Dispute__c', label: 'Has Dispute', fmt: fmtBool },
@@ -558,7 +541,6 @@ function PaymentRowsTable({ rows, type }) {
         <thead>
           <tr className="border-b border-border bg-muted/40">
             {isSupplier && <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">Supplier Invoice</th>}
-            <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">Payment</th>
             <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right font-semibold text-muted-foreground">Amount</th>
             <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left font-semibold text-muted-foreground">
               {isSupplier ? 'Paid Date' : 'Received Date'}
@@ -569,7 +551,6 @@ function PaymentRowsTable({ rows, type }) {
           {rows.map((payment, index) => (
             <tr key={payment.Id || `${type}-${index}`} className={`border-b border-border/40 ${index % 2 ? 'bg-muted/10' : ''}`}>
               {isSupplier && <td className="px-3 py-2 font-medium text-foreground">{payment._Supplier_Invoice_Name || payment.Supplier_Invoice__c || '—'}</td>}
-              <td className="px-3 py-2 text-foreground">{payment.Name || payment.Id || '—'}</td>
               <td className="px-3 py-2 text-right font-medium text-foreground">{payment._Payment_Amount != null ? fmtMoney(payment._Payment_Amount) : '—'}</td>
               <td className="px-3 py-2 text-foreground">{fmtDate(payment.Date__c)}</td>
             </tr>
@@ -580,24 +561,58 @@ function PaymentRowsTable({ rows, type }) {
   );
 }
 
-function PaymentDatesSection({ supplierPayments, buyerPayments }) {
+function FinancialMetric({ label, value, tone = 'default' }) {
+  const toneClass = tone === 'receivable'
+    ? 'text-blue-700'
+    : tone === 'payable'
+      ? 'text-amber-700'
+      : 'text-foreground';
   return (
-    <div>
-      <SectionHeader title="Payment Dates" />
+    <div className="rounded-lg border border-border bg-card px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={`mt-0.5 text-base font-semibold ${toneClass}`}>{fmtMoney(value)}</div>
+    </div>
+  );
+}
+
+function FinancialSummaryCard({ record, supplierPayments, buyerPayments }) {
+  return (
+    <div className="rounded-xl bg-muted/20 p-4 md:col-span-2 xl:col-span-3">
+      <SectionHeader title="Financials" />
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl bg-muted/20 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold text-foreground">Supplier Invoice Paid Dates</h4>
-            <span className="text-xs text-muted-foreground">{supplierPayments.length} payment{supplierPayments.length === 1 ? '' : 's'}</span>
+        <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+          <div>
+            <div className="text-sm font-semibold text-foreground">Buyer Side</div>
+            <div className="text-xs text-muted-foreground">Invoice value, open receivable, and received dates.</div>
           </div>
-          <PaymentRowsTable rows={supplierPayments} type="supplier" />
+          <div className="grid gap-2 sm:grid-cols-2">
+            <FinancialMetric label="Buyer Invoice Amount" value={record.Total_Invoice_Amount__c} />
+            <FinancialMetric label="Receivable Balance" value={record.Receivable_Balance__c} tone="receivable" />
+          </div>
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Buyer Invoice Received Dates</h4>
+              <span className="text-xs text-muted-foreground">{buyerPayments.length} date{buyerPayments.length === 1 ? '' : 's'}</span>
+            </div>
+            <PaymentRowsTable rows={buyerPayments} type="buyer" />
+          </div>
         </div>
-        <div className="rounded-xl bg-muted/20 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold text-foreground">Buyer Invoice Received Dates</h4>
-            <span className="text-xs text-muted-foreground">{buyerPayments.length} payment{buyerPayments.length === 1 ? '' : 's'}</span>
+        <div className="space-y-3 rounded-xl border border-amber-100 bg-amber-50/40 p-3">
+          <div>
+            <div className="text-sm font-semibold text-foreground">Supplier Side</div>
+            <div className="text-xs text-muted-foreground">Supplier invoice value, open payable, and paid dates.</div>
           </div>
-          <PaymentRowsTable rows={buyerPayments} type="buyer" />
+          <div className="grid gap-2 sm:grid-cols-2">
+            <FinancialMetric label="Supplier Invoice Amount" value={record._Supplier_Invoice_Amount} />
+            <FinancialMetric label="Payable Balance" value={record.Payable_Balance__c} tone="payable" />
+          </div>
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Supplier Invoice Paid Dates</h4>
+              <span className="text-xs text-muted-foreground">{supplierPayments.length} date{supplierPayments.length === 1 ? '' : 's'}</span>
+            </div>
+            <PaymentRowsTable rows={supplierPayments} type="supplier" />
+          </div>
         </div>
       </div>
     </div>
@@ -748,6 +763,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
               <div className="space-y-7">
                 {/* Info sections in a 3-col grid */}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <FinancialSummaryCard record={record} supplierPayments={supplierInvoicePayments} buyerPayments={buyerInvoicePayments} />
                   {SECTIONS.map(section => {
                     const rows = section.fields.filter(f => {
                       const v = record[f.key];
@@ -773,8 +789,6 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                     );
                   })}
                 </div>
-
-                <PaymentDatesSection supplierPayments={supplierInvoicePayments} buyerPayments={buyerInvoicePayments} />
 
                 {/* Line Items */}
                 {lineItems.length > 0 && (
