@@ -296,6 +296,14 @@ export default function IncomingPayments() {
     setInterestRequestLoading((prev) => ({ ...prev, [paymentId]: true }));
     try {
       const delivery = incomingPaymentSmtpCredentials(emailSettings.from || DEFAULT_EMAIL_SETTINGS.from);
+      if (!delivery.credentials) {
+        toast({
+          title: 'Email sender not configured',
+          description: 'Save and enable an SMTP sender in Settings > Email Senders, then try the interest invoice request again.',
+          variant: 'destructive',
+        });
+        return;
+      }
       const res = await appClient.functions.invoke('incomingPaymentInterestInvoiceRequest', {
         paymentId,
         paymentName: row.paymentName || row.paymentDisplayName || row.salesforcePaymentName,

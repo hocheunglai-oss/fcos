@@ -4918,7 +4918,13 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile);
   const credentials = body.credentials || {};
   const from = String(body.from || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from);
-  const useSmtp = credentials.method === 'smtp' || credentials.smtp || (!process.env.RESEND_API_KEY && process.env.SMTP_HOST);
+  const hasBrowserSmtp = Boolean(credentials.method === 'smtp' || credentials.smtp);
+  const hasServerSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+  const hasResend = Boolean(process.env.RESEND_API_KEY);
+  if (!hasBrowserSmtp && !hasServerSmtp && !hasResend) {
+    throw appError('Interest invoice request sender is not configured. Save and enable an SMTP sender in Settings > Email Senders, then try again.', 400);
+  }
+  const useSmtp = hasBrowserSmtp || hasServerSmtp;
   const smtpFrom = credentials.smtp?.from || credentials.from || from;
   const result = useSmtp
     ? await sendWithSmtp({

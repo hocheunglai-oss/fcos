@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.11';
+export const APP_VERSION = '1.0.12';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.12',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment notification fixes',
+    changes: [
+      'Changed late payment interest requests to require a saved SMTP sender instead of falling through to missing Resend configuration.',
+      'Improved the missing sender message so users know to configure Settings > Email Senders.',
+      'Raised the notification layer and made toast close buttons always visible and clickable.',
+    ],
+  },
   {
     version: '1.0.11',
     releasedAt: '2026-07-08',
