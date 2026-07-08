@@ -102,11 +102,16 @@ async function invoke(name, payload = {}, options = {}) {
     const { data } = await supabase.auth.getSession();
     if (data?.session?.access_token) headers.authorization = `Bearer ${data.session.access_token}`;
   }
-  const res = await fetch(`/api/functions/${name}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  let res;
+  try {
+    res = await fetch(`/api/functions/${name}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    return { data: { error: error?.message || 'Network request failed. Check your connection and try again.' } };
+  }
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {

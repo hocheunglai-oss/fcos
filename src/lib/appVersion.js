@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.7';
+export const APP_VERSION = '1.0.8';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.8',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment email error visibility',
+    changes: [
+      'Made Incoming Payment report send failures show a visible toast and modal error.',
+      'Separated Previewing and Sending button states in the Incoming Payment report email modal.',
+      'Hardened API calls so network failures return visible errors instead of leaving pages stuck.',
+    ],
+  },
   {
     version: '1.0.7',
     releasedAt: '2026-07-08',

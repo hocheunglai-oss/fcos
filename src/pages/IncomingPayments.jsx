@@ -132,6 +132,7 @@ export default function IncomingPayments() {
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailSettings, setEmailSettings] = useState(readEmailSettings);
   const [emailBusy, setEmailBusy] = useState(false);
+  const [emailAction, setEmailAction] = useState('');
   const [emailPreview, setEmailPreview] = useState(null);
   const [emailError, setEmailError] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
@@ -378,32 +379,57 @@ export default function IncomingPayments() {
   };
 
   const runEmailReport = async (preview = true) => {
+    if (!preview && !String(emailSettings.to || '').trim()) {
+      const message = 'Enter at least one To recipient before sending.';
+      setEmailError(message);
+      toast({ title: 'Email send failed', description: message, variant: 'destructive' });
+      return;
+    }
     setEmailBusy(true);
+    setEmailAction(preview ? 'preview' : 'send');
     setEmailError('');
     setEmailMessage('');
-    if (!preview) saveEmailSettings(emailSettings);
-    const smtpSettings = readSmtpSettings();
-    const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
-      ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587), from: smtpFromAddress(smtpSettings, emailSettings.from) } }
-      : undefined;
-    const res = await appClient.functions.invoke('incomingPaymentEmailReport', {
-      dateFrom,
-      dateTo,
-      search,
-      settings: emailSettings,
-      credentials,
-      preview,
-    });
-    if (res.data?.error) {
-      setEmailError(res.data.error);
-    } else if (preview) {
-      setEmailPreview(res.data.email || null);
-      setEmailMessage(`Preview ready: ${res.data.report?.receivableRows ?? 0} receivable payments and ${res.data.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
-    } else {
-      setEmailPreview(res.data.email || null);
-      setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to}.`);
+    try {
+      if (!preview) saveEmailSettings(emailSettings);
+      const smtpSettings = readSmtpSettings();
+      const credentials = hasUsableSmtpSettings(smtpSettings) && !preview
+        ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587), from: smtpFromAddress(smtpSettings, emailSettings.from) } }
+        : undefined;
+      const res = await appClient.functions.invoke('incomingPaymentEmailReport', {
+        dateFrom,
+        dateTo,
+        search,
+        settings: emailSettings,
+        credentials,
+        preview,
+      });
+      if (res.data?.error) {
+        setEmailError(res.data.error);
+        toast({
+          title: preview ? 'Email preview failed' : 'Email send failed',
+          description: res.data.error,
+          variant: 'destructive',
+        });
+      } else if (preview) {
+        setEmailPreview(res.data.email || null);
+        setEmailMessage(`Preview ready: ${res.data.report?.receivableRows ?? 0} receivable payments and ${res.data.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
+      } else {
+        setEmailPreview(res.data.email || null);
+        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to}.`);
+        toast({ title: 'Incoming Payment report sent', description: `Sent to ${res.data.to?.join(', ') || emailSettings.to}.` });
+      }
+    } catch (error) {
+      const message = error?.message || 'Unexpected error while sending Incoming Payment report.';
+      setEmailError(message);
+      toast({
+        title: preview ? 'Email preview failed' : 'Email send failed',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setEmailBusy(false);
+      setEmailAction('');
     }
-    setEmailBusy(false);
   };
 
   const confirmAllocation = async () => {
@@ -735,8 +761,8 @@ export default function IncomingPayments() {
                   </div>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => runEmailReport(true)} disabled={emailBusy}>
-                  {emailBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
-                  Preview
+                  {emailAction === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
+                  {emailAction === 'preview' ? 'Previewing' : 'Preview'}
                 </Button>
               </div>
               <div className="h-[520px] overflow-auto p-4">
@@ -757,8 +783,8 @@ export default function IncomingPayments() {
             <Button variant="outline" onClick={() => setEmailOpen(false)}>Close</Button>
             <Button variant="outline" onClick={saveEmailTemplate}>Save Template</Button>
             <Button onClick={() => runEmailReport(false)} disabled={emailBusy}>
-              {emailBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-              Send Email
+              {emailAction === 'send' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              {emailAction === 'send' ? 'Sending' : 'Send Email'}
             </Button>
           </DialogFooter>
         </DialogContent>
