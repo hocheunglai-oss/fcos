@@ -6401,6 +6401,8 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
       emailDelivery: serverEmailDeliveryStatus(),
       from: settings.from,
       daysAhead: report.daysAhead,
+      paymentReminderCc: settings.paymentReminderCc,
+      paymentReminderBcc: settings.paymentReminderBcc,
     },
   };
 }

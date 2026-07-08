@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.20';
+export const APP_VERSION = '1.0.21';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.21',
+    releasedAt: '2026-07-08',
+    title: 'External reminder preview cleanup',
+    changes: [
+      'Changed the payment reminder modal title to External payment reminder.',
+      'Improved Buyer-only routing badge color and alignment in related invoice selection.',
+      'Added saved CC and BCC template fields while keeping To as final review-only routing.',
+      'Changed the reminder preview to show actual To, Cc, Bcc, Subject, and selected invoice rows.',
+    ],
+  },
   {
     version: '1.0.20',
     releasedAt: '2026-07-08',

@@ -277,9 +277,53 @@ function invoiceTableMarkerHtml(count) {
     </div>`;
 }
 
-function emailBodyPreviewHtml(body, selectedCount) {
+function invoiceTablePreviewHtml(rows = []) {
+  if (!rows.length) return invoiceTableMarkerHtml(0);
+  const bodyRows = rows.map((row) => {
+    const severity = overdueSeverity(row.daysUntilDue);
+    const rowStyle = severity === 'red'
+      ? 'background:#fee2e2'
+      : severity === 'orange'
+        ? 'background:#fed7aa'
+        : severity === 'yellow'
+          ? 'background:#fef08a'
+          : '';
+    const cellStyle = 'border-bottom:1px solid #d9e2ef;padding:7px 8px;vertical-align:top;white-space:nowrap';
+    return `
+      <tr style="${rowStyle}">
+        <td style="${cellStyle};font-weight:600;white-space:normal;min-width:170px">${escapeHtml(row.stemName)}</td>
+        <td style="${cellStyle};white-space:normal;min-width:120px">${escapeHtml(row.buyerName || '-')}</td>
+        <td style="${cellStyle};text-align:right">${fmtMoney(row.invoiceAmount)}</td>
+        <td style="${cellStyle};text-align:right;font-weight:600">${fmtMoney(row.receivableBalance)}</td>
+        <td style="${cellStyle}">${fmtDate(row.buyerInvoiceDueDate)}</td>
+        <td style="${cellStyle};white-space:normal;min-width:95px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
+        <td style="${cellStyle};white-space:normal;min-width:90px">${escapeHtml(row.prpspStatus || '-')}</td>
+        <td style="${cellStyle};text-align:right;font-weight:600">${escapeHtml(overdueDisplayValue(row.daysUntilDue))}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #d9e2ef;border-radius:10px;margin:14px 0 16px;max-width:100%">
+      <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
+        <thead>
+          <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Invoice</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">PSPRS</th>
+            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function emailBodyPreviewHtml(body, rows = []) {
   const html = normalizeReminderPreviewHtml(body);
-  const marker = invoiceTableMarkerHtml(selectedCount);
+  const marker = invoiceTablePreviewHtml(rows);
   const tokenPattern = /\{\{\s*invoiceTable\s*\}\}/i;
   if (tokenPattern.test(html)) {
     return html
@@ -570,7 +614,7 @@ function brokerRoutingLabel(mode) {
 function brokerRoutingTone(mode) {
   if (mode === 'broker_only') return 'border-purple-200 bg-purple-50 text-purple-700';
   if (mode === 'buyer_cc_broker') return 'border-blue-200 bg-blue-50 text-blue-700';
-  return 'border-border bg-background text-muted-foreground';
+  return 'border-slate-200 bg-slate-100 text-slate-700';
 }
 
 async function writeClipboardTable({ html, text }) {
@@ -863,6 +907,8 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
         ]));
         const baseForm = {
           recipientBatches: baseRecipientBatches,
+          templateCc: res.data.settings?.paymentReminderCc || '',
+          templateBcc: res.data.settings?.paymentReminderBcc || '',
           subject: res.data.subject || '',
           body: richTemplateValue(res.data.body || ''),
         };
@@ -958,18 +1004,23 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       buyerTraderEmail: previewSelectedRow?.buyerTraderEmail || '',
       paymentHandlerName: previewSelectedRow?.paymentHandlerName || previewSelectedRow?.collection?.ownerName || '',
       paymentHandlerEmail: previewSelectedRow?.paymentHandlerEmail || '',
-      buyerBrokerNames: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerNames).filter(Boolean))].join(', '),
-      buyerBrokerEmails: uniqueEmailList(...selectedRows.map((candidate) => candidate.buyerBrokerEmails || '')).join(', '),
-      buyerBrokerInvoiceFormats: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerInvoiceFormats).filter(Boolean))].join(', '),
-      toRecipients: selectedPreviewRecipients.to || '',
-      psprsStatus: previewSelectedRow?.prpspStatus || '',
-      overdue: overdueDisplayValue(previewSelectedRow?.daysUntilDue),
-      invoiceStatus: previewSelectedRow?.status || '',
+	      buyerBrokerNames: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerNames).filter(Boolean))].join(', '),
+	      buyerBrokerEmails: uniqueEmailList(...selectedRows.map((candidate) => candidate.buyerBrokerEmails || '')).join(', '),
+	      buyerBrokerInvoiceFormats: [...new Set(selectedRows.map((candidate) => candidate.buyerBrokerInvoiceFormats).filter(Boolean))].join(', '),
+	      toRecipients: selectedPreviewRecipients.to || '',
+	      ccRecipients: selectedPreviewRecipients.cc || '',
+	      bccRecipients: selectedPreviewRecipients.bcc || '',
+	      psprsStatus: previewSelectedRow?.prpspStatus || '',
+	      overdue: overdueDisplayValue(previewSelectedRow?.daysUntilDue),
+	      invoiceStatus: previewSelectedRow?.status || '',
       daysAhead: String(daysAhead ?? DEFAULT_EMAIL_SETTINGS.daysAhead),
       invoiceCount: String(selectedRows.length),
       totalReceivable: fmtMoney(totalReceivable),
     };
-  }, [daysAhead, previewSelectedRow, selectedPreviewGroup, selectedPreviewRecipients.to, selectedRows]);
+	  }, [daysAhead, previewSelectedRow, selectedPreviewGroup, selectedPreviewRecipients.bcc, selectedPreviewRecipients.cc, selectedPreviewRecipients.to, selectedRows]);
+	  const renderedPreviewSubject = useMemo(() => (
+	    renderReminderPreviewTemplate(form.subject, previewContext)
+	  ), [form.subject, previewContext]);
   const renderedPreviewBody = useMemo(() => (
     renderReminderPreviewTemplate(form.body, previewContext)
   ), [form.body, previewContext]);
@@ -1085,14 +1136,16 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', {
       settings: {
         ...(data?.settings || {}),
-        paymentReminderSubject: form.subject,
-        paymentReminderBody: form.body,
-      },
-    });
+	        paymentReminderSubject: form.subject,
+	        paymentReminderCc: form.templateCc || '',
+	        paymentReminderBcc: form.templateBcc || '',
+	        paymentReminderBody: form.body,
+	      },
+	    });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
-      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, subject: form.subject, body: form.body } } : prev);
+	      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
       clearDraft(draftKey);
       setTemplateMessage('Payment reminder template saved.');
       setTemplateEditing(false);
@@ -1102,21 +1155,23 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
 
   const cancelPaymentReminderTemplateChanges = () => {
     setForm((prev) => ({
-      ...prev,
-      subject: baseDraftValue?.form?.subject ?? prev.subject,
-      body: baseDraftValue?.form?.body ?? prev.body,
-    }));
+	      ...prev,
+	      templateCc: baseDraftValue?.form?.templateCc ?? prev.templateCc,
+	      templateBcc: baseDraftValue?.form?.templateBcc ?? prev.templateBcc,
+	      subject: baseDraftValue?.form?.subject ?? prev.subject,
+	      body: baseDraftValue?.form?.body ?? prev.body,
+	    }));
     setTemplateMessage('');
     setTemplateEditing(false);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-      <div className="max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Payment reminder</p>
-            <h2 className="mt-1 text-lg font-semibold text-foreground">{row.stemName}</h2>
+	      <div className="max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+	        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
+	          <div>
+	            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{row.stemName}</p>
+	            <h2 className="mt-1 text-lg font-semibold text-foreground">External payment reminder</h2>
             <p className="text-sm text-muted-foreground">
               {row.buyerName || '-'}{row.buyerGroupName ? ` · ${row.buyerGroupName}` : ''}
             </p>
@@ -1237,9 +1292,9 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                             {candidate.buyerBrokerInvoiceFormats && <div className="text-[11px] text-muted-foreground">{candidate.buyerBrokerInvoiceFormats}</div>}
                           </td>
                           <td className="px-3 py-2">
-                            <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${brokerRoutingTone(candidate.buyerBrokerRoutingMode)}`}>
-                              {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
-                            </span>
+	                            <span className={`inline-flex w-fit items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium leading-none ${brokerRoutingTone(candidate.buyerBrokerRoutingMode)}`}>
+	                              {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
+	                            </span>
                           </td>
                           <td className="px-3 py-2 text-muted-foreground">
                             {candidate.buyerBrokerRoutingMode === 'broker_only'
@@ -1305,7 +1360,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                         Only the addresses shown below will be used. Remove an address here to exclude it from sending.
                       </p>
                     </div>
-                    <div className="max-h-[26vh] space-y-3 overflow-auto pr-1">
+	                    <div className="max-h-[26vh] space-y-3 overflow-auto pr-1">
                       {selectedRecipientBatches.map((group, index) => (
                         <div key={group.key} className="rounded-lg border border-border bg-card p-3">
                           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1337,10 +1392,33 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                             </div>
                           </div>
                         </div>
-                      ))}
-                    </div>
+	                      ))}
+	                    </div>
 
-                    <div className="space-y-1.5">
+	                    <div className="grid gap-3 md:grid-cols-2">
+	                      <div className="space-y-1.5">
+	                        <Label className="text-xs text-muted-foreground">CC template</Label>
+	                        <Input
+	                          value={form.templateCc || ''}
+	                          onChange={(event) => updateForm('templateCc', event.target.value)}
+	                          disabled={!templateEditing}
+	                          placeholder="Optional CC saved to template"
+	                        />
+	                        <p className="text-[11px] text-muted-foreground">Saved for future reminders. Final CC above controls this send.</p>
+	                      </div>
+	                      <div className="space-y-1.5">
+	                        <Label className="text-xs text-muted-foreground">BCC template</Label>
+	                        <Input
+	                          value={form.templateBcc || ''}
+	                          onChange={(event) => updateForm('templateBcc', event.target.value)}
+	                          disabled={!templateEditing}
+	                          placeholder="Optional BCC saved to template"
+	                        />
+	                        <p className="text-[11px] text-muted-foreground">Saved for future reminders. Final BCC above controls this send.</p>
+	                      </div>
+	                    </div>
+
+	                    <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Subject</Label>
                       <Input value={form.subject} onChange={(event) => updateForm('subject', event.target.value)} disabled={!templateEditing} />
                     </div>
@@ -1370,13 +1448,16 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-border bg-card">
-                    <div className="border-b border-border px-3 py-2">
-                      <h3 className="text-sm font-semibold text-foreground">Email preview</h3>
-                      <p className="text-xs text-muted-foreground">
-                        The outstanding invoice table is inserted at the marker below when the email is sent.
-                      </p>
-                    </div>
+	                  <div className="rounded-xl border border-border bg-card">
+	                    <div className="border-b border-border px-3 py-2">
+	                      <h3 className="text-sm font-semibold text-foreground">Email preview</h3>
+	                      <div className="mt-1 grid gap-1 text-xs text-muted-foreground">
+	                        <div><span className="font-semibold text-foreground">To:</span> {selectedFinalTo.join(', ') || '-'}</div>
+	                        <div><span className="font-semibold text-foreground">Cc:</span> {selectedFinalCc.join(', ') || '-'}</div>
+	                        <div><span className="font-semibold text-foreground">Bcc:</span> {selectedFinalBcc.join(', ') || '-'}</div>
+	                        <div><span className="font-semibold text-foreground">Subject:</span> {renderedPreviewSubject || '-'}</div>
+	                      </div>
+	                    </div>
                     <div className="max-h-[620px] overflow-auto p-4">
                       {selectedRoutingWarnings.length > 0 && (
                         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
@@ -1386,10 +1467,10 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
                           </ul>
                         </div>
                       )}
-                      <div
-                        className="rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
-                        dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows.length) }}
-                      />
+	                      <div
+	                        className="rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
+	                        dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows) }}
+	                      />
                     </div>
                   </div>
                 </div>
