@@ -20,11 +20,9 @@ const ADMIN_APP_MODULES = [
   { id: 'disputes', label: 'Dispute Management', path: '/disputes', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
   { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
-  { id: 'reports', label: 'Report Builder', path: '/reports', sortOrder: 50 },
-  { id: 'pnl', label: 'Stem P&L', path: '/pnl', sortOrder: 60 },
+  { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
-  { id: 'explorer', label: 'Data Explorer', path: '/explorer', sortOrder: 80 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];
@@ -42,10 +40,10 @@ const DEFAULT_USER_TYPES = [
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
   administrator: ADMIN_FULL_ACCESS,
-  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: true, admin: false },
-  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, reports: true, pnl: true, brokers: true, report_archive: true, explorer: false, settings: false, admin: false },
-  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, reports: true, pnl: true, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
-  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, reports: false, pnl: false, brokers: false, report_archive: false, explorer: false, settings: false, admin: false },
+  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, pnl: true, brokers: true, report_archive: true, settings: true, admin: false },
+  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, pnl: true, brokers: true, report_archive: true, settings: false, admin: false },
+  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, pnl: true, brokers: false, report_archive: false, settings: false, admin: false },
+  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, pnl: false, brokers: false, report_archive: false, settings: false, admin: false },
 };
 
 function reportArchiveAccessLevel(value, canView = undefined) {
@@ -301,11 +299,11 @@ const HANDLER_MODULE_ACCESS = {
   reportExportRename: ['report_archive'],
   reportExportDelete: ['report_archive'],
   reportExportDownload: ['report_archive'],
-  salesforceSchema: ['reports', 'explorer', 'settings'],
-  salesforceObjectFields: ['reports', 'explorer', 'settings'],
-  salesforceFullSchema: ['reports', 'explorer', 'settings'],
-  salesforceQuery: ['dashboard', 'reports', 'explorer', 'settings'],
-  salesforceDescribeChildren: ['reports', 'explorer', 'settings'],
+  salesforceSchema: ['admin'],
+  salesforceObjectFields: ['admin'],
+  salesforceFullSchema: ['admin'],
+  salesforceQuery: ['dashboard'],
+  salesforceDescribeChildren: ['admin'],
   adminUsersList: ['admin'],
   adminAuditLogs: ['admin'],
   adminUserSave: ['admin'],

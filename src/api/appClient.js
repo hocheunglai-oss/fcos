@@ -134,7 +134,6 @@ export const appClient = {
   functions: { invoke, clearCache: clearFunctionCache },
   entities: {
     AppSettings: createEntityStore('app_settings'),
-    SavedReport: createEntityStore('saved_reports'),
   },
   auth: {
     async me() {

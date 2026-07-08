@@ -7,8 +7,6 @@ import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
 import Layout from '@/components/Layout';
-import ReportBuilder from '@/pages/ReportBuilder';
-import DataExplorer from '@/pages/DataExplorer';
 import DashboardSettings from '@/pages/DashboardSettings';
 import SettingsPage from '@/pages/Settings';
 import StemPnlReport from '@/pages/StemPnlReport';
@@ -71,8 +69,6 @@ const AuthenticatedApp = () => {
       {!authError && isAuthenticated && (
         <Route element={<Layout />}>
           <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
-          <Route path="/reports" element={<ModuleGate moduleId="reports"><ReportBuilder /></ModuleGate>} />
-          <Route path="/explorer" element={<ModuleGate moduleId="explorer"><DataExplorer /></ModuleGate>} />
           <Route path="/settings" element={<ModuleGate moduleId="settings"><SettingsPage /></ModuleGate>} />
           <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
           <Route path="/review" element={<ModuleGate moduleId="review"><ReviewQueue /></ModuleGate>} />

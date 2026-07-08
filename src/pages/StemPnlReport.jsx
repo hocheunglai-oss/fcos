@@ -148,7 +148,7 @@ export default function StemPnlReport() {
     const csv = [headers.join(','), ...csvRows.map(r => r.join(','))].join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `stem_pnl_${year}${month !== 'all' ? '_' + month : ''}.csv`;
+    a.download = `dashboard_qlik_validator_${year}${month !== 'all' ? '_' + month : ''}.csv`;
     a.click();
   };
 
@@ -157,8 +157,8 @@ export default function StemPnlReport() {
       <div className="p-6 lg:p-8">
         <PageHeader
           icon={BarChart2}
-          eyebrow="Stem P&L Report"
-          title="Stem Profit & Loss"
+          eyebrow="Dashboard and Qlik Validator Tool"
+          title="Dashboard and Qlik Validator Tool"
           description="Validate calculated Gross Profit against Qlik reference values and inspect the underlying STEM detail."
           meta={rows.length > 0 ? `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} stems shown` : undefined}
           actions={rows.length > 0 && (
@@ -238,9 +238,9 @@ export default function StemPnlReport() {
 
         {/* Table */}
         {loading ? (
-          <StateBlock icon={Loader2} title="Fetching stem P&L data..." description="Loading calculated Salesforce amounts and Qlik reference values." />
+          <StateBlock icon={Loader2} title="Fetching validator data..." description="Loading calculated Salesforce amounts and Qlik reference values." />
         ) : rows.length > 0 ? (
-          <TableShell title="Stem P&L Results" meta={`${filtered.length.toLocaleString()} stems`} bodyClassName="p-0">
+          <TableShell title="Dashboard and Qlik Validator Results" meta={`${filtered.length.toLocaleString()} stems`} bodyClassName="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -316,7 +316,7 @@ export default function StemPnlReport() {
             </div>
           </TableShell>
         ) : !loading && !error ? (
-          <StateBlock icon={TrendingUp} title="No P&L data loaded" description="Select a period and click Run to load results." />
+          <StateBlock icon={TrendingUp} title="No validator data loaded" description="Select a period and click Run to load results." />
         ) : null}
       </div>
       <StemDetailModal

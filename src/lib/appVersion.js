@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.32';
+export const APP_VERSION = '1.0.33';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.33',
+    releasedAt: '2026-07-08',
+    title: 'Remove report builder and data explorer',
+    changes: [
+      'Removed Report Builder and Data Explorer routes, navigation items, access modules, and unused page/component code.',
+      'Renamed Stem P&L Report to Dashboard and Qlik Validator Tool across navigation and page headings.',
+    ],
+  },
   {
     version: '1.0.32',
     releasedAt: '2026-07-08',
