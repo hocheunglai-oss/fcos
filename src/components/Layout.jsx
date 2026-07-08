@@ -36,6 +36,7 @@ export default function Layout() {
   const location = useLocation();
   const { user, logout, hasModuleAccess, authMode } = useAuth();
   const [collapsed, setCollapsed] = useState(true);
+  const [dockHoverIndex, setDockHoverIndex] = useState(null);
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
@@ -137,11 +138,44 @@ export default function Layout() {
       window.location.reload();
     }
   };
+  const accessibleNavItems = navItems.filter((item) => hasModuleAccess(item.moduleId));
+  const collapsedNavEntries = accessibleNavItems.flatMap((item) => {
+    const parentEntry = {
+      key: item.to,
+      to: item.to,
+      label: item.label,
+      Icon: item.icon,
+      isChild: false,
+      isActive: item.to === '/'
+        ? location.pathname === '/' && !location.hash
+        : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`),
+    };
+    const childEntries = item.children?.length && location.pathname === item.to
+      ? item.children.map((child) => ({
+        key: child.to,
+        to: child.to,
+        label: child.label,
+        Icon: child.icon,
+        isChild: true,
+        isActive: location.pathname === item.to && location.hash === child.hash,
+      }))
+      : [];
+    return [parentEntry, ...childEntries];
+  });
+  const dockScale = (index) => {
+    if (!collapsed || dockHoverIndex == null) return 1;
+    const distance = Math.abs(index - dockHoverIndex);
+    if (distance === 0) return 1.38;
+    if (distance === 1) return 1.18;
+    if (distance === 2) return 1.07;
+    return 1;
+  };
+  const dockTranslate = (scale) => (scale > 1 ? Math.round((scale - 1) * 18) : 0);
 
   return (
     <div className="app-shell flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className={cn('glass-sidebar flex flex-col shrink-0 transition-all duration-200', collapsed ? 'w-14' : 'w-60')}>
+      <aside className={cn('glass-sidebar relative z-50 flex flex-col shrink-0 overflow-visible transition-all duration-200', collapsed ? 'w-16' : 'w-60')}>
         {/* Logo + collapse button */}
         <div className={cn('flex items-center border-b border-sidebar-border', collapsed ? 'px-2 py-4 justify-center' : 'px-5 py-5 justify-between')}>
           {!collapsed && (
@@ -163,8 +197,55 @@ export default function Layout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-2 py-4 space-y-0.5">
-          {navItems.filter((item) => hasModuleAccess(item.moduleId)).map(({ to, label, icon: Icon, children }) => {
+        {collapsed ? (
+          <nav
+            className="flex-1 overflow-visible px-2 py-4"
+            onMouseLeave={() => setDockHoverIndex(null)}
+            aria-label="Collapsed navigation"
+          >
+            <div className="flex flex-col items-center gap-2 overflow-visible">
+              {collapsedNavEntries.map(({ key, to, label, Icon, isActive, isChild }, index) => {
+                const scale = dockScale(index);
+                return (
+                  <Link
+                    key={key}
+                    to={to}
+                    title={label}
+                    aria-label={label}
+                    onMouseEnter={() => setDockHoverIndex(index)}
+                    onFocus={() => setDockHoverIndex(index)}
+                    onBlur={() => setDockHoverIndex(null)}
+                    onClick={(event) => handleSidebarNavigation(event, to)}
+                    className="group/dock relative flex h-11 w-11 items-center justify-center overflow-visible rounded-2xl outline-none"
+                    style={{
+                      transform: `translateX(${dockTranslate(scale)}px) scale(${scale})`,
+                      transformOrigin: 'left center',
+                      transition: 'transform 170ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+                      zIndex: Math.round(scale * 100),
+                    }}
+                  >
+                    <span
+                      className={cn(
+                        'flex h-9 w-9 items-center justify-center rounded-2xl border shadow-sm transition-colors duration-150',
+                        isChild ? 'h-8 w-8 rounded-xl' : '',
+                        isActive
+                          ? 'border-white/20 bg-white/15 text-sidebar-primary ring-1 ring-white/15'
+                          : 'border-white/10 bg-white/5 text-sidebar-foreground/70 group-hover/dock:border-white/20 group-hover/dock:bg-white/12 group-hover/dock:text-sidebar-foreground'
+                      )}
+                    >
+                      <Icon className={cn('h-4 w-4 shrink-0', isChild && 'h-3.5 w-3.5')} />
+                    </span>
+                    <span className="pointer-events-none absolute left-[calc(100%+14px)] top-1/2 z-[999] -translate-y-1/2 translate-x-1 whitespace-nowrap rounded-lg border border-white/10 bg-slate-950/95 px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-xl backdrop-blur transition-all duration-150 group-hover/dock:translate-x-0 group-hover/dock:opacity-100 group-focus-visible/dock:translate-x-0 group-focus-visible/dock:opacity-100">
+                      {label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </nav>
+        ) : (
+          <nav className="flex-1 px-2 py-4 space-y-0.5">
+            {accessibleNavItems.map(({ to, label, icon: Icon, children }) => {
             const showChildren = children?.length && location.pathname === to;
             return (
               <div key={to} className="space-y-0.5">
@@ -211,8 +292,9 @@ export default function Layout() {
                 )}
               </div>
             );
-          })}
-        </nav>
+            })}
+          </nav>
+        )}
 
         {/* Footer */}
         <div className={cn('py-4 border-t border-sidebar-border space-y-3', collapsed ? 'flex flex-col items-center px-2' : 'px-4')}>

@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.4';
+export const APP_VERSION = '1.0.5';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.5',
+    releasedAt: '2026-07-08',
+    title: 'Dock-style collapsed sidebar',
+    changes: [
+      'Changed the collapsed sidebar into a dock-style navigation with hover magnification.',
+      'Added visible hover labels beside collapsed navigation icons.',
+      'Kept the expanded sidebar navigation behavior unchanged.',
+    ],
+  },
   {
     version: '1.0.4',
     releasedAt: '2026-07-08',
