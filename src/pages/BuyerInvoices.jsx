@@ -9,6 +9,14 @@ import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -97,6 +105,7 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
     ],
   },
 ];
+const PAYMENT_REMINDER_STEPS = ['Select invoices', 'Review recipients', 'Email preview'];
 
 const COPY_ROW_FIELDS = [
   (row) => row.stemName || '-',
@@ -617,6 +626,23 @@ function brokerRoutingTone(mode) {
   return 'border-slate-200 bg-slate-100 text-slate-700';
 }
 
+function reminderOverduePillClass(daysUntilDue) {
+  const severity = overdueSeverity(daysUntilDue);
+  if (severity === 'red') return 'border-red-300 bg-red-100 text-red-800';
+  if (severity === 'orange') return 'border-orange-300 bg-orange-100 text-orange-800';
+  if (severity === 'yellow') return 'border-yellow-300 bg-yellow-100 text-yellow-900';
+  return 'border-slate-200 bg-slate-100 text-slate-700';
+}
+
+function reminderRowAccentClass(row) {
+  if (row?.prpspStatus === 'Conditional-Not Sent') return 'border-l-purple-400';
+  const severity = overdueSeverity(row?.daysUntilDue);
+  if (severity === 'red') return 'border-l-red-400';
+  if (severity === 'orange') return 'border-l-orange-400';
+  if (severity === 'yellow') return 'border-l-yellow-400';
+  return 'border-l-transparent';
+}
+
 async function writeClipboardTable({ html, text }) {
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     await navigator.clipboard.write([
@@ -874,6 +900,7 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const [templateEditing, setTemplateEditing] = useState(false);
   const [data, setData] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [currentStep, setCurrentStep] = useState(0);
   const reminderBodyEditorRef = useRef(null);
   const [form, setForm] = useState({
     recipientBatches: {},
@@ -882,6 +909,10 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   });
   const [baseDraftValue, setBaseDraftValue] = useState(null);
   const [restoredAt, setRestoredAt] = useState(null);
+
+  useEffect(() => {
+    if (open) setCurrentStep(0);
+  }, [open, row?.stemId]);
 
   useEffect(() => {
     if (!open || !row) return;
@@ -969,6 +1000,9 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
   const selectedFinalTo = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.to || '')), [selectedRecipientBatches]);
   const selectedFinalCc = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.cc || '')), [selectedRecipientBatches]);
   const selectedFinalBcc = useMemo(() => uniqueEmailList(...selectedRecipientBatches.map((group) => group.recipients.bcc || '')), [selectedRecipientBatches]);
+  const hasMissingRecipient = useMemo(() => (
+    selectedRecipientBatches.some((group) => !uniqueEmailList(group.recipients.to).length)
+  ), [selectedRecipientBatches]);
   const selectedRoutingWarnings = useMemo(() => (
     [...new Set(selectedRows.flatMap((candidate) => candidate.buyerBrokerRoutingWarnings || []))]
   ), [selectedRows]);
@@ -1100,8 +1134,8 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     }));
     const missingRecipientBatch = reviewedRecipientBatches.find((batch) => !uniqueEmailList(batch.to).length);
     if (missingRecipientBatch) {
-      const missingGroup = selectedRecipientBatches.find((group) => group.key === missingRecipientBatch.key);
-      setError(`Payment reminder recipient is required for ${missingGroup?.primaryRecipientName || 'recipient group'}. Enter the To email before sending.`);
+      setCurrentStep(1);
+      setError('Enter at least one To email before sending.');
       return;
     }
     setSending(true);
@@ -1172,23 +1206,53 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     setTemplateEditing(false);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-	      <div className="max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-	        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
-	          <div>
-	            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{row.stemName}</p>
-	            <h2 className="mt-1 text-lg font-semibold text-foreground">External payment reminder</h2>
-            <p className="text-sm text-muted-foreground">
-              {row.buyerName || '-'}{row.buyerGroupName ? ` · ${row.buyerGroupName}` : ''}
-            </p>
-          </div>
-          <Button variant="outline" size="icon" onClick={onClose} disabled={sending}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+  const goToStep = (step) => {
+    if (step > 0 && !selectedRows.length) {
+      setError('Select at least one invoice before continuing.');
+      return;
+    }
+    if (step > 1 && hasMissingRecipient) {
+      setError('Enter at least one To email before sending.');
+      setCurrentStep(1);
+      return;
+    }
+    setError(null);
+    setCurrentStep(Math.max(0, Math.min(step, PAYMENT_REMINDER_STEPS.length - 1)));
+  };
 
-        <div className="max-h-[calc(92vh-78px)] overflow-auto p-4">
+  const goNext = () => goToStep(currentStep + 1);
+  const goBack = () => goToStep(currentStep - 1);
+
+  return (
+    <Dialog open={open && Boolean(row)} onOpenChange={(nextOpen) => {
+      if (!nextOpen && !sending) onClose();
+    }}>
+      <DialogContent className="payment-reminder-dialog max-h-[94vh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden p-0 text-slate-950">
+        <DialogHeader className="border-b border-slate-200 px-5 py-4 text-left">
+          <div className="flex flex-wrap items-start justify-between gap-4 pr-8">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium uppercase tracking-wide text-slate-500">{row.stemName}</p>
+              <DialogTitle className="mt-1 text-xl font-semibold text-slate-950">External payment reminder</DialogTitle>
+              <DialogDescription className="mt-1 text-sm text-slate-500">
+                {row.buyerName || '-'}{row.buyerGroupName ? ` · ${row.buyerGroupName}` : ''}
+              </DialogDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn(
+                'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium',
+                lastReminderSentToday
+                  ? 'border-zinc-700 bg-zinc-800 text-white'
+                  : lastReminderSentAt
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-slate-200 bg-slate-100 text-slate-600',
+              )}>
+                Last sent: {lastReminderSentAt ? fmtDateTime(lastReminderSentAt) : 'Not sent yet'}
+              </span>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="max-h-[calc(94vh-152px)] overflow-auto px-5 py-4">
           {loading && (
             <StateBlock icon={Loader2} title="Preparing reminder..." description="Finding related buyer and buyer group invoices in the current due window." />
           )}
@@ -1201,316 +1265,341 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
 
           {!loading && data && (
             <div className="space-y-4">
-              <DraftNotice restoredAt={restoredAt} label="Payment reminder draft restored" onDiscard={discardDraft} />
-              <div
-                className={cn(
-                  'rounded-xl border p-4 shadow-sm',
-                  lastReminderSentToday
-                    ? 'border-zinc-700 bg-zinc-900 text-white'
-                    : lastReminderSentAt
-                      ? 'border-amber-300 bg-amber-50 text-amber-950'
-                      : 'border-border bg-muted/20 text-foreground',
-                )}
-              >
-                <p className={cn(
-                  'text-xs font-semibold uppercase tracking-wide',
-                  lastReminderSentToday ? 'text-zinc-200' : 'text-muted-foreground',
-                )}>
-                  Last Payment Reminder Sent
-                </p>
-                <div className="mt-1 text-lg font-semibold">
-                  {lastReminderSentAt ? fmtDateTime(lastReminderSentAt) : 'Not sent yet'}
+              <DraftNotice restoredAt={restoredAt} label="Draft restored" onDiscard={discardDraft} />
+
+              <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Selected</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-950">{selectedRows.length.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Receivable</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-950">{fmtMoney(selectedReceivable)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Email batches</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-950">{selectedRecipientBatches.length.toLocaleString()}</div>
+                    </div>
+                  </div>
                 </div>
-                <p className={cn(
-                  'mt-1 text-xs',
-                  lastReminderSentToday ? 'text-zinc-300' : 'text-muted-foreground',
-                )}>
-                  All reminder dates and times use Hong Kong time, GMT+8.
-                </p>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <div><span className="font-semibold text-slate-900">To:</span> {selectedFinalTo.join(', ') || '-'}</div>
+                  <div className="mt-1"><span className="font-semibold text-slate-900">CC:</span> {selectedFinalCc.join(', ') || '-'}</div>
+                  <div className="mt-1"><span className="font-semibold text-slate-900">BCC:</span> {selectedFinalBcc.join(', ') || '-'}</div>
+                </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-                <div>
-                  <div className="font-semibold text-foreground">
-                    {selectedRows.length.toLocaleString()} selected · {fmtMoney(selectedReceivable)}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {selectedRecipientBatches.length.toLocaleString()} email batch{selectedRecipientBatches.length === 1 ? '' : 'es'} · To: {selectedFinalTo.join(', ') || '-'}
-                    {selectedFinalCc.length ? ` · CC: ${selectedFinalCc.join(', ')}` : ''}
-                    {selectedFinalBcc.length ? ` · BCC: ${selectedFinalBcc.join(', ')}` : ''}
-                  </div>
-                </div>
+              <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+                {PAYMENT_REMINDER_STEPS.map((step, index) => {
+                  const isActive = currentStep === index;
+                  const isComplete = index < currentStep;
+                  const disabled = loading || (index > 0 && !selectedRows.length) || (index > 1 && hasMissingRecipient);
+                  return (
+                    <button
+                      key={step}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => goToStep(index)}
+                      className={cn(
+                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors',
+                        isActive
+                          ? 'border-blue-600 bg-blue-600 text-white'
+                          : isComplete
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                        disabled && !isActive && 'cursor-not-allowed opacity-50 hover:bg-white',
+                      )}
+                    >
+                      <span className={cn(
+                        'flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
+                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600',
+                      )}>
+                        {isComplete ? <Check className="h-3 w-3" /> : index + 1}
+                      </span>
+                      {step}
+                    </button>
+                  );
+                })}
               </div>
+
               {selectedRoutingWarnings.length > 0 && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  <div className="font-semibold">Buyer broker routing warnings</div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                  <div className="font-semibold">Check broker routing</div>
                   <ul className="mt-1 list-disc space-y-1 pl-4">
                     {selectedRoutingWarnings.map((warning) => <li key={warning}>{warning}</li>)}
                   </ul>
                 </div>
               )}
 
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-foreground">Related invoices</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Same buyer and same buyer group, except Fratelli Cosulich group, using the current Due in next days value.
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" size="sm" onClick={toggleAll}>
-                    {selectedIds.length === candidates.length ? 'Clear all' : 'Select all'}
-                  </Button>
-                </div>
-                <div className="max-h-[34vh] overflow-auto rounded-lg border border-border">
-                  <table className="w-full min-w-[1500px] text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/40">
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Group</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Broker</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Routing</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recipient</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection</th>
-                        <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {candidates.map((candidate, idx) => (
-                        <tr key={candidate.stemId} className={`border-b border-border/40 ${rowSeverityClass(candidate, idx)}`}>
-                          <td className="px-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.includes(candidate.stemId)}
-                              onChange={() => toggleInvoice(candidate.stemId)}
-                            />
-                          </td>
-                          <td className="px-3 py-2 font-medium text-foreground">{candidate.stemName || '-'}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{candidate.buyerName || '-'}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{candidate.buyerGroupName || '-'}</td>
-                          <td className="px-3 py-2 text-right font-semibold text-foreground">{fmtMoney(candidate.receivableBalance)}</td>
-                          <td className="px-3 py-2 text-foreground">{fmtDate(candidate.buyerInvoiceDueDate)}</td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            <div className="font-medium text-foreground">{candidate.buyerBrokerNames || '-'}</div>
-                            {candidate.buyerBrokerInvoiceFormats && <div className="text-[11px] text-muted-foreground">{candidate.buyerBrokerInvoiceFormats}</div>}
-                          </td>
-                          <td className="px-3 py-2">
-	                            <span className={`inline-flex w-fit items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium leading-none ${brokerRoutingTone(candidate.buyerBrokerRoutingMode)}`}>
-	                              {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
-	                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {candidate.buyerBrokerRoutingMode === 'broker_only'
-                              ? candidate.buyerBrokerEmails || '-'
-                              : (
-                                <>
-                                  <div>{candidate.paymentReminderRecipient || '-'}</div>
-                                  {candidate.buyerBrokerRoutingMode === 'buyer_cc_broker' && candidate.buyerBrokerEmails && (
-                                    <div className="text-[11px] text-blue-700">CC broker: {candidate.buyerBrokerEmails}</div>
-                                  )}
-                                </>
-                              )}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(candidate))}`}>
-                              {collectionStatus(candidate)}
-                            </span>
-                          </td>
-                          <td className={`px-3 py-2 text-right font-medium ${dueTextClass(candidate.daysUntilDue)}`}>
-                            {overdueDisplayValue(candidate.daysUntilDue)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="space-y-3 rounded-xl border border-border bg-background/40 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-foreground">Email review</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Related invoices stay above. Review final recipients on the left and the email preview on the right.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {!templateEditing ? (
-                      <Button type="button" variant="outline" size="sm" onClick={() => setTemplateEditing(true)} className="gap-2">
-                        <Mail className="h-4 w-4" />
-                        Edit Template
-                      </Button>
-                    ) : (
-                      <>
-                        <Button type="button" variant="outline" size="sm" onClick={cancelPaymentReminderTemplateChanges} disabled={sending || templateSaving} className="gap-2">
-                          <X className="h-4 w-4" />
-                          Cancel Changes
-                        </Button>
-                        <Button type="button" variant="outline" size="sm" onClick={savePaymentReminderTemplateFromModal} disabled={sending || templateSaving} className="gap-2">
-                          {templateSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                          Save Template
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-[minmax(0,480px)_minmax(0,1fr)]">
-	                  <div className="space-y-3">
-	                    {templateEditing && (
-	                      <div className="rounded-lg border border-border bg-muted/20 p-3">
-	                        <PaymentReminderVariablePalette onInsert={insertReminderBodyToken} />
-	                        <p className="mt-2 text-xs text-muted-foreground">
-	                          Drag variables into the email content. Drag <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> to choose where the invoice table appears.
-	                        </p>
-	                      </div>
-	                    )}
-	                    <div>
-	                      <Label className="text-xs text-muted-foreground">Email batches</Label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Only the addresses shown below will be used. Remove an address here to exclude it from sending.
-                      </p>
+              {currentStep === 0 && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-950">Select invoices</h3>
+                      <p className="text-xs text-slate-500">Same buyer and buyer group invoices in the current due window.</p>
                     </div>
-	                    <div className="max-h-[26vh] space-y-3 overflow-auto pr-1">
-                      {selectedRecipientBatches.map((group, index) => (
-                        <div key={group.key} className="rounded-lg border border-border bg-card p-3">
-                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <div className="text-sm font-semibold text-foreground">
-                                Batch {index + 1}: {group.primaryRecipientName || 'Recipient group'}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                {group.stemIds.length.toLocaleString()} invoice{group.stemIds.length === 1 ? '' : 's'} · {brokerRoutingLabel(group.mode)}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="grid gap-3">
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">To</Label>
-                              <Input
-                                value={group.recipients.to}
-                                onChange={(event) => updateBatchRecipient(group.key, 'to', event.target.value)}
-                                placeholder="Enter recipient email"
+                    <Button type="button" variant="outline" size="sm" onClick={toggleAll}>
+                      {selectedIds.length === candidates.length ? 'Clear all' : 'Select all'}
+                    </Button>
+                  </div>
+                  <div className="max-h-[52vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+                    <table className="w-full min-w-[1180px] text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50">
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Include</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">STEM</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Buyer</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Buyer Broker</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Routing</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Receivable</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Due Date</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Overdue</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Collection</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {candidates.map((candidate) => (
+                          <tr key={candidate.stemId} className={`border-b border-l-4 border-slate-100 bg-white transition-colors hover:bg-slate-50 ${reminderRowAccentClass(candidate)}`}>
+                            <td className="px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.includes(candidate.stemId)}
+                                onChange={() => toggleInvoice(candidate.stemId)}
                               />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">CC</Label>
-                              <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-xs text-muted-foreground">BCC</Label>
-                              <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} />
-                            </div>
+                            </td>
+                            <td className="px-3 py-2 font-medium text-slate-950">{candidate.stemName || '-'}</td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium text-slate-900">{candidate.buyerName || '-'}</div>
+                              {candidate.buyerGroupName && <div className="text-[11px] text-slate-500">{candidate.buyerGroupName}</div>}
+                            </td>
+                            <td className="px-3 py-2 text-slate-600">
+                              <div className="font-medium text-slate-800">{candidate.buyerBrokerNames || '-'}</div>
+                              {candidate.buyerBrokerInvoiceFormats && <div className="text-[11px] text-slate-500">{candidate.buyerBrokerInvoiceFormats}</div>}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex w-fit items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium leading-none ${brokerRoutingTone(candidate.buyerBrokerRoutingMode)}`}>
+                                {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-950">{fmtMoney(candidate.receivableBalance)}</td>
+                            <td className="px-3 py-2 text-slate-700">{fmtDate(candidate.buyerInvoiceDueDate)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${reminderOverduePillClass(candidate.daysUntilDue)}`}>
+                                {overdueDisplayValue(candidate.daysUntilDue)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(candidate))}`}>
+                                {collectionStatus(candidate)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 1 && (
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Review recipients</h3>
+                    <p className="text-xs text-slate-500">Only the addresses shown here will be used.</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {selectedRecipientBatches.map((group, index) => (
+                      <div key={group.key} className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="mb-3 flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-950">Batch {index + 1}</div>
+                            <div className="mt-0.5 text-xs text-slate-500">{group.primaryRecipientName || 'Recipient group'}</div>
+                          </div>
+                          <span className={`inline-flex w-fit items-center justify-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${brokerRoutingTone(group.mode)}`}>
+                            {brokerRoutingLabel(group.mode)}
+                          </span>
+                        </div>
+                        <div className="mb-3 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
+                          {group.stemIds.length.toLocaleString()} invoice{group.stemIds.length === 1 ? '' : 's'}
+                        </div>
+                        <div className="grid gap-3">
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-slate-500">To</Label>
+                            <Input
+                              value={group.recipients.to}
+                              onChange={(event) => updateBatchRecipient(group.key, 'to', event.target.value)}
+                              placeholder="Enter recipient email"
+                              className={cn(!uniqueEmailList(group.recipients.to).length && 'border-red-300 focus-visible:ring-red-400')}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-slate-500">CC</Label>
+                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-slate-500">BCC</Label>
+                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} />
                           </div>
                         </div>
-	                      ))}
-	                    </div>
-
-	                    <div className="grid gap-3 md:grid-cols-2">
-	                      <div className="space-y-1.5">
-	                        <Label className="text-xs text-muted-foreground">CC template</Label>
-	                        <Input
-	                          value={form.templateCc || ''}
-	                          onChange={(event) => updateForm('templateCc', event.target.value)}
-	                          disabled={!templateEditing}
-	                          placeholder="Optional CC saved to template"
-	                        />
-	                        <p className="text-[11px] text-muted-foreground">Saved for future reminders. Final CC above controls this send.</p>
-	                      </div>
-	                      <div className="space-y-1.5">
-	                        <Label className="text-xs text-muted-foreground">BCC template</Label>
-	                        <Input
-	                          value={form.templateBcc || ''}
-	                          onChange={(event) => updateForm('templateBcc', event.target.value)}
-	                          disabled={!templateEditing}
-	                          placeholder="Optional BCC saved to template"
-	                        />
-	                        <p className="text-[11px] text-muted-foreground">Saved for future reminders. Final BCC above controls this send.</p>
-	                      </div>
-	                    </div>
-
-	                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Subject</Label>
-                      <Input value={form.subject} onChange={(event) => updateForm('subject', event.target.value)} disabled={!templateEditing} />
-                    </div>
-	                    <div className="space-y-1.5">
-	                      <Label className="text-xs text-muted-foreground">Email content</Label>
-	                      <div className={cn(
-	                        'rounded-md border border-input bg-background [&_.ql-container]:min-h-64 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border',
-	                        !templateEditing && 'opacity-80',
-	                      )}
-	                        onDragOver={(event) => templateEditing && event.preventDefault()}
-	                        onDrop={dropReminderBodyToken}
-	                      >
-	                        <ReactQuill
-	                          ref={reminderBodyEditorRef}
-                          theme="snow"
-                          modules={QUILL_MODULES}
-                          value={form.body}
-                          readOnly={!templateEditing}
-                          onChange={(value) => updateForm('body', value)}
-                        />
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        Move the invoice table by placing <span className="font-mono">{INVOICE_TABLE_TOKEN}</span> where the table should appear.
-                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 2 && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-950">Email preview</h3>
+                      <p className="text-xs text-slate-500">Review the message before sending.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {!templateEditing ? (
+                        <Button type="button" variant="outline" size="sm" onClick={() => setTemplateEditing(true)} className="gap-2">
+                          <Mail className="h-4 w-4" />
+                          Edit Template
+                        </Button>
+                      ) : (
+                        <>
+                          <Button type="button" variant="outline" size="sm" onClick={cancelPaymentReminderTemplateChanges} disabled={sending || templateSaving} className="gap-2">
+                            <X className="h-4 w-4" />
+                            Cancel
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" onClick={savePaymentReminderTemplateFromModal} disabled={sending || templateSaving} className="gap-2">
+                            {templateSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                            Save Template
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
 
-	                  <div className="rounded-xl border border-border bg-card">
-	                    <div className="border-b border-border px-3 py-2">
-	                      <h3 className="text-sm font-semibold text-foreground">Email preview</h3>
-	                      <div className="mt-1 grid gap-1 text-xs text-muted-foreground">
-	                        <div><span className="font-semibold text-foreground">To:</span> {selectedFinalTo.join(', ') || '-'}</div>
-	                        <div><span className="font-semibold text-foreground">Cc:</span> {selectedFinalCc.join(', ') || '-'}</div>
-	                        <div><span className="font-semibold text-foreground">Bcc:</span> {selectedFinalBcc.join(', ') || '-'}</div>
-	                        <div><span className="font-semibold text-foreground">Subject:</span> {renderedPreviewSubject || '-'}</div>
-	                      </div>
-	                    </div>
-                    <div className="max-h-[620px] overflow-auto p-4">
-                      {selectedRoutingWarnings.length > 0 && (
-                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                          <div className="font-semibold">Check broker routing before sending</div>
-                          <ul className="mt-1 list-disc space-y-1 pl-4">
-                            {selectedRoutingWarnings.map((warning) => <li key={`preview-${warning}`}>{warning}</li>)}
-                          </ul>
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)]">
+                    <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+                      {templateEditing && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <PaymentReminderVariablePalette onInsert={insertReminderBodyToken} />
+                          <p className="mt-2 text-xs text-slate-500">Drag variables into the email content. Drag {INVOICE_TABLE_TOKEN} to move the invoice table.</p>
                         </div>
                       )}
-	                      <div
-	                        className="rounded-lg border border-border bg-background p-4 text-sm leading-6 text-foreground [&_p]:mb-3 [&_p]:mt-0"
-	                        dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows) }}
-	                      />
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs text-slate-500">CC template</Label>
+                          <Input
+                            value={form.templateCc || ''}
+                            onChange={(event) => updateForm('templateCc', event.target.value)}
+                            disabled={!templateEditing}
+                            placeholder="Optional CC saved to template"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs text-slate-500">BCC template</Label>
+                          <Input
+                            value={form.templateBcc || ''}
+                            onChange={(event) => updateForm('templateBcc', event.target.value)}
+                            disabled={!templateEditing}
+                            placeholder="Optional BCC saved to template"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-500">Subject</Label>
+                        <Input value={form.subject} onChange={(event) => updateForm('subject', event.target.value)} disabled={!templateEditing} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-500">Email content</Label>
+                        <div
+                          className={cn(
+                            'rounded-md border border-slate-200 bg-white [&_.ql-container]:min-h-72 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-slate-200',
+                            !templateEditing && 'opacity-85',
+                          )}
+                          onDragOver={(event) => templateEditing && event.preventDefault()}
+                          onDrop={dropReminderBodyToken}
+                        >
+                          <ReactQuill
+                            ref={reminderBodyEditorRef}
+                            theme="snow"
+                            modules={QUILL_MODULES}
+                            value={form.body}
+                            readOnly={!templateEditing}
+                            onChange={(value) => updateForm('body', value)}
+                          />
+                        </div>
+                        <p className="text-xs text-slate-500">Invoice table position: <span className="font-mono">{INVOICE_TABLE_TOKEN}</span></p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-white">
+                      <div className="border-b border-slate-200 px-3 py-2">
+                        <div className="text-sm font-semibold text-slate-950">Preview</div>
+                        <div className="mt-1 grid gap-1 text-xs text-slate-500">
+                          <div><span className="font-semibold text-slate-900">To:</span> {selectedFinalTo.join(', ') || '-'}</div>
+                          <div><span className="font-semibold text-slate-900">CC:</span> {selectedFinalCc.join(', ') || '-'}</div>
+                          <div><span className="font-semibold text-slate-900">BCC:</span> {selectedFinalBcc.join(', ') || '-'}</div>
+                          <div><span className="font-semibold text-slate-900">Subject:</span> {renderedPreviewSubject || '-'}</div>
+                        </div>
+                      </div>
+                      <div className="max-h-[58vh] overflow-auto p-4">
+                        {selectedRoutingWarnings.length > 0 && (
+                          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                            <div className="font-semibold">Check broker routing</div>
+                            <ul className="mt-1 list-disc space-y-1 pl-4">
+                              {selectedRoutingWarnings.map((warning) => <li key={`preview-${warning}`}>{warning}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        <div
+                          className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-900 [&_p]:mb-3 [&_p]:mt-0"
+                          dangerouslySetInnerHTML={{ __html: emailBodyPreviewHtml(renderedPreviewBody, selectedRows) }}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {templateMessage && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-                    {templateMessage}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  {error ? (
-                    <div className="max-w-3xl rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
-                      {error}
+                  {templateMessage && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+                      {templateMessage}
                     </div>
-                  ) : <span />}
-                  <Button type="button" onClick={sendReminder} disabled={sending || !selectedRows.length} className="gap-2">
-                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    Send Reminder
-                  </Button>
+                  )}
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
-      </div>
-    </div>
+
+        <DialogFooter className="border-t border-slate-200 bg-slate-50 px-5 py-3">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-h-9 flex-1">
+              {error && data && (
+                <div className="inline-flex max-w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onClose} disabled={sending}>Close</Button>
+              {data && currentStep > 0 && (
+                <Button type="button" variant="outline" onClick={goBack} disabled={sending}>Back</Button>
+              )}
+              {data && currentStep < PAYMENT_REMINDER_STEPS.length - 1 && (
+                <Button type="button" onClick={goNext} disabled={sending || (currentStep === 0 && !selectedRows.length)}>
+                  Next
+                </Button>
+              )}
+              {data && currentStep === PAYMENT_REMINDER_STEPS.length - 1 && (
+                <Button type="button" onClick={sendReminder} disabled={sending || !selectedRows.length} className="gap-2">
+                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Send Email
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

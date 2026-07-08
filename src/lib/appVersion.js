@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.31';
+export const APP_VERSION = '1.0.32';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.32',
+    releasedAt: '2026-07-08',
+    title: 'External payment reminder modal redesign',
+    changes: [
+      'Redesigned the external payment reminder modal into a three-step workflow for invoice selection, recipient review, and email preview.',
+      'Simplified reminder wording and changed the modal to a neutral solid style with status-only color accents.',
+    ],
+  },
   {
     version: '1.0.31',
     releasedAt: '2026-07-08',
