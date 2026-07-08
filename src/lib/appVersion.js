@@ -1,6 +1,17 @@
-export const APP_VERSION = '1.0.9';
+export const APP_VERSION = '1.0.10';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.10',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment created-date filters',
+    changes: [
+      'Changed Incoming Payment filters to use Payment CreatedDate on a Hong Kong date basis.',
+      'Added Inserted On details below Received Date when the created date differs from the received date.',
+      'Widened the Incoming Payment email preview while keeping the template editor fixed-width.',
+      'Reworked the Incoming Payment email template editor with drag-and-drop table tokens plus explicit edit, save, and cancel actions.',
+    ],
+  },
   {
     version: '1.0.9',
     releasedAt: '2026-07-08',

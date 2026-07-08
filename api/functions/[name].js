@@ -3784,6 +3784,12 @@ function soqlDateValue(dateField, dateType, isoDate, endOfDay = false) {
   return isoDate;
 }
 
+function soqlHongKongDateTimeValue(isoDate, endOfDay = false) {
+  if (!isoDate) return null;
+  const localTime = endOfDay ? '23:59:59.999' : '00:00:00.000';
+  return new Date(`${isoDate}T${localTime}+08:00`).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 function selectedFields(fieldNames, fields) {
   return fields.filter((field) => field && fieldNames.has(field));
 }
@@ -4378,11 +4384,17 @@ async function incomingPaymentsList(body) {
     ...directionFields,
   ].filter(Boolean);
 
-  const dateType = paymentFieldByName[dateField]?.type || null;
+  const filterDateField = paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : dateField;
+  const filterDateType = paymentFieldByName[filterDateField]?.type || null;
+  const filterDateValue = (isoDate, endOfDay = false) => (
+    filterDateField === 'CreatedDate'
+      ? soqlHongKongDateTimeValue(isoDate, endOfDay)
+      : soqlDateValue(filterDateField, filterDateType, isoDate, endOfDay)
+  );
   const whereParts = [];
-  if (dateField && dateFrom) whereParts.push(`${dateField} >= ${soqlDateValue(dateField, dateType, dateFrom, false)}`);
-  if (dateField && dateTo) whereParts.push(`${dateField} <= ${soqlDateValue(dateField, dateType, dateTo, true)}`);
-  const orderBy = dateField ? `${dateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
+  if (filterDateField && dateFrom) whereParts.push(`${filterDateField} >= ${filterDateValue(dateFrom, false)}`);
+  if (filterDateField && dateTo) whereParts.push(`${filterDateField} <= ${filterDateValue(dateTo, true)}`);
+  const orderBy = filterDateField ? `${filterDateField} DESC NULLS LAST${filterDateField !== 'CreatedDate' ? ', CreatedDate DESC' : ''}` : 'CreatedDate DESC';
   const payments = await queryRows(`
     SELECT ${[...new Set(paymentSelectFields)].join(', ')}
     FROM Payment__c
@@ -4610,6 +4622,7 @@ async function incomingPaymentsList(body) {
       paymentDisplayName: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice, type }),
       salesforcePaymentName: payment.Name || null,
       paymentDate,
+      createdDate: payment.CreatedDate || null,
       invoiceDueDate: buyerInvoiceDueDate,
       delayDays,
       paymentTerms: type === 'Buyer Payment' ? stem?.Payment_Term__c || null : null,
@@ -4694,6 +4707,7 @@ async function incomingPaymentsList(body) {
     dateTo,
     schema: {
       paymentDateField: dateField,
+      paymentFilterDateField: filterDateField,
       paymentAmountField: amountField,
       paymentReferenceFields: referenceFields,
       paymentSupplierInvoiceFields: supplierInvoiceLookupFields,
@@ -4734,7 +4748,7 @@ const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
   cc: [],
   bcc: [],
   subject: 'Incoming Payment Report - {{dateFrom}} to {{dateTo}}',
-  intro: 'Incoming Payment Report\n\nPlease find below the receivable payments and Buyer CIA invoices for the selected filters.\n\nReceived date range: {{dateFrom}} to {{dateTo}}.\nIncoming total: {{incomingTotal}}.\n\n{{receivablePaymentsTable}}\n\n{{buyerCiaInvoicesTable}}',
+  intro: 'Incoming Payment Report\n\nPlease find below the receivable payments and Buyer CIA invoices for the selected filters.\n\nPayment created date range: {{dateFrom}} to {{dateTo}}.\nIncoming total: {{incomingTotal}}.\n\n{{receivablePaymentsTable}}\n\n{{buyerCiaInvoicesTable}}',
   includeReceivablePayments: true,
   includeBuyerCiaInvoices: true,
 };
@@ -4792,6 +4806,12 @@ function incomingPaymentReportSummary(rows = []) {
   };
 }
 
+function incomingPaymentInsertedNote(row) {
+  if (!row?.paymentDate || !row?.createdDate) return '';
+  if (dateOnly(row.paymentDate) === dateOnly(row.createdDate)) return '';
+  return `Inserted on ${prettyDate(row.createdDate)}`;
+}
+
 function incomingPaymentReceivableTableHtml(rows = []) {
   const tableRows = rows.map((row) => {
     const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
@@ -4802,7 +4822,7 @@ function incomingPaymentReceivableTableHtml(rows = []) {
     return `
       <tr>
         <td style="${cell};white-space:nowrap"><span style="display:inline-block;border:1px solid;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;${incomingPaymentStatusPill(row.type)}">${escapeHtml(row.type || '-')}</span></td>
-        <td style="${cell};white-space:nowrap">${prettyDate(row.paymentDate)}</td>
+        <td style="${cell};white-space:nowrap">${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? `<span style="display:block;color:#667085;font-size:11px">Inserted on ${prettyDate(row.createdDate)}</span>` : ''}</td>
         <td style="${cell};white-space:nowrap">${escapeHtml(row.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A')}</td>
         <td style="${cell};white-space:nowrap;text-align:right">${row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${Number(row.delayDays).toLocaleString()} Days`) : 'N/A'}</td>
         <td style="${cell};min-width:160px">${escapeHtml(row.partyName || '-')}</td>
@@ -4876,7 +4896,7 @@ function incomingPaymentReceivableTableText(rows = []) {
   if (!rows.length) return 'Receivable Payments: none';
   return [
     `Receivable Payments (${rows.length})`,
-    ...rows.map((row) => `${row.type || '-'} | ${prettyDate(row.paymentDate)} | ${row.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A'} | ${row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${row.delayDays} Days`) : 'N/A'} | ${row.partyName || '-'} | ${row.buyerGroupName || '-'} | ${row.stemName || '-'} | ${money(row.amount)} | Receivable ${money(row.receivableBalance)}`),
+    ...rows.map((row) => `${row.type || '-'} | ${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? ` (${incomingPaymentInsertedNote(row)})` : ''} | ${row.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A'} | ${row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${row.delayDays} Days`) : 'N/A'} | ${row.partyName || '-'} | ${row.buyerGroupName || '-'} | ${row.stemName || '-'} | ${money(row.amount)} | Receivable ${money(row.receivableBalance)}`),
   ].join('\n');
 }
 

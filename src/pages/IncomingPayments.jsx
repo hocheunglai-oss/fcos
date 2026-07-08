@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { AlertTriangle, Banknote, Eye, Loader2, Mail, RefreshCw, Search, Send, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { AlertTriangle, Banknote, Eye, Loader2, Mail, Pencil, RefreshCw, Save, Search, Send, Settings2, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import ReorderableDataTable from '@/components/common/ReorderableDataTable';
@@ -41,7 +41,7 @@ const DEFAULT_EMAIL_SETTINGS = {
 
 Please find below the receivable payments and Buyer CIA invoices for the selected filters.
 
-Received date range: {{dateFrom}} to {{dateTo}}.
+Payment created date range: {{dateFrom}} to {{dateTo}}.
 Incoming total: {{incomingTotal}}.
 
 ${RECEIVABLE_PAYMENTS_TABLE_TOKEN}
@@ -50,6 +50,11 @@ ${BUYER_CIA_TABLE_TOKEN}`,
   includeReceivablePayments: true,
   includeBuyerCiaInvoices: true,
 };
+
+const EMAIL_TABLE_TOKENS = [
+  { label: 'Receivable Payments Table', token: RECEIVABLE_PAYMENTS_TABLE_TOKEN },
+  { label: 'Buyer CIA Invoices Table', token: BUYER_CIA_TABLE_TOKEN },
+];
 
 const paymentStatusClass = {
   'Buyer Payment': 'border-blue-200 bg-blue-50 text-blue-700',
@@ -81,6 +86,29 @@ function fmtDate(value) {
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return String(value); }
 }
 
+function dateOnlyHongKong(value) {
+  if (!value) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Hong_Kong',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(value));
+    const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${map.year}-${map.month}-${map.day}`;
+  } catch {
+    return '';
+  }
+}
+
+function insertedDateText(row) {
+  if (!row?.paymentDate || !row?.createdDate) return '';
+  return dateOnlyHongKong(row.paymentDate) !== dateOnlyHongKong(row.createdDate)
+    ? `Inserted on ${fmtDate(row.createdDate)}`
+    : '';
+}
+
 function lowerText(value) {
   return String(value || '').toLowerCase();
 }
@@ -106,7 +134,12 @@ function defaultPageState() {
 function readEmailSettings() {
   try {
     const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
-    return raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+    const settings = raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+    return {
+      ...settings,
+      intro: String(settings.intro || DEFAULT_EMAIL_SETTINGS.intro)
+        .replace('Received date range:', 'Payment created date range:'),
+    };
   } catch {
     return DEFAULT_EMAIL_SETTINGS;
   }
@@ -154,12 +187,15 @@ export default function IncomingPayments() {
   const [allocationLoading, setAllocationLoading] = useState(false);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [emailOpen, setEmailOpen] = useState(false);
-  const [emailSettings, setEmailSettings] = useState(readEmailSettings);
+  const [savedEmailSettings, setSavedEmailSettings] = useState(readEmailSettings);
+  const [emailSettings, setEmailSettings] = useState(() => savedEmailSettings);
+  const [emailTemplateEditing, setEmailTemplateEditing] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailAction, setEmailAction] = useState('');
   const [emailPreview, setEmailPreview] = useState(null);
   const [emailError, setEmailError] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
+  const emailContentRef = useRef(null);
 
   const updatePageState = (patch) => {
     setPageState((prev) => ({
@@ -238,7 +274,15 @@ export default function IncomingPayments() {
       header: 'Received Date',
       headerClassName: 'whitespace-nowrap',
       cellClassName: 'whitespace-nowrap text-sm',
-      cell: (row) => fmtDate(row.paymentDate),
+      cell: (row) => {
+        const inserted = insertedDateText(row);
+        return (
+          <div>
+            <div>{fmtDate(row.paymentDate)}</div>
+            {inserted && <div className="text-xs text-muted-foreground">{inserted}</div>}
+          </div>
+        );
+      },
     },
     {
       id: 'paymentTerms',
@@ -390,16 +434,62 @@ export default function IncomingPayments() {
     setEmailSettings((prev) => ({ ...prev, [field]: value }));
   };
 
+  const startEmailTemplateEdit = () => {
+    setSavedEmailSettings(emailSettings);
+    setEmailTemplateEditing(true);
+    setEmailMessage('');
+    setEmailError('');
+  };
+
   const saveEmailTemplate = () => {
     saveEmailSettings(emailSettings);
+    setSavedEmailSettings(emailSettings);
+    setEmailTemplateEditing(false);
     toast({ title: 'Incoming Payment email template saved' });
   };
 
+  const cancelEmailTemplateChanges = () => {
+    setEmailSettings(savedEmailSettings);
+    setEmailTemplateEditing(false);
+    setEmailMessage('');
+    setEmailError('');
+  };
+
+  const insertEmailToken = (token) => {
+    if (!emailTemplateEditing) return;
+    const target = emailContentRef.current;
+    const current = emailSettings.intro || '';
+    const start = target?.selectionStart ?? current.length;
+    const end = target?.selectionEnd ?? start;
+    const separatorBefore = start > 0 && !/\s$/.test(current.slice(0, start)) ? '\n\n' : '';
+    const separatorAfter = end < current.length && !/^\s/.test(current.slice(end)) ? '\n\n' : '';
+    const next = `${current.slice(0, start)}${separatorBefore}${token}${separatorAfter}${current.slice(end)}`;
+    updateEmailSetting('intro', next);
+    window.requestAnimationFrame(() => {
+      target?.focus();
+      const cursor = start + separatorBefore.length + token.length + separatorAfter.length;
+      target?.setSelectionRange(cursor, cursor);
+    });
+  };
+
   const openEmailReport = () => {
+    const saved = readEmailSettings();
+    setSavedEmailSettings(saved);
+    setEmailSettings(saved);
+    setEmailTemplateEditing(false);
     setEmailOpen(true);
     setEmailPreview(null);
     setEmailError('');
     setEmailMessage('');
+  };
+
+  const closeEmailReport = () => {
+    if (emailTemplateEditing && JSON.stringify(emailSettings) !== JSON.stringify(savedEmailSettings)) {
+      const discard = window.confirm('Discard unsaved Incoming Payment email template changes?');
+      if (!discard) return;
+      cancelEmailTemplateChanges();
+    }
+    setEmailOpen(false);
   };
 
   const runEmailReport = async (preview = true) => {
@@ -414,7 +504,6 @@ export default function IncomingPayments() {
     setEmailError('');
     setEmailMessage('');
     try {
-      if (!preview) saveEmailSettings(emailSettings);
       const delivery = preview ? { credentials: undefined, label: '' } : incomingPaymentSmtpCredentials(emailSettings.from);
       const res = await appClient.functions.invoke('incomingPaymentEmailReport', {
         dateFrom,
@@ -479,7 +568,7 @@ export default function IncomingPayments() {
         eyebrow="Salesforce payments"
         title="Incoming Payment"
         description="Manage receivable buyer payments, supplier refunds, fully paid thresholds, and buyer-group overpayment balances from Salesforce payment records."
-        meta={lastMeta ? `Received date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
+        meta={lastMeta ? `Payment created date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
         actions={(
           <>
             <Button variant="outline" onClick={() => setSettingsOpen(true)}>
@@ -532,17 +621,17 @@ export default function IncomingPayments() {
 
       <TableShell
         title="Payment Filters"
-        meta="Filters use Hong Kong date basis and the selected Payment__c date field."
+        meta="Filters use Payment__c CreatedDate on a Hong Kong date basis. Received Date remains the payment value date."
         bodyClassName="p-4"
         className="mb-4"
       >
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto] md:items-end">
           <div>
-            <Label className="text-xs text-muted-foreground">From</Label>
+            <Label className="text-xs text-muted-foreground">Created From</Label>
             <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">To</Label>
+            <Label className="text-xs text-muted-foreground">Created To</Label>
             <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div>
@@ -697,69 +786,69 @@ export default function IncomingPayments() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
-        <DialogContent className="max-h-[92vh] overflow-hidden sm:max-w-5xl">
+      <Dialog open={emailOpen} onOpenChange={(open) => (open ? setEmailOpen(true) : closeEmailReport())}>
+        <DialogContent className="max-h-[92vh] w-[96vw] max-w-[1500px] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Incoming Payment Report Email</DialogTitle>
             <DialogDescription>
-              The report uses the current received-date range and keyword filter. Tables are generated when you preview or send.
+              The report uses the current payment-created date range and keyword filter. Tables are generated when you preview or send.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid max-h-[70vh] gap-4 overflow-auto pr-1 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="space-y-3">
+          <div className="grid max-h-[70vh] gap-4 overflow-hidden pr-1 lg:grid-cols-[430px_minmax(0,1fr)]">
+            <div className="space-y-3 overflow-auto pr-1">
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <Label className="text-xs text-muted-foreground">From</Label>
-                  <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} />
+                  <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} disabled={!emailTemplateEditing} />
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label className="text-xs text-muted-foreground">To</Label>
-                  <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} placeholder="email@example.com" />
+                  <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} placeholder="email@example.com" disabled={!emailTemplateEditing} />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">CC</Label>
-                  <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} />
+                  <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} disabled={!emailTemplateEditing} />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">BCC</Label>
-                  <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} />
+                  <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} disabled={!emailTemplateEditing} />
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label className="text-xs text-muted-foreground">Subject</Label>
-                  <Input value={emailSettings.subject} onChange={(event) => updateEmailSetting('subject', event.target.value)} />
+                  <Input value={emailSettings.subject} onChange={(event) => updateEmailSetting('subject', event.target.value)} disabled={!emailTemplateEditing} />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Email Content</Label>
+                <div className="flex flex-wrap gap-2">
+                  {EMAIL_TABLE_TOKENS.map((item) => (
+                    <button
+                      key={item.token}
+                      type="button"
+                      draggable={emailTemplateEditing}
+                      disabled={!emailTemplateEditing}
+                      onClick={() => insertEmailToken(item.token)}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('text/plain', item.token);
+                        event.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      className={cn(
+                        'rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-foreground transition-colors',
+                        emailTemplateEditing ? 'cursor-grab hover:bg-muted/70' : 'cursor-not-allowed opacity-50',
+                      )}
+                      title={emailTemplateEditing ? 'Drag into the template or click to insert' : 'Click Edit Template to modify'}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
                 <Textarea
+                  ref={emailContentRef}
                   value={emailSettings.intro}
                   onChange={(event) => updateEmailSetting('intro', event.target.value)}
-                  className="min-h-56 font-mono text-xs"
+                  disabled={!emailTemplateEditing}
+                  className="min-h-72 font-mono text-xs"
                 />
-                <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
-                  Available table tokens: <span className="font-mono">{RECEIVABLE_PAYMENTS_TABLE_TOKEN}</span> and{' '}
-                  <span className="font-mono">{BUYER_CIA_TABLE_TOKEN}</span>. If a token is removed, that table is appended below the content.
-                </div>
-              </div>
-
-              <div className="grid gap-2 text-sm">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={emailSettings.includeReceivablePayments !== false}
-                    onChange={(event) => updateEmailSetting('includeReceivablePayments', event.target.checked)}
-                  />
-                  Include Receivable Payments table
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={emailSettings.includeBuyerCiaInvoices !== false}
-                    onChange={(event) => updateEmailSetting('includeBuyerCiaInvoices', event.target.checked)}
-                  />
-                  Include Buyer CIA Invoices table
-                </label>
               </div>
 
               {emailError && (
@@ -802,8 +891,24 @@ export default function IncomingPayments() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEmailOpen(false)}>Close</Button>
-            <Button variant="outline" onClick={saveEmailTemplate}>Save Template</Button>
+            <Button variant="outline" onClick={closeEmailReport}>Close</Button>
+            {!emailTemplateEditing ? (
+              <Button variant="outline" onClick={startEmailTemplateEdit}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Edit Template
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={cancelEmailTemplateChanges}>
+                  <X className="mr-2 h-4 w-4" />
+                  Cancel Changes
+                </Button>
+                <Button variant="outline" onClick={saveEmailTemplate} disabled={JSON.stringify(emailSettings) === JSON.stringify(savedEmailSettings)}>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save Template
+                </Button>
+              </>
+            )}
             <Button onClick={() => runEmailReport(false)} disabled={emailBusy}>
               {emailAction === 'send' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
               {emailAction === 'send' ? 'Sending' : 'Send Email'}
