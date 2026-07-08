@@ -5601,11 +5601,11 @@ function injectIncomingPaymentLateInterestLink(content, replacement) {
 }
 
 function incomingPaymentLateInterestLinkHtml(url) {
-  return `<p style="margin:0 0 14px"><a href="${escapeHtml(url)}" style="display:inline-block;border-radius:8px;background:#1f2937;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Request Late Payment Interest Invoice</a></p>`;
+  return `<p style="margin:0 0 14px"><a href="${escapeHtml(url)}" style="display:inline-block;border-radius:8px;background:#FF2800;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Late Payment Interest Invoice</a></p>`;
 }
 
 function incomingPaymentLateInterestLinkText(url) {
-  return `Request Late Payment Interest Invoice: ${url}`;
+  return `Late Payment Interest Invoice: ${url}`;
 }
 
 function buildIncomingPaymentEmail(report, settings) {

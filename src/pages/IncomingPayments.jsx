@@ -81,7 +81,7 @@ const EMAIL_TABLE_TOKENS = [
   { label: 'Supplier Refunds', token: '{{supplierRefundTotal}}' },
   { label: 'Incoming Records', token: '{{receivablePaymentCount}}' },
   { label: 'Needs Review', token: '{{needsReviewCount}}' },
-  { label: 'Request Late Payment Interest Invoice', token: '{{requestLatePaymentInterestInvoiceLink}}' },
+  { label: 'Late Payment Interest Invoice', token: '{{requestLatePaymentInterestInvoiceLink}}' },
   { label: 'Receivable Payments Table', token: RECEIVABLE_PAYMENTS_TABLE_TOKEN },
   { label: 'Buyer CIA Invoices Table', token: BUYER_CIA_TABLE_TOKEN },
 ];

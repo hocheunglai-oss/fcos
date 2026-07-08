@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.22';
+export const APP_VERSION = '1.0.23';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.23',
+    releasedAt: '2026-07-08',
+    title: 'Late payment interest link styling',
+    changes: [
+      'Renamed the incoming payment report hyperlink button to Late Payment Interest Invoice.',
+      'Changed the hyperlink button background to Ferrari red.',
+    ],
+  },
   {
     version: '1.0.22',
     releasedAt: '2026-07-08',
