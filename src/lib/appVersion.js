@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.25';
+export const APP_VERSION = '1.0.26';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.26',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment empty table behavior',
+    changes: [
+      'Removed data-table column headers from empty Buyer CIA Invoices and Available Buyer Balances sections.',
+      'Changed both empty sections to use compact one-row empty messages instead of tall table empty states.',
+    ],
+  },
   {
     version: '1.0.25',
     releasedAt: '2026-07-08',

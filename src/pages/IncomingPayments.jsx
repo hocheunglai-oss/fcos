@@ -324,6 +324,18 @@ function buildInterestPreview(settings) {
   return { to, cc, bcc, subject, html };
 }
 
+function CompactTableEmptyState({ icon: Icon, title, description }) {
+  return (
+    <div className="flex min-h-12 items-center gap-3 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+      {Icon && <Icon className="h-4 w-4 opacity-60" />}
+      <div className="min-w-0">
+        <p className="font-medium text-foreground">{title}</p>
+        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function IncomingPayments() {
   const { toast } = useToast();
   const { isAdministrator } = useAuth();
@@ -402,6 +414,7 @@ export default function IncomingPayments() {
 
   const rows = data?.rows || [];
   const buyerCiaRows = data?.buyerCiaInvoices || [];
+  const availableBalanceRows = data?.availableBalances || [];
   const visibleRows = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return rows;
@@ -978,20 +991,25 @@ export default function IncomingPayments() {
         meta={`${visibleBuyerCiaRows.length.toLocaleString()} visible of ${buyerCiaRows.length.toLocaleString()} unpaid CIA buyer invoice stems`}
         className="mb-4"
       >
-        <div className={cn(visibleBuyerCiaRows.length > 5 ? 'max-h-[360px] overflow-auto' : 'overflow-visible')}>
-          <ReorderableDataTable
-            tableKey="incoming-payment-cia-invoices"
-            columns={ciaColumns}
-            rows={visibleBuyerCiaRows}
-            rowKey={(row) => row.stemId}
-            isReorderEnabled={isAdministrator}
-            emptyIcon={Search}
-            emptyTitle="No unpaid CIA buyer invoices"
-            emptyDescription="No open buyer invoice STEMs with CIA payment terms were found."
-            onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
-            rowClassName="hover:bg-muted/40"
+        {visibleBuyerCiaRows.length > 0 ? (
+          <div className={cn(visibleBuyerCiaRows.length > 5 ? 'max-h-[360px] overflow-auto' : 'overflow-visible')}>
+            <ReorderableDataTable
+              tableKey="incoming-payment-cia-invoices"
+              columns={ciaColumns}
+              rows={visibleBuyerCiaRows}
+              rowKey={(row) => row.stemId}
+              isReorderEnabled={isAdministrator}
+              onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
+              rowClassName="hover:bg-muted/40"
+            />
+          </div>
+        ) : (
+          <CompactTableEmptyState
+            icon={Search}
+            title="No unpaid CIA buyer invoices"
+            description="No open buyer invoice STEMs with CIA payment terms were found."
           />
-        </div>
+        )}
       </TableShell>
 
       <TableShell
@@ -1066,19 +1084,24 @@ export default function IncomingPayments() {
             title="Available Buyer Balances"
             meta="Overpaid STEMs are grouped by buyer group. Allocation is limited to the same buyer group."
           >
-            <div className={cn((data?.availableBalances?.length || 0) > 5 ? 'max-h-[360px] overflow-auto' : 'overflow-visible')}>
-              <ReorderableDataTable
-                tableKey="incoming-payment-available-balances"
-                columns={availableBalanceColumns}
-                rows={data?.availableBalances || []}
-                rowKey={(group) => group.buyerGroupName}
-                isReorderEnabled={isAdministrator}
-                emptyIcon={WalletCards}
-                emptyTitle="No available buyer balances"
-                emptyDescription="No linked STEM has Receivable_Balance__c below zero in this payment range."
-                rowClassName="hover:bg-muted/40"
+            {availableBalanceRows.length > 0 ? (
+              <div className={cn(availableBalanceRows.length > 5 ? 'max-h-[360px] overflow-auto' : 'overflow-visible')}>
+                <ReorderableDataTable
+                  tableKey="incoming-payment-available-balances"
+                  columns={availableBalanceColumns}
+                  rows={availableBalanceRows}
+                  rowKey={(group) => group.buyerGroupName}
+                  isReorderEnabled={isAdministrator}
+                  rowClassName="hover:bg-muted/40"
+                />
+              </div>
+            ) : (
+              <CompactTableEmptyState
+                icon={WalletCards}
+                title="No available buyer balances"
+                description="No linked STEM has Receivable_Balance__c below zero in this payment range."
               />
-            </div>
+            )}
           </TableShell>
         </>
       )}
