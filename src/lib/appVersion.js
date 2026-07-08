@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.2';
+export const APP_VERSION = '1.0.3';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.3',
+    releasedAt: '2026-07-08',
+    title: 'Incoming payment source correction',
+    changes: [
+      'Filtered Buyer CIA Invoices to exclude STEMs with delivery dates before 1 Jan 2026.',
+      'Corrected Receivable Payments so positive supplier-side payments are not shown as buyer receipts.',
+      'Separated Stem Detail supplier paid dates from buyer received dates using supplier-side payment classification.',
+    ],
+  },
   {
     version: '1.0.2',
     releasedAt: '2026-07-08',

@@ -3843,6 +3843,154 @@ function incomingPaymentReferenceFields(paymentFields = []) {
   return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 10);
 }
 
+function incomingPaymentSupplierInvoiceFields(paymentFields = []) {
+  const fieldNames = new Set(paymentFields.map((field) => field.name));
+  const exactFields = ['Supplier_Invoice__c'].filter((field) => fieldNames.has(field));
+  const dynamicFields = paymentFields
+    .filter((field) => {
+      if (!field?.name || field.name === 'Name') return false;
+      if (field.type !== 'reference') return false;
+      const referenceTo = Array.isArray(field.referenceTo) ? field.referenceTo : [];
+      return referenceTo.includes('Supplier_Invoice__c')
+        || fieldMatchesAny(field, [
+          'supplierinvoice',
+          'supplierinvoicec',
+          'supplierinvoiceid',
+          'supplierinvoiceidc',
+        ], [
+          'supplierinvoice',
+          'supplierinv',
+          'vendorinvoice',
+        ]);
+    })
+    .map((field) => field.name);
+  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 8);
+}
+
+function incomingPaymentDirectionFields(paymentFields = []) {
+  const fieldNames = new Set(paymentFields.map((field) => field.name));
+  const exactFields = [
+    'Type__c',
+    'Payment_Type__c',
+    'Status__c',
+    'Payment_Status__c',
+    'Direction__c',
+    'Payment_Direction__c',
+    'Category__c',
+    'Payment_Category__c',
+    'Payable_Receivable__c',
+    'AP_AR__c',
+    'Payer__c',
+    'Payor__c',
+    'Payee__c',
+    'From__c',
+    'To__c',
+    'Supplier__c',
+    'Vendor__c',
+    'Account__c',
+  ].filter((field) => fieldNames.has(field));
+  const allowedTypes = new Set(['string', 'textarea', 'picklist', 'reference']);
+  const dynamicFields = paymentFields
+    .filter((field) => (
+      field?.name &&
+      field.name !== 'Name' &&
+      allowedTypes.has(field.type) &&
+      fieldMatchesAny(field, [
+        'paymenttype',
+        'paymenttypec',
+        'paymentdirection',
+        'paymentdirectionc',
+        'direction',
+        'directionc',
+        'payablereceivable',
+        'payablereceivablec',
+        'apar',
+        'aparc',
+        'supplier',
+        'supplierc',
+        'vendor',
+        'vendorc',
+        'payee',
+        'payeec',
+        'payer',
+        'payerc',
+        'payor',
+        'payorc',
+      ], [
+        'paymenttype',
+        'direction',
+        'payable',
+        'receivable',
+        'supplier',
+        'vendor',
+        'payee',
+        'payer',
+        'payor',
+        'payfrom',
+        'payto',
+        'recipient',
+        'beneficiary',
+        'party',
+      ])
+    ))
+    .map((field) => field.name);
+  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 20);
+}
+
+function incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields = []) {
+  return supplierInvoiceFields
+    .map((field) => payment?.[field])
+    .find((value) => isSalesforceId(value)) || null;
+}
+
+function incomingPaymentLooksSupplierSide(payment, {
+  supplierInvoiceFields = [],
+  directionFields = [],
+  typeFields = [],
+  statusFields = [],
+} = {}) {
+  if (incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields)) return true;
+  const fields = uniqueTextList([...directionFields, ...typeFields, ...statusFields]);
+  const text = fields
+    .filter((field) => payment?.[field] != null && payment[field] !== '')
+    .map((field) => `${field} ${payment[field]}`)
+    .join(' ');
+  const token = normalizedFieldToken(text);
+  if (!token) return false;
+  const supplierSignals = [
+    'supplierinvoice',
+    'supplierpayment',
+    'supplierrefund',
+    'vendor',
+    'payable',
+    'accountspayable',
+    'outgoing',
+    'paymenttosupplier',
+    'tosupplier',
+    'fromsupplier',
+    'supplieraccount',
+    'supplierc',
+    'suppliername',
+  ];
+  const hasSupplierSignal = supplierSignals.some((signal) => token.includes(signal));
+  if (!hasSupplierSignal) return false;
+  const mixedBuyerSupplierOnly = token.includes('buyersupplier')
+    && !['supplierinvoice', 'supplierpayment', 'supplierrefund', 'paymenttosupplier', 'payable', 'vendor'].some((signal) => token.includes(signal));
+  return !mixedBuyerSupplierOnly;
+}
+
+function incomingPaymentTypeFromContext(payment, { amount, stem, supplierInvoice, supplierInvoiceFields, directionFields, typeFields, statusFields }) {
+  const supplierSide = supplierInvoice || incomingPaymentLooksSupplierSide(payment, {
+    supplierInvoiceFields,
+    directionFields,
+    typeFields,
+    statusFields,
+  });
+  if (supplierSide) return amount != null && amount < 0 ? 'Supplier Refund' : 'Supplier Payment';
+  if (stem && (amount == null || amount >= 0)) return 'Buyer Payment';
+  return 'Unmatched';
+}
+
 function incomingPaymentReference(payment, referenceFields = []) {
   const value = referenceFields
     .map((field) => payment[field])
@@ -3942,6 +4090,7 @@ async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
   const whereParts = ["Payment_Term__c LIKE '%CIA%'"];
   if (fieldNames.has('Receivable_Balance__c')) whereParts.push(`Receivable_Balance__c >= ${Number(threshold || 0)}`);
   if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
+  if (fieldNames.has('Delivery_Date__c')) whereParts.push('(Delivery_Date__c = null OR Delivery_Date__c >= 2026-01-01)');
   const orderBy = fieldNames.has('Delivery_Date__c')
     ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC'
     : 'CreatedDate DESC';
@@ -4064,14 +4213,18 @@ async function incomingPaymentsList(body) {
   const referenceFields = incomingPaymentReferenceFields(paymentFields);
   const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
   const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
+  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
+  const directionFields = incomingPaymentDirectionFields(paymentFields);
   const paymentSelectFields = [
     'Id',
-    ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'Supplier_Invoice__c', 'CurrencyIsoCode', 'Currency__c']),
+    ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']),
+    ...supplierInvoiceLookupFields,
     dateField,
     amountField,
     ...referenceFields,
     ...statusFields,
     ...typeFields,
+    ...directionFields,
   ].filter(Boolean);
 
   const dateType = paymentFieldByName[dateField]?.type || null;
@@ -4088,7 +4241,9 @@ async function incomingPaymentsList(body) {
   `, { limit, softFail: true });
 
   const directStemIds = payments.map((payment) => payment.STEM__c).filter(Boolean);
-  const supplierInvoiceIds = payments.map((payment) => payment.Supplier_Invoice__c).filter(Boolean);
+  const supplierInvoiceIds = payments
+    .map((payment) => incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields))
+    .filter(Boolean);
   const supplierInvoiceDescribe = supplierInvoiceIds.length
     ? await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }))
     : { fields: [] };
@@ -4182,17 +4337,23 @@ async function incomingPaymentsList(body) {
   const availableStemKeys = new Set();
   const availableBalancesByGroup = {};
   const allRows = payments.map((payment) => {
-    const supplierInvoice = payment.Supplier_Invoice__c ? supplierInvoiceMap[payment.Supplier_Invoice__c] || null : null;
+    const supplierInvoiceId = incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
+    const supplierInvoice = supplierInvoiceId ? supplierInvoiceMap[supplierInvoiceId] || null : null;
     const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
     const stem = stemId ? stemMap[stemId] || null : null;
     const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
-    let type = 'Unmatched';
+    const type = incomingPaymentTypeFromContext(payment, {
+      amount,
+      stem,
+      supplierInvoice,
+      supplierInvoiceFields: supplierInvoiceLookupFields,
+      directionFields,
+      typeFields,
+      statusFields,
+    });
     let incomingAmount = amount;
-    if (supplierInvoice) {
-      type = amount != null && amount < 0 ? 'Supplier Refund' : 'Supplier Payment';
+    if (type.startsWith('Supplier')) {
       incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
-    } else if (stem) {
-      type = 'Buyer Payment';
     }
     const paymentDate = dateField ? payment[dateField] || null : payment.CreatedDate || null;
     const buyerInvoiceDueDate = type === 'Buyer Payment' && stem
@@ -4260,7 +4421,7 @@ async function incomingPaymentsList(body) {
       keyStem: stem?.KeyStem__c || null,
       buyerName,
       buyerGroupName,
-      supplierInvoiceId: supplierInvoice?.Id || null,
+      supplierInvoiceId: supplierInvoice?.Id || supplierInvoiceId || null,
       supplierInvoiceName: supplierInvoice?.Name || null,
       supplierName: supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships),
       partyName,
@@ -4271,6 +4432,7 @@ async function incomingPaymentsList(body) {
       status: status.label,
       statusTone: status.tone,
       paymentObjectAmountField: amountField,
+      paymentObjectSupplierInvoiceFields: supplierInvoiceLookupFields,
     };
   });
   const rows = allRows.filter((row) => row.type !== 'Supplier Payment');
@@ -4297,6 +4459,7 @@ async function incomingPaymentsList(body) {
       paymentDateField: dateField,
       paymentAmountField: amountField,
       paymentReferenceFields: referenceFields,
+      paymentSupplierInvoiceFields: supplierInvoiceLookupFields,
       supplierInvoicePayableField,
       supplierInvoiceAmountField,
     },
@@ -6495,7 +6658,8 @@ async function salesforceStemDetailFull(body) {
   let supplierInvoicePayments = [];
   let buyerInvoicePayments = [];
   const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
-  const paymentFieldNames = new Set((paymentDescribe.fields || []).map((field) => field.name));
+  const paymentFields = paymentDescribe.fields || [];
+  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
   const paymentAmountField = [
     'Amount__c',
     'Payment_Amount__c',
@@ -6505,51 +6669,94 @@ async function salesforceStemDetailFull(body) {
     'Amount_Paid__c',
     'Payment_Value__c',
   ].find((field) => paymentFieldNames.has(field));
+  const paymentDateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
+  const paymentDirectionFields = incomingPaymentDirectionFields(paymentFields);
+  const paymentStatusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
+  const paymentTypeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const paymentSelectFields = [
     'Id',
     paymentFieldNames.has('Name') ? 'Name' : null,
-    paymentFieldNames.has('Date__c') ? 'Date__c' : null,
     paymentFieldNames.has('STEM__c') ? 'STEM__c' : null,
-    paymentFieldNames.has('Supplier_Invoice__c') ? 'Supplier_Invoice__c' : null,
+    paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null,
+    paymentDateField,
+    ...supplierInvoiceLookupFields,
     paymentAmountField,
+    ...paymentStatusFields,
+    ...paymentTypeFields,
+    ...paymentDirectionFields,
   ].filter(Boolean);
-  const paymentOrder = paymentFieldNames.has('Date__c') ? 'Date__c DESC NULLS LAST, CreatedDate DESC' : 'CreatedDate DESC';
+  const paymentOrder = paymentDateField ? `${paymentDateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
   if (paymentSelectFields.length > 1) {
-    if (supplierInvoiceIds.length && paymentFieldNames.has('Supplier_Invoice__c')) {
-      const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
-          SELECT ${paymentSelectFields.join(', ')}
-          FROM Payment__c
-          WHERE Supplier_Invoice__c IN (${inList})
-          ORDER BY ${paymentOrder}
-          LIMIT 2000
-        `, { limit: 2000, softFail: true });
-      }));
-      supplierInvoicePayments = paymentChunks.flat().map((payment) => ({
+    const selectedPaymentFields = [...new Set(paymentSelectFields)];
+    const paymentDateValue = (payment) => (paymentDateField ? payment[paymentDateField] : null) || payment.Date__c || payment.CreatedDate || null;
+    const sortPaymentRows = (rows) => rows.sort((a, b) => String(paymentDateValue(b) || '').localeCompare(String(paymentDateValue(a) || '')));
+    const decoratePayment = (payment, supplierInvoiceId = null) => ({
         ...payment,
+        Date__c: paymentDateValue(payment),
         _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
         _Payment_Amount_Field: paymentAmountField || null,
-        _Supplier_Invoice_Name: supplierInvoiceNameMap[payment.Supplier_Invoice__c] || payment.Supplier_Invoice__c || null,
+        _Supplier_Invoice_Name: supplierInvoiceId
+          ? supplierInvoiceNameMap[supplierInvoiceId] || supplierInvoiceId
+          : null,
+      });
+    const supplierPaymentMap = new Map();
+    const buyerPaymentMap = new Map();
+    const addSupplierPayment = (payment, supplierInvoiceId = null) => {
+      if (!payment?.Id) return;
+      const invoiceId = supplierInvoiceId || incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
+      supplierPaymentMap.set(payment.Id, {
+        ...decoratePayment(payment, invoiceId),
+        _Supplier_Invoice_Name: invoiceId
+          ? supplierInvoiceNameMap[invoiceId] || invoiceId
+          : 'Supplier payment',
+      });
+    };
+    const addBuyerPayment = (payment) => {
+      if (!payment?.Id) return;
+      buyerPaymentMap.set(payment.Id, decoratePayment(payment));
+    };
+
+    if (supplierInvoiceIds.length && supplierInvoiceLookupFields.length) {
+      await Promise.all(supplierInvoiceLookupFields.map(async (field) => {
+        const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return queryRows(`
+            SELECT ${selectedPaymentFields.join(', ')}
+            FROM Payment__c
+            WHERE ${field} IN (${inList})
+            ORDER BY ${paymentOrder}
+            LIMIT 2000
+          `, { limit: 2000, softFail: true });
+        }));
+        for (const payment of paymentChunks.flat()) addSupplierPayment(payment, payment[field]);
       }));
     }
     if (paymentFieldNames.has('STEM__c')) {
-      const buyerPaymentWhere = paymentFieldNames.has('Supplier_Invoice__c')
-        ? `STEM__c = '${escapeSoql(actualStemId)}' AND Supplier_Invoice__c = null`
-        : `STEM__c = '${escapeSoql(actualStemId)}'`;
-      buyerInvoicePayments = await queryRows(`
-        SELECT ${paymentSelectFields.join(', ')}
+      const stemPayments = await queryRows(`
+        SELECT ${selectedPaymentFields.join(', ')}
         FROM Payment__c
-        WHERE ${buyerPaymentWhere}
+        WHERE STEM__c = '${escapeSoql(actualStemId)}'
         ORDER BY ${paymentOrder}
         LIMIT 2000
       `, { limit: 2000, softFail: true });
-      buyerInvoicePayments = buyerInvoicePayments.map((payment) => ({
-        ...payment,
-        _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
-        _Payment_Amount_Field: paymentAmountField || null,
-      }));
+      for (const payment of stemPayments) {
+        const amount = paymentAmountField ? incomingPaymentNumber(payment[paymentAmountField]) : null;
+        const supplierSide = incomingPaymentLooksSupplierSide(payment, {
+          supplierInvoiceFields: supplierInvoiceLookupFields,
+          directionFields: paymentDirectionFields,
+          typeFields: paymentTypeFields,
+          statusFields: paymentStatusFields,
+        });
+        if (supplierSide) {
+          addSupplierPayment(payment);
+        } else if (amount == null || amount >= 0) {
+          addBuyerPayment(payment);
+        }
+      }
     }
+    supplierInvoicePayments = sortPaymentRows([...supplierPaymentMap.values()]);
+    buyerInvoicePayments = sortPaymentRows([...buyerPaymentMap.values()]);
   }
 
   const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([
