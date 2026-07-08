@@ -2317,7 +2317,6 @@ export default function BuyerInvoices() {
             </div>
 
             <div className="shrink-0 flex flex-wrap justify-end gap-2 border-t border-border p-4">
-              <Button variant="outline" onClick={closeInternalEmailReminder} disabled={emailBusy}>Close</Button>
               {!internalEmailEditing ? (
                 <Button variant="outline" onClick={() => setInternalEmailEditing(true)} disabled={emailBusy || emailLoading} className="gap-2">
                   <Mail className="h-4 w-4" /> Edit Template
@@ -2332,6 +2331,7 @@ export default function BuyerInvoices() {
                   </Button>
                 </>
               )}
+              <Button variant="outline" onClick={closeInternalEmailReminder} disabled={emailBusy}>Close</Button>
               <Button onClick={() => sendEmailReport(false)} disabled={emailBusy || emailLoading} className="gap-2">
                 {emailAction === 'send' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {emailAction === 'send' ? 'Sending' : 'Send Now'}

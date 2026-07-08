@@ -1,6 +1,14 @@
-export const APP_VERSION = '1.0.36';
+export const APP_VERSION = '1.0.37';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.37',
+    releasedAt: '2026-07-08',
+    title: 'Internal report footer alignment',
+    changes: [
+      'Moved the Outstanding Buyer Invoices internal daily report template controls immediately to the left of Close.',
+    ],
+  },
   {
     version: '1.0.36',
     releasedAt: '2026-07-08',
