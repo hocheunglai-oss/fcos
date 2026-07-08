@@ -1066,7 +1066,7 @@ export default function IncomingPayments() {
             title="Available Buyer Balances"
             meta="Overpaid STEMs are grouped by buyer group. Allocation is limited to the same buyer group."
           >
-            <div className="max-h-[36vh] overflow-auto">
+            <div className={cn((data?.availableBalances?.length || 0) > 5 ? 'max-h-[360px] overflow-auto' : 'overflow-visible')}>
               <ReorderableDataTable
                 tableKey="incoming-payment-available-balances"
                 columns={availableBalanceColumns}

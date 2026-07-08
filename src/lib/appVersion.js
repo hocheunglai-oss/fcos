@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.24';
+export const APP_VERSION = '1.0.25';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.25',
+    releasedAt: '2026-07-08',
+    title: 'Available buyer balances table height behavior',
+    changes: [
+      'Changed Incoming Payment Available Buyer Balances table to auto-fit up to five records.',
+      'Enabled scrolling for the Available Buyer Balances table only when more than five records are visible.',
+    ],
+  },
   {
     version: '1.0.24',
     releasedAt: '2026-07-08',
