@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.12';
+export const APP_VERSION = '1.0.13';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.13',
+    releasedAt: '2026-07-08',
+    title: 'Notification close fix',
+    changes: [
+      'Fixed notification close buttons so dismissed toasts are removed immediately instead of staying visible.',
+      'Made the toast container non-interactive except for the notification itself so no overlay blocks the close button.',
+    ],
+  },
   {
     version: '1.0.12',
     releasedAt: '2026-07-08',
