@@ -33,6 +33,8 @@ const INTEREST_EMAIL_SETTINGS_KEY = 'salesforce_extension:incoming_payment_inter
 const RECEIVABLE_PAYMENTS_TABLE_TOKEN = '{{receivablePaymentsTable}}';
 const BUYER_CIA_TABLE_TOKEN = '{{buyerCiaInvoicesTable}}';
 const INTEREST_CALCULATION_TABLE_TOKEN = '{{interestCalculationTable}}';
+const STEM_LINK_TOKEN = '{{stemLink}}';
+const INTEREST_STEM_LINK_TOKEN_PATTERN = /\{\{\s*stemLink\s*\}\}/i;
 const INCOMING_EMAIL_STEPS = ['Review report', 'Review recipients', 'Email preview'];
 const DEFAULT_EMAIL_SETTINGS = {
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
@@ -66,6 +68,7 @@ const DEFAULT_INTEREST_EMAIL_SETTINGS = {
 Buyer: {{buyerName}}
 Group: {{buyerGroupName}}
 STEM: {{stemName}}
+${STEM_LINK_TOKEN}
 Payment: {{paymentName}}
 Received date: {{receivedDate}}
 Payment terms delay: {{delayDays}}
@@ -93,6 +96,7 @@ const INTEREST_EMAIL_TOKENS = [
   { label: 'Buyer', token: '{{buyerName}}' },
   { label: 'Group', token: '{{buyerGroupName}}' },
   { label: 'STEM', token: '{{stemName}}' },
+  { label: 'Link to STEM', token: STEM_LINK_TOKEN },
   { label: 'Payment', token: '{{paymentName}}' },
   { label: 'Received Date', token: '{{receivedDate}}' },
   { label: 'Inserted Date', token: '{{insertedDate}}' },
@@ -190,6 +194,12 @@ function readUrlFilterPatch() {
   return patch;
 }
 
+function readUrlStemId() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('stemId') || params.get('stem') || null;
+}
+
 function initialPageState() {
   const cached = readPageState(PAGE_STATE_KEY, defaultPageState);
   const filterPatch = readUrlFilterPatch();
@@ -266,6 +276,16 @@ function interestContentHtml(content) {
   }).join('');
 }
 
+function replaceInterestToken(source, pattern, replacement) {
+  return String(source || '')
+    .replace(new RegExp(`<p\\b[^>]*>\\s*${pattern.source}\\s*<\\/p>`, 'i'), replacement)
+    .replace(pattern, replacement);
+}
+
+function interestStemLinkHtml(url) {
+  return `<p style="margin:0 0 14px"><a href="${escapeInterestHtml(url)}" style="display:inline-block;border-radius:8px;background:#1f2937;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Link to STEM</a></p>`;
+}
+
 function sampleInterestCalculationHtml() {
   return `
     <div style="margin-top:16px">
@@ -295,6 +315,9 @@ function sampleInterestCalculationHtml() {
 }
 
 function buildInterestPreview(settings) {
+  const sampleStemUrl = typeof window === 'undefined'
+    ? 'https://salesforce-extension-murex.vercel.app/incoming-payments?stemId=sample'
+    : `${window.location.origin}/incoming-payments?stemId=sample`;
   const context = {
     requestedBy: 'Vincent Lee',
     requesterEmail: 'vincent@cosulich.com.hk',
@@ -318,7 +341,11 @@ function buildInterestPreview(settings) {
   const body = renderInterestTemplate(settings.body || DEFAULT_INTEREST_EMAIL_SETTINGS.body, context);
   const tokenPattern = /\{\{\s*interestCalculationTable\s*\}\}/i;
   const tokenParagraphPattern = /<p\b[^>]*>\s*\{\{\s*interestCalculationTable\s*\}\}\s*<\/p>/i;
-  const htmlContent = interestContentHtml(body)
+  const htmlContent = replaceInterestToken(
+    interestContentHtml(body),
+    INTEREST_STEM_LINK_TOKEN_PATTERN,
+    interestStemLinkHtml(sampleStemUrl),
+  )
     .replace(tokenParagraphPattern, sampleInterestCalculationHtml())
     .replace(tokenPattern, sampleInterestCalculationHtml());
   const html = `<div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">${htmlContent}</div>`;
@@ -349,7 +376,7 @@ export default function IncomingPayments() {
   const [allocationTarget, setAllocationTarget] = useState(null);
   const [allocationDraft, setAllocationDraft] = useState({ targetStem: '', amount: '', note: '' });
   const [allocationLoading, setAllocationLoading] = useState(false);
-  const [selectedStemId, setSelectedStemId] = useState(null);
+  const [selectedStemId, setSelectedStemId] = useState(readUrlStemId);
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailStep, setEmailStep] = useState(0);
   const [savedEmailSettings, setSavedEmailSettings] = useState(readEmailSettings);
@@ -492,6 +519,7 @@ export default function IncomingPayments() {
         receivableBalance: row.receivableBalance,
         from: emailSettings.from || DEFAULT_EMAIL_SETTINGS.from,
         template: readInterestEmailSettings(),
+        appUrl: window.location.origin,
         credentials: delivery.credentials,
       });
       if (res.data?.error) {

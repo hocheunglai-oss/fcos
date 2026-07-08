@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.34';
+export const APP_VERSION = '1.0.35';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.35',
+    releasedAt: '2026-07-08',
+    title: 'Late payment STEM link token',
+    changes: [
+      'Added a Link to STEM variable for late payment interest request email templates.',
+      'Linked late payment interest request emails back to Incoming Payment with the relevant STEM detail opened.',
+    ],
+  },
   {
     version: '1.0.34',
     releasedAt: '2026-07-08',

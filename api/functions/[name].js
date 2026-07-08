@@ -1804,6 +1804,12 @@ function incomingPaymentFilterUrl(settings, report) {
   return url.toString();
 }
 
+function incomingPaymentStemUrl(settings = {}, stemId) {
+  const url = new URL('/incoming-payments', incomingPaymentAppUrl(settings));
+  if (stemId) url.searchParams.set('stemId', String(stemId));
+  return url.toString();
+}
+
 function serverEmailDeliveryStatus() {
   const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
   return {
@@ -5407,6 +5413,7 @@ function incomingPaymentInterestCalculationText(calculation) {
 }
 
 const INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN = /\{\{\s*interestCalculationTable\s*\}\}/i;
+const INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN = /\{\{\s*stemLink\s*\}\}/i;
 const DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE = {
   to: INCOMING_PAYMENT_INTEREST_RECIPIENT,
   cc: '{{requesterEmail}}',
@@ -5419,6 +5426,7 @@ const DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE = {
 Buyer: {{buyerName}}
 Group: {{buyerGroupName}}
 STEM: {{stemName}}
+{{stemLink}}
 Payment: {{paymentName}}
 Received date: {{receivedDate}}
 Payment terms delay: {{delayDays}}
@@ -5443,6 +5451,20 @@ function renderIncomingPaymentInterestTemplate(value, context) {
   return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (
     Object.prototype.hasOwnProperty.call(context, key) ? context[key] : match
   ));
+}
+
+function replaceIncomingPaymentInterestToken(source, pattern, replacement) {
+  return String(source || '')
+    .replace(new RegExp(`<p\\b[^>]*>\\s*${pattern.source}\\s*<\\/p>`, 'i'), replacement)
+    .replace(pattern, replacement);
+}
+
+function incomingPaymentInterestStemLinkHtml(url) {
+  return `<p style="margin:0 0 14px"><a href="${escapeHtml(url)}" style="display:inline-block;border-radius:8px;background:#1f2937;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Link to STEM</a></p>`;
+}
+
+function incomingPaymentInterestStemLinkText(url) {
+  return `Link to STEM: ${url}`;
 }
 
 function buildIncomingPaymentInterestEmail(body, profile, calculation) {
@@ -5475,6 +5497,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
     interestTotal: money(calculation?.totalInterest),
   };
   const template = incomingPaymentInterestTemplate(body.template || body.interestTemplate || {});
+  const stemUrl = incomingPaymentStemUrl({ appUrl: body.appUrl }, calculation?.stem?.Id || body.stemId);
   const to = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.to, context));
   const cc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.cc, context));
   const bcc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.bcc, context));
@@ -5482,10 +5505,18 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   const bodyContent = renderIncomingPaymentInterestTemplate(template.body, context);
   const calculationHtml = calculation ? incomingPaymentInterestCalculationHtml(calculation) : '';
   const calculationText = calculation ? incomingPaymentInterestCalculationText(calculation) : '';
-  const htmlBody = emailContentHtml(bodyContent)
+  const htmlBody = replaceIncomingPaymentInterestToken(
+    emailContentHtml(bodyContent),
+    INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN,
+    incomingPaymentInterestStemLinkHtml(stemUrl),
+  )
     .replace(/<p\b[^>]*>\s*\{\{\s*interestCalculationTable\s*\}\}\s*<\/p>/i, calculationHtml)
     .replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationHtml);
-  const textBody = bodyContent.replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
+  const textBody = replaceIncomingPaymentInterestToken(
+    bodyContent,
+    INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN,
+    incomingPaymentInterestStemLinkText(stemUrl),
+  ).replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${htmlBody}
