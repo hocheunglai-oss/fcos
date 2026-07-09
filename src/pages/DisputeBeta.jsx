@@ -818,7 +818,7 @@ export default function DisputeBeta() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-64px)] min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
       <PageHeader
         icon={FileCheck2}
         eyebrow="Dispute workflow beta"

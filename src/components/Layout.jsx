@@ -47,6 +47,8 @@ export default function Layout() {
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
   const currentBuildIdRef = useRef(null);
+  const pageOwnsScroll = location.pathname === '/disputes-beta'
+    || location.pathname.startsWith('/disputes-beta/');
 
   useEffect(() => {
     document.documentElement.dataset.density = density;
@@ -370,9 +372,9 @@ export default function Layout() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-auto">
+      <main className={cn('flex-1', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
         {versionUpdate && (
-          <div className="sticky top-0 z-40 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
+          <div className="sticky top-0 z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
               <div className="text-sm">
                 <span className="font-semibold">New version available</span>
@@ -387,7 +389,9 @@ export default function Layout() {
             </div>
           </div>
         )}
-        <Outlet />
+        <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
+          <Outlet />
+        </div>
       </main>
 
       <Dialog open={versionOpen} onOpenChange={setVersionOpen}>

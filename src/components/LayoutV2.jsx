@@ -88,6 +88,9 @@ export default function LayoutV2() {
         : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
   }, [accessibleGroups, location.pathname]);
 
+  const pageOwnsScroll = location.pathname === '/v2/disputes-beta'
+    || location.pathname.startsWith('/v2/disputes-beta/');
+
   useEffect(() => {
     document.documentElement.dataset.density = density;
     localStorage.setItem('table-density', density);
@@ -237,9 +240,9 @@ export default function LayoutV2() {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-auto bg-slate-50">
+      <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
         {versionUpdate && (
-          <div className="sticky top-0 z-40 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
+          <div className="sticky top-0 z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm">
                 <span className="font-semibold">New version available</span>
@@ -252,7 +255,7 @@ export default function LayoutV2() {
             </div>
           </div>
         )}
-        <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur">
+        <div className="sticky top-0 z-30 shrink-0 border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Version 2 Workspace</div>
@@ -268,7 +271,9 @@ export default function LayoutV2() {
             </div>
           </div>
         </div>
-        <Outlet />
+        <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
+          <Outlet />
+        </div>
       </main>
 
       <Dialog open={versionOpen} onOpenChange={setVersionOpen}>

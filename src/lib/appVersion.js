@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.54';
+export const APP_VERSION = '1.0.55';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.55',
+    releasedAt: '2026-07-09',
+    title: 'Dispute workflow outer scroll lock',
+    changes: [
+      'Stopped the v2 Dispute Workflow route from using the outer workspace scroll container.',
+      'Made Dispute Workflow fill its route area exactly so only the queue table scrolls.',
+      'Applied the same route-level scroll containment to the v1 Dispute Beta entry point.',
+    ],
+  },
   {
     version: '1.0.54',
     releasedAt: '2026-07-09',
