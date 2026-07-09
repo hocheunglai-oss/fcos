@@ -1,14 +1,11 @@
 import { cn } from '@/lib/utils';
-import { useLocation } from 'react-router-dom';
-import { getV2PageCopy } from '@/lib/v2Copy';
+import { getPageCopy } from '@/lib/pageCopy';
 
 export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, actions, className }) {
-  const location = useLocation();
-  const isV2 = location.pathname.startsWith('/v2');
-  const copy = isV2 ? getV2PageCopy({ title, eyebrow, description }) : { title, eyebrow, description };
+  const copy = getPageCopy({ title, eyebrow, description });
 
   return (
-    <div className={cn('glass-page-header mb-6 flex flex-col gap-4 rounded-2xl px-5 py-4 lg:flex-row lg:items-end lg:justify-between', isV2 && 'v2-page-header', className)}>
+    <div className={cn('glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-2xl px-5 py-4 lg:flex-row lg:items-end lg:justify-between', className)}>
       <div className="min-w-0">
         {(eyebrow || Icon) && (
           <div className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">

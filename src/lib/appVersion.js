@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.56';
+export const APP_VERSION = '1.0.57';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.57',
+    releasedAt: '2026-07-09',
+    title: 'Single workspace routing',
+    changes: [
+      'Removed the old workspace shell and made the current interface the only active app surface.',
+      'Redirected legacy workspace URLs to canonical routes so existing bookmarks continue to open.',
+      'Removed visible workspace switching labels from navigation and version dialogs.',
+    ],
+  },
   {
     version: '1.0.56',
     releasedAt: '2026-07-09',
@@ -15,9 +25,9 @@ export const APP_VERSION_HISTORY = [
     releasedAt: '2026-07-09',
     title: 'Dispute workflow outer scroll lock',
     changes: [
-      'Stopped the v2 Dispute Workflow route from using the outer workspace scroll container.',
+      'Stopped the Dispute Workflow route from using the outer workspace scroll container.',
       'Made Dispute Workflow fill its route area exactly so only the queue table scrolls.',
-      'Applied the same route-level scroll containment to the v1 Dispute Beta entry point.',
+      'Applied the same route-level scroll containment to the Dispute Beta entry point.',
     ],
   },
   {
@@ -59,11 +69,11 @@ export const APP_VERSION_HISTORY = [
   {
     version: '1.0.50',
     releasedAt: '2026-07-09',
-    title: 'V2 workspace shell',
+    title: 'Workspace shell',
     changes: [
-      'Added a separate /v2 workspace with unified navigation, simplified module names, and a cleaner operational layout while preserving v1 routes.',
-      'Applied v2-specific page header, table, card, and control styling without changing Salesforce calculations or API payloads.',
-      'Added quick switching between v1 and v2 so the current version remains separately available.',
+      'Added unified navigation, simplified module names, and a cleaner operational layout.',
+      'Applied page header, table, card, and control styling without changing Salesforce calculations or API payloads.',
+      'Kept route compatibility while the workspace design was introduced.',
     ],
   },
   {

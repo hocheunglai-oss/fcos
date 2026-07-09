@@ -14,7 +14,7 @@ import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizont
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
-const STORAGE_KEY = 'dashboard_filters_v2';
+const STORAGE_KEY = 'dashboard_filters';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
 const YEARS = getRecentYears();
 const PRODUCT_FAMILY_KPI_ORDER = ['HSFO', 'VLSFO', 'LSMGO'];

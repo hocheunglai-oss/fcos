@@ -29,7 +29,7 @@ import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { hasUsableSmtpSettings, readSmtpSettings, smtpFromAddress } from '@/lib/smtpSettings';
 import { cn } from '@/lib/utils';
 
-const PAGE_STATE_KEY = 'incoming-payments:v1';
+const PAGE_STATE_KEY = 'incoming-payments';
 const EMAIL_SETTINGS_KEY = 'salesforce_extension:incoming_payment_email_settings';
 const INTEREST_EMAIL_SETTINGS_KEY = 'salesforce_extension:incoming_payment_interest_email_settings';
 const RECEIVABLE_PAYMENTS_TABLE_TOKEN = '{{receivablePaymentsTable}}';

@@ -1,4 +1,4 @@
-const V2_PAGE_COPY = {
+const PAGE_COPY = {
   Dashboard: {
     eyebrow: 'Review',
     title: 'Dashboard',
@@ -66,8 +66,8 @@ const V2_PAGE_COPY = {
   },
 };
 
-export function getV2PageCopy({ title, eyebrow, description }) {
-  const copy = V2_PAGE_COPY[title] || {};
+export function getPageCopy({ title, eyebrow, description }) {
+  const copy = PAGE_COPY[title] || {};
   return {
     eyebrow: copy.eyebrow ?? eyebrow,
     title: copy.title ?? title,

@@ -240,15 +240,15 @@
     background: hsl(220 22% 12% / 0.8);
   }
 
-  .v2-shell {
+  .app-workspace-shell {
     background: hsl(215 22% 96%);
     color: hsl(222 22% 12%);
   }
 
-  .v2-shell .glass-page-header,
-  .v2-shell .glass-surface,
-  .v2-shell .bg-card.border-border,
-  .v2-shell .border.bg-card {
+  .app-workspace-shell .glass-page-header,
+  .app-workspace-shell .glass-surface,
+  .app-workspace-shell .bg-card.border-border,
+  .app-workspace-shell .border.bg-card {
     background: hsl(0 0% 100%);
     border-color: hsl(214 24% 88%);
     border-radius: 8px;
@@ -257,21 +257,21 @@
     -webkit-backdrop-filter: none;
   }
 
-  .v2-shell .v2-page-header {
+  .app-workspace-shell .app-page-header {
     margin-bottom: 1rem;
     padding: 1rem 1.25rem;
   }
 
-  .v2-shell .v2-page-header h1 {
+  .app-workspace-shell .app-page-header h1 {
     font-size: 1.375rem;
     line-height: 1.75rem;
   }
 
-  .v2-shell .glass-control,
-  .v2-shell .glass-control.bg-transparent,
-  .v2-shell input,
-  .v2-shell select,
-  .v2-shell textarea {
+  .app-workspace-shell .glass-control,
+  .app-workspace-shell .glass-control.bg-transparent,
+  .app-workspace-shell input,
+  .app-workspace-shell select,
+  .app-workspace-shell textarea {
     background: hsl(0 0% 100%);
     border-color: hsl(214 24% 84%);
     border-radius: 8px;
@@ -280,17 +280,17 @@
     -webkit-backdrop-filter: none;
   }
 
-  .v2-shell button,
-  .v2-shell a {
+  .app-workspace-shell button,
+  .app-workspace-shell a {
     letter-spacing: 0;
   }
 
-  .v2-shell table {
+  .app-workspace-shell table {
     border-collapse: separate;
     border-spacing: 0;
   }
 
-  .v2-shell table th {
+  .app-workspace-shell table th {
     background: hsl(215 22% 97%);
     border-bottom: 1px solid hsl(214 24% 88%);
     color: hsl(215 12% 46%);
@@ -300,24 +300,24 @@
     white-space: nowrap;
   }
 
-  .v2-shell table td {
+  .app-workspace-shell table td {
     border-bottom-color: hsl(214 24% 91% / 0.8);
     vertical-align: top;
   }
 
-  .v2-shell tbody tr:hover {
+  .app-workspace-shell tbody tr:hover {
     background: hsl(214 95% 97%);
   }
 
-  .v2-shell .sticky.bg-card,
-  .v2-shell thead .bg-card {
+  .app-workspace-shell .sticky.bg-card,
+  .app-workspace-shell thead .bg-card {
     background: hsl(215 22% 97%);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
-  .v2-shell .rounded-xl,
-  .v2-shell .rounded-2xl {
+  .app-workspace-shell .rounded-xl,
+  .app-workspace-shell .rounded-2xl {
     border-radius: 8px;
   }
 }

@@ -40,7 +40,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { cn } from '@/lib/utils';
 
-const PAGE_STATE_KEY = 'cashflow-forecast:v1';
+const PAGE_STATE_KEY = 'cashflow-forecast';
 
 function hkDateOnly(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);

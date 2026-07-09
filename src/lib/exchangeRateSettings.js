@@ -1,4 +1,4 @@
-export const EXCHANGE_RATE_SETTINGS_KEY = 'broker_commission_exchange_rate_v1';
+export const EXCHANGE_RATE_SETTINGS_KEY = 'broker_commission_exchange_rate';
 
 export const RATE_PROVIDER_OPTIONS = [
   { value: 'blended', label: 'Frankfurter blended rate' },

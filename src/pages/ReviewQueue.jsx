@@ -16,7 +16,7 @@ import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
-const STORAGE_KEY = 'review_queue_filters_v1';
+const STORAGE_KEY = 'review_queue_filters';
 const YEARS = getRecentYears();
 
 const REVIEW_FILTERS = [
