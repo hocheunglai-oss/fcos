@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.39';
+export const APP_VERSION = '1.0.40';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.40',
+    releasedAt: '2026-07-09',
+    title: 'Settings system health',
+    changes: [
+      'Added a System Health tab inside Settings to show Salesforce, Supabase, Google Drive, exchange-rate, holiday, SMTP, Vercel, and browser sender status.',
+      'Added redacted server-side health checks with token expiry notes where providers expose them.',
+      'Separated server SMTP status from browser-local Internal and External Payment Reminder sender configuration.',
+    ],
+  },
   {
     version: '1.0.39',
     releasedAt: '2026-07-09',

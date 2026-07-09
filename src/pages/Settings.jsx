@@ -1,13 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, CircleDollarSign, FileText, Loader2, Mail, Settings } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  CircleDollarSign,
+  Clock,
+  FileText,
+  Loader2,
+  Mail,
+  RefreshCw,
+  Server,
+  Settings,
+  ShieldCheck,
+  XCircle,
+} from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
+import StateBlock from '@/components/common/StateBlock';
+import { appClient } from '@/api/appClient';
 import {
+  hasUsableSmtpSettings,
   readPaymentReminderSmtpSettings,
   readSmtpSettings,
   savePaymentReminderSmtpSettings,
@@ -25,6 +44,7 @@ const SETTINGS_TABS = [
   { id: 'email', label: 'Email Senders', icon: Mail },
   { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
   { id: 'documents', label: 'STEM Documents', icon: FileText },
+  { id: 'health', label: 'System Health', icon: Activity },
 ];
 
 function validSettingsTab(value) {
@@ -149,6 +169,259 @@ function SmtpAccountCard({ title, description, settings, onChange, enableLabel }
         </div>
       </div>
     </div>
+  );
+}
+
+const STATUS_META = {
+  online: {
+    label: 'Online',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    icon: CheckCircle2,
+  },
+  configured: {
+    label: 'Configured',
+    className: 'border-sky-200 bg-sky-50 text-sky-700',
+    icon: ShieldCheck,
+  },
+  warning: {
+    label: 'Warning',
+    className: 'border-amber-200 bg-amber-50 text-amber-800',
+    icon: AlertTriangle,
+  },
+  not_configured: {
+    label: 'Not configured',
+    className: 'border-slate-200 bg-slate-50 text-slate-600',
+    icon: Clock,
+  },
+  error: {
+    label: 'Error',
+    className: 'border-red-200 bg-red-50 text-red-700',
+    icon: XCircle,
+  },
+};
+
+function formatHealthDate(value) {
+  if (!value) return '—';
+  if (typeof value === 'string' && !/^\d{4}-\d{2}-\d{2}T/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Hong_Kong',
+  }).format(date);
+}
+
+function maskLocalValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('@')) {
+    const [name, domain] = raw.split('@');
+    return `${name.slice(0, 2) || '*'}***@${domain}`;
+  }
+  if (raw.length <= 8) return '***';
+  return `${raw.slice(0, 3)}***${raw.slice(-3)}`;
+}
+
+function StatusBadge({ status }) {
+  const meta = STATUS_META[status] || STATUS_META.not_configured;
+  const Icon = meta.icon;
+  return (
+    <Badge variant="outline" className={`gap-1.5 whitespace-nowrap ${meta.className}`}>
+      <Icon className="h-3 w-3" />
+      {meta.label}
+    </Badge>
+  );
+}
+
+function KeyValueList({ items }) {
+  const rows = Object.entries(items || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!rows.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {rows.map(([key, value]) => (
+        <span key={key} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+          <span className="font-semibold text-foreground">{key.replace(/([A-Z])/g, ' $1')}:</span>{' '}
+          {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function BrowserSmtpHealthRow({ id, name, settings, purpose }) {
+  const configured = hasUsableSmtpSettings(settings);
+  const enabled = settings?.enabled === true;
+  return {
+    id,
+    name,
+    category: 'Email',
+    purpose,
+    scope: 'browser',
+    provider: 'SMTP',
+    endpoint: settings?.host || null,
+    authType: 'Browser-saved SMTP username/password',
+    status: configured ? 'configured' : enabled ? 'warning' : 'not_configured',
+    configured,
+    missingEnv: configured ? [] : ['host/user/password in this browser'],
+    tokenExpiry: 'Not applicable.',
+    checkedAt: new Date().toISOString(),
+    latencyMs: null,
+    notes: ['Saved locally in this browser and supplied to the API only when sending manually.'],
+    details: {
+      enabled,
+      host: settings?.host || null,
+      port: settings?.port || null,
+      user: maskLocalValue(settings?.user),
+      fromEmail: maskLocalValue(settings?.fromEmail),
+    },
+  };
+}
+
+function SystemHealthPanel({ smtpSettings, paymentReminderSmtpSettings }) {
+  const [loading, setLoading] = useState(false);
+  const [health, setHealth] = useState(null);
+  const [error, setError] = useState('');
+
+  const browserRows = useMemo(() => ([
+    BrowserSmtpHealthRow({
+      id: 'browser-internal-smtp',
+      name: 'Browser Internal SMTP Sender',
+      settings: smtpSettings,
+      purpose: 'Manual internal reports and late payment interest requests when sent from this browser.',
+    }),
+    BrowserSmtpHealthRow({
+      id: 'browser-external-payment-reminder-smtp',
+      name: 'Browser External Payment Reminder SMTP Sender',
+      settings: paymentReminderSmtpSettings,
+      purpose: 'Manual customer-facing payment reminder emails sent from Outstanding Buyer Invoices.',
+    }),
+  ]), [paymentReminderSmtpSettings, smtpSettings]);
+
+  const rows = useMemo(() => [...(health?.rows || []), ...browserRows], [browserRows, health?.rows]);
+
+  const summary = useMemo(() => rows.reduce((acc, row) => {
+    acc.total += 1;
+    acc[row.status] = (acc[row.status] || 0) + 1;
+    return acc;
+  }, { total: 0 }), [rows]);
+
+  const loadHealth = async () => {
+    setLoading(true);
+    setError('');
+    const res = await appClient.functions.invoke('systemHealth', {}, { cache: false });
+    if (res.data?.error) {
+      setError(res.data.error);
+    } else {
+      setHealth(res.data);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadHealth();
+  }, []);
+
+  return (
+    <SettingsPanel
+      icon={Activity}
+      title="System Health"
+      description="Live status of server-side APIs, browser-local senders, external tools, and token expiry notes."
+      meta={health?.generatedAt ? `Last checked ${formatHealthDate(health.generatedAt)}` : null}
+    >
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid gap-2 sm:grid-cols-5">
+          {[
+            ['Total', summary.total, 'border-slate-200 bg-slate-50 text-slate-700'],
+            ['Online', summary.online || 0, STATUS_META.online.className],
+            ['Warning', summary.warning || 0, STATUS_META.warning.className],
+            ['Error', summary.error || 0, STATUS_META.error.className],
+            ['Not Configured', summary.not_configured || 0, STATUS_META.not_configured.className],
+          ].map(([label, value, className]) => (
+            <div key={label} className={`rounded-lg border px-3 py-2 ${className}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide">{label}</div>
+              <div className="text-lg font-bold">{value}</div>
+            </div>
+          ))}
+        </div>
+        <Button type="button" variant="outline" onClick={loadHealth} disabled={loading} className="gap-2">
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Refresh Health
+        </Button>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {loading && !rows.length ? (
+        <StateBlock icon={Loader2} title="Checking system health" description="Testing configured APIs and external services." />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-border">
+          <div className="max-h-[62vh] overflow-auto">
+            <table className="w-full min-w-[1080px] text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-muted text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">Service</th>
+                  <th className="px-3 py-2 font-semibold">Status</th>
+                  <th className="px-3 py-2 font-semibold">Scope</th>
+                  <th className="px-3 py-2 font-semibold">Auth</th>
+                  <th className="px-3 py-2 font-semibold">Token Expiry</th>
+                  <th className="px-3 py-2 text-right font-semibold">Latency</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border bg-card">
+                {rows.map((row) => {
+                  const expiry = row.details?.accessTokenExpiresAt || row.tokenExpiry;
+                  return (
+                    <tr key={row.id} className="align-top hover:bg-muted/40">
+                      <td className="max-w-md px-3 py-3">
+                        <div className="flex items-start gap-2">
+                          <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-foreground">{row.name}</div>
+                            <div className="mt-0.5 text-xs text-muted-foreground">{row.category} · {row.provider}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">{row.purpose}</div>
+                            {row.endpoint && <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{row.endpoint}</div>}
+                            {row.error && <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">{row.error}</div>}
+                            {row.missingEnv?.length ? (
+                              <div className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                                Missing: {row.missingEnv.join(', ')}
+                              </div>
+                            ) : null}
+                            <KeyValueList items={row.details} />
+                            {row.notes?.length ? (
+                              <div className="mt-2 space-y-1">
+                                {row.notes.map((note) => (
+                                  <div key={note} className="text-[11px] text-muted-foreground">{note}</div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3"><StatusBadge status={row.status} /></td>
+                      <td className="px-3 py-3 text-xs capitalize text-muted-foreground">{row.scope || 'server'}</td>
+                      <td className="px-3 py-3 text-xs text-muted-foreground">{row.authType || '—'}</td>
+                      <td className="max-w-xs px-3 py-3 text-xs text-muted-foreground">{formatHealthDate(expiry)}</td>
+                      <td className="px-3 py-3 text-right text-xs text-muted-foreground">
+                        {row.latencyMs != null ? `${row.latencyMs} ms` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </SettingsPanel>
   );
 }
 
@@ -382,6 +655,13 @@ export default function SettingsPage() {
               })}
             </div>
           </SettingsPanel>
+        </TabsContent>
+
+        <TabsContent value="health" className="mt-0">
+          <SystemHealthPanel
+            smtpSettings={smtpSettings}
+            paymentReminderSmtpSettings={paymentReminderSmtpSettings}
+          />
         </TabsContent>
       </Tabs>
 

@@ -305,6 +305,7 @@ const HANDLER_MODULE_ACCESS = {
   reportExportRename: ['report_archive'],
   reportExportDelete: ['report_archive'],
   reportExportDownload: ['report_archive'],
+  systemHealth: ['settings'],
   salesforceSchema: ['admin'],
   salesforceObjectFields: ['admin'],
   salesforceFullSchema: ['admin'],
@@ -1997,6 +1998,398 @@ function serverEmailDeliveryStatus() {
   return {
     hasServerProvider: hasSmtp,
     provider: hasSmtp ? 'smtp' : 'none',
+  };
+}
+
+function maskValue(value, visibleStart = 3, visibleEnd = 3) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('@')) {
+    const [name, domain] = raw.split('@');
+    const maskedName = name.length <= 2 ? `${name[0] || ''}***` : `${name.slice(0, 2)}***`;
+    return `${maskedName}@${domain}`;
+  }
+  if (raw.length <= visibleStart + visibleEnd) return '***';
+  return `${raw.slice(0, visibleStart)}***${raw.slice(-visibleEnd)}`;
+}
+
+function configuredEnv(names) {
+  return Object.fromEntries(names.map((name) => [name, Boolean(process.env[name])]));
+}
+
+function missingEnv(names) {
+  return names.filter((name) => !process.env[name]);
+}
+
+function jwtExpiresAt(token) {
+  try {
+    const [, payload] = String(token || '').split('.');
+    if (!payload) return null;
+    const decoded = JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    return decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function addSecondsIso(seconds) {
+  const amount = Number(seconds);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return new Date(Date.now() + amount * 1000).toISOString();
+}
+
+async function timedCheck(run) {
+  const startedAt = Date.now();
+  try {
+    const details = await run();
+    return {
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      details: details || {},
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      error: error.message || 'Health check failed',
+    };
+  }
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error_description || data.error?.message || data.message || `Request failed: ${response.status}`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function healthRow(base, result = null) {
+  const checkedAt = new Date().toISOString();
+  if (!base.configured) {
+    return {
+      ...base,
+      status: 'not_configured',
+      checkedAt,
+      latencyMs: null,
+      error: null,
+    };
+  }
+  if (!result) {
+    return {
+      ...base,
+      status: 'configured',
+      checkedAt,
+      latencyMs: null,
+      error: null,
+    };
+  }
+  return {
+    ...base,
+    status: result.ok ? (base.warning ? 'warning' : 'online') : 'error',
+    checkedAt,
+    latencyMs: result.latencyMs,
+    error: result.error || null,
+    details: { ...(base.details || {}), ...(result.details || {}) },
+  };
+}
+
+async function salesforceHealthRow() {
+  const usesRefreshToken = Boolean(process.env.SALESFORCE_CLIENT_ID && process.env.SALESFORCE_CLIENT_SECRET && process.env.SALESFORCE_REFRESH_TOKEN);
+  const usesAccessToken = Boolean(process.env.SALESFORCE_ACCESS_TOKEN);
+  const required = usesRefreshToken
+    ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
+    : ['SALESFORCE_ACCESS_TOKEN'];
+  const configured = usesRefreshToken || usesAccessToken;
+  const result = configured ? await timedCheck(async () => {
+    const limits = await sfRequest('/limits');
+    return {
+      apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
+      instanceUrl: getInstanceUrl(),
+      limitsChecked: Boolean(limits),
+    };
+  }) : null;
+  return healthRow({
+    id: 'salesforce',
+    name: 'Salesforce REST API',
+    category: 'Salesforce',
+    purpose: 'Dashboard, STEM details, documents, invoices, brokers, disputes, and payments.',
+    scope: 'server',
+    provider: 'Salesforce',
+    endpoint: getInstanceUrl(),
+    authType: usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : 'OAuth',
+    configured,
+    configuredEnv: configuredEnv(['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN', 'SALESFORCE_INSTANCE_URL', 'SALESFORCE_LOGIN_URL', 'SALESFORCE_API_VERSION']),
+    missingEnv: usesRefreshToken ? [] : missingEnv(required),
+    tokenExpiry: usesRefreshToken
+      ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.'
+      : usesAccessToken
+        ? 'Temporary access token expiry is not exposed to the app.'
+        : null,
+    warning: usesAccessToken && !usesRefreshToken,
+    notes: usesAccessToken && !usesRefreshToken
+      ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with refresh-token OAuth env vars for durable production use.']
+      : ['Connected app refresh-token policy controls long-term validity.'],
+  }, result);
+}
+
+async function supabaseHealthRow() {
+  const required = ['SUPABASE_SERVICE_ROLE_KEY'];
+  const hasUrl = Boolean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  const configured = hasUrl && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const result = configured ? await timedCheck(async () => {
+    const client = supabaseAdminClient();
+    const { error: authError } = await client.auth.admin.listUsers({ page: 1, perPage: 1 });
+    if (authError) throw authError;
+    const { count, error: profileError } = await client
+      .from('user_profiles')
+      .select('id', { count: 'exact', head: true });
+    if (profileError) throw profileError;
+    return {
+      userProfilesCount: count ?? null,
+    };
+  }) : null;
+  return healthRow({
+    id: 'supabase',
+    name: 'Supabase Auth and Database',
+    category: 'Database',
+    purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute beta, cashflow settings, and universal audit trail.',
+    scope: 'server',
+    provider: 'Supabase',
+    endpoint: hasUrl ? maskValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, 18, 8) : null,
+    authType: 'Service role key',
+    configured,
+    configuredEnv: {
+      SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
+      VITE_SUPABASE_URL: Boolean(process.env.VITE_SUPABASE_URL),
+      SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    },
+    missingEnv: [
+      ...(hasUrl ? [] : ['SUPABASE_URL or VITE_SUPABASE_URL']),
+      ...missingEnv(required),
+    ],
+    tokenExpiry: jwtExpiresAt(process.env.SUPABASE_SERVICE_ROLE_KEY) || 'No expiry claim exposed.',
+    notes: ['Service role key is never sent to the browser.'],
+  }, result);
+}
+
+async function googleDriveHealthRow() {
+  const required = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'GOOGLE_DRIVE_REPORT_FOLDER_ID'];
+  const configured = missingEnv(required).length === 0;
+  const result = configured ? await timedCheck(async () => {
+    const { clientId, clientSecret, refreshToken, folderId } = googleDriveConfig();
+    const token = await fetchJsonWithTimeout('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      }),
+    });
+    if (!token.access_token) throw new Error('Google OAuth did not return an access token.');
+    const fields = encodeURIComponent('id,name,mimeType,trashed');
+    const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
+      headers: { Authorization: `Bearer ${token.access_token}` },
+    });
+    return {
+      accessTokenExpiresAt: addSecondsIso(token.expires_in),
+      folderName: folder.name || null,
+      folderId: maskValue(folder.id, 6, 4),
+      folderTrashed: folder.trashed === true,
+    };
+  }) : null;
+  return healthRow({
+    id: 'google-drive',
+    name: 'Google Drive Report Archive',
+    category: 'Reports',
+    purpose: 'Stores exported XLS reports and supports archive rename, download, open, and delete actions.',
+    scope: 'server',
+    provider: 'Google Drive API',
+    endpoint: 'https://www.googleapis.com/drive/v3',
+    authType: 'OAuth refresh token',
+    configured,
+    configuredEnv: configuredEnv(required),
+    missingEnv: missingEnv(required),
+    tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
+    notes: ['Files are uploaded as XLS files, not converted to Google Sheets.'],
+  }, result);
+}
+
+async function frankfurterHealthRow() {
+  const result = await timedCheck(async () => {
+    const data = await fetchJsonWithTimeout('https://api.frankfurter.dev/v2/rate/USD/CNY?date=2024-01-02');
+    return {
+      sampleDate: data.date,
+      base: data.base,
+      quote: data.quote,
+      rateAvailable: Number.isFinite(Number(data.rate)),
+    };
+  });
+  return healthRow({
+    id: 'frankfurter',
+    name: 'Frankfurter USD/CNY API',
+    category: 'Exchange Rate',
+    purpose: "Broker's Commission CNY conversion. API mid-rate is reduced by 0.2% to estimate bank buy rate.",
+    scope: 'public',
+    provider: 'Frankfurter',
+    endpoint: 'https://api.frankfurter.dev/v2/rate/USD/CNY',
+    authType: 'No API key',
+    configured: true,
+    tokenExpiry: 'Not applicable.',
+  }, result);
+}
+
+async function nagerHealthRow() {
+  const year = new Date().getUTCFullYear();
+  const result = await timedCheck(async () => {
+    const data = await fetchJsonWithTimeout(`https://date.nager.at/api/v4/Holidays/SG/${year}`);
+    return {
+      sampleCountry: 'SG',
+      sampleYear: year,
+      holidayCount: Array.isArray(data) ? data.length : null,
+    };
+  });
+  return healthRow({
+    id: 'nager-date',
+    name: 'Nager.Date Holiday API',
+    category: 'Cashflow Forecast',
+    purpose: 'Weekend, Singapore public holiday, and US holiday blocking for cashflow forecast dates.',
+    scope: 'public',
+    provider: 'Nager.Date',
+    endpoint: 'https://date.nager.at/api/v4/Holidays',
+    authType: 'No API key',
+    configured: true,
+    tokenExpiry: 'Not applicable.',
+    notes: ['Holiday results are cached in Supabase when available.'],
+  }, result);
+}
+
+async function smtpHealthRow() {
+  const required = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD'];
+  const configured = missingEnv(required).length === 0;
+  const result = configured ? await timedCheck(async () => {
+    const nodemailer = await import('nodemailer');
+    const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
+    if (!createTransport) throw new Error('SMTP email library failed to load.');
+    const port = Number(process.env.SMTP_PORT || 587);
+    const transporter = createTransport({
+      host: process.env.SMTP_HOST,
+      port,
+      secure: process.env.SMTP_SECURE != null ? process.env.SMTP_SECURE === 'true' : port === 465,
+      connectionTimeout: 7000,
+      greetingTimeout: 7000,
+      socketTimeout: 10000,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+    await transporter.verify();
+    return {
+      host: process.env.SMTP_HOST,
+      port,
+      user: maskValue(process.env.SMTP_USER),
+    };
+  }) : null;
+  return healthRow({
+    id: 'server-smtp',
+    name: 'Server SMTP Sender',
+    category: 'Email',
+    purpose: 'Scheduled/internal report email fallback when browser-saved SMTP credentials are not supplied.',
+    scope: 'server',
+    provider: 'SMTP',
+    endpoint: process.env.SMTP_HOST || null,
+    authType: 'SMTP username/password',
+    configured,
+    configuredEnv: configuredEnv(['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE']),
+    missingEnv: missingEnv(required),
+    tokenExpiry: 'Not applicable.',
+    notes: ['This check verifies login only; it does not send an email.'],
+  }, result);
+}
+
+function cronHealthRow() {
+  const configured = Boolean(process.env.CRON_SECRET);
+  return healthRow({
+    id: 'vercel-cron',
+    name: 'Vercel Cron Protection',
+    category: 'Scheduling',
+    purpose: 'Protects scheduled Outstanding Buyer Invoices internal daily report endpoint.',
+    scope: 'server',
+    provider: 'Vercel Cron',
+    endpoint: '/api/functions/outstandingBuyerInvoicesEmailCron',
+    authType: 'Bearer CRON_SECRET',
+    configured,
+    configuredEnv: configuredEnv(['CRON_SECRET']),
+    missingEnv: configured ? [] : ['CRON_SECRET'],
+    tokenExpiry: 'Not applicable.',
+  });
+}
+
+function vercelRuntimeHealthRow() {
+  const configured = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.VERCEL_URL);
+  return healthRow({
+    id: 'vercel-runtime',
+    name: 'Vercel Runtime',
+    category: 'Hosting',
+    purpose: 'Hosts the React app and serverless API functions.',
+    scope: 'server',
+    provider: 'Vercel',
+    endpoint: process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || null,
+    authType: 'Deployment environment',
+    configured,
+    details: {
+      environment: process.env.VERCEL_ENV || null,
+      region: process.env.VERCEL_REGION || process.env.AWS_REGION || null,
+    },
+    tokenExpiry: 'Not applicable.',
+  });
+}
+
+function googleFontsHealthRow() {
+  return healthRow({
+    id: 'google-fonts',
+    name: 'Google Fonts',
+    category: 'Frontend Asset',
+    purpose: 'Loads Inter and DM Sans web fonts from the CSS import.',
+    scope: 'browser',
+    provider: 'Google Fonts',
+    endpoint: 'https://fonts.googleapis.com',
+    authType: 'No API key',
+    configured: true,
+    tokenExpiry: 'Not applicable.',
+    notes: ['Loaded by the browser as a frontend asset, not through the server API.'],
+  });
+}
+
+async function systemHealth() {
+  const rows = await Promise.all([
+    salesforceHealthRow(),
+    supabaseHealthRow(),
+    googleDriveHealthRow(),
+    frankfurterHealthRow(),
+    nagerHealthRow(),
+    smtpHealthRow(),
+  ]);
+  rows.push(cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
+  const summary = rows.reduce((acc, row) => {
+    acc.total += 1;
+    acc[row.status] = (acc[row.status] || 0) + 1;
+    return acc;
+  }, { total: 0 });
+  return {
+    generatedAt: new Date().toISOString(),
+    summary,
+    rows,
   };
 }
 
@@ -9726,6 +10119,7 @@ const handlers = {
   reportExportRename,
   reportExportDelete,
   reportExportDownload,
+  systemHealth,
   adminUsersList,
   adminAuditLogs,
   adminUserSave,
