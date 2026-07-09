@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.43';
+export const APP_VERSION = '1.0.44';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.44',
+    releasedAt: '2026-07-09',
+    title: 'Rich text email templates',
+    changes: [
+      'Converted all email content editors to rich text format.',
+      'Preserved rich HTML for outgoing internal reports, external reminders, incoming payment reports, and late payment interest request emails.',
+    ],
+  },
   {
     version: '1.0.43',
     releasedAt: '2026-07-09',

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { AlertTriangle, Banknote, Check, Eye, Loader2, Mail, Pencil, RefreshCw, Save, Search, Send, Settings2, ShieldCheck, WalletCards, X } from 'lucide-react';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import ReorderableDataTable from '@/components/common/ReorderableDataTable';
@@ -36,22 +38,23 @@ const INTEREST_CALCULATION_TABLE_TOKEN = '{{interestCalculationTable}}';
 const STEM_LINK_TOKEN = '{{stemLink}}';
 const INTEREST_STEM_LINK_TOKEN_PATTERN = /\{\{\s*stemLink\s*\}\}/i;
 const INCOMING_EMAIL_STEPS = ['Review report', 'Review recipients', 'Email preview'];
+const QUILL_MODULES = {
+  toolbar: [
+    [{ header: [false, 3, 4] }],
+    ['bold', 'italic', 'underline'],
+    [{ color: [] }, { background: [] }],
+    [{ list: 'ordered' }, { list: 'bullet' }],
+    ['link'],
+    ['clean'],
+  ],
+};
 const DEFAULT_EMAIL_SETTINGS = {
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: 'bt@cosulich.com.hk',
   cc: '',
   bcc: '',
   subject: 'Incoming Payment Report - {{dateFrom}} to {{dateTo}}',
-  intro: `Incoming Payment Report
-
-Please find below the receivable payments and Buyer CIA invoices for the selected filters.
-
-Payment created date range: {{dateFrom}} to {{dateTo}}.
-Incoming total: {{incomingTotal}}.
-
-${RECEIVABLE_PAYMENTS_TABLE_TOKEN}
-
-${BUYER_CIA_TABLE_TOKEN}`,
+  intro: `<h2>Incoming Payment Report</h2><p>Please find below the receivable payments and Buyer CIA invoices for the selected filters.</p><p>Payment created date range: {{dateFrom}} to {{dateTo}}.<br>Incoming total: {{incomingTotal}}.</p><p>${RECEIVABLE_PAYMENTS_TABLE_TOKEN}</p><p>${BUYER_CIA_TABLE_TOKEN}</p>`,
   includeReceivablePayments: true,
   includeBuyerCiaInvoices: true,
 };
@@ -61,22 +64,7 @@ const DEFAULT_INTEREST_EMAIL_SETTINGS = {
   cc: '{{requesterEmail}}',
   bcc: '',
   subject: 'Late Payment Interest Invoice Request - {{stemName}}',
-  body: `Late Payment Interest Invoice Request
-
-{{requestedBy}} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.
-
-Buyer: {{buyerName}}
-Group: {{buyerGroupName}}
-STEM: {{stemName}}
-${STEM_LINK_TOKEN}
-Payment: {{paymentName}}
-Received date: {{receivedDate}}
-Payment terms delay: {{delayDays}}
-Payment amount: {{paymentAmount}}
-Receivable balance: {{receivableBalance}}
-Calculated interest total: {{interestTotal}}
-
-${INTEREST_CALCULATION_TABLE_TOKEN}`,
+  body: `<h2>Late Payment Interest Invoice Request</h2><p>{{requestedBy}} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.</p><p>Buyer: {{buyerName}}<br>Group: {{buyerGroupName}}<br>STEM: {{stemName}}</p><p>${STEM_LINK_TOKEN}</p><p>Payment: {{paymentName}}<br>Received date: {{receivedDate}}<br>Payment terms delay: {{delayDays}}<br>Payment amount: {{paymentAmount}}<br>Receivable balance: {{receivableBalance}}<br>Calculated interest total: {{interestTotal}}</p><p>${INTEREST_CALCULATION_TABLE_TOKEN}</p>`,
 };
 
 const EMAIL_TABLE_TOKENS = [
@@ -213,8 +201,10 @@ function readEmailSettings() {
     const settings = raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
     return {
       ...settings,
-      intro: String(settings.intro || DEFAULT_EMAIL_SETTINGS.intro)
-        .replace('Received date range:', 'Payment created date range:'),
+      intro: richTemplateValue(
+        String(settings.intro || DEFAULT_EMAIL_SETTINGS.intro).replace('Received date range:', 'Payment created date range:'),
+        DEFAULT_EMAIL_SETTINGS.intro,
+      ),
     };
   } catch {
     return DEFAULT_EMAIL_SETTINGS;
@@ -228,7 +218,11 @@ function saveEmailSettings(settings) {
 function readInterestEmailSettings() {
   try {
     const raw = localStorage.getItem(INTEREST_EMAIL_SETTINGS_KEY);
-    return raw ? { ...DEFAULT_INTEREST_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_INTEREST_EMAIL_SETTINGS;
+    const settings = raw ? { ...DEFAULT_INTEREST_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_INTEREST_EMAIL_SETTINGS;
+    return {
+      ...settings,
+      body: richTemplateValue(settings.body, DEFAULT_INTEREST_EMAIL_SETTINGS.body),
+    };
   } catch {
     return DEFAULT_INTEREST_EMAIL_SETTINGS;
   }
@@ -261,6 +255,50 @@ function escapeInterestHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function hasHtmlMarkup(value) {
+  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+}
+
+function sanitizeRichHtml(value) {
+  return String(value || '')
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
+function richTemplateValue(value, fallback = '') {
+  const raw = String(value || fallback || '');
+  if (!raw) return '';
+  if (hasHtmlMarkup(raw)) return sanitizeRichHtml(raw);
+  return raw
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block, index) => {
+      const html = escapeInterestHtml(block).replaceAll('\n', '<br>');
+      return index === 0 ? `<h2>${html}</h2>` : `<p>${html}</p>`;
+    })
+    .join('');
+}
+
+function insertTokenIntoQuill(editor, token, uniqueTokens = []) {
+  if (!editor || !token) return;
+  let index = editor.getSelection(true)?.index ?? editor.getLength();
+  uniqueTokens.forEach((uniqueToken) => {
+    const text = editor.getText();
+    const escaped = uniqueToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = [...text.matchAll(new RegExp(escaped, 'gi'))];
+    for (const match of matches.reverse()) {
+      editor.deleteText(match.index, match[0].length);
+      if (match.index < index) index -= match[0].length;
+    }
+  });
+  editor.insertText(Math.max(0, index), token);
+  editor.setSelection(Math.max(0, index) + token.length, 0);
+}
+
 function renderInterestTemplate(value, context) {
   return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (
     Object.prototype.hasOwnProperty.call(context, key) ? context[key] : match
@@ -268,6 +306,7 @@ function renderInterestTemplate(value, context) {
 }
 
 function interestContentHtml(content) {
+  if (hasHtmlMarkup(content)) return sanitizeRichHtml(content);
   const blocks = String(content || '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   return blocks.map((block, index) => {
     const html = escapeInterestHtml(block).replaceAll('\n', '<br>');
@@ -395,12 +434,12 @@ export default function IncomingPayments() {
   const [interestTemplateMessage, setInterestTemplateMessage] = useState('');
   const [interestActiveField, setInterestActiveField] = useState('body');
   const [interestRequestLoading, setInterestRequestLoading] = useState({});
-  const emailContentRef = useRef(null);
+  const emailContentEditorRef = useRef(null);
   const interestToRef = useRef(null);
   const interestCcRef = useRef(null);
   const interestBccRef = useRef(null);
   const interestSubjectRef = useRef(null);
-  const interestContentRef = useRef(null);
+  const interestContentEditorRef = useRef(null);
 
   const updatePageState = (patch) => {
     setPageState((prev) => ({
@@ -781,19 +820,13 @@ export default function IncomingPayments() {
 
   const insertEmailToken = (token) => {
     if (!emailTemplateEditing) return;
-    const target = emailContentRef.current;
-    const current = emailSettings.intro || '';
-    const start = target?.selectionStart ?? current.length;
-    const end = target?.selectionEnd ?? start;
-    const separatorBefore = start > 0 && !/\s$/.test(current.slice(0, start)) ? '\n\n' : '';
-    const separatorAfter = end < current.length && !/^\s/.test(current.slice(end)) ? '\n\n' : '';
-    const next = `${current.slice(0, start)}${separatorBefore}${token}${separatorAfter}${current.slice(end)}`;
-    updateEmailSetting('intro', next);
-    window.requestAnimationFrame(() => {
-      target?.focus();
-      const cursor = start + separatorBefore.length + token.length + separatorAfter.length;
-      target?.setSelectionRange(cursor, cursor);
-    });
+    const editor = emailContentEditorRef.current?.getEditor?.();
+    if (!editor) {
+      updateEmailSetting('intro', `${emailSettings.intro || ''}<p>${token}</p>`);
+      return;
+    }
+    const uniqueTokens = [RECEIVABLE_PAYMENTS_TABLE_TOKEN, BUYER_CIA_TABLE_TOKEN].includes(token) ? [token] : [];
+    insertTokenIntoQuill(editor, token, uniqueTokens);
   };
 
   const openEmailReport = () => {
@@ -874,19 +907,13 @@ export default function IncomingPayments() {
 
   const insertInterestBodyToken = (token) => {
     if (!interestTemplateEditing) return;
-    const target = interestContentRef.current;
-    const current = interestEmailSettings.body || '';
-    const start = target?.selectionStart ?? current.length;
-    const end = target?.selectionEnd ?? start;
-    const separatorBefore = start > 0 && !/\s$/.test(current.slice(0, start)) ? '\n\n' : '';
-    const separatorAfter = end < current.length && !/^\s/.test(current.slice(end)) ? '\n\n' : '';
-    const next = `${current.slice(0, start)}${separatorBefore}${token}${separatorAfter}${current.slice(end)}`;
-    updateInterestEmailSetting('body', next);
-    window.requestAnimationFrame(() => {
-      target?.focus();
-      const cursor = start + separatorBefore.length + token.length + separatorAfter.length;
-      target?.setSelectionRange(cursor, cursor);
-    });
+    const editor = interestContentEditorRef.current?.getEditor?.();
+    if (!editor) {
+      updateInterestEmailSetting('body', `${interestEmailSettings.body || ''}<p>${token}</p>`);
+      return;
+    }
+    const uniqueTokens = [INTEREST_CALCULATION_TABLE_TOKEN, STEM_LINK_TOKEN].includes(token) ? [token] : [];
+    insertTokenIntoQuill(editor, token, uniqueTokens);
   };
 
   const insertInterestToken = (token) => {
@@ -1433,10 +1460,11 @@ export default function IncomingPayments() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs text-slate-500">Email content</Label>
-                        <Textarea
-                          ref={emailContentRef}
-                          value={emailSettings.intro}
-                          onChange={(event) => updateEmailSetting('intro', event.target.value)}
+                        <div
+                          className={cn(
+                            'rounded-md border border-slate-200 bg-white [&_.ql-container]:min-h-[360px] [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-slate-200',
+                            !emailTemplateEditing && 'opacity-85',
+                          )}
                           onDragOver={(event) => emailTemplateEditing && event.preventDefault()}
                           onDrop={(event) => {
                             if (!emailTemplateEditing) return;
@@ -1444,9 +1472,16 @@ export default function IncomingPayments() {
                             const token = event.dataTransfer.getData('text/plain');
                             if (token) insertEmailToken(token);
                           }}
-                          disabled={!emailTemplateEditing}
-                          className="min-h-[360px] font-mono text-xs"
-                        />
+                        >
+                          <ReactQuill
+                            ref={emailContentEditorRef}
+                            theme="snow"
+                            modules={QUILL_MODULES}
+                            value={emailSettings.intro}
+                            readOnly={!emailTemplateEditing}
+                            onChange={(value) => updateEmailSetting('intro', value)}
+                          />
+                        </div>
                         <p className="text-xs text-slate-500">
                           Table tokens: <span className="font-mono">{RECEIVABLE_PAYMENTS_TABLE_TOKEN}</span> and <span className="font-mono">{BUYER_CIA_TABLE_TOKEN}</span>
                         </p>
@@ -1629,16 +1664,24 @@ export default function IncomingPayments() {
                     </button>
                   ))}
                 </div>
-                <Textarea
-                  ref={interestContentRef}
-                  value={interestEmailSettings.body}
+                <div
+                  className={cn(
+                    'rounded-md border border-border bg-background [&_.ql-container]:min-h-80 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border',
+                    !interestTemplateEditing && 'opacity-85',
+                  )}
                   onFocus={() => setInterestActiveField('body')}
-                  onChange={(event) => updateInterestEmailSetting('body', event.target.value)}
-                  disabled={!interestTemplateEditing}
-                  className="min-h-80 font-mono text-xs"
                   onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
                   onDrop={(event) => dropInterestToken('body', event)}
-                />
+                >
+                  <ReactQuill
+                    ref={interestContentEditorRef}
+                    theme="snow"
+                    modules={QUILL_MODULES}
+                    value={interestEmailSettings.body}
+                    readOnly={!interestTemplateEditing}
+                    onChange={(value) => updateInterestEmailSetting('body', value)}
+                  />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   Place <span className="font-mono">{INTEREST_CALCULATION_TABLE_TOKEN}</span> where the calculation table should appear.
                 </p>

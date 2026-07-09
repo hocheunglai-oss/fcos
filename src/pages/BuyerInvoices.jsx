@@ -44,7 +44,7 @@ const DEFAULT_EMAIL_SETTINGS = {
   cc: 'lousia@cosulich.com.hk, laureen@cosulich.com.hk',
   daysAhead: 7,
   subject: 'Outstanding Buyer Invoices Report',
-  intro: 'Outstanding Buyer Invoices\n\nPlease find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.\n\nReport window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.',
+  intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
   includeSummary: true,
   includeTable: true,
   weekdays: WEEKDAYS,
@@ -224,9 +224,9 @@ function uniqueEmailList(...values) {
   return emails;
 }
 
-function richTemplateValue(value) {
+function richTemplateValue(value, fallback = DEFAULT_EMAIL_SETTINGS.paymentReminderBody) {
   const raw = textValue(value, '');
-  if (!raw) return DEFAULT_EMAIL_SETTINGS.paymentReminderBody;
+  if (!raw) return fallback;
   if (/<\/?[a-z][\s\S]*>/i.test(raw)) return raw;
   return raw
     .split(/\n{2,}/)
@@ -393,6 +393,7 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
     cc: arrayToInput(merged.cc),
     sendTimes: arrayToInput(merged.sendTimes),
     weekdays: Array.isArray(merged.weekdays) ? merged.weekdays : WEEKDAYS,
+    intro: richTemplateValue(merged.intro, DEFAULT_EMAIL_SETTINGS.intro),
     paymentReminderCc: arrayToInput(merged.paymentReminderCc),
     paymentReminderBcc: arrayToInput(merged.paymentReminderBcc),
     paymentReminderBody: richTemplateValue(paymentReminderBody),
@@ -1732,6 +1733,7 @@ export default function BuyerInvoices() {
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
   const initialBuyerTraderFilter = useRef(initialFilters);
+  const internalEmailEditorRef = useRef(null);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
   useDraftAutosave('buyer-invoices:email-settings', emailSettings, {
@@ -2244,7 +2246,21 @@ export default function BuyerInvoices() {
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">Email content</Label>
-                    <Textarea value={emailSettings.intro} onChange={(event) => updateEmailSetting('intro', event.target.value)} className="min-h-44 font-mono text-xs" disabled={!internalEmailEditing} />
+                    <div
+                      className={cn(
+                        'rounded-md border border-border bg-background [&_.ql-container]:min-h-44 [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-border',
+                        !internalEmailEditing && 'opacity-85',
+                      )}
+                    >
+                      <ReactQuill
+                        ref={internalEmailEditorRef}
+                        theme="snow"
+                        modules={QUILL_MODULES}
+                        value={emailSettings.intro}
+                        readOnly={!internalEmailEditing}
+                        onChange={(value) => updateEmailSetting('intro', value)}
+                      />
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Available placeholders: {'{{reportStart}}'}, {'{{reportEnd}}'}, {'{{daysAhead}}'}.
                     </p>

@@ -1952,7 +1952,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   cc: ['lousia@cosulich.com.hk', 'laureen@cosulich.com.hk'],
   daysAhead: 7,
   subject: 'Outstanding Buyer Invoices Report',
-  intro: 'Outstanding Buyer Invoices\n\nPlease find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.\n\nReport window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.',
+  intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
   includeSummary: true,
   includeTable: true,
   buyerTraders: [],
@@ -6907,22 +6907,7 @@ const DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE = {
   cc: '{{requesterEmail}}',
   bcc: '',
   subject: 'Late Payment Interest Invoice Request - {{stemName}}',
-  body: `Late Payment Interest Invoice Request
-
-{{requestedBy}} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.
-
-Buyer: {{buyerName}}
-Group: {{buyerGroupName}}
-STEM: {{stemName}}
-{{stemLink}}
-Payment: {{paymentName}}
-Received date: {{receivedDate}}
-Payment terms delay: {{delayDays}}
-Payment amount: {{paymentAmount}}
-Receivable balance: {{receivableBalance}}
-Calculated interest total: {{interestTotal}}
-
-{{interestCalculationTable}}`,
+  body: '<h2>Late Payment Interest Invoice Request</h2><p>{{requestedBy}} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.</p><p>Buyer: {{buyerName}}<br>Group: {{buyerGroupName}}<br>STEM: {{stemName}}</p><p>{{stemLink}}</p><p>Payment: {{paymentName}}<br>Received date: {{receivedDate}}<br>Payment terms delay: {{delayDays}}<br>Payment amount: {{paymentAmount}}<br>Receivable balance: {{receivableBalance}}<br>Calculated interest total: {{interestTotal}}</p><p>{{interestCalculationTable}}</p>',
 };
 
 function incomingPaymentInterestTemplate(input = {}) {
@@ -6991,6 +6976,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   const bcc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.bcc, context));
   const subject = renderIncomingPaymentInterestTemplate(template.subject, context);
   const bodyContent = renderIncomingPaymentInterestTemplate(template.body, context);
+  const bodyText = hasHtmlMarkup(bodyContent) ? htmlToPlainText(bodyContent) : bodyContent;
   const calculationHtml = calculation ? incomingPaymentInterestCalculationHtml(calculation) : '';
   const calculationText = calculation ? incomingPaymentInterestCalculationText(calculation) : '';
   const htmlBody = replaceIncomingPaymentInterestToken(
@@ -7001,7 +6987,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
     .replace(/<p\b[^>]*>\s*\{\{\s*interestCalculationTable\s*\}\}\s*<\/p>/i, calculationHtml)
     .replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationHtml);
   const textBody = replaceIncomingPaymentInterestToken(
-    bodyContent,
+    bodyText,
     INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN,
     incomingPaymentInterestStemLinkText(stemUrl),
   ).replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
@@ -7134,7 +7120,7 @@ const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
   bcc: [],
   appUrl: '',
   subject: 'Incoming Payment Report - {{dateFrom}} to {{dateTo}}',
-  intro: 'Incoming Payment Report\n\nPlease find below the receivable payments and Buyer CIA invoices for the selected filters.\n\nPayment created date range: {{dateFrom}} to {{dateTo}}.\nIncoming total: {{incomingTotal}}.\n\n{{receivablePaymentsTable}}\n\n{{buyerCiaInvoicesTable}}',
+  intro: '<h2>Incoming Payment Report</h2><p>Please find below the receivable payments and Buyer CIA invoices for the selected filters.</p><p>Payment created date range: {{dateFrom}} to {{dateTo}}.<br>Incoming total: {{incomingTotal}}.</p><p>{{receivablePaymentsTable}}</p><p>{{buyerCiaInvoicesTable}}</p>',
   includeReceivablePayments: true,
   includeBuyerCiaInvoices: true,
 };
@@ -7353,6 +7339,7 @@ function buildIncomingPaymentEmail(report, settings) {
   };
   const subject = renderIncomingPaymentTemplate(settings.subject, context);
   const content = renderIncomingPaymentTemplate(settings.intro, context);
+  const contentText = hasHtmlMarkup(content) ? htmlToPlainText(content) : content;
   const contentHtml = injectIncomingPaymentLateInterestLink(
     emailContentHtml(content),
     incomingPaymentLateInterestLinkHtml(lateInterestUrl),
@@ -7367,7 +7354,7 @@ function buildIncomingPaymentEmail(report, settings) {
       )}
     </div>`;
   const textContent = injectIncomingPaymentTables(
-    injectIncomingPaymentLateInterestLink(content, incomingPaymentLateInterestLinkText(lateInterestUrl)),
+    injectIncomingPaymentLateInterestLink(contentText, incomingPaymentLateInterestLinkText(lateInterestUrl)),
     settings,
     `\n\n${incomingPaymentReceivableTableText(report.rows || [])}\n\n`,
     `\n\n${incomingPaymentBuyerCiaTableText(report.buyerCiaInvoices || [])}\n\n`,
@@ -7653,6 +7640,7 @@ function renderBuyerInvoiceEmailContent(template, report, settings) {
 }
 
 function emailContentHtml(content) {
+  if (hasHtmlMarkup(content)) return sanitizeReminderHtml(content);
   const blocks = String(content || '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   if (!blocks.length) return '';
   return blocks.map((block, index) => {
@@ -7751,6 +7739,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     </div>` : '';
   const contentHtml = emailContentHtml(content);
   const hasAttentionMarker = /for your attention\./i.test(contentHtml);
+  const contentText = hasHtmlMarkup(content) ? htmlToPlainText(content) : content;
   const reportBodyHtml = hasAttentionMarker && tableHtml
     ? `${insertAfterAttentionSentence(contentHtml, tableHtml)}${summaryHtml}`
     : `${contentHtml}${summaryHtml}${tableHtml}`;
@@ -7760,8 +7749,8 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     </div>`;
   const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`).join('\n');
   const introText = hasAttentionMarker && tableText
-    ? insertAfterAttentionSentence(content, `\n\n${tableText}\n\n`)
-    : content;
+    ? insertAfterAttentionSentence(contentText, `\n\n${tableText}\n\n`)
+    : contentText;
   const textLines = [
     introText,
     `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
