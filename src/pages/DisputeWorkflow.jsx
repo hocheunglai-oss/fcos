@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, CircleDollarSign, FileCheck2, Loader2, RefreshCw, Search, Send, ShieldCheck, X } from 'lucide-react';
+import { AlertCircle, BookOpen, CheckCircle2, CircleDollarSign, ExternalLink, Eye, FileCheck2, Loader2, RefreshCw, Search, Send, ShieldCheck, Upload, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
@@ -13,10 +13,12 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 
-const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Approved - Pending Execution', 'Rejected', 'Revision Requested', 'Executed', 'Closed'];
+const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
 const ACTION_TYPES = [
   { value: 'hold_supplier_payment', label: 'Hold supplier payment', partyType: 'supplier' },
@@ -35,6 +37,16 @@ const BUYER_CLOSE_REASONS = [
   'Settlement agreement concluded with written agreement enclosed',
 ];
 const BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
+const ACCOUNTING_STATUSES = ['Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required'];
+const DOCUMENT_TYPES = [
+  { value: 'settlement_agreement', label: 'Settlement Agreement' },
+  { value: 'buyer_credit_note', label: 'Buyer Credit Note' },
+  { value: 'supplier_credit_note', label: 'Supplier Credit Note' },
+  { value: 'payment_instruction', label: 'Payment Instruction' },
+  { value: 'proof_of_payment', label: 'Proof of Payment' },
+  { value: 'correspondence', label: 'Correspondence' },
+  { value: 'other_support', label: 'Other Support' },
+];
 const DEFAULT_ACTION = {
   actionType: 'hold_supplier_payment',
   partyType: 'supplier',
@@ -49,6 +61,7 @@ const DEFAULT_ACTION = {
   balancePaymentInstruction: '',
   description: '',
   requiresAttachment: false,
+  accountingStatus: 'Pending Accounting',
 };
 
 const fmtMoney = (value) => {
@@ -143,8 +156,9 @@ function Metric({ label, value, tone = 'default' }) {
 
 function stageTone(stage) {
   if (stage === 'Pending Approval') return 'border-amber-200 bg-amber-50 text-amber-800';
-  if (stage === 'Approved - Pending Execution') return 'border-blue-200 bg-blue-50 text-blue-800';
-  if (stage === 'Executed' || stage === 'Closed') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  if (stage === 'Approved - Pending Accounting') return 'border-blue-200 bg-blue-50 text-blue-800';
+  if (stage === 'Accounting In Progress') return 'border-cyan-200 bg-cyan-50 text-cyan-800';
+  if (stage === 'Settled - Ready to Close' || stage === 'Closed') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
   if (stage === 'Rejected' || stage === 'Revision Requested') return 'border-red-200 bg-red-50 text-red-800';
   return 'border-border bg-muted/50 text-muted-foreground';
 }
@@ -240,6 +254,7 @@ function partyOptions(stem, type) {
 
 function normalizeActionForSave(action) {
   return {
+    id: action.id || null,
     actionType: action.actionType,
     partyType: action.partyType,
     partyName: action.partyName,
@@ -253,20 +268,54 @@ function normalizeActionForSave(action) {
     balancePaymentInstruction: action.balancePaymentInstruction || '',
     description: action.description || '',
     requiresAttachment: action.requiresAttachment === true,
-    executionStatus: action.executionStatus || 'Pending Execution',
+    accountingStatus: action.accountingStatus || action.executionStatus || 'Pending Accounting',
   };
 }
 
 function workflowFromRow(row) {
-  return row?._Dispute_Workflow || { case: null, actions: [], events: [] };
+  return row?._Dispute_Workflow || { case: null, actions: [], events: [], documents: [] };
 }
 
 function editableWorkflow(caseRow) {
   return !caseRow || ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflowStatus);
 }
 
-function actionExecutionPending(action) {
-  return action.executionStatus !== 'Executed' && action.executionStatus !== 'Not Required';
+function actionAccountingStatus(action) {
+  return action.accountingStatus || action.executionStatus || 'Pending Accounting';
+}
+
+function accountingStatusTone(status) {
+  if (status === 'Settled' || status === 'Not Required') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  if (status === 'Instruction Issued') return 'border-blue-200 bg-blue-50 text-blue-800';
+  return 'border-amber-200 bg-amber-50 text-amber-800';
+}
+
+function documentTypeLabel(value) {
+  return DOCUMENT_TYPES.find((type) => type.value === value)?.label || value || 'Document';
+}
+
+function documentPreviewKind(document) {
+  const extension = String(document?.fileExtension || document?.fileName || '').split('.').pop()?.toLowerCase();
+  const contentType = String(document?.contentType || '').toLowerCase();
+  if (extension === 'pdf' || contentType.includes('pdf')) return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension) || contentType.startsWith('image/')) return 'image';
+  return null;
+}
+
+function nextWorkflowOwner(stage) {
+  if (stage === 'Pending Approval') return 'Approver';
+  if (['Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close'].includes(stage)) return 'Finance / Accounting';
+  if (stage === 'Closed') return 'Complete';
+  return 'Trader';
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',').pop() || '');
+    reader.onerror = () => reject(new Error('The selected document could not be read.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
@@ -481,13 +530,254 @@ function FinancialExposureSection({ stem }) {
   );
 }
 
-function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
+function WorkflowRulesModal({ open, onClose, capabilities }) {
+  const lifecycle = [
+    ['Draft', 'Trader prepares party instructions and links supporting documents.'],
+    ['Pending Approval', 'Approver reviews commercial terms, evidence, and dispute P&L.'],
+    ['Approved - Pending Accounting', 'Approved instructions enter the finance queue.'],
+    ['Accounting In Progress', 'Finance records payment instructions, references, and settlement evidence.'],
+    ['Settled - Ready to Close', 'Every action is Settled or Not Required; final closure can be recorded.'],
+    ['Closed', 'Salesforce is updated and the audit record is final.'],
+  ];
+  const roles = [
+    ['Trader', 'Create and revise instructions; upload buyer/supplier evidence; submit for approval.', 'Draft, Rejected, Revision Requested'],
+    ['Approver', 'Approve, reject, or request revision after checking required documents.', 'Pending Approval'],
+    ['Finance / Accounting', 'Issue payment instructions; record references, dates, amounts, and settlement.', 'Approved through Ready to Close'],
+    ['Administrator', 'All workflow actions plus exceptional correction and support.', 'All stages'],
+  ];
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+      <DialogContent className="flex h-[88vh] w-[min(1040px,96vw)] max-w-none flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
+          <DialogTitle className="flex items-center gap-2 pr-8"><BookOpen className="h-5 w-5" /> Dispute Workflow Rules</DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <Tabs defaultValue="roles">
+            <TabsList className="grid h-auto w-full grid-cols-1 gap-1 sm:h-9 sm:w-[520px] sm:grid-cols-3">
+              <TabsTrigger value="roles">Roles</TabsTrigger>
+              <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
+              <TabsTrigger value="controls">Documents & Closure</TabsTrigger>
+            </TabsList>
+            <TabsContent value="roles" className="mt-4 space-y-4">
+              <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                Everyone can see every role. Your current access: <span className="font-semibold text-foreground">{capabilities?.role || 'User'}</span>
+                {capabilities?.canApprove ? ' · Approver' : ''}{capabilities?.canAccount ? ' · Accounting' : ''}.
+              </div>
+              <div className="divide-y divide-border overflow-hidden rounded-lg border border-border sm:hidden">
+                {roles.map(([role, responsibility, stages]) => (
+                  <div key={role} className="space-y-1.5 px-3 py-3">
+                    <div className="text-sm font-semibold text-foreground">{role}</div>
+                    <div className="text-sm text-muted-foreground">{responsibility}</div>
+                    <div className="text-xs text-muted-foreground">Active: {stages}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden overflow-hidden rounded-lg border border-border sm:block">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead><tr className="border-b border-border bg-muted/40"><th className="px-3 py-2 text-left">Role</th><th className="px-3 py-2 text-left">Responsibilities</th><th className="px-3 py-2 text-left">Active stages</th></tr></thead>
+                  <tbody>{roles.map(([role, responsibility, stages]) => <tr key={role} className="border-b border-border/50"><td className="px-3 py-3 font-semibold">{role}</td><td className="px-3 py-3 text-muted-foreground">{responsibility}</td><td className="px-3 py-3 text-muted-foreground">{stages}</td></tr>)}</tbody>
+                </table>
+              </div>
+              <p className="text-sm text-muted-foreground">Visibility of these rules does not grant action permissions. Restricted controls are only shown to the responsible role.</p>
+            </TabsContent>
+            <TabsContent value="lifecycle" className="mt-4">
+              <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+                {lifecycle.map(([stage, rule], index) => (
+                  <div key={stage} className="grid gap-2 px-4 py-3 sm:grid-cols-[36px_220px_1fr]">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{index + 1}</div>
+                    <div><span className={cn('inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span></div>
+                    <div className="text-sm text-muted-foreground">{rule}</div>
+                  </div>
+                ))}
+              </div>
+            </TabsContent>
+            <TabsContent value="controls" className="mt-4 space-y-5 text-sm">
+              <section><h3 className="font-semibold text-foreground">Document rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Documents are stored in Salesforce and linked to the selected buyer or supplier dispute when available, otherwise to the STEM.</p><p>Every action marked “Agreement/document required” must have an action-linked document before submission and approval.</p><p>Files are named automatically by STEM, party side, party, document type, date, and sequence.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Accounting rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Instruction Issued requires an instruction date and either a reference or accounting note.</p><p>Settled requires a settlement date and either a settlement reference or action-linked settlement document.</p><p>Not Required requires an explanation.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Every action must be Settled or Not Required, all required documents must remain linked, and a final closure note is mandatory.</p><p>Closure succeeds only after Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
+            </TabsContent>
+          </Tabs>
+        </div>
+        <div className="flex shrink-0 justify-end border-t border-border px-5 py-3"><Button variant="outline" onClick={onClose}>Close</Button></div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DocumentPreviewModal({ document, onClose }) {
+  const downloadAuthToken = useDownloadAuthToken(Boolean(document));
+  const url = document ? withDownloadAuth(document.downloadUrl, downloadAuthToken) : '';
+  const kind = documentPreviewKind(document);
+  return (
+    <Dialog open={Boolean(document)} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+      <DialogContent className="flex h-[92vh] w-[min(1100px,96vw)] max-w-none flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4"><DialogTitle className="truncate pr-8 text-base">{document?.fileName || 'Document preview'}</DialogTitle></DialogHeader>
+        <div className="min-h-0 flex-1 bg-muted/20 p-3">
+          {kind === 'pdf' && <iframe title={document?.fileName || 'Document'} src={url} className="h-full w-full rounded-md border border-border bg-white" />}
+          {kind === 'image' && <div className="flex h-full items-center justify-center overflow-auto"><img src={url} alt={document?.fileName || 'Document'} className="max-h-full max-w-full object-contain" /></div>}
+          {!kind && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Preview is not available for this file type.</div>}
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
+          {document?.salesforceUrl && <Button asChild variant="outline"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" /> Salesforce</a></Button>}
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DocumentUploadModal({ caseRow, action, open, onClose, onUploaded }) {
+  const [documentType, setDocumentType] = useState('settlement_agreement');
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (open) { setDocumentType('settlement_agreement'); setFile(null); setError(''); } }, [open, action?.id]);
+
+  const upload = async () => {
+    if (!file) { setError('Select a document to upload.'); return; }
+    if (file.size > 3 * 1024 * 1024) { setError('Maximum document size is 3 MB.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await appClient.functions.invoke('disputeWorkflowUploadDocument', {
+        caseId: caseRow.id,
+        actionId: action.id,
+        partyType: action.partyType,
+        partyName: action.partyName,
+        disputeId: action.disputeIds?.[0] || null,
+        documentType,
+        originalFileName: file.name,
+        contentType: file.type || 'application/octet-stream',
+        base64,
+      });
+      if (res.data?.error) { setError(res.data.error); return; }
+      await onUploaded(res.data.document);
+      onClose();
+    } catch (uploadError) {
+      setError(uploadError.message || 'Document upload failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader><DialogTitle>Upload Dispute Document</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"><div className="font-semibold">{action?.actionLabel || actionLabel(action?.actionType)}</div><div className="text-muted-foreground">{action?.partyName}</div></div>
+          <div className="space-y-1.5"><Label>Document type</Label><Select value={documentType} onValueChange={setDocumentType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>)}</SelectContent></Select></div>
+          <div className="space-y-1.5"><Label htmlFor="dispute-document-file">File</Label><Input id="dispute-document-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx" onChange={(event) => setFile(event.target.files?.[0] || null)} /><p className="text-xs text-muted-foreground">Maximum 3 MB. Salesforce filename is generated automatically.</p></div>
+          {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+          {missingRequiredDocuments.length > 0 && (
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div><span className="font-semibold">Required documents missing.</span> Save the draft, then upload evidence against each flagged action before submission or approval.</div>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={upload} disabled={busy} className="gap-2">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Upload to Salesforce</Button></div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AccountingUpdateModal({ action, open, onClose, onSaved }) {
+  const [status, setStatus] = useState('Pending Accounting');
+  const [instructionReference, setInstructionReference] = useState('');
+  const [instructionDate, setInstructionDate] = useState('');
+  const [instructionAmount, setInstructionAmount] = useState('');
+  const [settlementReference, setSettlementReference] = useState('');
+  const [settlementDate, setSettlementDate] = useState('');
+  const [settlementAmount, setSettlementAmount] = useState('');
+  const [accountingNote, setAccountingNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!open || !action) return;
+    setStatus(actionAccountingStatus(action));
+    setInstructionReference(action.instructionReference || '');
+    setInstructionDate(action.instructionDate || '');
+    setInstructionAmount(action.instructionAmount ?? '');
+    setSettlementReference(action.settlementReference || '');
+    setSettlementDate(action.settlementDate || '');
+    setSettlementAmount(action.settlementAmount ?? '');
+    setAccountingNote(action.accountingNote || '');
+    setError('');
+  }, [open, action]);
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    const res = await appClient.functions.invoke('disputeWorkflowAccountingUpdate', {
+      actionId: action.id,
+      accountingStatus: status,
+      instructionReference,
+      instructionDate,
+      instructionAmount: numberOrNull(instructionAmount),
+      settlementReference,
+      settlementDate,
+      settlementAmount: numberOrNull(settlementAmount),
+      accountingNote,
+    });
+    if (res.data?.error) { setError(res.data.error); setBusy(false); return; }
+    await onSaved(res.data);
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader><DialogTitle>Accounting Update - {action?.partyName || 'Party'}</DialogTitle></DialogHeader>
+        <div className="grid gap-4 py-2 md:grid-cols-2">
+          <div className="space-y-1.5 md:col-span-2"><Label>Status</Label><Select value={status} onValueChange={setStatus}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ACCOUNTING_STATUSES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
+          {(status === 'Instruction Issued' || status === 'Settled') && <><div className="space-y-1.5"><Label>Instruction date</Label><Input type="date" value={instructionDate} onChange={(event) => setInstructionDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction reference</Label><Input value={instructionReference} onChange={(event) => setInstructionReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction amount</Label><Input type="number" min="0" step="0.01" value={instructionAmount} onChange={(event) => setInstructionAmount(event.target.value)} /></div></>}
+          {status === 'Settled' && <><div className="space-y-1.5"><Label>Settlement date</Label><Input type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Settlement reference</Label><Input value={settlementReference} onChange={(event) => setSettlementReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Settlement amount</Label><Input type="number" min="0" step="0.01" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></div></>}
+          <div className="space-y-1.5 md:col-span-2"><Label>Accounting note</Label><Textarea rows={3} value={accountingNote} onChange={(event) => setAccountingNote(event.target.value)} placeholder={status === 'Not Required' ? 'Reason accounting is not required' : 'Payment or settlement details'} /></div>
+          {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive md:col-span-2">{error}</div>}
+        </div>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={save} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Accounting Update</Button></div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WorkflowDecisionModal({ mode, open, onClose, onConfirm, busy }) {
+  const [note, setNote] = useState('');
+  const config = {
+    approve: ['Approve Instructions', 'Approval note', 'Confirm Approval'],
+    revision: ['Request Revision', 'Revision reason', 'Return to Trader'],
+    reject: ['Reject Instructions', 'Rejection reason', 'Reject'],
+    close: ['Close Dispute', 'Final closure note', 'Close Dispute'],
+  }[mode] || ['Workflow Decision', 'Note', 'Confirm'];
+  useEffect(() => { if (open) setNote(''); }, [open, mode]);
+  const requiresNote = mode !== 'approve';
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader><DialogTitle>{config[0]}</DialogTitle></DialogHeader>
+        <div className="space-y-1.5 py-2"><Label>{config[1]}</Label><Textarea rows={4} value={note} onChange={(event) => setNote(event.target.value)} /></div>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={() => onConfirm(note)} disabled={busy || (requiresNote && !note.trim())}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{config[2]}</Button></div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const workflow = workflowFromRow(stem);
   const [caseRow, setCaseRow] = useState(workflow.case);
   const [actions, setActions] = useState(workflow.actions || []);
   const [events, setEvents] = useState(workflow.events || []);
+  const [documents, setDocuments] = useState(workflow.documents || []);
   const [note, setNote] = useState(workflow.case?.latestNote || '');
   const [draftAction, setDraftAction] = useState(DEFAULT_ACTION);
+  const [uploadAction, setUploadAction] = useState(null);
+  const [accountingAction, setAccountingAction] = useState(null);
+  const [previewDocument, setPreviewDocument] = useState(null);
+  const [decisionMode, setDecisionMode] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -497,6 +787,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
     setCaseRow(nextWorkflow.case);
     setActions(nextWorkflow.actions || []);
     setEvents(nextWorkflow.events || []);
+    setDocuments(nextWorkflow.documents || []);
     setNote(nextWorkflow.case?.latestNote || '');
     setDraftAction({
       ...DEFAULT_ACTION,
@@ -509,9 +800,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
   if (!open || !stem) return null;
 
   const canEdit = editableWorkflow(caseRow);
-  const canSubmit = canEdit && actions.length > 0;
-  const canApprove = isDisputeAdmin && caseRow?.approvalStatus === 'Pending Approval';
-  const canExecute = caseRow?.approvalStatus === 'Approved';
+  const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
+  const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
+  const canSubmit = canEdit && actions.length > 0 && missingRequiredDocuments.length === 0;
+  const canApprove = capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval' && missingRequiredDocuments.length === 0;
+  const canAccount = capabilities?.canAccount && caseRow?.approvalStatus === 'Approved' && caseRow?.workflowStatus !== 'Closed';
+  const canClose = capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close';
   const financials = settlementFinancials(actions);
   const basePnl = stemBasePnl(stem);
   const stemPnlIncludingDispute = basePnl == null ? null : basePnl + financials.settlementPnl;
@@ -519,6 +813,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
   const refreshAfter = async (response) => {
     if (response?.case) setCaseRow(response.case);
     if (response?.actions) setActions(response.actions);
+    if (response?.documents) setDocuments(response.documents);
     await onSaved?.(stem.Id);
   };
 
@@ -553,7 +848,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
       setError('Buyer close reason is required.');
       return;
     }
-    setActions((prev) => [...prev, { ...draftAction, clientId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, actionLabel: actionLabel(draftAction.actionType), executionStatus: 'Pending Execution' }]);
+    setActions((prev) => [...prev, { ...draftAction, clientId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, actionLabel: actionLabel(draftAction.actionType), accountingStatus: 'Pending Accounting' }]);
     setDraftAction((prev) => ({ ...DEFAULT_ACTION, partyType: prev.partyType, actionType: prev.actionType, partyName: prev.partyName, disputeIds: prev.disputeIds }));
     setError(null);
   };
@@ -569,20 +864,21 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
     if (!saved?.case?.id) return;
     await invokeWorkflow('disputeWorkflowSubmitApproval', { caseId: saved.case.id, note });
   };
-  const approve = () => invokeWorkflow('disputeWorkflowApprove', { caseId: caseRow.id, note: 'Approved in Dispute Workflow.' });
-  const reject = (revisionRequested = false) => {
-    const reason = window.prompt(revisionRequested ? 'Revision reason' : 'Rejection reason');
-    if (reason == null) return;
-    invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason, revisionRequested });
+  const confirmDecision = async (decisionNote) => {
+    let result = null;
+    if (decisionMode === 'approve') result = await invokeWorkflow('disputeWorkflowApprove', { caseId: caseRow.id, note: decisionNote || 'Approved.' });
+    if (decisionMode === 'revision') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: true });
+    if (decisionMode === 'reject') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: false });
+    if (decisionMode === 'close') result = await invokeWorkflow('disputeWorkflowClose', { caseId: caseRow.id, note: decisionNote });
+    if (result) setDecisionMode(null);
   };
-  const executeAction = (action) => {
-    const executionNote = window.prompt('Execution note', action.executionNote || '');
-    if (executionNote == null) return;
-    invokeWorkflow('disputeWorkflowMarkExecuted', { actionId: action.id, note: executionNote });
+  const documentUploaded = async (document) => {
+    setDocuments((prev) => [document, ...prev.filter((item) => item.id !== document.id)]);
+    await onSaved?.(stem.Id);
   };
-  const closeWorkflow = () => invokeWorkflow('disputeWorkflowClose', { caseId: caseRow.id, note: 'Closed in Dispute Workflow.' });
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogContent className="flex h-[92vh] w-[min(1180px,96vw)] max-w-none flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
@@ -629,7 +925,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party</th>
                     <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Amount</th>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Close / Balance</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Execution</th>
+                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Accounting</th>
                     <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Control</th>
                   </tr>
                 </thead>
@@ -653,19 +949,22 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
                         <div>{action.closeReason || '—'}</div>
                         {action.balancePaymentInstruction && <div>{action.balancePaymentInstruction}</div>}
                         {action.requiresAttachment && <div className="text-amber-700">Attachment required</div>}
+                        {action.id && <div className="text-[11px] text-muted-foreground">{documents.filter((document) => document.actionId === action.id).length} document(s)</div>}
                       </td>
                       <td className="px-3 py-2">
-                        <span className={cn('rounded-full border px-2 py-0.5 text-xs', action.executionStatus === 'Executed' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-border bg-muted/50 text-muted-foreground')}>
-                          {action.executionStatus || 'Pending Execution'}
+                        <span className={cn('rounded-full border px-2 py-0.5 text-xs', accountingStatusTone(actionAccountingStatus(action)))}>
+                          {actionAccountingStatus(action)}
                         </span>
-                        {action.executedAt && <div className="mt-0.5 text-[11px] text-muted-foreground">{fmtDateTime(action.executedAt)}</div>}
+                        {action.accountingAt && <div className="mt-0.5 text-[11px] text-muted-foreground">{fmtDateTime(action.accountingAt)}</div>}
+                        {action.settlementReference && <div className="mt-0.5 text-[11px] text-muted-foreground">{action.settlementReference}</div>}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {canEdit ? (
-                          <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>
-                        ) : canExecute && action.id && actionExecutionPending(action) ? (
-                          <Button type="button" variant="outline" size="sm" onClick={() => executeAction(action)} disabled={busy}>Mark executed</Button>
-                        ) : '—'}
+                        <div className="flex justify-end gap-1.5">
+                          {action.id && (canEdit || canAccount || capabilities?.canApprove) && <Button type="button" variant="outline" size="sm" onClick={() => setUploadAction(action)} disabled={busy} title="Upload document"><Upload className="h-3.5 w-3.5" /></Button>}
+                          {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
+                          {canAccount && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
+                          {!canEdit && !canAccount && !capabilities?.canApprove && '—'}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -677,10 +976,29 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
             </div>
           </section>
 
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <StepHeading step="3" title="Dispute Documents" description="Salesforce files are linked to the selected buyer or supplier dispute and named automatically for fast retrieval." />
+              <span className="text-xs text-muted-foreground">{documents.length} uploaded</span>
+            </div>
+            <div className="overflow-hidden rounded-lg border border-border">
+              <table className="w-full min-w-[780px] text-xs">
+                <thead><tr className="border-b border-border bg-muted/40"><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Document</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party / Action</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Type</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Uploaded</th><th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Open</th></tr></thead>
+                <tbody>
+                  {documents.map((document) => {
+                    const linkedAction = actions.find((action) => action.id === document.actionId);
+                    return <tr key={document.id} className="border-b border-border/40"><td className="max-w-[360px] px-3 py-2"><div className="truncate font-medium text-foreground" title={document.fileName}>{document.fileName}</div><div className="truncate text-[11px] text-muted-foreground" title={document.originalFileName}>{document.originalFileName}</div></td><td className="px-3 py-2 text-muted-foreground"><div className="font-medium text-foreground">{document.partyName}</div><div>{linkedAction?.actionLabel || actionLabel(linkedAction?.actionType)}</div></td><td className="px-3 py-2 text-muted-foreground">{documentTypeLabel(document.documentType)}</td><td className="px-3 py-2 text-muted-foreground"><div>{fmtDateTime(document.createdAt)}</div><div>{document.uploadedByEmail || '—'}</div></td><td className="px-3 py-2 text-right"><div className="flex justify-end gap-1.5">{documentPreviewKind(document) && <Button type="button" variant="outline" size="sm" onClick={() => setPreviewDocument(document)}><Eye className="h-3.5 w-3.5" /></Button>}{document.salesforceUrl && <Button asChild variant="outline" size="sm"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button>}</div></td></tr>;
+                  })}
+                  {!documents.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No dispute documents uploaded yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-muted/10 p-4">
               <StepHeading
-                step="3"
+                step="4"
         title="Settlement Credit Notes & Dispute P&L"
         description="Buyer credit notes reduce P&L. Supplier credit notes and supplier deductions increase P&L."
       />
@@ -700,9 +1018,9 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
 
           <section className="rounded-xl border border-border bg-muted/10 p-4">
             <StepHeading
-              step="4"
+              step="5"
               title="Approval & Audit Trail"
-              description="Dispute administrators approve before accounts/admin proceed with supplier payment or buyer credit note execution."
+              description="Approvers release instructions to accounting. Finance records instruction and settlement details before closure."
             />
             <div className="mt-3 space-y-2">
               {events.map((event) => (
@@ -719,20 +1037,26 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
 
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
           <div className="text-xs text-muted-foreground">
-            {caseRow?.approvedByEmail ? `Approved by ${caseRow.approvedByEmail} at ${fmtDateTime(caseRow.approvedAt)}` : 'Approval required from Vincent Lee or Stanley Chui.'}
+            Next owner: <span className="font-semibold text-foreground">{nextWorkflowOwner(caseRow?.workflowStatus || 'Draft')}</span>
+            {caseRow?.approvedByEmail ? ` · Approved by ${caseRow.approvedByEmail} at ${fmtDateTime(caseRow.approvedAt)}` : ''}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>Close</Button>
             {canEdit && <Button type="button" variant="outline" onClick={saveDraft} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Save Draft</Button>}
-            {canSubmit && <Button type="button" onClick={submitForApproval} disabled={busy} className="gap-2"><Send className="h-4 w-4" /> Submit for Approval</Button>}
-            {canApprove && <Button type="button" variant="outline" onClick={() => reject(true)} disabled={busy}>Request Revision</Button>}
-            {canApprove && <Button type="button" variant="outline" onClick={() => reject(false)} disabled={busy}>Reject</Button>}
-            {canApprove && <Button type="button" onClick={approve} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" /> Approve</Button>}
-            {caseRow?.approvalStatus === 'Approved' && caseRow.workflowStatus !== 'Closed' && <Button type="button" onClick={closeWorkflow} disabled={busy} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Workflow</Button>}
+            {canEdit && actions.length > 0 && <Button type="button" onClick={submitForApproval} disabled={busy || !canSubmit} className="gap-2" title={!canSubmit ? 'Upload all required documents first' : undefined}><Send className="h-4 w-4" /> Submit for Approval</Button>}
+            {canApprove && <Button type="button" variant="outline" onClick={() => setDecisionMode('revision')} disabled={busy}>Request Revision</Button>}
+            {canApprove && <Button type="button" variant="outline" onClick={() => setDecisionMode('reject')} disabled={busy}>Reject</Button>}
+            {canApprove && <Button type="button" onClick={() => setDecisionMode('approve')} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" /> Approve</Button>}
+            {canClose && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
           </div>
         </div>
       </DialogContent>
     </Dialog>
+    <DocumentUploadModal caseRow={caseRow} action={uploadAction} open={Boolean(uploadAction)} onClose={() => setUploadAction(null)} onUploaded={documentUploaded} />
+    <AccountingUpdateModal action={accountingAction} open={Boolean(accountingAction)} onClose={() => setAccountingAction(null)} onSaved={refreshAfter} />
+    <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
+    <WorkflowDecisionModal mode={decisionMode} open={Boolean(decisionMode)} onClose={() => setDecisionMode(null)} onConfirm={confirmDecision} busy={busy} />
+    </>
   );
 }
 
@@ -751,10 +1075,11 @@ export default function DisputeWorkflow() {
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [search, setSearch] = useState('');
-  const [selectedStages, setSelectedStages] = useState(['Draft', 'Pending Approval', 'Approved - Pending Execution', 'Revision Requested']);
+  const [selectedStages, setSelectedStages] = useState(['Draft', 'Pending Approval', 'Revision Requested', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close']);
   const [managedStem, setManagedStem] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
-  const [isDisputeAdmin, setIsDisputeAdmin] = useState(false);
+  const [capabilities, setCapabilities] = useState({ role: 'user', canPrepare: true, canApprove: false, canAccount: false, canClose: false, canViewAllRules: true });
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [fieldWarning, setFieldWarning] = useState('');
 
   const loadRows = async (options = {}) => {
@@ -769,7 +1094,14 @@ export default function DisputeWorkflow() {
     }
     const nextRows = res.data?.rows || [];
     setRows(nextRows);
-    setIsDisputeAdmin(Boolean(res.data?.isDisputeAdmin));
+    setCapabilities(res.data?.capabilities || {
+      role: 'user',
+      canPrepare: true,
+      canApprove: Boolean(res.data?.isDisputeAdmin),
+      canAccount: Boolean(res.data?.isDisputeAccounting),
+      canClose: Boolean(res.data?.isDisputeAccounting),
+      canViewAllRules: true,
+    });
     setFieldWarning(res.data?.fieldWarning || '');
     setLastRefresh(new Date());
     setLoading(false);
@@ -804,7 +1136,8 @@ export default function DisputeWorkflow() {
   const totals = useMemo(() => ({
     count: filteredRows.length,
     pending: filteredRows.filter((row) => workflowFromRow(row).case?.workflowStatus === 'Pending Approval').length,
-    approved: filteredRows.filter((row) => workflowFromRow(row).case?.workflowStatus === 'Approved - Pending Execution').length,
+    accounting: filteredRows.filter((row) => ['Approved - Pending Accounting', 'Accounting In Progress'].includes(workflowFromRow(row).case?.workflowStatus)).length,
+    readyToClose: filteredRows.filter((row) => workflowFromRow(row).case?.workflowStatus === 'Settled - Ready to Close').length,
     pnl: filteredRows.reduce((sum, row) => sum + Number(workflowFromRow(row).case?.settlementPnl || 0), 0),
   }), [filteredRows]);
 
@@ -823,27 +1156,31 @@ export default function DisputeWorkflow() {
         icon={FileCheck2}
         eyebrow="Dispute workflow"
         title="Dispute Workflow"
-        description="Trader instructions, dispute administrator approval, execution tracking, and settlement P&L."
+        description="Trader instructions, approval, accounting settlement, Salesforce documents, and closure."
         className="shrink-0"
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}
         actions={(
-          <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setRulesOpen(true)} className="gap-2"><BookOpen className="h-4 w-4" /> Workflow Rules</Button>
+            <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
+            </Button>
+          </div>
         )}
       />
 
       {fieldWarning && (
-        <div className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          <div className="font-semibold">Salesforce workflow fields are not available</div>
+        <div className="shrink-0 rounded-xl border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+          <div className="font-semibold text-foreground">Workflow data storage</div>
           <div className="mt-1">{fieldWarning}</div>
         </div>
       )}
 
-      <div className="grid shrink-0 gap-3 md:grid-cols-4">
+      <div className="grid shrink-0 gap-3 md:grid-cols-5">
         <Metric label="Cases" value={totals.count.toLocaleString()} tone="red" />
         <Metric label="Pending Approval" value={totals.pending.toLocaleString()} tone="amber" />
-        <Metric label="Approved / Execution" value={totals.approved.toLocaleString()} />
+        <Metric label="Pending Accounting" value={totals.accounting.toLocaleString()} />
+        <Metric label="Ready to Close" value={totals.readyToClose.toLocaleString()} tone="green" />
         <Metric label="Dispute P&L" value={fmtMoney(totals.pnl)} tone={totals.pnl >= 0 ? 'green' : 'red'} />
       </div>
 
@@ -888,11 +1225,12 @@ export default function DisputeWorkflow() {
           <StateBlock icon={Loader2} title="Loading Dispute Workflow..." description="Fetching disputed STEMs and workflow state." />
         ) : filteredRows.length ? (
           <div className="h-full min-h-0 overflow-auto overscroll-contain">
-            <table className="w-full min-w-[1380px] text-xs">
+            <table className="w-full min-w-[1480px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
+                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Next Owner</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer / Invoice Due</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Products</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier / Invoice Due</th>
@@ -920,6 +1258,7 @@ export default function DisputeWorkflow() {
                       <td className="whitespace-nowrap px-3 py-2.5">
                         <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span>
                       </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{nextWorkflowOwner(stage)}</td>
                       <td className="max-w-[240px] px-3 py-2.5">
                         <div className="truncate font-medium text-foreground" title={row._Buyer_Name || ''}>{row._Buyer_Name || '—'}</div>
                         <div className="mt-0.5 text-[11px] text-muted-foreground">Due {fmtDate(row._Buyer_Invoice_Due_Date || row.Buyer_Pay_Term_Date__c)}</div>
@@ -998,8 +1337,9 @@ export default function DisputeWorkflow() {
         open={!!managedStem}
         onClose={() => setManagedStem(null)}
         onSaved={refreshManagedStem}
-        isDisputeAdmin={isDisputeAdmin}
+        capabilities={capabilities}
       />
+      <WorkflowRulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} capabilities={capabilities} />
     </div>
   );
 }

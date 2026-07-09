@@ -282,6 +282,9 @@ const HANDLER_MODULE_ACCESS = {
   disputeWorkflowSubmitApproval: ['disputes'],
   disputeWorkflowApprove: ['disputes'],
   disputeWorkflowReject: ['disputes'],
+  disputeWorkflowAccountingUpdate: ['disputes'],
+  disputeWorkflowUploadDocument: ['disputes'],
+  disputeWorkflowDocuments: ['disputes'],
   disputeWorkflowMarkExecuted: ['disputes'],
   disputeWorkflowClose: ['disputes'],
   salesforceBuyerInvoicesDue: ['buyer_invoices'],
@@ -1984,9 +1987,9 @@ const DISPUTE_BETA_ADMIN_EMAILS = new Set([
   'stanley.chui@cosulich.com.hk',
 ]);
 const DISPUTE_BETA_ADMIN_NAMES = new Set(['vincent lee', 'stanley chui']);
-const DISPUTE_BETA_WORKFLOW_STATUSES = ['Draft', 'Pending Approval', 'Approved - Pending Execution', 'Rejected', 'Revision Requested', 'Executed', 'Closed'];
+const DISPUTE_BETA_WORKFLOW_STATUSES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_BETA_APPROVAL_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Revision Requested'];
-const DISPUTE_BETA_EXECUTION_STATUSES = ['Pending Execution', 'Executed', 'Not Required'];
+const DISPUTE_BETA_EXECUTION_STATUSES = ['Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required'];
 const DISPUTE_BETA_ACTION_LABELS = {
   hold_supplier_payment: 'Hold supplier payment',
   pay_full_supplier_invoice: 'Pay full supplier invoice amount',
@@ -2004,9 +2007,20 @@ const DISPUTE_BETA_BUYER_CLOSE_REASONS = [
   'Settlement agreement concluded with written agreement enclosed',
 ];
 const DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
+const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set([
+  'settlement_agreement',
+  'buyer_credit_note',
+  'supplier_credit_note',
+  'payment_instruction',
+  'proof_of_payment',
+  'correspondence',
+  'other_support',
+]);
+const DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 const DISPUTE_BETA_CASE_SELECT = 'id,stem_id,stem_name,buyer_name,supplier_names,current_salesforce_status,workflow_status,approval_status,latest_note,submitted_by,submitted_by_email,submitted_at,approved_by,approved_by_email,approved_at,rejected_by,rejected_by_email,rejected_at,rejection_reason,closed_by,closed_by_email,closed_at,settlement_financials,settlement_pnl,salesforce_writeback_status,salesforce_writeback_error,created_at,updated_at';
-const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_type,party_name,dispute_ids,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
+const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_type,party_name,dispute_ids,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
 const DISPUTE_BETA_EVENT_SELECT = 'id,case_id,action_id,stem_id,event_type,note,metadata,actor_user_id,actor_email,created_at';
+const DISPUTE_WORKFLOW_DOCUMENT_SELECT = 'id,case_id,action_id,stem_id,party_type,party_name,dispute_id,document_type,original_filename,smart_filename,content_type,file_extension,content_size,salesforce_content_version_id,salesforce_content_document_id,salesforce_linked_record_id,salesforce_url,uploaded_by,uploaded_by_email,created_at';
 
 function canonicalDisputeBetaCloseReason(value, allowed = []) {
   const raw = String(value || '').trim();
@@ -8869,6 +8883,23 @@ function isDisputeBetaAdmin(profile = {}) {
   return DISPUTE_BETA_ADMIN_EMAILS.has(email) || DISPUTE_BETA_ADMIN_NAMES.has(name);
 }
 
+function isDisputeAccounting(profile = {}) {
+  return profile.user_type === 'finance' || profile.user_type === 'administrator';
+}
+
+function disputeWorkflowCapabilities(profile = {}) {
+  const isApprover = isDisputeBetaAdmin(profile);
+  const isAccounting = isDisputeAccounting(profile);
+  return {
+    role: profile.user_type || 'user',
+    canPrepare: true,
+    canApprove: isApprover,
+    canAccount: isAccounting,
+    canClose: isAccounting,
+    canViewAllRules: true,
+  };
+}
+
 function disputeBetaCaseFromStem(stem = {}) {
   return {
     stem_id: stem.Id,
@@ -8939,7 +8970,18 @@ function serializeDisputeBetaAction(row) {
     balancePaymentInstruction: row.balance_payment_instruction || null,
     description: row.description || '',
     requiresAttachment: row.requires_attachment === true,
-    executionStatus: row.execution_status || 'Pending Execution',
+    accountingStatus: row.execution_status || 'Pending Accounting',
+    executionStatus: row.execution_status || 'Pending Accounting',
+    instructionReference: row.instruction_reference || '',
+    instructionDate: row.instruction_date || null,
+    instructionAmount: row.instruction_amount == null ? null : Number(row.instruction_amount),
+    settlementReference: row.settlement_reference || '',
+    settlementDate: row.settlement_date || null,
+    settlementAmount: row.settlement_amount == null ? null : Number(row.settlement_amount),
+    accountingNote: row.accounting_note || '',
+    accountingBy: row.accounting_by || null,
+    accountingByEmail: row.accounting_by_email || null,
+    accountingAt: row.accounting_at || null,
     executedBy: row.executed_by || null,
     executedByEmail: row.executed_by_email || null,
     executedAt: row.executed_at || null,
@@ -8950,6 +8992,36 @@ function serializeDisputeBetaAction(row) {
     updatedByEmail: row.updated_by_email || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
+  };
+}
+
+function serializeDisputeWorkflowDocument(row) {
+  if (!row) return null;
+  const fileName = row.smart_filename || row.original_filename || 'Dispute document';
+  const versionId = row.salesforce_content_version_id;
+  return {
+    id: row.id,
+    caseId: row.case_id,
+    actionId: row.action_id || null,
+    stemId: row.stem_id,
+    partyType: row.party_type,
+    partyName: row.party_name || '',
+    disputeId: row.dispute_id || null,
+    documentType: row.document_type,
+    originalFileName: row.original_filename,
+    fileName,
+    smartFileName: fileName,
+    contentType: row.content_type || 'application/octet-stream',
+    fileExtension: row.file_extension || '',
+    contentSize: Number(row.content_size || 0),
+    contentVersionId: versionId,
+    contentDocumentId: row.salesforce_content_document_id || null,
+    linkedRecordId: row.salesforce_linked_record_id,
+    salesforceUrl: row.salesforce_url || null,
+    downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
+    uploadedBy: row.uploaded_by || null,
+    uploadedByEmail: row.uploaded_by_email || null,
+    createdAt: row.created_at || null,
   };
 }
 
@@ -9017,7 +9089,7 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}) {
     balance_payment_instruction: balancePaymentInstruction,
     description: String(input.description || '').trim(),
     requires_attachment: Boolean(input.requiresAttachment ?? input.requires_attachment),
-    execution_status: normalizeDisputeBetaStatus(input.executionStatus || input.execution_status, DISPUTE_BETA_EXECUTION_STATUSES, 'Pending Execution'),
+    execution_status: normalizeDisputeBetaStatus(input.accountingStatus || input.executionStatus || input.execution_status, DISPUTE_BETA_EXECUTION_STATUSES, 'Pending Accounting'),
     updated_by: profile.id,
     updated_by_email: profile.email,
   };
@@ -9079,7 +9151,7 @@ function calculateDisputeBetaSettlement(actions = []) {
 async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
   const ids = [...new Set(stemIds.filter(Boolean))];
   if (!ids.length) return {};
-  const [casesRes, actionsRes, eventsRes] = await Promise.all([
+  const [casesRes, actionsRes, eventsRes, documentsRes] = await Promise.all([
     client
       .from('dispute_beta_cases')
       .select(DISPUTE_BETA_CASE_SELECT)
@@ -9095,22 +9167,32 @@ async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
       .in('stem_id', ids)
       .order('created_at', { ascending: false })
       .limit(Math.max(100, Math.min(ids.length * 25, 2500))),
+    client
+      .from('dispute_workflow_documents')
+      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
+      .in('stem_id', ids)
+      .order('created_at', { ascending: false }),
   ]);
   if (casesRes.error) throw casesRes.error;
   if (actionsRes.error) throw actionsRes.error;
   if (eventsRes.error) throw eventsRes.error;
+  if (documentsRes.error) throw documentsRes.error;
 
   const map = {};
   for (const row of casesRes.data || []) {
-    map[row.stem_id] = { case: serializeDisputeBetaCase(row), actions: [], events: [] };
+    map[row.stem_id] = { case: serializeDisputeBetaCase(row), actions: [], events: [], documents: [] };
   }
   for (const row of actionsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [] };
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
     map[row.stem_id].actions.push(serializeDisputeBetaAction(row));
   }
   for (const row of eventsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [] };
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
     map[row.stem_id].events.push(serializeDisputeBetaEvent(row));
+  }
+  for (const row of documentsRes.data || []) {
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
+    map[row.stem_id].documents.push(serializeDisputeWorkflowDocument(row));
   }
   return map;
 }
@@ -9127,6 +9209,82 @@ async function writeDisputeBetaEvent(client, caseRow, eventType, profile, payloa
     actor_email: profile?.email || null,
   });
   if (error) throw error;
+}
+
+async function loadDisputeWorkflowDocuments(client, caseId) {
+  const { data, error } = await client
+    .from('dispute_workflow_documents')
+    .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
+    .eq('case_id', caseId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+function missingRequiredDisputeDocuments(actions = [], documents = []) {
+  const actionIdsWithDocuments = new Set(documents.map((document) => document.action_id).filter(Boolean));
+  return actions.filter((action) => action.requires_attachment === true && !actionIdsWithDocuments.has(action.id));
+}
+
+async function assertRequiredDisputeDocuments(client, actions = []) {
+  const caseId = actions[0]?.case_id;
+  const documents = caseId ? await loadDisputeWorkflowDocuments(client, caseId) : [];
+  if (!actions.some((action) => action.requires_attachment === true)) return documents;
+  const missing = missingRequiredDisputeDocuments(actions, documents);
+  if (missing.length) {
+    const labels = missing.map((action) => `${action.action_label || action.action_type} (${action.party_name || action.party_type})`);
+    throw appError(`Upload the required document for: ${labels.join(', ')}.`, 400);
+  }
+  return documents;
+}
+
+async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, salesforceStatus, options = {}) {
+  let writebackStatus = 'success';
+  let writebackError = null;
+  try {
+    await sfRequest(`/sobjects/stem__c/${encodeURIComponent(caseRow.stem_id)}`, {
+      method: 'PATCH',
+      body: { Dispute_Status__c: salesforceStatus },
+    });
+  } catch (error) {
+    writebackStatus = 'failed';
+    writebackError = error.message;
+    if (options.required) throw appError(`Salesforce dispute status could not be updated: ${error.message}`, 502);
+  }
+  const { data: updatedCase, error } = await client
+    .from('dispute_beta_cases')
+    .update({
+      current_salesforce_status: writebackStatus === 'success' ? salesforceStatus : caseRow.current_salesforce_status,
+      salesforce_writeback_status: writebackStatus,
+      salesforce_writeback_error: writebackError,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', caseRow.id)
+    .select(DISPUTE_BETA_CASE_SELECT)
+    .single();
+  if (error) throw error;
+  await writeDisputeBetaEvent(client, updatedCase, 'salesforce_writeback', profile, {
+    note: writebackStatus === 'success'
+      ? `Salesforce dispute status updated to ${salesforceStatus}.`
+      : `Salesforce dispute status update to ${salesforceStatus} failed.`,
+    metadata: { salesforceStatus, error: writebackError },
+  });
+  return updatedCase;
+}
+
+function disputeWorkflowFilenameToken(value, fallback, maxLength = 42) {
+  const token = String(value || '')
+    .normalize('NFKD')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLength)
+    .replace(/-+$/g, '');
+  return token || fallback;
+}
+
+function disputeWorkflowFileExtension(fileName) {
+  const match = String(fileName || '').match(/\.([a-zA-Z0-9]{1,10})$/);
+  return match ? match[1].toLowerCase() : '';
 }
 
 async function upsertDisputeBetaCase(client, stem, extra = {}) {
@@ -9162,16 +9320,39 @@ async function getDisputeBetaCase(client, caseIdOrStemId) {
 }
 
 async function replaceDisputeBetaActions(client, caseRow, actions, profile) {
-  const normalizedActions = (actions || []).map((action) => normalizeDisputeBetaAction(action, caseRow, profile));
-  const financials = calculateDisputeBetaSettlement(normalizedActions);
-  const { error: deleteError } = await client
+  const normalizedActions = (actions || []).map((action) => ({
+    id: String(action.id || '').trim() || null,
+    values: normalizeDisputeBetaAction(action, caseRow, profile),
+  }));
+  const financials = calculateDisputeBetaSettlement(normalizedActions.map((action) => action.values));
+  const { data: existingRows, error: existingError } = await client
     .from('dispute_beta_actions')
-    .delete()
+    .select('id')
     .eq('case_id', caseRow.id);
-  if (deleteError) throw deleteError;
-  if (normalizedActions.length) {
-    const { error: insertError } = await client.from('dispute_beta_actions').insert(normalizedActions.map((action) => ({
-      ...action,
+  if (existingError) throw existingError;
+  const existingIds = new Set((existingRows || []).map((row) => row.id));
+  const retainedIds = normalizedActions.map((action) => action.id).filter((id) => id && existingIds.has(id));
+  const removedIds = [...existingIds].filter((id) => !retainedIds.includes(id));
+  if (removedIds.length) {
+    const { error: deleteError } = await client
+      .from('dispute_beta_actions')
+      .delete()
+      .eq('case_id', caseRow.id)
+      .in('id', removedIds);
+    if (deleteError) throw deleteError;
+  }
+  for (const action of normalizedActions.filter((item) => item.id && existingIds.has(item.id))) {
+    const { error: updateError } = await client
+      .from('dispute_beta_actions')
+      .update({ ...action.values, updated_at: new Date().toISOString() })
+      .eq('case_id', caseRow.id)
+      .eq('id', action.id);
+    if (updateError) throw updateError;
+  }
+  const newActions = normalizedActions.filter((action) => !action.id || !existingIds.has(action.id));
+  if (newActions.length) {
+    const { error: insertError } = await client.from('dispute_beta_actions').insert(newActions.map((action) => ({
+      ...action.values,
       case_id: caseRow.id,
       created_by: profile.id,
       created_by_email: profile.email,
@@ -9296,12 +9477,13 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
   const workflowMap = await loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id));
   return {
     isDisputeAdmin: isDisputeBetaAdmin(profile),
+    isDisputeAccounting: isDisputeAccounting(profile),
+    capabilities: disputeWorkflowCapabilities(profile),
     requiredSalesforceFieldsMissing: true,
-    fieldWarning: 'Dispute Workflow state is stored in Supabase because the required Salesforce workflow and approval fields do not exist. Only approved summary status, description, and deduction amount are written back to Salesforce Dispute__c records.',
+    fieldWarning: 'Detailed approval, accounting, document, and audit state is stored in Supabase. Salesforce receives the high-level Dispute Status and approved party instructions without requiring additional Salesforce fields.',
     rows: rows.map((row) => ({
       ...row,
-      _Dispute_Workflow: workflowMap[row.Id] || { case: null, actions: [], events: [] },
-      _Dispute_Beta: workflowMap[row.Id] || { case: null, actions: [], events: [] },
+      _Dispute_Workflow: workflowMap[row.Id] || { case: null, actions: [], events: [], documents: [] },
     })),
   };
 }
@@ -9312,6 +9494,15 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const stemId = stem.Id || body.stemId;
   if (!stemId) throw appError('stemId is required.', 400);
   await requireInterofficeStemAccess(stemId, accessContext || { client, profile });
+  const { data: existingCase, error: existingError } = await client
+    .from('dispute_beta_cases')
+    .select(DISPUTE_BETA_CASE_SELECT)
+    .eq('stem_id', stemId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existingCase && !['Draft', 'Rejected', 'Revision Requested'].includes(existingCase.workflow_status)) {
+    throw appError('Trader instructions are locked after submission. Request a revision before editing them.', 400);
+  }
   const caseRow = await upsertDisputeBetaCase(client, { ...stem, Id: stemId }, {
     latestNote: body.latestNote,
     workflowStatus: 'Draft',
@@ -9319,9 +9510,14 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   });
   const { caseRow: updatedCase, actions } = await replaceDisputeBetaActions(client, caseRow, body.actions || [], profile);
   await writeDisputeBetaEvent(client, updatedCase, 'draft_saved', profile, { note: body.latestNote || 'Draft saved.' });
+  const statusCase = updatedCase.current_salesforce_status === 'Open - Trader Review'
+    ? updatedCase
+    : await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
+  const documents = await loadDisputeWorkflowDocuments(client, updatedCase.id);
   return {
-    case: serializeDisputeBetaCase(updatedCase),
+    case: serializeDisputeBetaCase(statusCase),
     actions: actions.map(serializeDisputeBetaAction),
+    documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }
 
@@ -9335,6 +9531,10 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
     .eq('case_id', caseRow.id);
   if (actionError) throw actionError;
   if (!actions?.length) throw appError('Add at least one trader action before submitting for approval.', 400);
+  if (!['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status)) {
+    throw appError('Only draft, rejected, or revision-requested cases can be submitted.', 400);
+  }
+  await assertRequiredDisputeDocuments(client, actions);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -9352,7 +9552,13 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, 'submitted', profile, { note: body.note || 'Submitted for dispute administrator approval.' });
-  return { case: serializeDisputeBetaCase(updatedCase), actions: actions.map(serializeDisputeBetaAction) };
+  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Pending Approval');
+  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  return {
+    case: serializeDisputeBetaCase(statusCase),
+    actions: actions.map(serializeDisputeBetaAction),
+    documents: documents.map(serializeDisputeWorkflowDocument),
+  };
 }
 
 async function disputeBetaApprove(body = {}, req, accessContext = null) {
@@ -9361,11 +9567,36 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be approved.', 400);
+  const { data: actions, error: actionsError } = await client
+    .from('dispute_beta_actions')
+    .select(DISPUTE_BETA_ACTION_SELECT)
+    .eq('case_id', caseRow.id)
+    .order('created_at', { ascending: true });
+  if (actionsError) throw actionsError;
+  await assertRequiredDisputeDocuments(client, actions || []);
   const nowIso = new Date().toISOString();
+  const { error: accountingResetError } = await client
+    .from('dispute_beta_actions')
+    .update({
+      execution_status: 'Pending Accounting',
+      instruction_reference: null,
+      instruction_date: null,
+      instruction_amount: null,
+      settlement_reference: null,
+      settlement_date: null,
+      settlement_amount: null,
+      accounting_note: null,
+      accounting_by: null,
+      accounting_by_email: null,
+      accounting_at: null,
+      updated_at: nowIso,
+    })
+    .eq('case_id', caseRow.id);
+  if (accountingResetError) throw accountingResetError;
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
     .update({
-      workflow_status: 'Approved - Pending Execution',
+      workflow_status: 'Approved - Pending Accounting',
       approval_status: 'Approved',
       approved_by: profile.id,
       approved_by_email: profile.email,
@@ -9378,8 +9609,21 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, 'approved', profile, { note: body.note || 'Approved by dispute administrator.' });
-  const writeback = await writeDisputeBetaSummaryToSalesforce(client, updatedCase, profile);
-  return { case: serializeDisputeBetaCase(writeback.caseRow), writebackResults: writeback.results };
+  const writeback = await writeDisputeBetaSummaryToSalesforce(client, updatedCase, profile, actions || []);
+  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, writeback.caseRow, profile, 'Approved - Pending Accounting');
+  const { data: updatedActions, error: updatedActionsError } = await client
+    .from('dispute_beta_actions')
+    .select(DISPUTE_BETA_ACTION_SELECT)
+    .eq('case_id', caseRow.id)
+    .order('created_at', { ascending: true });
+  if (updatedActionsError) throw updatedActionsError;
+  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  return {
+    case: serializeDisputeBetaCase(statusCase),
+    actions: (updatedActions || []).map(serializeDisputeBetaAction),
+    documents: documents.map(serializeDisputeWorkflowDocument),
+    writebackResults: writeback.results,
+  };
 }
 
 async function disputeBetaReject(body = {}, req, accessContext = null) {
@@ -9387,7 +9631,10 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
   if (!isDisputeBetaAdmin(profile)) throw appError('Dispute administrator approval is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
+  if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be rejected or returned for revision.', 400);
   const revisionRequested = Boolean(body.revisionRequested);
+  const reason = String(body.reason || '').trim();
+  if (!reason) throw appError(revisionRequested ? 'Revision reason is required.' : 'Rejection reason is required.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -9397,7 +9644,7 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
       rejected_by: profile.id,
       rejected_by_email: profile.email,
       rejected_at: nowIso,
-      rejection_reason: String(body.reason || '').trim(),
+      rejection_reason: reason,
       updated_at: nowIso,
     })
     .eq('id', caseRow.id)
@@ -9405,13 +9652,127 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, revisionRequested ? 'revision_requested' : 'rejected', profile, {
-    note: body.reason || (revisionRequested ? 'Revision requested.' : 'Rejected.'),
+    note: reason,
   });
-  return { case: serializeDisputeBetaCase(updatedCase) };
+  const salesforceStatus = revisionRequested ? 'Revision Requested' : 'Rejected';
+  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, salesforceStatus);
+  return { case: serializeDisputeBetaCase(statusCase) };
 }
 
-async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
+async function disputeWorkflowDocuments(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
+  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
+  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  return { documents: documents.map(serializeDisputeWorkflowDocument) };
+}
+
+async function disputeWorkflowUploadDocument(body = {}, req, accessContext = null) {
+  const { client, profile } = await requireActiveUser(req);
+  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
+  const canEdit = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
+  if (!canEdit && !isDisputeBetaAdmin(profile) && !isDisputeAccounting(profile)) {
+    throw appError('Only accounting or administrators can add documents after trader submission.', 403);
+  }
+
+  const actionId = String(body.actionId || '').trim() || null;
+  let action = null;
+  if (actionId) {
+    const { data, error } = await client
+      .from('dispute_beta_actions')
+      .select(DISPUTE_BETA_ACTION_SELECT)
+      .eq('id', actionId)
+      .eq('case_id', caseRow.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw appError('The selected workflow action was not found.', 404);
+    action = data;
+  }
+
+  const documentType = String(body.documentType || '').trim();
+  if (!DISPUTE_WORKFLOW_DOCUMENT_TYPES.has(documentType)) throw appError('Valid document type is required.', 400);
+  const originalFileName = String(body.originalFileName || '').trim();
+  if (!originalFileName) throw appError('Document filename is required.', 400);
+  const rawBase64 = String(body.base64 || '').replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+  if (!rawBase64) throw appError('Document content is required.', 400);
+  const buffer = Buffer.from(rawBase64, 'base64');
+  if (!buffer.length) throw appError('Document content is empty or invalid.', 400);
+  if (buffer.length > DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES) throw appError('Document is too large. Maximum size is 3 MB.', 413);
+
+  const partyType = action?.party_type || (String(body.partyType || '').toLowerCase() === 'buyer' ? 'buyer' : 'supplier');
+  const partyName = action?.party_name || String(body.partyName || '').trim();
+  if (!partyName) throw appError('Buyer or supplier party is required.', 400);
+  const allowedDisputeIds = new Set((action?.dispute_ids || []).filter(isSalesforceId));
+  const requestedDisputeId = String(body.disputeId || '').trim();
+  if (requestedDisputeId && !allowedDisputeIds.has(requestedDisputeId)) {
+    throw appError('The selected Salesforce dispute does not belong to this workflow action.', 400);
+  }
+  const disputeId = requestedDisputeId || [...allowedDisputeIds][0] || null;
+  const linkedRecordId = disputeId || caseRow.stem_id;
+  const existingDocuments = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  const sequence = String(existingDocuments.length + 1).padStart(2, '0');
+  const extension = disputeWorkflowFileExtension(originalFileName);
+  const dateToken = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const stemToken = disputeWorkflowFilenameToken(caseRow.stem_name || caseRow.stem_id, 'STEM');
+  const partyToken = disputeWorkflowFilenameToken(partyName, partyType.toUpperCase());
+  const typeToken = disputeWorkflowFilenameToken(documentType, 'DOCUMENT');
+  const smartFileName = `DISPUTE-${stemToken}-${partyType.toUpperCase()}-${partyToken}-${typeToken}-${dateToken}-${sequence}${extension ? `.${extension}` : ''}`;
+  const contentType = String(body.contentType || 'application/octet-stream').trim() || 'application/octet-stream';
+  const title = extension ? smartFileName.slice(0, -(extension.length + 1)) : smartFileName;
+
+  const contentVersion = await sfRequest('/sobjects/ContentVersion', {
+    method: 'POST',
+    body: {
+      Title: title,
+      PathOnClient: `/${smartFileName}`,
+      VersionData: buffer.toString('base64'),
+      FirstPublishLocationId: linkedRecordId,
+    },
+  });
+  const contentVersionId = contentVersion?.id;
+  if (!isSalesforceId(contentVersionId)) throw appError('Salesforce did not return a ContentVersion id.', 502);
+  const versionRows = await queryRows(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id = '${escapeSoql(contentVersionId)}' LIMIT 1`, { softFail: true });
+  const contentDocumentId = versionRows[0]?.ContentDocumentId || null;
+  const salesforceUrl = contentDocumentId
+    ? `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`
+    : `${getInstanceUrl()}/lightning/r/${linkedRecordId}/view`;
+  const { data: documentRow, error: documentError } = await client
+    .from('dispute_workflow_documents')
+    .insert({
+      case_id: caseRow.id,
+      action_id: actionId,
+      stem_id: caseRow.stem_id,
+      party_type: partyType,
+      party_name: partyName,
+      dispute_id: disputeId,
+      document_type: documentType,
+      original_filename: originalFileName,
+      smart_filename: smartFileName,
+      content_type: contentType,
+      file_extension: extension || null,
+      content_size: buffer.length,
+      salesforce_content_version_id: contentVersionId,
+      salesforce_content_document_id: contentDocumentId,
+      salesforce_linked_record_id: linkedRecordId,
+      salesforce_url: salesforceUrl,
+      uploaded_by: profile.id,
+      uploaded_by_email: profile.email,
+    })
+    .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
+    .single();
+  if (documentError) throw documentError;
+  await writeDisputeBetaEvent(client, caseRow, 'document_uploaded', profile, {
+    actionId,
+    note: `${smartFileName} uploaded to Salesforce.`,
+    metadata: { documentId: documentRow.id, documentType, partyType, partyName, contentVersionId, linkedRecordId },
+  });
+  return { document: serializeDisputeWorkflowDocument(documentRow) };
+}
+
+async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
+  const { client, profile } = await requireActiveUser(req);
+  if (!isDisputeAccounting(profile)) throw appError('Finance or administrator access is required for accounting updates.', 403);
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
   const { data: action, error: actionLookupError } = await client
@@ -9423,16 +9784,55 @@ async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
   if (!action) throw appError('Dispute Workflow action not found.', 404);
   const caseRow = await getDisputeBetaCase(client, action.case_id);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  if (caseRow.approval_status !== 'Approved') throw appError('Action can only be executed after dispute administrator approval.', 400);
+  if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
+    throw appError('Accounting can update actions only after approval and before closure.', 400);
+  }
+
+  const accountingStatus = normalizeDisputeBetaStatus(body.accountingStatus || body.executionStatus, DISPUTE_BETA_EXECUTION_STATUSES, '');
+  if (!accountingStatus) throw appError('Valid accounting status is required.', 400);
+  const instructionReference = String(body.instructionReference || '').trim();
+  const instructionDate = String(body.instructionDate || '').trim() || null;
+  const settlementReference = String(body.settlementReference || '').trim();
+  const settlementDate = String(body.settlementDate || '').trim() || null;
+  const accountingNote = String(body.accountingNote || body.note || '').trim();
+  if (instructionDate && !/^\d{4}-\d{2}-\d{2}$/.test(instructionDate)) throw appError('Instruction date is invalid.', 400);
+  if (settlementDate && !/^\d{4}-\d{2}-\d{2}$/.test(settlementDate)) throw appError('Settlement date is invalid.', 400);
+  if (accountingStatus === 'Instruction Issued' && (!instructionDate || (!instructionReference && !accountingNote))) {
+    throw appError('Instruction Issued requires an instruction date and a reference or accounting note.', 400);
+  }
+  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  const hasSettlementDocument = documents.some((document) => document.action_id === actionId && [
+    'settlement_agreement',
+    'buyer_credit_note',
+    'supplier_credit_note',
+    'proof_of_payment',
+  ].includes(document.document_type));
+  if (accountingStatus === 'Settled' && (!settlementDate || (!settlementReference && !hasSettlementDocument))) {
+    throw appError('Settled requires a settlement date and either a reference or settlement document.', 400);
+  }
+  if (accountingStatus === 'Not Required' && !accountingNote) {
+    throw appError('Explain why accounting is not required.', 400);
+  }
+
   const nowIso = new Date().toISOString();
   const { data: updatedAction, error } = await client
     .from('dispute_beta_actions')
     .update({
-      execution_status: 'Executed',
-      executed_by: profile.id,
-      executed_by_email: profile.email,
-      executed_at: nowIso,
-      execution_note: String(body.note || '').trim(),
+      execution_status: accountingStatus,
+      instruction_reference: instructionReference || null,
+      instruction_date: instructionDate,
+      instruction_amount: decimalOrNull(body.instructionAmount),
+      settlement_reference: settlementReference || null,
+      settlement_date: settlementDate,
+      settlement_amount: decimalOrNull(body.settlementAmount),
+      accounting_note: accountingNote || null,
+      accounting_by: profile.id,
+      accounting_by_email: profile.email,
+      accounting_at: nowIso,
+      executed_by: accountingStatus === 'Settled' ? profile.id : null,
+      executed_by_email: accountingStatus === 'Settled' ? profile.email : null,
+      executed_at: accountingStatus === 'Settled' ? nowIso : null,
+      execution_note: accountingNote || null,
       updated_by: profile.id,
       updated_by_email: profile.email,
       updated_at: nowIso,
@@ -9441,55 +9841,94 @@ async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
     .select(DISPUTE_BETA_ACTION_SELECT)
     .single();
   if (error) throw error;
-  await writeDisputeBetaEvent(client, caseRow, 'action_executed', profile, {
+  await writeDisputeBetaEvent(client, caseRow, 'accounting_updated', profile, {
     actionId,
-    note: body.note || `${updatedAction.action_label} marked executed.`,
+    note: `${updatedAction.action_label} updated to ${accountingStatus}.`,
+    metadata: { accountingStatus, instructionReference, instructionDate, settlementReference, settlementDate },
   });
   const { data: actions, error: actionsError } = await client
     .from('dispute_beta_actions')
     .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id);
+    .eq('case_id', caseRow.id)
+    .order('created_at', { ascending: true });
   if (actionsError) throw actionsError;
-  const allExecuted = (actions || []).length > 0 && (actions || []).every((row) => row.execution_status === 'Executed' || row.execution_status === 'Not Required');
-  let updatedCase = caseRow;
-  if (allExecuted) {
-    const { data, error: caseError } = await client
-      .from('dispute_beta_cases')
-      .update({ workflow_status: 'Executed', updated_at: nowIso })
-      .eq('id', caseRow.id)
-      .select(DISPUTE_BETA_CASE_SELECT)
-      .single();
-    if (caseError) throw caseError;
-    updatedCase = data;
-  }
+  const allSettled = (actions || []).length > 0 && (actions || []).every((row) => row.execution_status === 'Settled' || row.execution_status === 'Not Required');
+  const hasAccountingProgress = (actions || []).some((row) => row.execution_status !== 'Pending Accounting');
+  const workflowStatus = allSettled
+    ? 'Settled - Ready to Close'
+    : hasAccountingProgress
+      ? 'Accounting In Progress'
+      : 'Approved - Pending Accounting';
+  const { data: statusCase, error: caseError } = await client
+    .from('dispute_beta_cases')
+    .update({ workflow_status: workflowStatus, updated_at: nowIso })
+    .eq('id', caseRow.id)
+    .select(DISPUTE_BETA_CASE_SELECT)
+    .single();
+  if (caseError) throw caseError;
+  const salesforceCase = await writeDisputeWorkflowStatusToSalesforce(client, statusCase, profile, workflowStatus);
   return {
-    case: serializeDisputeBetaCase(updatedCase),
+    case: serializeDisputeBetaCase(salesforceCase),
     action: serializeDisputeBetaAction(updatedAction),
     actions: (actions || []).map(serializeDisputeBetaAction),
+    documents: documents.map(serializeDisputeWorkflowDocument),
   };
+}
+
+async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
+  return disputeWorkflowAccountingUpdate({
+    ...body,
+    accountingStatus: 'Settled',
+    settlementDate: body.settlementDate || new Date().toISOString().slice(0, 10),
+    settlementReference: body.settlementReference || body.note,
+    accountingNote: body.accountingNote || body.note,
+  }, req, accessContext);
 }
 
 async function disputeBetaClose(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
+  if (!isDisputeAccounting(profile)) throw appError('Finance or administrator access is required to close a dispute.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
+  if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
+  const finalNote = String(body.note || '').trim();
+  if (!finalNote) throw appError('Final closure note is required.', 400);
+  const { data: actions, error: actionsError } = await client
+    .from('dispute_beta_actions')
+    .select(DISPUTE_BETA_ACTION_SELECT)
+    .eq('case_id', caseRow.id)
+    .order('created_at', { ascending: true });
+  if (actionsError) throw actionsError;
+  if (!(actions || []).length || !(actions || []).every((action) => action.execution_status === 'Settled' || action.execution_status === 'Not Required')) {
+    throw appError('Every accounting action must be Settled or Not Required before closure.', 400);
+  }
+  const documents = await assertRequiredDisputeDocuments(client, actions || []);
+  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 'Closed', { required: true });
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
     .update({
       workflow_status: 'Closed',
+      latest_note: finalNote,
+      current_salesforce_status: 'Closed',
+      salesforce_writeback_status: 'success',
+      salesforce_writeback_error: null,
       closed_by: profile.id,
       closed_by_email: profile.email,
       closed_at: nowIso,
       updated_at: nowIso,
     })
-    .eq('id', caseRow.id)
+    .eq('id', statusCase.id)
     .select(DISPUTE_BETA_CASE_SELECT)
     .single();
   if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: body.note || 'Dispute Workflow closed.' });
-  return { case: serializeDisputeBetaCase(updatedCase) };
+  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: finalNote });
+  return {
+    case: serializeDisputeBetaCase(updatedCase),
+    actions: (actions || []).map(serializeDisputeBetaAction),
+    documents: documents.map(serializeDisputeWorkflowDocument),
+  };
 }
 
 async function salesforceStemDetailFull(body, req = null, accessContext = null) {
@@ -10152,6 +10591,9 @@ const handlers = {
   disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
   disputeWorkflowApprove: disputeBetaApprove,
   disputeWorkflowReject: disputeBetaReject,
+  disputeWorkflowAccountingUpdate,
+  disputeWorkflowUploadDocument,
+  disputeWorkflowDocuments,
   disputeWorkflowMarkExecuted: disputeBetaMarkExecuted,
   disputeWorkflowClose: disputeBetaClose,
   stemPnl: stemPnlFull,

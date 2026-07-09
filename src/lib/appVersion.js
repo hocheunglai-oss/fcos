@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.3';
+export const APP_VERSION = '2.0.4';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.4',
+    releasedAt: '2026-07-10',
+    title: 'Dispute collaboration and settlement',
+    changes: [
+      'Redesigned the dispute lifecycle around trader preparation, approval, accounting settlement, and guarded final closure.',
+      'Added Salesforce-first dispute document uploads with party-aware smart filenames, evidence checks, and in-app preview.',
+      'Added visible workflow rules for every role while keeping approval and accounting actions permission-controlled.',
+    ],
+  },
   {
     version: '2.0.3',
     releasedAt: '2026-07-10',

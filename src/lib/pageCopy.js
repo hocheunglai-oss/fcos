@@ -27,7 +27,7 @@ const PAGE_COPY = {
   'Dispute Workflow': {
     eyebrow: 'Disputes',
     title: 'Dispute Workflow',
-    description: 'Manage trader actions, approvals, and settlement P&L.',
+    description: 'Manage trader instructions, approval, accounting settlement, documents, and closure.',
   },
   'Exception Review': {
     eyebrow: 'Review',
