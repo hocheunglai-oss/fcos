@@ -66,9 +66,47 @@ function jwtBearerConfig() {
   return { clientId, username, privateKey };
 }
 
+function hasEnvKey(name) {
+  return Object.prototype.hasOwnProperty.call(process.env, name);
+}
+
 function hasJwtBearerConfig() {
   const { clientId, username, privateKey } = jwtBearerConfig();
   return Boolean(clientId && username && privateKey);
+}
+
+function hasAnyJwtBearerEnv() {
+  return ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_USERNAME']
+    .some(hasEnvKey);
+}
+
+function refreshTokenConfig() {
+  return {
+    clientId: process.env.SALESFORCE_CLIENT_ID,
+    clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
+    refreshToken: process.env.SALESFORCE_REFRESH_TOKEN,
+  };
+}
+
+function hasRefreshTokenConfig() {
+  const { clientId, clientSecret, refreshToken } = refreshTokenConfig();
+  return Boolean(clientId && clientSecret && refreshToken);
+}
+
+function hasAnyRefreshTokenEnv() {
+  return ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'].some(hasEnvKey);
+}
+
+function missingOrBlankDurableAuthVars() {
+  if (hasAnyJwtBearerEnv() && !hasJwtBearerConfig()) {
+    return ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY']
+      .filter((name) => !process.env[name] && !(name === 'SALESFORCE_JWT_CLIENT_ID' && process.env.SALESFORCE_CLIENT_ID));
+  }
+  if (hasAnyRefreshTokenEnv() && !hasRefreshTokenConfig()) {
+    return ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
+      .filter((name) => !process.env[name]);
+  }
+  return [];
 }
 
 function cacheSalesforceToken(data = {}) {
@@ -118,7 +156,8 @@ async function jwtBearerAccessToken() {
 
 export function salesforceAuthMode() {
   if (hasJwtBearerConfig()) return 'jwt';
-  if (process.env.SALESFORCE_CLIENT_ID && process.env.SALESFORCE_CLIENT_SECRET && process.env.SALESFORCE_REFRESH_TOKEN) return 'refresh_token';
+  if (hasRefreshTokenConfig()) return 'refresh_token';
+  if (hasAnyJwtBearerEnv() || hasAnyRefreshTokenEnv()) return 'misconfigured';
   if (process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
   return 'missing';
 }
@@ -129,13 +168,14 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
     return jwtBearerAccessToken();
   }
 
-  const clientId = process.env.SALESFORCE_CLIENT_ID;
-  const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
-  const refreshToken = process.env.SALESFORCE_REFRESH_TOKEN;
-
-  if (clientId && clientSecret && refreshToken) {
+  if (hasRefreshTokenConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
     return refreshAccessToken();
+  }
+
+  const missingDurableVars = missingOrBlankDurableAuthVars();
+  if (missingDurableVars.length > 0) {
+    throw new Error(`Salesforce OAuth env vars are missing or blank: ${missingDurableVars.join(', ')}. Fix these in Vercel instead of using SALESFORCE_ACCESS_TOKEN.`);
   }
 
   if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;

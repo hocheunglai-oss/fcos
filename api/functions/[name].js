@@ -2168,13 +2168,20 @@ async function salesforceHealthRow() {
   const usesJwt = authMode === 'jwt';
   const usesRefreshToken = authMode === 'refresh_token';
   const usesAccessToken = authMode === 'access_token';
+  const isMisconfigured = authMode === 'misconfigured';
   const required = usesJwt
     ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY']
     : usesRefreshToken
       ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
-      : ['SALESFORCE_ACCESS_TOKEN'];
-  const configured = authMode !== 'missing';
-  const result = configured ? await timedCheck(async () => {
+      : isMisconfigured
+        ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
+        : ['SALESFORCE_ACCESS_TOKEN'];
+  const configured = authMode !== 'missing' && !isMisconfigured;
+  const result = isMisconfigured ? {
+    ok: false,
+    latencyMs: null,
+    error: 'Salesforce OAuth env vars are missing or blank.',
+  } : configured ? await timedCheck(async () => {
     const limits = await sfRequest('/limits');
     return {
       apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
@@ -2190,8 +2197,8 @@ async function salesforceHealthRow() {
     scope: 'server',
     provider: 'Salesforce',
     endpoint: getInstanceUrl(),
-    authType: usesJwt ? 'OAuth JWT bearer' : usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : 'OAuth',
-    configured,
+    authType: usesJwt ? 'OAuth JWT bearer' : usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : isMisconfigured ? 'OAuth misconfigured' : 'OAuth',
+    configured: configured || isMisconfigured,
     configuredEnv: configuredEnv([
       'SALESFORCE_JWT_CLIENT_ID',
       'SALESFORCE_JWT_USERNAME',
@@ -2212,9 +2219,11 @@ async function salesforceHealthRow() {
         : usesAccessToken
           ? 'Temporary access token expiry is not exposed to the app.'
           : null,
-    warning: usesAccessToken && !usesRefreshToken,
+    warning: isMisconfigured || (usesAccessToken && !usesRefreshToken),
     notes: usesJwt
       ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.']
+      : isMisconfigured
+        ? ['Salesforce OAuth variables exist but at least one required value is blank. The temporary access-token fallback is intentionally blocked until durable auth is fixed.']
       : usesAccessToken && !usesRefreshToken
         ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.']
         : ['Connected app refresh-token policy controls long-term validity.'],

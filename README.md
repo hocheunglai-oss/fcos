@@ -30,7 +30,7 @@ SALESFORCE_CLIENT_SECRET=your_connected_app_client_secret
 SALESFORCE_REFRESH_TOKEN=your_salesforce_refresh_token
 ```
 
-For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will expire and should not be used for production.
+For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will expire and should not be used for production. If JWT or refresh-token environment variable names exist but any required value is blank, the app intentionally blocks the temporary access-token fallback and reports a System Health configuration error.
 
 ## Deployment
 

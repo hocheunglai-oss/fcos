@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.47';
+export const APP_VERSION = '1.0.48';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.48',
+    releasedAt: '2026-07-09',
+    title: 'Salesforce OAuth configuration guard',
+    changes: [
+      'Blocked silent fallback to expired temporary Salesforce access tokens when durable OAuth variables are present but blank.',
+      'Updated System Health to report blank Salesforce OAuth variables as a configuration error.',
+    ],
+  },
   {
     version: '1.0.47',
     releasedAt: '2026-07-09',
