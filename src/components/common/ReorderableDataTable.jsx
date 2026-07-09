@@ -4,7 +4,7 @@ import StateBlock from '@/components/common/StateBlock';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
-const STORAGE_PREFIX = 'salesforce_extension:column_order';
+const STORAGE_PREFIX = 'fcos:column_order';
 
 function storageKey(tableKey) {
   return `${STORAGE_PREFIX}:${tableKey}`;

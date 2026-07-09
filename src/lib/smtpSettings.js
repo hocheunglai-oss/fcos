@@ -1,5 +1,5 @@
-export const SMTP_SETTINGS_KEY = 'salesforce_extension:smtp_email_credentials';
-export const PAYMENT_REMINDER_SMTP_SETTINGS_KEY = 'salesforce_extension:payment_reminder_smtp_email_credentials';
+export const SMTP_SETTINGS_KEY = 'fcos:smtp_email_credentials';
+export const PAYMENT_REMINDER_SMTP_SETTINGS_KEY = 'fcos:payment_reminder_smtp_email_credentials';
 
 export const DEFAULT_SMTP_SETTINGS = {
   enabled: false,

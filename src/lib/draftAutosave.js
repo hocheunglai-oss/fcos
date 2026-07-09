@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-const DRAFT_PREFIX = 'salesforce_extension:draft:';
+const DRAFT_PREFIX = 'fcos:draft:';
 const DEFAULT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 
 function storageKey(key) {
@@ -99,7 +99,7 @@ export function useDraftAutosave(key, value, {
   useEffect(() => {
     if (!key) return undefined;
     const detail = { key: `draft:${key}`, dirty: enabled && dirty, message };
-    window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', { detail }));
+    window.dispatchEvent(new CustomEvent('fcos:dirty-state', { detail }));
     const beforeUnload = (event) => {
       if (!detail.dirty) return;
       event.preventDefault();
@@ -108,7 +108,7 @@ export function useDraftAutosave(key, value, {
     window.addEventListener('beforeunload', beforeUnload);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
-      window.dispatchEvent(new CustomEvent('salesforce-extension:dirty-state', {
+      window.dispatchEvent(new CustomEvent('fcos:dirty-state', {
         detail: { key: `draft:${key}`, dirty: false },
       }));
     };

@@ -16,4 +16,4 @@ jobs:
             --request POST \
             --header "content-type: application/json" \
             --data '{}' \
-            "https://salesforce-extension-murex.vercel.app/api/functions/outstandingBuyerInvoicesEmailReport"
+            "https://fcos.vercel.app/api/functions/outstandingBuyerInvoicesEmailReport"

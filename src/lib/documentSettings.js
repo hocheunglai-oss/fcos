@@ -1,4 +1,4 @@
-export const DOCUMENT_SETTINGS_KEY = 'salesforce_extension:stem_document_settings';
+export const DOCUMENT_SETTINGS_KEY = 'fcos:stem_document_settings';
 
 export const DOCUMENT_SOURCE_GROUPS = [
   'Direct STEM',

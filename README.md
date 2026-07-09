@@ -1,6 +1,6 @@
-# Salesforce Extension
+# FCOS
 
-Salesforce Extension is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
+FCOS is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
 
 ## Local Development
 

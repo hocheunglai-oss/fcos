@@ -1133,7 +1133,7 @@ async function googleDriveFetch(url, options = {}) {
 
 async function googleDriveUploadFile({ fileName, mimeType, buffer }) {
   const { folderId } = googleDriveConfig();
-  const boundary = `salesforce-extension-${Date.now()}`;
+  const boundary = `fcos-${Date.now()}`;
   const metadata = {
     name: fileName,
     mimeType,
@@ -2023,7 +2023,7 @@ function buyerInvoiceAppUrl(settings = {}) {
     || normalizedUrl(process.env.BUYER_INVOICE_REPORT_APP_URL)
     || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
     || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://salesforce-extension-murex.vercel.app';
+    || 'https://fcos.vercel.app';
 }
 
 function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
@@ -2038,7 +2038,7 @@ function incomingPaymentAppUrl(settings = {}) {
     || normalizedUrl(process.env.INCOMING_PAYMENT_REPORT_APP_URL)
     || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
     || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://salesforce-extension-murex.vercel.app';
+    || 'https://fcos.vercel.app';
 }
 
 function incomingPaymentFilterUrl(settings, report) {

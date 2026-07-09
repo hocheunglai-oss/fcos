@@ -213,7 +213,7 @@ export const AuthProvider = ({ children }) => {
     isLoadingAuth,
     isLoadingPublicSettings,
     authError,
-    appPublicSettings: { id: 'salesforce-extension', public_settings: {} },
+    appPublicSettings: { id: 'fcos', public_settings: {} },
     authChecked,
     authMode,
     isSupabaseConfigured,

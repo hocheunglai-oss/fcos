@@ -30,8 +30,8 @@ import { hasUsableSmtpSettings, readSmtpSettings, smtpFromAddress } from '@/lib/
 import { cn } from '@/lib/utils';
 
 const PAGE_STATE_KEY = 'incoming-payments';
-const EMAIL_SETTINGS_KEY = 'salesforce_extension:incoming_payment_email_settings';
-const INTEREST_EMAIL_SETTINGS_KEY = 'salesforce_extension:incoming_payment_interest_email_settings';
+const EMAIL_SETTINGS_KEY = 'fcos:incoming_payment_email_settings';
+const INTEREST_EMAIL_SETTINGS_KEY = 'fcos:incoming_payment_interest_email_settings';
 const RECEIVABLE_PAYMENTS_TABLE_TOKEN = '{{receivablePaymentsTable}}';
 const BUYER_CIA_TABLE_TOKEN = '{{buyerCiaInvoicesTable}}';
 const INTEREST_CALCULATION_TABLE_TOKEN = '{{interestCalculationTable}}';
@@ -355,7 +355,7 @@ function sampleInterestCalculationHtml() {
 
 function buildInterestPreview(settings) {
   const sampleStemUrl = typeof window === 'undefined'
-    ? 'https://salesforce-extension-murex.vercel.app/incoming-payments?stemId=sample'
+    ? 'https://fcos.vercel.app/incoming-payments?stemId=sample'
     : `${window.location.origin}/incoming-payments?stemId=sample`;
   const context = {
     requestedBy: 'Vincent Lee',

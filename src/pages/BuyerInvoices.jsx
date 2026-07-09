@@ -30,7 +30,7 @@ import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
-const EMAIL_SETTINGS_KEY = 'salesforce_extension:buyer_invoice_email_settings';
+const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];

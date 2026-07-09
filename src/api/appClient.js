@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 
-const STORAGE_PREFIX = 'salesforce_extension';
+const STORAGE_PREFIX = 'fcos';
 const functionResponseCache = new Map();
 
 const storage = {

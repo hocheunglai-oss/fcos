@@ -88,8 +88,8 @@ export default function Layout() {
         [event.detail?.key || 'default']: event.detail || {},
       }));
     };
-    window.addEventListener('salesforce-extension:dirty-state', onDirtyState);
-    return () => window.removeEventListener('salesforce-extension:dirty-state', onDirtyState);
+    window.addEventListener('fcos:dirty-state', onDirtyState);
+    return () => window.removeEventListener('fcos:dirty-state', onDirtyState);
   }, []);
 
   useEffect(() => {
