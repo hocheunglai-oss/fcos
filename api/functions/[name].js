@@ -316,6 +316,7 @@ const HANDLER_MODULE_ACCESS = {
   adminUserDelete: ['admin'],
   adminUserTypeSave: ['admin'],
   adminUserTypeDelete: ['admin'],
+  universalAuditTrail: ['admin'],
 };
 
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
@@ -619,6 +620,176 @@ async function adminAuditLogs(body, req) {
     .limit(limit);
   if (error) throw error;
   return { logs: data || [] };
+}
+
+function auditTableUnavailable(error) {
+  return error?.code === '42P01' || /does not exist/i.test(error?.message || '');
+}
+
+async function safeAuditRows(promise, mapper) {
+  const { data, error } = await promise;
+  if (error) {
+    if (auditTableUnavailable(error)) return [];
+    throw error;
+  }
+  return (data || []).map(mapper);
+}
+
+function compactAuditSummary(parts = []) {
+  return parts.map((part) => String(part || '').trim()).filter(Boolean).join(' · ') || '—';
+}
+
+function normalizedAuditAction(value) {
+  return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+async function universalAuditTrail(body, req) {
+  const { client } = await requireAdministrator(req);
+  const limit = Math.max(25, Math.min(Number(body.limit) || 300, 1000));
+  const sourceFilter = String(body.source || 'all').trim();
+  const keyword = String(body.keyword || '').trim().toLowerCase();
+  const queryLimit = Math.max(100, Math.min(limit, 1000));
+
+  const [adminRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
+    safeAuditRows(
+      client
+        .from('admin_audit_logs')
+        .select('id,created_at,actor_email,action,target_user_id,target_email,metadata')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `admin:${row.id}`,
+        source: 'Admin Control',
+        module: 'Admin',
+        action: normalizedAuditAction(row.action),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.target_email || row.target_user_id || '—',
+        summary: compactAuditSummary([row.target_email || row.target_user_id, row.metadata?.user_type, row.metadata?.type_id]),
+        metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('buyer_invoice_collection_events')
+        .select('id,stem_id,event_type,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,actor_email,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `collection:${row.id}`,
+        source: 'Buyer Invoice Collection',
+        module: 'Outstanding Buyer Invoices',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.stem_id || '—',
+        summary: compactAuditSummary([row.status, row.owner_name, row.note, row.next_follow_up_date, row.promised_payment_date]),
+        metadata: {
+          status: row.status,
+          ownerName: row.owner_name,
+          note: row.note,
+          nextFollowUpDate: row.next_follow_up_date,
+          promisedPaymentDate: row.promised_payment_date,
+          promisedAmount: row.promised_amount,
+        },
+      })),
+    safeAuditRows(
+      client
+        .from('report_export_events')
+        .select('id,report_export_id,event_type,actor_email,previous_file_name,new_file_name,metadata,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `report:${row.id}`,
+        source: 'Reports Archive',
+        module: 'Reports Archive',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.new_file_name || row.previous_file_name || row.report_export_id || '—',
+        summary: compactAuditSummary([row.previous_file_name, row.new_file_name, row.metadata?.reportType || row.metadata?.report_type]),
+        metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('incoming_payment_interest_notifications')
+        .select('id,payment_id,payment_name,stem_id,stem_name,buyer_name,buyer_group_name,delay_days,amount,currency,recipient_email,email_subject,actor_email,actor_name,metadata,sent_at,created_at')
+        .order('sent_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `interest:${row.id}`,
+        source: 'Late Payment Interest',
+        module: 'Incoming Payment',
+        action: row.metadata?.resent === true ? 'Interest Request Resent' : 'Interest Request Sent',
+        createdAt: row.sent_at || row.created_at,
+        actor: row.actor_email || row.actor_name || 'System',
+        target: row.stem_name || row.stem_id || row.payment_name || row.payment_id || '—',
+        summary: compactAuditSummary([row.buyer_name, row.recipient_email, row.delay_days != null ? `${row.delay_days} delay days` : '', row.email_subject]),
+        metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('dispute_beta_events')
+        .select('id,stem_id,event_type,note,metadata,actor_email,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `dispute:${row.id}`,
+        source: 'Dispute Beta',
+        module: 'Dispute Beta',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.stem_id || '—',
+        summary: compactAuditSummary([row.note, row.metadata?.workflowStatus, row.metadata?.approvalStatus]),
+        metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('buyer_invoice_email_runs')
+        .select('id,run_key,schedule_time,status,rows_count,totals,error,provider_result,created_at,completed_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `internal-email:${row.id}`,
+        source: 'Internal Daily Report',
+        module: 'Outstanding Buyer Invoices',
+        action: normalizedAuditAction(row.status),
+        createdAt: row.completed_at || row.created_at,
+        actor: 'System',
+        target: row.run_key || row.schedule_time || '—',
+        summary: compactAuditSummary([row.schedule_time, row.rows_count != null ? `${row.rows_count} rows` : '', row.error]),
+        metadata: {
+          totals: row.totals || {},
+          providerResult: row.provider_result || {},
+        },
+      })),
+  ]);
+
+  let rows = [
+    ...adminRows,
+    ...collectionRows,
+    ...reportRows,
+    ...interestRows,
+    ...disputeRows,
+    ...internalEmailRows,
+  ].filter((row) => row.createdAt);
+
+  if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
+  if (keyword) {
+    rows = rows.filter((row) => [
+      row.source,
+      row.module,
+      row.action,
+      row.actor,
+      row.target,
+      row.summary,
+      JSON.stringify(row.metadata || {}),
+    ].join(' ').toLowerCase().includes(keyword));
+  }
+
+  rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const sources = [...new Set(rows.map((row) => row.source))].sort((a, b) => a.localeCompare(b));
+  return { rows: rows.slice(0, limit), sources, total: rows.length };
 }
 
 async function adminUserSave(body, req) {
@@ -5809,6 +5980,7 @@ const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = [
   'actor_user_id',
   'actor_email',
   'actor_name',
+  'metadata',
   'sent_at',
   'created_at',
 ].join(',');
@@ -5847,6 +6019,7 @@ function serializeIncomingPaymentInterestNotification(row = null) {
     actorUserId: row.actor_user_id,
     actorEmail: row.actor_email,
     actorName: row.actor_name,
+    metadata: row.metadata || {},
     sentAt: row.sent_at,
     createdAt: row.created_at,
   };
@@ -6367,7 +6540,8 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   }
 
   const existing = await fetchIncomingPaymentInterestNotification(client, paymentId);
-  if (existing) return { sent: false, alreadySent: true, notification: existing };
+  const forceResend = body.force === true || body.confirmResend === true || body.allowResend === true;
+  if (existing && !forceResend) return { sent: false, alreadySent: true, requiresConfirmation: true, notification: existing };
 
   const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId });
   const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile, calculation);
@@ -6418,6 +6592,14 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
       source: 'incoming_payment',
       delayThresholdDays: 3,
       requestedAtTimezone: 'Asia/Hong_Kong',
+      resent: Boolean(existing),
+      resendCount: Number(existing?.metadata?.resendCount || 0) + (existing ? 1 : 0),
+      previousRequest: existing ? {
+        sentAt: existing.sentAt || null,
+        actorEmail: existing.actorEmail || null,
+        recipientEmail: existing.recipientEmail || null,
+        emailSubject: existing.emailSubject || null,
+      } : null,
       interestCalculation: {
         invoiceAmount: calculation.invoiceAmount,
         dueDate: calculation.dueDate,
@@ -6432,19 +6614,25 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
     },
   };
 
-  const { data, error } = await client
-    .from('incoming_payment_interest_notifications')
-    .insert(payload)
+  const saveQuery = existing
+    ? client
+      .from('incoming_payment_interest_notifications')
+      .update({
+        ...payload,
+        sent_at: new Date().toISOString(),
+      })
+      .eq('payment_id', paymentId)
+    : client
+      .from('incoming_payment_interest_notifications')
+      .insert(payload);
+  const { data, error } = await saveQuery
     .select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS)
     .single();
-  if (error?.code === '23505') {
-    const existingAfterSend = await fetchIncomingPaymentInterestNotification(client, paymentId);
-    return { sent: true, alreadySent: true, notification: existingAfterSend };
-  }
   if (error) throw error;
   return {
     sent: true,
-    alreadySent: false,
+    alreadySent: Boolean(existing),
+    resent: Boolean(existing),
     to: recipients,
     notification: serializeIncomingPaymentInterestNotification(data),
   };
@@ -9544,6 +9732,7 @@ const handlers = {
   adminUserDelete,
   adminUserTypeSave,
   adminUserTypeDelete,
+  universalAuditTrail,
   adminBootstrap,
 };
 

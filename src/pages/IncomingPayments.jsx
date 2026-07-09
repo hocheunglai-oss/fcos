@@ -490,9 +490,15 @@ export default function IncomingPayments() {
     }));
   };
 
-  const sendInterestInvoiceRequest = async (row) => {
+  const sendInterestInvoiceRequest = async (row, { force = false } = {}) => {
     const paymentId = row.paymentId || row.id;
     if (!paymentId) return;
+    let forceResend = force;
+    if (row.interestInvoiceNotificationSent && !forceResend) {
+      const proceed = window.confirm('A late payment interest invoice request has already been sent for this payment. Send another request?');
+      if (!proceed) return;
+      forceResend = true;
+    }
     setInterestRequestLoading((prev) => ({ ...prev, [paymentId]: true }));
     try {
       const delivery = incomingPaymentSmtpCredentials(emailSettings.from || DEFAULT_EMAIL_SETTINGS.from);
@@ -521,6 +527,7 @@ export default function IncomingPayments() {
         template: readInterestEmailSettings(),
         appUrl: window.location.origin,
         credentials: delivery.credentials,
+        force: forceResend,
       });
       if (res.data?.error) {
         toast({ title: 'Interest invoice request failed', description: res.data.error, variant: 'destructive' });
@@ -529,10 +536,8 @@ export default function IncomingPayments() {
       markInterestInvoiceRequested(paymentId, res.data?.notification || null);
       const senderNote = delivery.label ? ` using ${delivery.label}` : '';
       toast({
-        title: res.data?.alreadySent ? 'Interest invoice already requested' : 'Interest invoice request sent',
-        description: res.data?.alreadySent
-          ? 'This payment already has a recorded request.'
-          : `Louisa and your email have been notified${senderNote}.`,
+        title: res.data?.resent ? 'Interest invoice request sent again' : 'Interest invoice request sent',
+        description: `Louisa and your email have been notified${senderNote}.`,
       });
     } catch (error) {
       toast({
@@ -550,7 +555,6 @@ export default function IncomingPayments() {
   };
 
   const receivableColumns = useMemo(() => [
-    { id: 'status', header: 'Status', cell: (row) => <PaymentStatusBadge row={row} /> },
     {
       id: 'receivedDate',
       header: 'Received Date',
@@ -568,23 +572,31 @@ export default function IncomingPayments() {
     },
     {
       id: 'paymentTerms',
-      header: 'Payment Terms',
-      headerClassName: 'whitespace-nowrap',
-      cellClassName: 'whitespace-nowrap text-sm',
+      header: 'Terms',
+      headerClassName: 'w-[80px] whitespace-nowrap',
+      cellClassName: 'w-[80px] max-w-[80px] whitespace-normal text-xs leading-tight',
       cell: (row) => row.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A',
     },
     {
       id: 'delay',
       header: 'Delay',
-      headerClassName: 'whitespace-nowrap',
-      cellClassName: 'whitespace-nowrap text-sm',
-      cell: (row) => row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : `${row.delayDays} Days`) : 'N/A',
+      headerClassName: 'w-[70px] whitespace-nowrap text-right',
+      cellClassName: 'w-[70px] whitespace-nowrap text-right text-sm tabular-nums',
+      cell: (row) => row.type === 'Buyer Payment' ? (row.delayDays == null ? '-' : row.delayDays) : 'N/A',
     },
     {
       id: 'from',
       header: 'From',
       cellClassName: 'max-w-[220px] text-sm',
-      cell: (row) => <div className="font-medium text-foreground">{row.partyName || '-'}</div>,
+      cell: (row) => (
+        <div className="space-y-1">
+          <div className="font-medium text-foreground">{row.partyName || '-'}</div>
+          {row.type !== 'Buyer Payment' && <PaymentStatusBadge row={row} />}
+          {row.type === 'Buyer Payment' && row.status && !['Partially paid', 'Fully paid'].includes(row.status) && (
+            <div className="text-xs font-semibold text-amber-700">{row.status}</div>
+          )}
+        </div>
+      ),
     },
     { id: 'group', header: 'Group', cellClassName: 'min-w-[160px] text-sm', cell: (row) => row.buyerGroupName || '-' },
     { id: 'stem', header: 'STEM', cellClassName: 'min-w-[240px] text-sm', cell: (row) => row.stemName || '-' },
@@ -631,16 +643,16 @@ export default function IncomingPayments() {
           <Button
             variant={sent ? 'secondary' : 'outline'}
             size="sm"
-            disabled={sent || loadingRequest}
+            disabled={loadingRequest}
             title={sentLabel}
-            className={cn(sent && 'bg-slate-700 text-white hover:bg-slate-700 disabled:opacity-100')}
+            className={cn(sent && 'bg-slate-700 text-white hover:bg-slate-800')}
             onClick={(event) => {
               event.stopPropagation();
               sendInterestInvoiceRequest(row);
             }}
           >
             {loadingRequest ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
-            {sent ? 'Requested' : 'Request'}
+            {sent ? 'Request Again' : 'Request'}
           </Button>
         );
       },

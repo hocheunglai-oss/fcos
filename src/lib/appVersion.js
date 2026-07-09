@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.38';
+export const APP_VERSION = '1.0.39';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.39',
+    releasedAt: '2026-07-09',
+    title: 'Universal audit trail and receivable table cleanup',
+    changes: [
+      'Added an administrator-only Universal Audit Trail page covering admin changes, collection events, report archive actions, dispute beta events, internal report runs, and late payment interest requests.',
+      'Allowed late payment interest invoice requests to be sent again after user confirmation.',
+      'Removed the Receivable Payments Status column, tightened Terms and Delay columns, and removed the Days suffix from Delay values.',
+    ],
+  },
   {
     version: '1.0.38',
     releasedAt: '2026-07-08',

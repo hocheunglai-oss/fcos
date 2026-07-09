@@ -27,6 +27,7 @@ const navItems = [
   { to: '/brokers', label: "Broker's Commission", icon: DollarSign, moduleId: 'brokers' },
   { to: '/report-archive', label: 'Reports Archive', icon: History, moduleId: 'report_archive' },
   { to: '/settings', label: 'Settings', icon: Settings, moduleId: 'settings' },
+  { to: '/audit-trail', label: 'Audit Trail', icon: History, moduleId: 'admin' },
   { to: '/admin', label: 'Admin Control', icon: ShieldCheck, moduleId: 'admin' },
 ];
 const VERSION_CHECK_INTERVAL_MS = 60_000;

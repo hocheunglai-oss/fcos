@@ -20,6 +20,7 @@ import DisputeManagement from '@/pages/DisputeManagement';
 import DisputeBeta from '@/pages/DisputeBeta';
 import Login from '@/pages/Login';
 import AdminControl from '@/pages/AdminControl';
+import UniversalAuditTrail from '@/pages/UniversalAuditTrail';
 
 function AuthErrorScreen({ authError }) {
   if (authError?.type === 'user_not_registered') return <UserNotRegisteredError />;
@@ -80,6 +81,7 @@ const AuthenticatedApp = () => {
           <Route path="/cashflow-forecast" element={<ModuleGate moduleId="cashflow_forecast"><CashflowForecast /></ModuleGate>} />
           <Route path="/brokers" element={<ModuleGate moduleId="brokers"><BrokerRegister /></ModuleGate>} />
           <Route path="/report-archive" element={<ModuleGate moduleId="report_archive"><ReportArchive /></ModuleGate>} />
+          <Route path="/audit-trail" element={<ModuleGate moduleId="admin"><UniversalAuditTrail /></ModuleGate>} />
           <Route path="/admin" element={<ModuleGate moduleId="admin"><AdminControl /></ModuleGate>} />
           <Route path="*" element={<PageNotFound />} />
         </Route>
