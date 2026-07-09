@@ -24,11 +24,6 @@ const PAGE_COPY = {
     title: 'Broker Commissions',
     description: 'Review broker commission rows, summaries, and XLS exports.',
   },
-  'Dispute Management': {
-    eyebrow: 'Disputes',
-    title: 'Dispute Management',
-    description: 'Track disputed STEMs and supporting documents.',
-  },
   'Dispute Beta': {
     eyebrow: 'Disputes',
     title: 'Dispute Workflow',

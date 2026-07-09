@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  AlertTriangle,
   Banknote,
   ClipboardCheck,
   DollarSign,
@@ -36,7 +35,6 @@ const navGroups = [
     label: 'Review',
     items: [
       { to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
-      { to: '/disputes', label: 'Disputes', moduleId: 'disputes', icon: AlertTriangle },
       { to: '/disputes-beta', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
       { to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
       { to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },

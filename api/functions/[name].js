@@ -17,7 +17,7 @@ async function readBody(req) {
 const ADMIN_APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
-  { id: 'disputes', label: 'Dispute Management', path: '/disputes', sortOrder: 30 },
+  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes-beta', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
   { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
   { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
@@ -268,12 +268,8 @@ const HANDLER_MODULE_ACCESS = {
   salesforceTopBuyers: ['dashboard'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'cashflow_forecast', 'pnl', 'brokers'],
   salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceStemDocumentUpload: ['disputes'],
-  salesforceDocumentRename: ['disputes'],
-  salesforceDocumentDelete: ['disputes'],
   salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'pnl', 'brokers'],
   salesforceDisputeStems: ['disputes'],
-  salesforceDisputePartyUpdate: ['disputes'],
   disputeBetaList: ['disputes'],
   disputeBetaSaveDraft: ['disputes'],
   disputeBetaSubmitApproval: ['disputes'],
@@ -3170,89 +3166,6 @@ function buildContentVersionFilename(document, version) {
   const extension = version?.FileExtension || '';
   if (!extension || title.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) return cleanDownloadFilename(title);
   return cleanDownloadFilename(`${title}.${extension}`);
-}
-
-function cleanBase64Payload(value) {
-  return String(value || '').replace(/^data:[^;]+;base64,/i, '').trim();
-}
-
-function ensureFilenameExtension(filename, title) {
-  const cleanFilename = cleanDownloadFilename(filename || title || 'salesforce-document');
-  if (cleanFilename.includes('.')) return cleanFilename;
-  const titleExtension = String(title || '').split('.').pop();
-  if (titleExtension && titleExtension !== title) return `${cleanFilename}.${titleExtension}`;
-  return cleanFilename;
-}
-
-async function salesforceStemDocumentUpload(body = {}, req = null, accessContext = null) {
-  const actualStemId = await resolveStemId(body.stemId, accessContext);
-  const fileBase64 = cleanBase64Payload(body.fileBase64);
-  if (!fileBase64) throw appError('File content is required.', 400);
-
-  const title = cleanDownloadFilename(body.title || body.fileName || 'Salesforce File');
-  const pathOnClient = ensureFilenameExtension(body.fileName, title);
-  await sfRequest('/sobjects/ContentVersion', {
-    method: 'POST',
-    body: {
-      Title: title,
-      PathOnClient: pathOnClient,
-      VersionData: fileBase64,
-      FirstPublishLocationId: actualStemId,
-    },
-  });
-
-  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
-}
-
-async function assertDirectStemDocument(stemId, { kind, id }, accessContext = null) {
-  const actualStemId = await resolveStemId(stemId, accessContext);
-  const documentsResponse = await salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
-  const directStemDocument = (documentsResponse.documents || []).find((document) => {
-    const documentId = kind === 'attachment'
-      ? document.attachmentId
-      : document.contentDocumentId || document.id;
-    return document.sourceGroup === 'Direct STEM' && documentId === id;
-  });
-  if (!directStemDocument) {
-    throw appError('Only Direct STEM dispute-flow documents can be renamed or deleted here.', 403);
-  }
-  return actualStemId;
-}
-
-async function salesforceDocumentRename(body = {}, req = null, accessContext = null) {
-  const title = cleanDownloadFilename(body.title || body.fileName || 'Salesforce File');
-  const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
-  const id = body.attachmentId || body.contentDocumentId || body.id;
-  if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
-  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id }, accessContext);
-
-  if (kind === 'attachment') {
-    await sfRequest(`/sobjects/Attachment/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: { Name: title },
-    });
-  } else {
-    await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: { Title: title },
-    });
-  }
-
-  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
-}
-
-async function salesforceDocumentDelete(body = {}, req = null, accessContext = null) {
-  const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
-  const id = body.attachmentId || body.contentDocumentId || body.id;
-  if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
-  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id }, accessContext);
-
-  const path = kind === 'attachment'
-    ? `/sobjects/Attachment/${encodeURIComponent(id)}`
-    : `/sobjects/ContentDocument/${encodeURIComponent(id)}`;
-  await sfRequest(path, { method: 'DELETE' });
-
-  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
 }
 
 async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
@@ -8937,67 +8850,6 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   };
 }
 
-const isDeductBelowAmountStatus = (value) => /deduct\s+below\s+amount/i.test(String(value || ''));
-
-function parseOptionalCurrency(value, label) {
-  if (value == null || value === '') return null;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) throw appError(`${label} must be a positive number.`, 400);
-  return number;
-}
-
-async function salesforceDisputePartyUpdate(body = {}, req = null, accessContext = null) {
-  const disputeIds = Array.isArray(body.disputeIds)
-    ? body.disputeIds
-    : body.disputeId
-      ? [body.disputeId]
-      : [];
-  const validIds = [...new Set(disputeIds.filter(isSalesforceId))];
-  if (!validIds.length) throw appError('Valid dispute id required.', 400);
-  if (isInterofficeAccess(accessContext)) {
-    const disputeDescribe = await salesforceObjectFields({ objectName: 'Dispute__c' }).catch(() => ({ fields: [] }));
-    const disputeFieldNames = fieldNameSetFrom(disputeDescribe.fields || []);
-    if (disputeFieldNames.has('STEM__c')) {
-      for (const chunk of chunkIds(validIds)) {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        const disputes = await queryRows(`
-          SELECT Id, STEM__c
-          FROM Dispute__c
-          WHERE Id IN (${inList})
-          LIMIT 5000
-        `, { limit: 5000, softFail: true });
-        for (const dispute of disputes) {
-          if (dispute.STEM__c) await requireInterofficeStemAccess(dispute.STEM__c, accessContext);
-        }
-      }
-    }
-  }
-
-  const side = String(body.side || '').toLowerCase();
-  const updates = {};
-  if (side === 'buyer') {
-    updates.Status_Buyer__c = body.status || null;
-    updates.Description_Buyer__c = body.description || null;
-  } else if (side === 'supplier') {
-    const deductionAmount = parseOptionalCurrency(body.deductionAmount, 'Deduction amount');
-    if (isDeductBelowAmountStatus(body.status) && deductionAmount == null) {
-      throw appError('Deduction amount is required when supplier status is Deduct below amount.', 400);
-    }
-    updates.Status_Supplier__c = body.status || null;
-    updates.Description_Supplier__c = body.description || null;
-    updates.Deduction_Amount_Supplier__c = isDeductBelowAmountStatus(body.status) ? deductionAmount : null;
-  } else {
-    throw appError('side must be buyer or supplier.', 400);
-  }
-
-  await Promise.all(validIds.map((id) => sfRequest(`/sobjects/Dispute__c/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    body: updates,
-  })));
-
-  return { success: true, updated: validIds.length };
-}
-
 function normalizeDisputeBetaStatus(value, allowed, fallback) {
   const raw = String(value || '').trim();
   return allowed.includes(raw) ? raw : fallback;
@@ -10255,9 +10107,6 @@ const handlers = {
   salesforceDashboardFiltered: salesforceDashboardFilteredFull,
   salesforceStemDetail: salesforceStemDetailFull,
   salesforceStemDocuments,
-  salesforceStemDocumentUpload,
-  salesforceDocumentRename,
-  salesforceDocumentDelete,
   salesforceDescribeChildren,
   salesforceTopBuyers,
   salesforceBrokerRegister: salesforceBrokerRegisterFull,
@@ -10283,7 +10132,6 @@ const handlers = {
   cashflowSettingsSave,
   cashflowHolidayCalendar,
   salesforceDisputeStems,
-  salesforceDisputePartyUpdate,
   disputeBetaList,
   disputeBetaSaveDraft,
   disputeBetaSubmitApproval,

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.1';
+export const APP_VERSION = '2.0.2';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.2',
+    releasedAt: '2026-07-09',
+    title: 'Dispute workflow cleanup',
+    changes: [
+      'Removed the retired Dispute Management page from navigation and routed old dispute links to Dispute Workflow.',
+      'Removed old-only dispute document mutation and party-edit endpoints while keeping Dispute Workflow APIs unchanged.',
+      'Changed the disputes access module label and path to Dispute Workflow.',
+    ],
+  },
   {
     version: '2.0.1',
     releasedAt: '2026-07-09',
