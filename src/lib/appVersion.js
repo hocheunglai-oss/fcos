@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.60';
+export const APP_VERSION = '2.0.1';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.1',
+    releasedAt: '2026-07-09',
+    title: 'V2 version sequence',
+    changes: [
+      'Started the next release sequence at V2.0.1 for FCOS releases going forward.',
+      'Kept the existing version audit trail visible for reference.',
+    ],
+  },
   {
     version: '1.0.60',
     releasedAt: '2026-07-09',
