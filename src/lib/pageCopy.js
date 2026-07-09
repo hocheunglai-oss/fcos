@@ -24,7 +24,7 @@ const PAGE_COPY = {
     title: 'Broker Commissions',
     description: 'Review broker commission rows, summaries, and XLS exports.',
   },
-  'Dispute Beta': {
+  'Dispute Workflow': {
     eyebrow: 'Disputes',
     title: 'Dispute Workflow',
     description: 'Manage trader actions, approvals, and settlement P&L.',

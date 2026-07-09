@@ -35,7 +35,7 @@ const navGroups = [
     label: 'Review',
     items: [
       { to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
-      { to: '/disputes-beta', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
+      { to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
       { to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
       { to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
     ],
@@ -71,8 +71,8 @@ export default function Layout() {
       .filter((group) => group.items.length > 0)
   ), [hasModuleAccess]);
 
-  const pageOwnsScroll = location.pathname === '/disputes-beta'
-    || location.pathname.startsWith('/disputes-beta/');
+  const pageOwnsScroll = location.pathname === '/disputes'
+    || location.pathname.startsWith('/disputes/');
 
   useEffect(() => {
     document.documentElement.dataset.density = density;

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.2';
+export const APP_VERSION = '2.0.3';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.3',
+    releasedAt: '2026-07-10',
+    title: 'Dispute Workflow wording',
+    changes: [
+      'Removed preview wording from the Dispute Workflow page, audit labels, release notes, and workflow messages.',
+      'Made /disputes the canonical Dispute Workflow route while redirecting legacy dispute links.',
+      'Added Dispute Workflow API aliases while keeping the old endpoints available for compatibility.',
+    ],
+  },
   {
     version: '2.0.2',
     releasedAt: '2026-07-09',
@@ -76,7 +86,7 @@ export const APP_VERSION_HISTORY = [
     changes: [
       'Stopped the Dispute Workflow route from using the outer workspace scroll container.',
       'Made Dispute Workflow fill its route area exactly so only the queue table scrolls.',
-      'Applied the same route-level scroll containment to the Dispute Beta entry point.',
+      'Applied the same route-level scroll containment to the Dispute Workflow entry point.',
     ],
   },
   {
@@ -85,7 +95,7 @@ export const APP_VERSION_HISTORY = [
     title: 'Dispute workflow page scroll containment',
     changes: [
       'Changed Dispute Workflow to a viewport-contained layout so the page itself does not keep scrolling.',
-      'Moved scrolling responsibility to the Dispute Beta Queue table area only.',
+      'Moved scrolling responsibility to the Dispute Workflow Queue table area only.',
     ],
   },
   {
@@ -103,7 +113,7 @@ export const APP_VERSION_HISTORY = [
     title: 'Dispute queue delivery date cutoff',
     changes: [
       'Hardcoded Dispute Management queue to exclude STEMs with Delivery Date before 1 Jan 2026.',
-      'Applied the same hardcoded Delivery Date cutoff to Dispute Beta queue while keeping blank delivery-date STEMs visible.',
+      'Applied the same hardcoded Delivery Date cutoff to Dispute Workflow queue while keeping blank delivery-date STEMs visible.',
     ],
   },
   {
@@ -221,7 +231,7 @@ export const APP_VERSION_HISTORY = [
     releasedAt: '2026-07-09',
     title: 'Universal audit trail and receivable table cleanup',
     changes: [
-      'Added an administrator-only Universal Audit Trail page covering admin changes, collection events, report archive actions, dispute beta events, internal report runs, and late payment interest requests.',
+      'Added an administrator-only Universal Audit Trail page covering admin changes, collection events, report archive actions, dispute workflow events, internal report runs, and late payment interest requests.',
       'Allowed late payment interest invoice requests to be sent again after user confirmation.',
       'Removed the Receivable Payments Status column, tightened Terms and Delay columns, and removed the Days suffix from Delay values.',
     ],
@@ -622,7 +632,7 @@ export const APP_VERSION_HISTORY = [
   {
     version: '1.0.0.20',
     releasedAt: '2026-07-08',
-    title: 'Dispute Beta queue readability',
+    title: 'Dispute Workflow queue readability',
     changes: [
       'Combined buyer and buyer invoice due date into one two-line queue column.',
       'Moved product and quantity details into a separate Products column between buyer and supplier details.',
@@ -633,32 +643,32 @@ export const APP_VERSION_HISTORY = [
   {
     version: '1.0.0.19',
     releasedAt: '2026-07-08',
-    title: 'Dispute Beta queue and P&L labels',
+    title: 'Dispute Workflow queue and P&L labels',
     changes: [
-      'Renamed Dispute Beta settlement labels to Dispute P&L and added STEM P&L including dispute impact to the manage modal header.',
-      'Removed duplicate receivable display from the Dispute Beta manage modal header.',
-      'Added delivery date, buyer invoice due date, and supplier invoice due/product quantity details to the Dispute Beta queue.',
-      'Capitalized Dispute Beta close reason labels while preserving compatibility with previously saved lowercase values.',
+      'Renamed Dispute Workflow settlement labels to Dispute P&L and added STEM P&L including dispute impact to the manage modal header.',
+      'Removed duplicate receivable display from the Dispute Workflow manage modal header.',
+      'Added delivery date, buyer invoice due date, and supplier invoice due/product quantity details to the Dispute Workflow queue.',
+      'Capitalized Dispute Workflow close reason labels while preserving compatibility with previously saved lowercase values.',
     ],
   },
   {
     version: '1.0.0.18',
     releasedAt: '2026-07-08',
-    title: 'Dispute Beta settlement refinement',
+    title: 'Dispute Workflow settlement refinement',
     changes: [
-      'Dispute Beta now treats buyer and supplier settlement credit notes as lump-sum amounts instead of unit-price spreads.',
+      'Dispute Workflow now treats buyer and supplier settlement credit notes as lump-sum amounts instead of unit-price spreads.',
       'The manage modal now shows buyer receivable and every supplier invoice/payable row even when that party is not under dispute.',
-      'Dispute Beta queue rows now open the standard Stem Detail modal, while Manage opens the workflow modal.',
+      'Dispute Workflow queue rows now open the standard Stem Detail modal, while Manage opens the workflow modal.',
     ],
   },
   {
     version: '1.0.0.17',
     releasedAt: '2026-07-07',
-    title: 'Dispute Beta workflow',
+    title: 'Dispute Workflow',
     changes: [
-      'Added a separate Dispute Beta page while keeping the existing Dispute Management page unchanged.',
+      'Added a separate Dispute Workflow page while keeping the existing Dispute Management page unchanged.',
       'Added Supabase-backed trader actions, dispute administrator approval, execution tracking, audit events, and settlement P&L.',
-      'Approved beta actions write back only summary status, description, and deduction amount to existing Salesforce dispute records.',
+      'Approved workflow actions write back only summary status, description, and deduction amount to existing Salesforce dispute records.',
     ],
   },
   {

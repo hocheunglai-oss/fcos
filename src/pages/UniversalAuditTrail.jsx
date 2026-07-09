@@ -41,7 +41,7 @@ function sourceTone(source) {
   if (source === 'Admin Control') return 'border-slate-200 bg-slate-50 text-slate-700';
   if (source === 'Reports Archive') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   if (source === 'Late Payment Interest') return 'border-red-200 bg-red-50 text-red-700';
-  if (source === 'Dispute Beta') return 'border-amber-200 bg-amber-50 text-amber-800';
+  if (source === 'Dispute Workflow') return 'border-amber-200 bg-amber-50 text-amber-800';
   if (source === 'Internal Daily Report') return 'border-blue-200 bg-blue-50 text-blue-700';
   return 'border-violet-200 bg-violet-50 text-violet-700';
 }

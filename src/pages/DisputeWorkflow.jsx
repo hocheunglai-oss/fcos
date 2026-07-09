@@ -258,7 +258,7 @@ function normalizeActionForSave(action) {
 }
 
 function workflowFromRow(row) {
-  return row?._Dispute_Beta || { case: null, actions: [], events: [] };
+  return row?._Dispute_Workflow || { case: null, actions: [], events: [] };
 }
 
 function editableWorkflow(caseRow) {
@@ -481,7 +481,7 @@ function FinancialExposureSection({ stem }) {
   );
 }
 
-function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
+function ManageWorkflowModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
   const workflow = workflowFromRow(stem);
   const [caseRow, setCaseRow] = useState(workflow.case);
   const [actions, setActions] = useState(workflow.actions || []);
@@ -559,7 +559,7 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
   };
 
   const removeAction = (index) => setActions((prev) => prev.filter((_, actionIndex) => actionIndex !== index));
-  const saveDraft = () => invokeWorkflow('disputeBetaSaveDraft', {
+  const saveDraft = () => invokeWorkflow('disputeWorkflowSaveDraft', {
     stem,
     actions: actions.map(normalizeActionForSave),
     latestNote: note,
@@ -567,26 +567,26 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
   const submitForApproval = async () => {
     const saved = await saveDraft();
     if (!saved?.case?.id) return;
-    await invokeWorkflow('disputeBetaSubmitApproval', { caseId: saved.case.id, note });
+    await invokeWorkflow('disputeWorkflowSubmitApproval', { caseId: saved.case.id, note });
   };
-  const approve = () => invokeWorkflow('disputeBetaApprove', { caseId: caseRow.id, note: 'Approved in Dispute Beta.' });
+  const approve = () => invokeWorkflow('disputeWorkflowApprove', { caseId: caseRow.id, note: 'Approved in Dispute Workflow.' });
   const reject = (revisionRequested = false) => {
     const reason = window.prompt(revisionRequested ? 'Revision reason' : 'Rejection reason');
     if (reason == null) return;
-    invokeWorkflow('disputeBetaReject', { caseId: caseRow.id, reason, revisionRequested });
+    invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason, revisionRequested });
   };
   const executeAction = (action) => {
     const executionNote = window.prompt('Execution note', action.executionNote || '');
     if (executionNote == null) return;
-    invokeWorkflow('disputeBetaMarkExecuted', { actionId: action.id, note: executionNote });
+    invokeWorkflow('disputeWorkflowMarkExecuted', { actionId: action.id, note: executionNote });
   };
-  const closeWorkflow = () => invokeWorkflow('disputeBetaClose', { caseId: caseRow.id, note: 'Closed in Dispute Beta.' });
+  const closeWorkflow = () => invokeWorkflow('disputeWorkflowClose', { caseId: caseRow.id, note: 'Closed in Dispute Workflow.' });
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogContent className="flex h-[92vh] w-[min(1180px,96vw)] max-w-none flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
-          <DialogTitle className="pr-8">Dispute Beta - {stem._Display_Name || stem.Name}</DialogTitle>
+          <DialogTitle className="pr-8">Dispute Workflow - {stem._Display_Name || stem.Name}</DialogTitle>
         </DialogHeader>
 
         <div className="grid shrink-0 gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
@@ -745,7 +745,7 @@ function Summary({ label, value, align = 'left', strong = false, tone = 'default
   );
 }
 
-export default function DisputeBeta() {
+export default function DisputeWorkflow() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -760,7 +760,7 @@ export default function DisputeBeta() {
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('disputeBetaList', { limit: 10000 }, { cache: true, force: options.force });
+    const res = await appClient.functions.invoke('disputeWorkflowList', { limit: 10000 }, { cache: true, force: options.force });
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
@@ -783,8 +783,8 @@ export default function DisputeBeta() {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
       if (!isDeliveryDateAllowed(row)) return false;
-      const beta = workflowFromRow(row);
-      const stage = beta.case?.workflowStatus || 'Draft';
+      const workflow = workflowFromRow(row);
+      const stage = workflow.case?.workflowStatus || 'Draft';
       const stageMatch = selectedStageSet.has(stage);
       const textMatch = !q || [
         row._Display_Name,
@@ -795,7 +795,7 @@ export default function DisputeBeta() {
         row._Buyer_Invoice_Due_Date,
         queueDetailLines(row).map((line) => [line.supplierName, line.invoiceName, line.productLabel, line.dueDate].filter(Boolean).join(' ')).join(' '),
         row.Dispute_Status__c,
-        beta.case?.latestNote,
+        workflow.case?.latestNote,
       ].some((value) => textValue(value, '').toLowerCase().includes(q));
       return stageMatch && textMatch;
     });
@@ -821,8 +821,8 @@ export default function DisputeBeta() {
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
       <PageHeader
         icon={FileCheck2}
-        eyebrow="Dispute workflow beta"
-        title="Dispute Beta"
+        eyebrow="Dispute workflow"
+        title="Dispute Workflow"
         description="Trader instructions, dispute administrator approval, execution tracking, and settlement P&L."
         className="shrink-0"
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}
@@ -841,7 +841,7 @@ export default function DisputeBeta() {
       )}
 
       <div className="grid shrink-0 gap-3 md:grid-cols-4">
-        <Metric label="Beta Cases" value={totals.count.toLocaleString()} tone="red" />
+        <Metric label="Cases" value={totals.count.toLocaleString()} tone="red" />
         <Metric label="Pending Approval" value={totals.pending.toLocaleString()} tone="amber" />
         <Metric label="Approved / Execution" value={totals.approved.toLocaleString()} />
         <Metric label="Dispute P&L" value={fmtMoney(totals.pnl)} tone={totals.pnl >= 0 ? 'green' : 'red'} />
@@ -883,9 +883,9 @@ export default function DisputeBeta() {
 
       {error && <div className="shrink-0 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
-      <TableShell title="Dispute Beta Queue" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="min-h-0 flex-1 p-0" className="flex min-h-0 flex-1 flex-col">
+      <TableShell title="Dispute Workflow Queue" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="min-h-0 flex-1 p-0" className="flex min-h-0 flex-1 flex-col">
         {loading ? (
-          <StateBlock icon={Loader2} title="Loading Dispute Beta..." description="Fetching disputed STEMs and workflow state." />
+          <StateBlock icon={Loader2} title="Loading Dispute Workflow..." description="Fetching disputed STEMs and workflow state." />
         ) : filteredRows.length ? (
           <div className="h-full min-h-0 overflow-auto overscroll-contain">
             <table className="w-full min-w-[1380px] text-xs">
@@ -904,8 +904,8 @@ export default function DisputeBeta() {
               </thead>
               <tbody>
                 {filteredRows.map((row, index) => {
-                  const beta = workflowFromRow(row);
-                  const stage = beta.case?.workflowStatus || 'Draft';
+                  const workflow = workflowFromRow(row);
+                  const stage = workflow.case?.workflowStatus || 'Draft';
                   const detailLines = queueDetailLines(row);
                   return (
                     <tr
@@ -953,17 +953,17 @@ export default function DisputeBeta() {
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{row.Dispute_Status__c || '—'}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums">{fmtMoney(beta.case?.settlementPnl || 0)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums">{fmtMoney(workflow.case?.settlementPnl || 0)}</td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
-                        {beta.case?.approvedByEmail ? (
+                        {workflow.case?.approvedByEmail ? (
                           <div>
-                            <div className="font-medium text-foreground">{beta.case.approvedByEmail}</div>
-                            <div className="text-[11px]">{fmtDateTime(beta.case.approvedAt)}</div>
+                            <div className="font-medium text-foreground">{workflow.case.approvedByEmail}</div>
+                            <div className="text-[11px]">{fmtDateTime(workflow.case.approvedAt)}</div>
                           </div>
-                        ) : beta.case?.submittedByEmail ? (
+                        ) : workflow.case?.submittedByEmail ? (
                           <div>
-                            <div>{beta.case.submittedByEmail}</div>
-                            <div className="text-[11px]">{fmtDateTime(beta.case.submittedAt)}</div>
+                            <div>{workflow.case.submittedByEmail}</div>
+                            <div className="text-[11px]">{fmtDateTime(workflow.case.submittedAt)}</div>
                           </div>
                         ) : '—'}
                       </td>
@@ -988,12 +988,12 @@ export default function DisputeBeta() {
             </table>
           </div>
         ) : (
-          <StateBlock title="No Dispute Beta records found" description="No records match the current filters." />
+          <StateBlock title="No Dispute Workflow records found" description="No records match the current filters." />
         )}
       </TableShell>
 
       <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} />
-      <ManageBetaModal
+      <ManageWorkflowModal
         stem={managedStem}
         open={!!managedStem}
         onClose={() => setManagedStem(null)}

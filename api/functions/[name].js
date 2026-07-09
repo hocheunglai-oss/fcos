@@ -17,7 +17,7 @@ async function readBody(req) {
 const ADMIN_APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
-  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes-beta', sortOrder: 30 },
+  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
   { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
   { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
@@ -277,6 +277,13 @@ const HANDLER_MODULE_ACCESS = {
   disputeBetaReject: ['disputes'],
   disputeBetaMarkExecuted: ['disputes'],
   disputeBetaClose: ['disputes'],
+  disputeWorkflowList: ['disputes'],
+  disputeWorkflowSaveDraft: ['disputes'],
+  disputeWorkflowSubmitApproval: ['disputes'],
+  disputeWorkflowApprove: ['disputes'],
+  disputeWorkflowReject: ['disputes'],
+  disputeWorkflowMarkExecuted: ['disputes'],
+  disputeWorkflowClose: ['disputes'],
   salesforceBuyerInvoicesDue: ['buyer_invoices'],
   buyerInvoiceCollectionList: ['buyer_invoices'],
   buyerInvoiceCollectionSave: ['buyer_invoices'],
@@ -786,8 +793,8 @@ async function universalAuditTrail(body, req) {
         .limit(queryLimit),
       (row) => ({
         id: `dispute:${row.id}`,
-        source: 'Dispute Beta',
-        module: 'Dispute Beta',
+        source: 'Dispute Workflow',
+        module: 'Dispute Workflow',
         action: normalizedAuditAction(row.event_type),
         createdAt: row.created_at,
         actor: row.actor_email || 'System',
@@ -2246,7 +2253,7 @@ async function supabaseHealthRow() {
     id: 'supabase',
     name: 'Supabase Auth and Database',
     category: 'Database',
-    purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute beta, cashflow settings, and universal audit trail.',
+    purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute workflow, cashflow settings, and universal audit trail.',
     scope: 'server',
     provider: 'Supabase',
     endpoint: hasUrl ? maskValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, 18, 8) : null,
@@ -8970,7 +8977,7 @@ function disputeBetaActionPartyType(actionType, inputPartyType) {
 
 function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}) {
   const actionType = String(input.actionType || input.action_type || '').trim();
-  if (!DISPUTE_BETA_ACTION_LABELS[actionType]) throw appError('Valid dispute beta action type is required.', 400);
+  if (!DISPUTE_BETA_ACTION_LABELS[actionType]) throw appError('Valid dispute workflow action type is required.', 400);
   const partyType = disputeBetaActionPartyType(actionType, input.partyType || input.party_type);
   const amount = decimalOrNull(input.amount);
   if (actionType === 'deduct_specific_amount' && amount == null) throw appError('Deduction amount is required.', 400);
@@ -9150,7 +9157,7 @@ async function getDisputeBetaCase(client, caseIdOrStemId) {
     ? await query.eq('stem_id', value).maybeSingle()
     : await query.eq('id', value).maybeSingle();
   if (error) throw error;
-  if (!data) throw appError('Dispute Beta workflow case not found.', 404);
+  if (!data) throw appError('Dispute Workflow case not found.', 404);
   return data;
 }
 
@@ -9193,7 +9200,7 @@ async function replaceDisputeBetaActions(client, caseRow, actions, profile) {
 
 function disputeBetaWritebackForAction(action) {
   const descriptionParts = [
-    `Dispute Beta approved instruction: ${action.action_label || DISPUTE_BETA_ACTION_LABELS[action.action_type] || action.action_type}.`,
+    `Dispute Workflow approved instruction: ${action.action_label || DISPUTE_BETA_ACTION_LABELS[action.action_type] || action.action_type}.`,
     action.amount != null ? `Amount: ${Number(action.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.` : null,
     action.close_reason ? `Close reason: ${action.close_reason}.` : null,
     action.balance_payment_instruction ? `Balance payment: ${action.balance_payment_instruction}.` : null,
@@ -9290,9 +9297,10 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
   return {
     isDisputeAdmin: isDisputeBetaAdmin(profile),
     requiredSalesforceFieldsMissing: true,
-    fieldWarning: 'Dispute Beta workflow state is stored in Supabase because the required Salesforce workflow and approval fields do not exist. Only approved summary status, description, and deduction amount are written back to Salesforce Dispute__c records.',
+    fieldWarning: 'Dispute Workflow state is stored in Supabase because the required Salesforce workflow and approval fields do not exist. Only approved summary status, description, and deduction amount are written back to Salesforce Dispute__c records.',
     rows: rows.map((row) => ({
       ...row,
+      _Dispute_Workflow: workflowMap[row.Id] || { case: null, actions: [], events: [] },
       _Dispute_Beta: workflowMap[row.Id] || { case: null, actions: [], events: [] },
     })),
   };
@@ -9352,7 +9360,7 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   if (!isDisputeBetaAdmin(profile)) throw appError('Dispute administrator approval is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Beta cases can be approved.', 400);
+  if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be approved.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -9412,7 +9420,7 @@ async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
     .eq('id', actionId)
     .maybeSingle();
   if (actionLookupError) throw actionLookupError;
-  if (!action) throw appError('Dispute Beta action not found.', 404);
+  if (!action) throw appError('Dispute Workflow action not found.', 404);
   const caseRow = await getDisputeBetaCase(client, action.case_id);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Approved') throw appError('Action can only be executed after dispute administrator approval.', 400);
@@ -9465,7 +9473,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Beta cases can be closed.', 400);
+  if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -9480,7 +9488,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
     .select(DISPUTE_BETA_CASE_SELECT)
     .single();
   if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: body.note || 'Dispute Beta workflow closed.' });
+  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: body.note || 'Dispute Workflow closed.' });
   return { case: serializeDisputeBetaCase(updatedCase) };
 }
 
@@ -10139,6 +10147,13 @@ const handlers = {
   disputeBetaReject,
   disputeBetaMarkExecuted,
   disputeBetaClose,
+  disputeWorkflowList: disputeBetaList,
+  disputeWorkflowSaveDraft: disputeBetaSaveDraft,
+  disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
+  disputeWorkflowApprove: disputeBetaApprove,
+  disputeWorkflowReject: disputeBetaReject,
+  disputeWorkflowMarkExecuted: disputeBetaMarkExecuted,
+  disputeWorkflowClose: disputeBetaClose,
   stemPnl: stemPnlFull,
   frankfurterUsdCnyRate,
   reportExportCreate,

@@ -10,7 +10,7 @@ export const USER_TYPES = [
 export const APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
-  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes-beta', sortOrder: 30 },
+  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes', sortOrder: 30 },
   { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
   { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
   { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
