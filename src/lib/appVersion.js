@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.41';
+export const APP_VERSION = '1.0.42';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.42',
+    releasedAt: '2026-07-09',
+    title: 'Interoffice data restriction',
+    changes: [
+      'Added the Interoffice user type with operational finance access and no default Settings, Admin, or Reports Archive access.',
+      'Applied server-side exclusion of FRATELLI COSULICH buyer-group STEMs to dashboard KPIs, charts, tables, invoice reports, incoming payments, cashflow, disputes, broker commissions, and stem detail access.',
+    ],
+  },
   {
     version: '1.0.41',
     releasedAt: '2026-07-09',

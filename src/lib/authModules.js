@@ -3,6 +3,7 @@ export const USER_TYPES = [
   { id: 'manager', label: 'Manager' },
   { id: 'finance', label: 'Finance' },
   { id: 'operations', label: 'Operations' },
+  { id: 'interoffice', label: 'Interoffice' },
   { id: 'viewer', label: 'Viewer' },
 ];
 

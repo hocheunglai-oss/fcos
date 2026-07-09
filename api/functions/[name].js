@@ -37,6 +37,7 @@ const DEFAULT_USER_TYPES = [
   { id: 'manager', label: 'Manager', description: 'Operational management access without user administration.', is_system: true, sort_order: 20 },
   { id: 'finance', label: 'Finance', description: 'Finance, invoice, report, and commission review access.', is_system: true, sort_order: 30 },
   { id: 'operations', label: 'Operations', description: 'Operational review and dispute workflow access.', is_system: true, sort_order: 40 },
+  { id: 'interoffice', label: 'Interoffice', description: 'Finance-style access with FRATELLI COSULICH buyer-group STEMs excluded from Salesforce data.', is_system: true, sort_order: 45 },
   { id: 'viewer', label: 'Viewer', description: 'Read-only dashboard access.', is_system: true, sort_order: 50 },
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
@@ -44,8 +45,11 @@ const FALLBACK_TYPE_PERMISSIONS = {
   manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, settings: true, admin: false },
   finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, settings: false, admin: false },
   operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: true, brokers: false, report_archive: false, settings: false, admin: false },
+  interoffice: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: false, settings: false, admin: false },
   viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: false, brokers: false, report_archive: false, settings: false, admin: false },
 };
+const INTEROFFICE_USER_TYPE_ID = 'interoffice';
+const INTEROFFICE_EXCLUDED_BUYER_GROUP = 'FRATELLI COSULICH';
 
 function reportArchiveAccessLevel(value, canView = undefined) {
   if (value === 'full' || value === true) return 'full';
@@ -378,6 +382,57 @@ async function requireReportArchiveFullAccess(client, profile) {
   if (accessLevel !== 'full') {
     throw appError('Full Reports Archive access is required for this action.', 403);
   }
+}
+
+function isInterofficeAccess(accessContext) {
+  return accessContext?.profile?.user_type === INTEROFFICE_USER_TYPE_ID;
+}
+
+function fieldNameSetFrom(input) {
+  if (!input) return new Set();
+  if (input instanceof Set) return input;
+  return new Set(input.map((field) => (typeof field === 'string' ? field : field?.name)).filter(Boolean));
+}
+
+function combineWhereConditions(conditions = []) {
+  return conditions.filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
+}
+
+let cachedAccountFieldNameSet = null;
+
+async function accountFieldNameSet() {
+  if (cachedAccountFieldNameSet) return cachedAccountFieldNameSet;
+  const describe = await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }));
+  cachedAccountFieldNameSet = fieldNameSetFrom(describe.fields || []);
+  return cachedAccountFieldNameSet;
+}
+
+async function interofficeStemAccessCondition(accessContext, stemFields = null, accountFields = null) {
+  if (!isInterofficeAccess(accessContext)) return '';
+  const stemFieldNames = stemFields ? fieldNameSetFrom(stemFields) : fieldNameSetFrom((await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }))).fields || []);
+  if (!stemFieldNames.has('Account__c')) return '';
+  const accountFieldNames = accountFields ? fieldNameSetFrom(accountFields) : await accountFieldNameSet();
+  const escapedGroup = escapeSoql(INTEROFFICE_EXCLUDED_BUYER_GROUP);
+  const conditions = [];
+  if (accountFieldNames.has('Group_Name__c')) {
+    conditions.push(`(Account__r.Group_Name__c = null OR Account__r.Group_Name__c != '${escapedGroup}')`);
+  }
+  if (accountFieldNames.has('ParentId')) {
+    conditions.push(`(Account__r.Parent.Name = null OR Account__r.Parent.Name != '${escapedGroup}')`);
+  }
+  return combineWhereConditions(conditions);
+}
+
+async function requireInterofficeStemAccess(stemId, accessContext) {
+  const condition = await interofficeStemAccessCondition(accessContext);
+  if (!condition || !stemId) return;
+  const rows = await queryRows(`
+    SELECT Id
+    FROM stem__c
+    WHERE Id = '${escapeSoql(stemId)}' AND ${condition}
+    LIMIT 1
+  `, { limit: 1, softFail: true });
+  if (!rows.length) throw appError('This STEM is not available for Interoffice users.', 403);
 }
 
 async function requireHandlerAccess(name, req) {
@@ -1321,10 +1376,11 @@ async function reportExportDownload(body, req) {
 }
 
 async function buyerInvoiceCollectionList(body, req) {
-  await requireActiveUser(req);
+  const { client, profile } = await requireActiveUser(req);
   const stemIds = Array.isArray(body.stemIds)
     ? body.stemIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
+  await Promise.all(stemIds.map((stemId) => requireInterofficeStemAccess(stemId, { client, profile })));
   const map = await loadBuyerInvoiceCollectionMap(stemIds);
   return {
     items: Object.values(map).map((entry) => entry.item).filter(Boolean),
@@ -1337,6 +1393,7 @@ async function persistBuyerInvoiceCollection(body, req, eventOverride = null) {
   const { client, profile } = await requireActiveUser(req);
   const stemId = String(body.stemId || body.stem_id || '').trim();
   if (!stemId) throw appError('stemId is required.', 400);
+  await requireInterofficeStemAccess(stemId, { client, profile });
 
   const updates = normalizeCollectionUpdates(body.updates || body, profile);
   const nowIso = new Date().toISOString();
@@ -1432,7 +1489,8 @@ async function salesforceObjectFields(body) {
   return { objectName, label: data.label, fields, childRelationships };
 }
 
-async function salesforceQuery(body) {
+async function salesforceQuery(body, req = null, accessContext = null) {
+  if (isInterofficeAccess(accessContext)) throw appError('Raw Salesforce query is not available for Interoffice users.', 403);
   if (!body.soql) throw new Error('soql query required');
   const result = await sfQuery(body.soql, { clean: true, limit: 2000 });
   return { records: result.records, totalSize: result.totalSize, fetched: result.records.length };
@@ -1452,9 +1510,11 @@ async function salesforceFullSchema() {
   return { objects };
 }
 
-async function salesforceDashboard() {
+async function salesforceDashboard(body = {}, req = null, accessContext = null) {
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames);
+  const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
   const hasStatus = fieldNames.includes('Status__c');
   const hasType = fieldNames.includes('Type__c');
   const hasAmount = fieldNames.includes('Amount__c');
@@ -1466,13 +1526,13 @@ async function salesforceDashboard() {
   if (fieldNames.includes('OwnerId')) usefulFields.push('OwnerId');
 
   const [totalRes, statusRes, typeRes, recentRes, accountRes, amountRes, profitRes] = await Promise.all([
-    sfQuery('SELECT COUNT(Id) total FROM stem__c', { softFail: true }),
-    hasStatus ? sfQuery('SELECT Status__c val, COUNT(Id) total FROM stem__c GROUP BY Status__c', { softFail: true }) : { records: [] },
-    hasType ? sfQuery('SELECT Type__c val, COUNT(Id) total FROM stem__c GROUP BY Type__c', { softFail: true }) : { records: [] },
-    sfQuery(`SELECT ${usefulFields.join(', ')} FROM stem__c ORDER BY CreatedDate DESC LIMIT 20`, { clean: true, softFail: true }),
+    sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
+    hasStatus ? sfQuery(`SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, { softFail: true }) : { records: [] },
+    hasType ? sfQuery(`SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, { softFail: true }) : { records: [] },
+    sfQuery(`SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY CreatedDate DESC LIMIT 20`, { clean: true, softFail: true }),
     sfQuery('SELECT COUNT(Id) total FROM Account', { softFail: true }),
-    hasAmount ? sfQuery('SELECT SUM(Amount__c) total FROM stem__c', { softFail: true }) : { records: [] },
-    profitField ? sfQuery(`SELECT SUM(${profitField}) total FROM stem__c`, { softFail: true }) : { records: [] },
+    hasAmount ? sfQuery(`SELECT SUM(Amount__c) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
+    profitField ? sfQuery(`SELECT SUM(${profitField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
   ]);
 
   return {
@@ -1665,8 +1725,10 @@ async function salesforceDescribeChildren(body) {
   return cleanRecord(record);
 }
 
-async function salesforceTopBuyers() {
-  const rows = await sfQuery('SELECT Account__r.Name buyer, SUM(Total_Invoice_Amount__c) total FROM stem__c GROUP BY Account__r.Name ORDER BY SUM(Total_Invoice_Amount__c) DESC LIMIT 10', { clean: true, softFail: true });
+async function salesforceTopBuyers(body = {}, req = null, accessContext = null) {
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext);
+  const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
+  const rows = await sfQuery(`SELECT Account__r.Name buyer, SUM(Total_Invoice_Amount__c) total FROM stem__c ${whereClause} GROUP BY Account__r.Name ORDER BY SUM(Total_Invoice_Amount__c) DESC LIMIT 10`, { clean: true, softFail: true });
   return { buyers: (rows.records || []).map((r) => ({ name: r.buyer || 'Unknown', total: r.total || 0 })) };
 }
 
@@ -3015,11 +3077,15 @@ function addRelatedRecord(records, seen, { id, sourceGroup, sourceLabel, sourceO
   });
 }
 
-async function resolveStemId(stemId) {
+async function resolveStemId(stemId, accessContext = null) {
   if (!stemId) throw new Error('stemId required');
-  if (isSalesforceId(stemId)) return stemId;
+  if (isSalesforceId(stemId)) {
+    await requireInterofficeStemAccess(stemId, accessContext);
+    return stemId;
+  }
   const lookup = await queryRows(`SELECT Id FROM stem__c WHERE KeyStem__c = '${escapeSoql(stemId)}' LIMIT 1`, { softFail: true });
   if (!lookup.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
+  await requireInterofficeStemAccess(lookup[0].Id, accessContext);
   return lookup[0].Id;
 }
 
@@ -3090,8 +3156,8 @@ function ensureFilenameExtension(filename, title) {
   return cleanFilename;
 }
 
-async function salesforceStemDocumentUpload(body = {}) {
-  const actualStemId = await resolveStemId(body.stemId);
+async function salesforceStemDocumentUpload(body = {}, req = null, accessContext = null) {
+  const actualStemId = await resolveStemId(body.stemId, accessContext);
   const fileBase64 = cleanBase64Payload(body.fileBase64);
   if (!fileBase64) throw appError('File content is required.', 400);
 
@@ -3107,12 +3173,12 @@ async function salesforceStemDocumentUpload(body = {}) {
     },
   });
 
-  return salesforceStemDocuments({ stemId: actualStemId });
+  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
 }
 
-async function assertDirectStemDocument(stemId, { kind, id }) {
-  const actualStemId = await resolveStemId(stemId);
-  const documentsResponse = await salesforceStemDocuments({ stemId: actualStemId });
+async function assertDirectStemDocument(stemId, { kind, id }, accessContext = null) {
+  const actualStemId = await resolveStemId(stemId, accessContext);
+  const documentsResponse = await salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
   const directStemDocument = (documentsResponse.documents || []).find((document) => {
     const documentId = kind === 'attachment'
       ? document.attachmentId
@@ -3125,12 +3191,12 @@ async function assertDirectStemDocument(stemId, { kind, id }) {
   return actualStemId;
 }
 
-async function salesforceDocumentRename(body = {}) {
+async function salesforceDocumentRename(body = {}, req = null, accessContext = null) {
   const title = cleanDownloadFilename(body.title || body.fileName || 'Salesforce File');
   const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
   const id = body.attachmentId || body.contentDocumentId || body.id;
   if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
-  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id });
+  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id }, accessContext);
 
   if (kind === 'attachment') {
     await sfRequest(`/sobjects/Attachment/${encodeURIComponent(id)}`, {
@@ -3144,25 +3210,25 @@ async function salesforceDocumentRename(body = {}) {
     });
   }
 
-  return salesforceStemDocuments({ stemId: actualStemId });
+  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
 }
 
-async function salesforceDocumentDelete(body = {}) {
+async function salesforceDocumentDelete(body = {}, req = null, accessContext = null) {
   const kind = body.kind === 'attachment' || body.attachmentId ? 'attachment' : 'contentDocument';
   const id = body.attachmentId || body.contentDocumentId || body.id;
   if (!isSalesforceId(id)) throw appError('Valid document id required.', 400);
-  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id });
+  const actualStemId = await assertDirectStemDocument(body.stemId, { kind, id }, accessContext);
 
   const path = kind === 'attachment'
     ? `/sobjects/Attachment/${encodeURIComponent(id)}`
     : `/sobjects/ContentDocument/${encodeURIComponent(id)}`;
   await sfRequest(path, { method: 'DELETE' });
 
-  return salesforceStemDocuments({ stemId: actualStemId });
+  return salesforceStemDocuments({ stemId: actualStemId }, null, accessContext);
 }
 
-async function salesforceStemDocuments(body = {}) {
-  const actualStemId = await resolveStemId(body.stemId);
+async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
+  const actualStemId = await resolveStemId(body.stemId, accessContext);
   const record = await sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord);
   const relatedRecords = [];
   const seenRecordIds = new Set();
@@ -3381,11 +3447,16 @@ async function salesforceDocumentDownload(req, res) {
   res.end(file.buffer);
 }
 
-async function salesforceDashboardFilteredFull(body) {
+async function salesforceDashboardFilteredFull(body, req = null, accessContext = null) {
   const { where, trendYear, disputeOnly, portCountry, companyKeyword, companyFilterMode } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
+  const accountDescribe = fieldNames.includes('Account__c')
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
 
   const hasStatus = fieldNames.includes('Status__c');
   const hasType = fieldNames.includes('Type__c');
@@ -3428,15 +3499,12 @@ async function salesforceDashboardFilteredFull(body) {
           ].filter(Boolean).join(' OR ')
         : ''
     : '';
-  const baseWhereConditions = [where, companyCondition].filter(Boolean);
-  const baseWhere = baseWhereConditions.map((condition) => `(${condition})`).join(' AND ');
-  const combinedWhere = [...baseWhereConditions, disputeCondition].filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
+  const baseWhereConditions = [where, companyCondition, interofficeCondition].filter(Boolean);
+  const baseWhere = combineWhereConditions(baseWhereConditions);
+  const combinedWhere = combineWhereConditions([...baseWhereConditions, disputeCondition]);
   const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
   const monthlyDateCondition = `(Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''}`;
-  const monthlyWhere = [monthlyDateCondition, disputeCondition, portCountryCondition, companyCondition]
-    .filter(Boolean)
-    .map((condition) => `(${condition})`)
-    .join(' AND ');
+  const monthlyWhere = combineWhereConditions([monthlyDateCondition, disputeCondition, portCountryCondition, companyCondition, interofficeCondition]);
   const monthlyWhereClause = monthlyWhere ? `WHERE ${monthlyWhere}` : '';
 
   const plFields = ['Id', 'Name', 'CreatedDate'];
@@ -3444,7 +3512,10 @@ async function salesforceDashboardFilteredFull(body) {
   if (expectedDeliveryField) plFields.push(expectedDeliveryField);
   if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
   if (buyerNameField) plFields.push(buyerNameField);
-  if (accountField) plFields.push('Account__r.Group_Name__c', 'Account__r.Parent.Name');
+  if (accountField) {
+    if (accountFieldNames.includes('Group_Name__c')) plFields.push('Account__r.Group_Name__c');
+    if (accountFieldNames.includes('ParentId')) plFields.push('Account__r.Parent.Name');
+  }
   if (hasDisputeStatus) plFields.push('Dispute_Status__c');
   if (hasDispute) plFields.push('Dispute__c');
   if (hasDisputeType) plFields.push('Dispute_Type__c');
@@ -3859,9 +3930,11 @@ async function salesforceDashboardFilteredFull(body) {
   };
 }
 
-async function stemPnlFull(body) {
+async function stemPnlFull(body, req = null, accessContext = null) {
   const { where, limit = 500 } = body;
-  const whereClause = where ? `WHERE ${where}` : '';
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext);
+  const combinedWhere = combineWhereConditions([where, interofficeCondition]);
+  const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
   const stems = await queryRows(`
     SELECT Id, KeyStem__c, Name, Delivery_Date__c, Expected_Delivery_Date__c,
            Account__r.Name,
@@ -4013,7 +4086,7 @@ async function stemPnlFull(body) {
   };
 }
 
-async function salesforceBuyerInvoicesDue(body) {
+async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
   const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
   const receivableThreshold = Math.max(0, Number(body.receivableThreshold ?? body.receivable_threshold ?? 50) || 0);
   const rowLimit = 10000;
@@ -4025,6 +4098,7 @@ async function salesforceBuyerInvoicesDue(body) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
   const brokerInvoiceFormatFields = accountInvoiceFormatFields(accountDescribe.fields || []);
   const brokerEmailFields = accountBrokerEmailFields(accountDescribe.fields || []);
 
@@ -4069,6 +4143,7 @@ async function salesforceBuyerInvoicesDue(body) {
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
   if (fieldNames.includes('Receivable_Balance__c')) outstandingConditions.push(`Receivable_Balance__c >= ${receivableThreshold}`);
   const whereParts = [`(${dueCondition})`, ...outstandingConditions];
+  if (interofficeCondition) whereParts.push(interofficeCondition);
 
   const stems = await queryRows(`
     SELECT ${[...new Set(fields)].join(', ')}
@@ -4679,7 +4754,7 @@ function cashflowPaymentText(payment, fields = []) {
     .toLowerCase();
 }
 
-async function cashflowBuyerPaymentSamples({ lookbackMonths }) {
+async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = null }) {
   const today = dateOnly(new Date());
   const lookbackStart = [addDays(today, -Math.max(1, Number(lookbackMonths || 12)) * 31), CASHFLOW_FORECAST_START_DATE].sort().at(-1);
   const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
@@ -4737,6 +4812,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths }) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
   const stemSelectFields = [
     'Id',
     'Name',
@@ -4762,10 +4838,11 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths }) {
   const stemMap = {};
   for (const chunk of chunkIds(stemIds)) {
     const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+    const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
     const rows = await queryRows(`
       SELECT ${[...new Set(stemSelectFields)].join(', ')}
       FROM stem__c
-      WHERE Id IN (${inList})
+      WHERE ${stemWhere}
       LIMIT 5000
     `, { limit: 5000, softFail: true });
     for (const stem of rows) stemMap[stem.Id] = stem;
@@ -4867,7 +4944,7 @@ function cashflowSummarizeRows(rows, bucket = 'daily') {
   };
 }
 
-async function cashflowSupplierInvoiceRows({ dateTo, blockedMap }) {
+async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext = null }) {
   const warnings = [];
   const today = dateOnly(new Date());
   const describe = await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }));
@@ -4914,6 +4991,11 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap }) {
   if (stemIds.length) {
     const stemDescribe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
     const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
+    const accountDescribe = stemFieldNames.has('Account__c')
+      ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+      : { fields: [] };
+    const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+    const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
     const stemSelectFields = [
       'Id',
       'Name',
@@ -4923,10 +5005,11 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap }) {
     if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
     for (const chunk of chunkIds(stemIds)) {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
       const stems = await queryRows(`
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
-        WHERE Id IN (${inList})
+        WHERE ${stemWhere}
         LIMIT 5000
       `, { limit: 5000, softFail: true });
       for (const stem of stems) stemMap[stem.Id] = stem;
@@ -4941,6 +5024,7 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap }) {
     const originalDate = sourceDueDate < today ? today : sourceDueDate;
     const adjusted = cashflowBusinessDayAdjustment(originalDate, blockedMap);
     const stem = stemMap[invoice[stemField]] || null;
+    if (isInterofficeAccess(accessContext) && invoice[stemField] && !stem) continue;
     if (isBeforeCashflowForecastStart(stem?.Delivery_Date__c)) continue;
     const counterparty = supplierRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean)
       || invoice.Supplier_Name__c
@@ -4972,10 +5056,10 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap }) {
   return { rows, warnings };
 }
 
-async function cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap, receivableThreshold }) {
+async function cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap, receivableThreshold, accessContext = null }) {
   const today = dateOnly(new Date());
   const daysAhead = Math.max(0, Math.min(daysBetween(today, dateTo) ?? settings.horizonDays, 365));
-  const invoiceData = await salesforceBuyerInvoicesDue({ daysAhead, receivableThreshold });
+  const invoiceData = await salesforceBuyerInvoicesDue({ daysAhead, receivableThreshold }, null, accessContext);
   const rows = [];
   for (const invoice of invoiceData.rows || []) {
     if (isBeforeCashflowForecastStart(invoice.deliveryDate)) continue;
@@ -5042,7 +5126,7 @@ function cashflowPerformanceRows(samples, models) {
     .slice(0, 50);
 }
 
-async function cashflowForecast(body) {
+async function cashflowForecast(body, req = null, accessContext = null) {
   const warnings = [];
   const settings = await loadCashflowSettings();
   const today = dateOnly(new Date());
@@ -5054,12 +5138,12 @@ async function cashflowForecast(body) {
   const holidayData = await loadCashflowHolidayData(yearsBetween(dateFrom, addDays(dateTo, 14)), warnings);
   const incomingSettings = await loadIncomingPaymentSettings();
   const receivableThreshold = Number(incomingSettings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
-  const buyerSamplesData = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths });
+  const buyerSamplesData = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
   warnings.push(...(buyerSamplesData.warnings || []));
   const models = cashflowBuildDelayModels(buyerSamplesData.samples || [], settings);
   const [buyerRows, supplierData] = await Promise.all([
-    cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap: holidayData.blockedMap, receivableThreshold }),
-    cashflowSupplierInvoiceRows({ dateTo, blockedMap: holidayData.blockedMap }),
+    cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap: holidayData.blockedMap, receivableThreshold, accessContext }),
+    cashflowSupplierInvoiceRows({ dateTo, blockedMap: holidayData.blockedMap, accessContext }),
   ]);
   warnings.push(...(supplierData.warnings || []));
   const rows = [...buyerRows, ...(supplierData.rows || [])]
@@ -5087,13 +5171,13 @@ async function cashflowForecast(body) {
   };
 }
 
-async function cashflowBuyerPaymentPerformance(body) {
+async function cashflowBuyerPaymentPerformance(body, req = null, accessContext = null) {
   const baseSettings = await loadCashflowSettings();
   const settings = {
     ...baseSettings,
     lookbackMonths: clampInteger(body.lookbackMonths, baseSettings.lookbackMonths, 1, 36),
   };
-  const data = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths });
+  const data = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
   const models = cashflowBuildDelayModels(data.samples || [], settings);
   return {
     settings,
@@ -5757,7 +5841,7 @@ function supplierInvoicePartyName(invoice, supplierRelationships = []) {
     || null;
 }
 
-async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
+async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null } = {}) {
   const describe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
   const fields = describe.fields || [];
   const fieldNames = new Set(fields.map((field) => field.name));
@@ -5767,6 +5851,7 @@ async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
   const selectFields = [
     'Id',
     'Name',
@@ -5795,6 +5880,7 @@ async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
   if (fieldNames.has('Receivable_Balance__c')) whereParts.push(`Receivable_Balance__c >= ${Number(threshold || 0)}`);
   if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
   if (fieldNames.has('Delivery_Date__c')) whereParts.push('(Delivery_Date__c = null OR Delivery_Date__c >= 2026-01-01)');
+  if (interofficeCondition) whereParts.push(interofficeCondition);
   const orderBy = fieldNames.has('Delivery_Date__c')
     ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC'
     : 'CreatedDate DESC';
@@ -5889,7 +5975,7 @@ async function incomingBuyerCiaInvoices({ threshold = 50 } = {}) {
   });
 }
 
-async function incomingPaymentsList(body) {
+async function incomingPaymentsList(body, req = null, accessContext = null) {
   const settings = await loadIncomingPaymentSettings();
   const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
   const today = dateOnly(new Date());
@@ -6005,6 +6091,7 @@ async function incomingPaymentsList(body) {
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
   const stemSelectFields = [
     'Id',
     'Name',
@@ -6041,10 +6128,11 @@ async function incomingPaymentsList(body) {
   if (stemIds.length && stemFieldNames.size) {
     const stemChunks = await Promise.all(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
       return queryRows(`
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
-        WHERE Id IN (${inList})
+        WHERE ${stemWhere}
         LIMIT 5000
       `, { limit: 5000, softFail: true });
     }));
@@ -6128,6 +6216,7 @@ async function incomingPaymentsList(body) {
     const supplierInvoice = supplierInvoiceId ? supplierInvoiceMap[supplierInvoiceId] || null : null;
     const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
     const stem = stemId ? stemMap[stemId] || null : null;
+    if (stemId && !stem) return null;
     const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
     const brokerCommissionMatch = stem?.Id
       ? findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroupsByStem[stem.Id] || [], [...referenceFields, ...directionFields, ...typeFields, ...statusFields])
@@ -6256,7 +6345,7 @@ async function incomingPaymentsList(body) {
       paymentObjectSupplierInvoiceFields: supplierInvoiceLookupFields,
       brokerCommissionMatch,
     };
-  });
+  }).filter(Boolean);
   const rows = allRows
     .filter((row) => row.type !== 'Supplier Payment' && row.type !== 'Bank Charge' && row.type !== 'Broker Commission')
     .map((row) => ({ ...row, bankCharges: [] }));
@@ -6299,7 +6388,7 @@ async function incomingPaymentsList(body) {
   });
 
   const includedIncomingRows = rowsWithInterestNotifications.filter((row) => row.isIncoming);
-  const buyerCiaInvoices = await incomingBuyerCiaInvoices({ threshold });
+  const buyerCiaInvoices = await incomingBuyerCiaInvoices({ threshold, accessContext });
   const availableBalances = Object.values(availableBalancesByGroup)
     .map((group) => ({
       buyerGroupName: group.buyerGroupName,
@@ -6504,9 +6593,10 @@ function interestFormulaText(balance, rateDecimal, days) {
   return `${money(balance)} x ${incomingPaymentInterestRateLabel(rateDecimal)} x ${days} / 30`;
 }
 
-async function incomingPaymentInterestCalculation(body = {}) {
+async function incomingPaymentInterestCalculation(body = {}, accessContext = null) {
   const stemId = String(body.stemId || body.stem_id || '').trim();
   if (!isSalesforceId(stemId)) throw appError('Valid stemId is required for late payment interest calculation.', 400);
+  await requireInterofficeStemAccess(stemId, accessContext);
 
   const [stemDescribe, paymentDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] })),
@@ -6922,7 +7012,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   return { to, cc, bcc, subject, html, text: textBody };
 }
 
-async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
+async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const paymentId = String(body.paymentId || body.payment_id || '').trim();
   if (!paymentId) throw appError('paymentId is required.', 400);
@@ -6936,7 +7026,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null) {
   const forceResend = body.force === true || body.confirmResend === true || body.allowResend === true;
   if (existing && !forceResend) return { sent: false, alreadySent: true, requiresConfirmation: true, notification: existing };
 
-  const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId });
+  const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId }, accessContext);
   const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile, calculation);
   const credentials = body.credentials || {};
   const from = String(body.from || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from);
@@ -7285,14 +7375,14 @@ function buildIncomingPaymentEmail(report, settings) {
   return { subject, html, text: textContent, summary };
 }
 
-async function incomingPaymentEmailReport(body = {}, req = null) {
+async function incomingPaymentEmailReport(body = {}, req = null, accessContext = null) {
   await requireActiveUser(req);
   const settings = incomingPaymentEmailSettings(body.settings || body);
   const source = await incomingPaymentsList({
     dateFrom: body.dateFrom,
     dateTo: body.dateTo,
     limit: body.limit || 5000,
-  });
+  }, null, accessContext);
   const search = String(body.search || '').trim();
   const rows = (source.rows || []).filter((row) => incomingPaymentSearchMatches(row, search, [
     'partyName',
@@ -7973,7 +8063,7 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
   return { subject, body, html, text };
 }
 
-async function loadBuyerInvoicePaymentReminderContext(body = {}) {
+async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext = null) {
   const stored = await loadStoredBuyerInvoiceEmailSettings();
   const settings = {
     ...buyerInvoiceEmailSettings(stored.settings),
@@ -7981,7 +8071,7 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}) {
   };
   const report = await salesforceBuyerInvoicesDue({
     daysAhead: body.daysAhead ?? settings.daysAhead,
-  });
+  }, null, accessContext);
   const stemId = String(body.stemId || body.stem_id || '').trim();
   const selected = report.rows.find((row) => row.stemId === stemId);
   if (!selected) throw appError('Selected invoice is no longer in the current outstanding invoice window.', 404);
@@ -7994,9 +8084,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}) {
   return { settings, report, selected, candidates };
 }
 
-async function buyerInvoicePaymentReminderPrepare(body, req) {
+async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
   await requireActiveUser(req);
-  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body);
+  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, accessContext);
   const routing = paymentReminderRoutingForRows(candidates);
   const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
     || routing.groups[0]
@@ -8044,9 +8134,9 @@ async function buyerInvoicePaymentReminderPrepare(body, req) {
   };
 }
 
-async function buyerInvoicePaymentReminderSend(body, req) {
+async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) {
   await requireActiveUser(req);
-  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body);
+  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, accessContext);
   const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean));
@@ -8220,7 +8310,7 @@ function requireCronAuthorization(req) {
   if (String(header) !== `Bearer ${secret}`) throw appError('Unauthorized cron request.', 401);
 }
 
-async function outstandingBuyerInvoicesEmailReport(body = {}, req = null) {
+async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
   if (!body.scheduled) await requireActiveUser(req);
   const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl']
     .some((key) => Object.prototype.hasOwnProperty.call(body, key));
@@ -8243,7 +8333,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null) {
   }
   const reportPayload = { daysAhead: settings.daysAhead };
   if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
-  const report = await salesforceBuyerInvoicesDue(reportPayload);
+  const report = await salesforceBuyerInvoicesDue(reportPayload, null, accessContext);
   const email = buildBuyerInvoiceReportEmail(report, settings);
   if (body.preview || body.dryRun) {
     await updateBuyerInvoiceEmailSettingsMeta({
@@ -8340,10 +8430,11 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
   }
 }
 
-async function salesforceDisputeStems(body) {
+async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames);
   const hasDispute = fieldNames.includes('Dispute__c');
   const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
   if (!hasDispute && !hasDisputeStatus) return { rows: [] };
@@ -8399,10 +8490,11 @@ async function salesforceDisputeStems(body) {
   const disputeCondition = hasDisputeStatus
     ? activeDisputeStatusCondition
     : 'Dispute__c = true';
+  const stemWhere = combineWhereConditions([disputeCondition, interofficeCondition]);
   const rows = await queryRows(`
     SELECT ${[...new Set(fields)].join(', ')}
     FROM stem__c
-    WHERE ${disputeCondition}
+    WHERE ${stemWhere}
     ORDER BY LastModifiedDate DESC
     LIMIT ${limit}
   `, { limit, softFail: true });
@@ -8802,7 +8894,7 @@ function parseOptionalCurrency(value, label) {
   return number;
 }
 
-async function salesforceDisputePartyUpdate(body = {}) {
+async function salesforceDisputePartyUpdate(body = {}, req = null, accessContext = null) {
   const disputeIds = Array.isArray(body.disputeIds)
     ? body.disputeIds
     : body.disputeId
@@ -8810,6 +8902,24 @@ async function salesforceDisputePartyUpdate(body = {}) {
       : [];
   const validIds = [...new Set(disputeIds.filter(isSalesforceId))];
   if (!validIds.length) throw appError('Valid dispute id required.', 400);
+  if (isInterofficeAccess(accessContext)) {
+    const disputeDescribe = await salesforceObjectFields({ objectName: 'Dispute__c' }).catch(() => ({ fields: [] }));
+    const disputeFieldNames = fieldNameSetFrom(disputeDescribe.fields || []);
+    if (disputeFieldNames.has('STEM__c')) {
+      for (const chunk of chunkIds(validIds)) {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        const disputes = await queryRows(`
+          SELECT Id, STEM__c
+          FROM Dispute__c
+          WHERE Id IN (${inList})
+          LIMIT 5000
+        `, { limit: 5000, softFail: true });
+        for (const dispute of disputes) {
+          if (dispute.STEM__c) await requireInterofficeStemAccess(dispute.STEM__c, accessContext);
+        }
+      }
+    }
+  }
 
   const side = String(body.side || '').toLowerCase();
   const updates = {};
@@ -9268,9 +9378,9 @@ async function writeDisputeBetaSummaryToSalesforce(client, caseRow, profile, act
   return { caseRow: updatedCase, results };
 }
 
-async function disputeBetaList(body = {}, req) {
+async function disputeBetaList(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
-  const salesforceData = await salesforceDisputeStems({ limit: body.limit || 10000 });
+  const salesforceData = await salesforceDisputeStems({ limit: body.limit || 10000 }, null, accessContext || { client, profile });
   const rows = salesforceData.rows || [];
   const workflowMap = await loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id));
   return {
@@ -9284,11 +9394,12 @@ async function disputeBetaList(body = {}, req) {
   };
 }
 
-async function disputeBetaSaveDraft(body = {}, req) {
+async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const stem = body.stem || {};
   const stemId = stem.Id || body.stemId;
   if (!stemId) throw appError('stemId is required.', 400);
+  await requireInterofficeStemAccess(stemId, accessContext || { client, profile });
   const caseRow = await upsertDisputeBetaCase(client, { ...stem, Id: stemId }, {
     latestNote: body.latestNote,
     workflowStatus: 'Draft',
@@ -9302,9 +9413,10 @@ async function disputeBetaSaveDraft(body = {}, req) {
   };
 }
 
-async function disputeBetaSubmitApproval(body = {}, req) {
+async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const { data: actions, error: actionError } = await client
     .from('dispute_beta_actions')
     .select(DISPUTE_BETA_ACTION_SELECT)
@@ -9331,10 +9443,11 @@ async function disputeBetaSubmitApproval(body = {}, req) {
   return { case: serializeDisputeBetaCase(updatedCase), actions: actions.map(serializeDisputeBetaAction) };
 }
 
-async function disputeBetaApprove(body = {}, req) {
+async function disputeBetaApprove(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   if (!isDisputeBetaAdmin(profile)) throw appError('Dispute administrator approval is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Beta cases can be approved.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
@@ -9357,10 +9470,11 @@ async function disputeBetaApprove(body = {}, req) {
   return { case: serializeDisputeBetaCase(writeback.caseRow), writebackResults: writeback.results };
 }
 
-async function disputeBetaReject(body = {}, req) {
+async function disputeBetaReject(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   if (!isDisputeBetaAdmin(profile)) throw appError('Dispute administrator approval is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const revisionRequested = Boolean(body.revisionRequested);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
@@ -9384,7 +9498,7 @@ async function disputeBetaReject(body = {}, req) {
   return { case: serializeDisputeBetaCase(updatedCase) };
 }
 
-async function disputeBetaMarkExecuted(body = {}, req) {
+async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
@@ -9396,6 +9510,7 @@ async function disputeBetaMarkExecuted(body = {}, req) {
   if (actionLookupError) throw actionLookupError;
   if (!action) throw appError('Dispute Beta action not found.', 404);
   const caseRow = await getDisputeBetaCase(client, action.case_id);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Approved') throw appError('Action can only be executed after dispute administrator approval.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedAction, error } = await client
@@ -9442,9 +9557,10 @@ async function disputeBetaMarkExecuted(body = {}, req) {
   };
 }
 
-async function disputeBetaClose(body = {}, req) {
+async function disputeBetaClose(body = {}, req, accessContext = null) {
   const { client, profile } = await requireActiveUser(req);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
+  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Beta cases can be closed.', 400);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
@@ -9464,7 +9580,7 @@ async function disputeBetaClose(body = {}, req) {
   return { case: serializeDisputeBetaCase(updatedCase) };
 }
 
-async function salesforceStemDetailFull(body) {
+async function salesforceStemDetailFull(body, req = null, accessContext = null) {
   const { stemId, updates, childObject, childId, childUpdates } = body;
   if (!stemId) throw new Error('stemId required');
 
@@ -9474,6 +9590,7 @@ async function salesforceStemDetailFull(body) {
     if (!lookup.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
     actualStemId = lookup[0].Id;
   }
+  await requireInterofficeStemAccess(actualStemId, accessContext);
 
   if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
     await sfRequest(`/sobjects/${childObject}/${childId}`, { method: 'PATCH', body: childUpdates });
@@ -9871,11 +9988,14 @@ function combineBrokerCommissionRows(rows) {
   });
 }
 
-async function salesforceBrokerRegisterFull(body) {
+async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
   const limit = Math.min(Number(body.limit) || 2000, 3000);
+  const interofficeCondition = await interofficeStemAccessCondition(accessContext);
+  const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
   const stems = await queryRows(`
     SELECT Id, Name, Delivery_Date__c, Payment_Date__c, Buyer_Pay_Term_Date__c
     FROM stem__c
+    ${whereClause}
     ORDER BY Delivery_Date__c DESC NULLS LAST
     LIMIT ${limit}
   `, { limit });
@@ -10147,9 +10267,9 @@ export default async function handler(req, res) {
     }
     const fn = handlers[name];
     if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-    await requireHandlerAccess(name, req);
+    const accessContext = await requireHandlerAccess(name, req);
     const body = await readBody(req);
-    const data = await fn(body, req);
+    const data = await fn(body, req, accessContext);
     return sendJson(res, data);
   } catch (error) {
     const status = error.status || error.statusCode || 500;
