@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.46';
+export const APP_VERSION = '1.0.47';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.47',
+    releasedAt: '2026-07-09',
+    title: 'Durable Salesforce authentication',
+    changes: [
+      'Added Salesforce OAuth JWT bearer authentication as the preferred permanent server-to-server auth mode.',
+      'Updated System Health to show JWT bearer, refresh-token, or temporary access-token mode with expiry-risk notes.',
+    ],
+  },
   {
     version: '1.0.46',
     releasedAt: '2026-07-09',

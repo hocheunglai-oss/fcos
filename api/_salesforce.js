@@ -1,8 +1,11 @@
+import { createSign } from 'node:crypto';
+
 const DEFAULT_INSTANCE_URL = 'https://fratellicosulich.my.salesforce.com';
 const DEFAULT_API_VERSION = 'v59.0';
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
+let cachedInstanceUrl = null;
 
 export function sendJson(res, data, status = 200) {
   res.statusCode = status;
@@ -12,7 +15,7 @@ export function sendJson(res, data, status = 200) {
 }
 
 export function getInstanceUrl() {
-  return process.env.SALESFORCE_INSTANCE_URL || DEFAULT_INSTANCE_URL;
+  return process.env.SALESFORCE_INSTANCE_URL || cachedInstanceUrl || DEFAULT_INSTANCE_URL;
 }
 
 export function getApiVersion() {
@@ -40,12 +43,92 @@ async function refreshAccessToken() {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.error || 'Salesforce token refresh failed');
 
-  cachedToken = data.access_token;
-  cachedTokenExpiresAt = Date.now() + 50 * 60 * 1000;
+  cacheSalesforceToken(data);
   return cachedToken;
 }
 
+function base64Url(input) {
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+function normalizePrivateKey(value) {
+  return String(value || '').replace(/\\n/g, '\n').trim();
+}
+
+function jwtBearerConfig() {
+  const clientId = process.env.SALESFORCE_JWT_CLIENT_ID || process.env.SALESFORCE_CLIENT_ID;
+  const username = process.env.SALESFORCE_JWT_USERNAME || process.env.SALESFORCE_USERNAME;
+  const privateKey = process.env.SALESFORCE_JWT_PRIVATE_KEY;
+  return { clientId, username, privateKey };
+}
+
+function hasJwtBearerConfig() {
+  const { clientId, username, privateKey } = jwtBearerConfig();
+  return Boolean(clientId && username && privateKey);
+}
+
+function cacheSalesforceToken(data = {}) {
+  cachedToken = data.access_token;
+  cachedInstanceUrl = data.instance_url || cachedInstanceUrl;
+  const issuedAt = Number(data.issued_at);
+  const baseTime = Number.isFinite(issuedAt) && issuedAt > 0 ? issuedAt : Date.now();
+  cachedTokenExpiresAt = baseTime + 50 * 60 * 1000;
+}
+
+function createJwtBearerAssertion() {
+  const { clientId, username, privateKey } = jwtBearerConfig();
+  const loginUrl = process.env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com';
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = {
+    iss: clientId,
+    sub: username,
+    aud: loginUrl,
+    exp: Math.floor(Date.now() / 1000) + 180,
+  };
+  const unsigned = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
+  const signer = createSign('RSA-SHA256');
+  signer.update(unsigned);
+  signer.end();
+  const signature = signer.sign(normalizePrivateKey(privateKey));
+  return `${unsigned}.${base64Url(signature)}`;
+}
+
+async function jwtBearerAccessToken() {
+  const loginUrl = process.env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com';
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion: createJwtBearerAssertion(),
+  });
+
+  const res = await fetch(`${loginUrl}/services/oauth2/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Salesforce JWT bearer token request failed');
+
+  cacheSalesforceToken(data);
+  return cachedToken;
+}
+
+export function salesforceAuthMode() {
+  if (hasJwtBearerConfig()) return 'jwt';
+  if (process.env.SALESFORCE_CLIENT_ID && process.env.SALESFORCE_CLIENT_SECRET && process.env.SALESFORCE_REFRESH_TOKEN) return 'refresh_token';
+  if (process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
+  return 'missing';
+}
+
 export async function getAccessToken({ forceRefresh = false } = {}) {
+  if (hasJwtBearerConfig()) {
+    if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
+    return jwtBearerAccessToken();
+  }
+
   const clientId = process.env.SALESFORCE_CLIENT_ID;
   const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
   const refreshToken = process.env.SALESFORCE_REFRESH_TOKEN;
@@ -57,7 +140,7 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
 
   if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
 
-  throw new Error('Missing Salesforce env vars. Set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
+  throw new Error('Missing Salesforce env vars. Configure Salesforce JWT bearer env vars or set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
 }
 
 export function cleanRecord(obj) {

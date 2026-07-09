@@ -1,4 +1,4 @@
-import { chunkIds, cleanRecord, getInstanceUrl, sendJson, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import { chunkIds, cleanRecord, getInstanceUrl, salesforceAuthMode, sendJson, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 
@@ -2164,12 +2164,16 @@ function healthRow(base, result = null) {
 }
 
 async function salesforceHealthRow() {
-  const usesRefreshToken = Boolean(process.env.SALESFORCE_CLIENT_ID && process.env.SALESFORCE_CLIENT_SECRET && process.env.SALESFORCE_REFRESH_TOKEN);
-  const usesAccessToken = Boolean(process.env.SALESFORCE_ACCESS_TOKEN);
-  const required = usesRefreshToken
-    ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
-    : ['SALESFORCE_ACCESS_TOKEN'];
-  const configured = usesRefreshToken || usesAccessToken;
+  const authMode = salesforceAuthMode();
+  const usesJwt = authMode === 'jwt';
+  const usesRefreshToken = authMode === 'refresh_token';
+  const usesAccessToken = authMode === 'access_token';
+  const required = usesJwt
+    ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY']
+    : usesRefreshToken
+      ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
+      : ['SALESFORCE_ACCESS_TOKEN'];
+  const configured = authMode !== 'missing';
   const result = configured ? await timedCheck(async () => {
     const limits = await sfRequest('/limits');
     return {
@@ -2186,19 +2190,34 @@ async function salesforceHealthRow() {
     scope: 'server',
     provider: 'Salesforce',
     endpoint: getInstanceUrl(),
-    authType: usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : 'OAuth',
+    authType: usesJwt ? 'OAuth JWT bearer' : usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : 'OAuth',
     configured,
-    configuredEnv: configuredEnv(['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN', 'SALESFORCE_INSTANCE_URL', 'SALESFORCE_LOGIN_URL', 'SALESFORCE_API_VERSION']),
-    missingEnv: usesRefreshToken ? [] : missingEnv(required),
-    tokenExpiry: usesRefreshToken
-      ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.'
-      : usesAccessToken
-        ? 'Temporary access token expiry is not exposed to the app.'
-        : null,
+    configuredEnv: configuredEnv([
+      'SALESFORCE_JWT_CLIENT_ID',
+      'SALESFORCE_JWT_USERNAME',
+      'SALESFORCE_JWT_PRIVATE_KEY',
+      'SALESFORCE_CLIENT_ID',
+      'SALESFORCE_CLIENT_SECRET',
+      'SALESFORCE_REFRESH_TOKEN',
+      'SALESFORCE_ACCESS_TOKEN',
+      'SALESFORCE_INSTANCE_URL',
+      'SALESFORCE_LOGIN_URL',
+      'SALESFORCE_API_VERSION',
+    ]),
+    missingEnv: usesJwt || usesRefreshToken ? [] : missingEnv(required),
+    tokenExpiry: usesJwt
+      ? 'JWT bearer issues short-lived access tokens on demand. Long-term validity depends on the Connected App certificate and user access.'
+      : usesRefreshToken
+        ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.'
+        : usesAccessToken
+          ? 'Temporary access token expiry is not exposed to the app.'
+          : null,
     warning: usesAccessToken && !usesRefreshToken,
-    notes: usesAccessToken && !usesRefreshToken
-      ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with refresh-token OAuth env vars for durable production use.']
-      : ['Connected app refresh-token policy controls long-term validity.'],
+    notes: usesJwt
+      ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.']
+      : usesAccessToken && !usesRefreshToken
+        ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.']
+        : ['Connected app refresh-token policy controls long-term validity.'],
   }, result);
 }
 
