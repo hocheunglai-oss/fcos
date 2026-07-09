@@ -16,4 +16,4 @@ jobs:
             --request POST \
             --header "content-type: application/json" \
             --data '{}' \
-            "https://fcos.vercel.app/api/functions/outstandingBuyerInvoicesEmailReport"
+            "https://fcos.fcuno.com/api/functions/outstandingBuyerInvoicesEmailReport"

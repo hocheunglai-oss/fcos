@@ -1,12 +1,22 @@
-export const APP_VERSION = '1.0.59';
+export const APP_VERSION = '1.0.60';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.60',
+    releasedAt: '2026-07-09',
+    title: 'FCOS custom domain',
+    changes: [
+      'Changed generated app links and scheduled report endpoints to fcos.fcuno.com.',
+      'Attached and verified the fcos.fcuno.com custom domain in Vercel.',
+      'Prepared the old deployment aliases for removal after custom-domain verification.',
+    ],
+  },
   {
     version: '1.0.59',
     releasedAt: '2026-07-09',
     title: 'FCOS production domain',
     changes: [
-      'Changed the production app identity and generated report links to fcos.vercel.app.',
+      'Changed the production app identity and generated report links to FCOS.',
       'Renamed internal app storage, autosave, and event prefixes to FCOS.',
       'Updated package metadata, documentation, and server fallback URLs to the FCOS app identity.',
     ],

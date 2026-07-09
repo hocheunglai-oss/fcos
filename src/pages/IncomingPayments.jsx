@@ -355,7 +355,7 @@ function sampleInterestCalculationHtml() {
 
 function buildInterestPreview(settings) {
   const sampleStemUrl = typeof window === 'undefined'
-    ? 'https://fcos.vercel.app/incoming-payments?stemId=sample'
+    ? 'https://fcos.fcuno.com/incoming-payments?stemId=sample'
     : `${window.location.origin}/incoming-payments?stemId=sample`;
   const context = {
     requestedBy: 'Vincent Lee',

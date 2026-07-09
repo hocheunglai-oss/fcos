@@ -2023,7 +2023,7 @@ function buyerInvoiceAppUrl(settings = {}) {
     || normalizedUrl(process.env.BUYER_INVOICE_REPORT_APP_URL)
     || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
     || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://fcos.vercel.app';
+    || 'https://fcos.fcuno.com';
 }
 
 function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
@@ -2038,7 +2038,7 @@ function incomingPaymentAppUrl(settings = {}) {
     || normalizedUrl(process.env.INCOMING_PAYMENT_REPORT_APP_URL)
     || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
     || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://fcos.vercel.app';
+    || 'https://fcos.fcuno.com';
 }
 
 function incomingPaymentFilterUrl(settings, report) {
