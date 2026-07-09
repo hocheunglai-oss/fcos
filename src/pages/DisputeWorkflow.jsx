@@ -671,12 +671,6 @@ function DocumentUploadModal({ caseRow, action, open, onClose, onUploaded }) {
           <div className="space-y-1.5"><Label>Document type</Label><Select value={documentType} onValueChange={setDocumentType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-1.5"><Label htmlFor="dispute-document-file">File</Label><Input id="dispute-document-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx" onChange={(event) => setFile(event.target.files?.[0] || null)} /><p className="text-xs text-muted-foreground">Maximum 3 MB. Salesforce filename is generated automatically.</p></div>
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-          {missingRequiredDocuments.length > 0 && (
-            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div><span className="font-semibold">Required documents missing.</span> Save the draft, then upload evidence against each flagged action before submission or approval.</div>
-            </div>
-          )}
         </div>
         <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={upload} disabled={busy} className="gap-2">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Upload to Salesforce</Button></div>
       </DialogContent>
@@ -898,6 +892,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+          {missingRequiredDocuments.length > 0 && (
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div><span className="font-semibold">Required documents missing.</span> Save the draft, then upload evidence against each flagged action before submission or approval.</div>
+            </div>
+          )}
           {caseRow?.salesforceWritebackStatus && caseRow.salesforceWritebackStatus !== 'not_started' && (
             <div className={cn('rounded-lg border p-3 text-xs', caseRow.salesforceWritebackStatus === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900')}>
               Salesforce writeback: {caseRow.salesforceWritebackStatus}
