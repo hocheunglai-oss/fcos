@@ -614,7 +614,7 @@ export default function BrokerRegister() {
         xmlns:html="http://www.w3.org/TR/REC-html40">
         <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
           <Title>Broker's Commission</Title>
-          <Author>Salesforce Analytics Hub</Author>
+          <Author>FCOS</Author>
           <Created>${new Date().toISOString()}</Created>
         </DocumentProperties>
         ${workbookStyles(showCny)}

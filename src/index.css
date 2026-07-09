@@ -245,6 +245,27 @@
     color: hsl(222 22% 12%);
   }
 
+  .app-workspace-sidebar {
+    will-change: transform;
+  }
+
+  .app-workspace-sidebar::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    width: 12px;
+    border-right: 1px solid hsl(214 24% 84%);
+    background: linear-gradient(90deg, hsl(215 22% 96% / 0), hsl(217 91% 60% / 0.18));
+    pointer-events: none;
+    transition: opacity 150ms ease;
+  }
+
+  .app-workspace-sidebar:hover::after,
+  .app-workspace-sidebar:focus-within::after {
+    opacity: 0;
+  }
+
   .app-workspace-shell .glass-page-header,
   .app-workspace-shell .glass-surface,
   .app-workspace-shell .bg-card.border-border,

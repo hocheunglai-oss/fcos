@@ -12,7 +12,7 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    document.title = 'Login · Salesforce Analytics Hub';
+    document.title = 'Login · FCOS';
   }, []);
 
   if (isAuthenticated) {
@@ -44,7 +44,7 @@ export default function Login() {
             <LockKeyhole className="h-6 w-6" />
           </div>
           <h1 className="text-xl font-semibold text-foreground">Sign in</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Salesforce Analytics Hub</p>
+          <p className="mt-1 text-sm text-muted-foreground">FCOS</p>
         </div>
 
         {!supabaseReady && (

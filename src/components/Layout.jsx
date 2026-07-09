@@ -73,16 +73,6 @@ export default function Layout() {
       .filter((group) => group.items.length > 0)
   ), [hasModuleAccess]);
 
-  const activeItem = useMemo(() => {
-    const allItems = accessibleGroups.flatMap((group) => group.items);
-    return allItems
-      .slice()
-      .sort((a, b) => b.to.length - a.to.length)
-      .find((item) => item.to === '/'
-        ? location.pathname === '/'
-        : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
-  }, [accessibleGroups, location.pathname]);
-
   const pageOwnsScroll = location.pathname === '/disputes-beta'
     || location.pathname.startsWith('/disputes-beta/');
 
@@ -158,13 +148,13 @@ export default function Layout() {
   };
 
   return (
-    <div className="app-workspace-shell flex h-screen overflow-hidden">
-      <aside className="app-workspace-sidebar flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white">
+    <div className="app-workspace-shell relative flex h-screen overflow-hidden">
+      <aside className="app-workspace-sidebar fixed inset-y-0 left-0 z-50 flex w-[272px] shrink-0 -translate-x-[260px] flex-col border-r border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-transform duration-200 ease-out hover:translate-x-0 focus-within:translate-x-0">
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-950">FCBHK</div>
-              <div className="truncate text-xs text-slate-500">Salesforce Analytics Hub</div>
+              <div className="text-sm font-semibold text-slate-950">FCOS</div>
+              <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
             </div>
           </div>
         </div>
@@ -210,7 +200,7 @@ export default function Layout() {
             <Button variant="outline" size="sm" onClick={() => setDensity((value) => value === 'compact' ? 'comfort' : 'compact')}>
               {density === 'compact' ? 'Compact' : 'Comfort'}
             </Button>
-          <Button variant="outline" size="sm" onClick={() => setVersionOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setVersionOpen(true)}>
               {APP_VERSION}
             </Button>
           </div>
@@ -244,19 +234,6 @@ export default function Layout() {
             </div>
           </div>
         )}
-        <div className="sticky top-0 z-30 shrink-0 border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace</div>
-              <div className="truncate text-sm font-semibold text-slate-900">{activeItem?.label || 'Workspace'}</div>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span className="hidden rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 font-medium text-emerald-700 md:inline">
-                Salesforce connected
-              </span>
-            </div>
-          </div>
-        </div>
         <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
           <Outlet />
         </div>

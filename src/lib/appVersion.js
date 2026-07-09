@@ -1,6 +1,16 @@
-export const APP_VERSION = '1.0.57';
+export const APP_VERSION = '1.0.58';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.58',
+    releasedAt: '2026-07-09',
+    title: 'FCOS shell branding',
+    changes: [
+      'Renamed the app brand to FCOS across the browser title, manifest, login screen, sidebar, favicon label, and XLS report metadata.',
+      'Changed the sidebar into an auto-hide left-edge drawer so the pages use the full browser width by default.',
+      'Removed the workspace header banner and moved the Salesforce connection status into the sidebar header.',
+    ],
+  },
   {
     version: '1.0.57',
     releasedAt: '2026-07-09',
