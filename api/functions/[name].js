@@ -5855,15 +5855,19 @@ function incomingPaymentRecordTypeToken(payment) {
   ].filter(Boolean).join(' '));
 }
 
-function incomingPaymentIsReceivableRemittance(payment, fields = []) {
+function incomingPaymentIsRemittanceRecord(payment, fields = []) {
   const token = incomingPaymentRecordTypeToken(payment);
-  if (token.includes('receivableremittance') || token.includes('remittancereceivable')) return true;
+  if (token.includes('remittance')) return true;
   return uniqueTextList(fields).some((field) => {
     const valueToken = normalizedFieldToken(payment?.[field]);
     return valueToken.includes('receivableremittance')
-      || valueToken.includes('remittancereceivable');
+      || valueToken.includes('remittancereceivable')
+      || valueToken.includes('payableremittance')
+      || valueToken.includes('remittancepayable');
   });
 }
+
+const incomingPaymentIsReceivableRemittance = incomingPaymentIsRemittanceRecord;
 
 function supplierInvoicePartyName(invoice, supplierRelationships = []) {
   return invoice?.Supplier_Name__c

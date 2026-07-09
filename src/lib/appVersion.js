@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.48';
+export const APP_VERSION = '1.0.49';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.49',
+    releasedAt: '2026-07-09',
+    title: 'Payable remittance payment filter',
+    changes: [
+      'Excluded Payment__c Payable Remittance records from Incoming Payment receivable rows.',
+      'Applied the same remittance filter to Stem Detail Payment from Buyer rows so payable remittance aggregates are not shown as buyer receipts.',
+    ],
+  },
   {
     version: '1.0.48',
     releasedAt: '2026-07-09',
