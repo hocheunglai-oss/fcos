@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CalendarDays,
   Check,
+  Info,
   Loader2,
   RefreshCw,
   Save,
@@ -34,6 +35,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { cn } from '@/lib/utils';
@@ -167,6 +169,7 @@ export default function CashflowForecast() {
   const [error, setError] = useState('');
   const [sort, setSort] = useState({ key: 'forecastDate', direction: 'asc' });
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [methodologyOpen, setMethodologyOpen] = useState(false);
 
   useEffect(() => {
     writePageState(PAGE_STATE_KEY, { dateFrom, dateTo, bucket, keyword, buyerGroup, supplier });
@@ -325,12 +328,91 @@ export default function CashflowForecast() {
         description="Predict buyer receipts from historical payment delay and supplier outflows on due date, adjusted for weekends, Singapore holidays, and US holidays."
         meta={`Hong Kong timezone. Range: ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}.`}
         actions={(
-          <Button onClick={() => load({ force: true })} disabled={loading}>
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setMethodologyOpen(true)} className="gap-2">
+              <Info className="h-4 w-4" />
+              Methodology
+            </Button>
+            <Button onClick={() => load({ force: true })} disabled={loading}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          </>
         )}
       />
+
+      <Sheet open={methodologyOpen} onOpenChange={setMethodologyOpen}>
+        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle>Cashflow Forecast Methodology</SheetTitle>
+            <SheetDescription>
+              How the forecast converts Salesforce receivables and payables into expected daily cash movement.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="mt-6 space-y-5 text-sm text-muted-foreground">
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Purpose</h3>
+              <p className="mt-2">
+                The forecast estimates future cash inflow from buyer collections and future cash outflow from supplier invoice payments. It is a planning tool, not an accounting posting.
+              </p>
+            </section>
+
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Buyer Receipts</h3>
+              <ul className="mt-2 list-disc space-y-1.5 pl-5">
+                <li>Source is open buyer invoices using the same inclusion rules as Outstanding Buyer Invoices.</li>
+                <li>Amount is the current receivable balance.</li>
+                <li>Prediction starts from the buyer invoice due date, then applies expected payment delay.</li>
+                <li>If the predicted date is already past, the forecast starts from today before business-day adjustment.</li>
+              </ul>
+            </section>
+
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Payment Delay Model</h3>
+              <ul className="mt-2 list-disc space-y-1.5 pl-5">
+                <li>Historical buyer payment performance before 1 Jan 2026 is ignored.</li>
+                <li>The model first uses the exact buyer account when enough paid samples exist.</li>
+                <li>If buyer history is insufficient, it falls back to buyer group, then global buyer history.</li>
+                <li>Recent payments are weighted more heavily so the forecast reacts to current payment behavior.</li>
+                <li>Model level, sample count, and confidence are shown in the Forecast Rows table.</li>
+              </ul>
+            </section>
+
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Supplier Payments</h3>
+              <ul className="mt-2 list-disc space-y-1.5 pl-5">
+                <li>Supplier invoices are treated as expected cash outflows.</li>
+                <li>The assumption is that supplier invoices are paid in full on the contractual due date.</li>
+                <li>Supplier payment timing is not predicted from history in this version.</li>
+                <li>STEMs with delivery date before 1 Jan 2026 are excluded from receivable and payable forecast rows.</li>
+              </ul>
+            </section>
+
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Business-Day Adjustment</h3>
+              <ul className="mt-2 list-disc space-y-1.5 pl-5">
+                <li>Timezone basis is Hong Kong.</li>
+                <li>Forecast dates falling on weekends are moved to the next available business day.</li>
+                <li>Singapore public holidays and US bank/public holidays are blocked dates.</li>
+                <li>Holiday data comes from Nager.Date and is cached by year and country.</li>
+                <li>Manual blocked-date overrides in Forecast Settings are also applied.</li>
+              </ul>
+            </section>
+
+            <section className="rounded-lg border border-border bg-muted/20 p-4">
+              <h3 className="text-sm font-semibold text-foreground">Current Assumptions</h3>
+              <ul className="mt-2 list-disc space-y-1.5 pl-5">
+                <li>Forecast scope is AR and AP only.</li>
+                <li>Buyer receipts use receivable balance, not original invoice amount.</li>
+                <li>Supplier payments are assumed payable on time unless the date is blocked.</li>
+                <li>Currency conversion is not applied in this page unless already present in the source amount.</li>
+                <li>Forecast rows reconcile to the KPI cards and chart after current page filters are applied.</li>
+              </ul>
+            </section>
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <TableShell title="Forecast Filters" bodyClassName="p-4" className="mb-4">
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_150px_1.5fr_1.5fr_1.5fr_auto] lg:items-end">

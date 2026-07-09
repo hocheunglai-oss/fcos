@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.50';
+export const APP_VERSION = '1.0.51';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.51',
+    releasedAt: '2026-07-09',
+    title: 'Cashflow forecast methodology sheet',
+    changes: [
+      'Added a Methodology button to Cashflow Forecast next to Refresh.',
+      'Added a floating explanation sheet covering buyer receipt prediction, supplier payment assumptions, business-day adjustment, holiday handling, and forecast limitations.',
+    ],
+  },
   {
     version: '1.0.50',
     releasedAt: '2026-07-09',
