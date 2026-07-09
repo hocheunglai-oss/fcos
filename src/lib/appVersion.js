@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.51';
+export const APP_VERSION = '1.0.52';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.52',
+    releasedAt: '2026-07-09',
+    title: 'Dispute queue delivery date cutoff',
+    changes: [
+      'Hardcoded Dispute Management queue to exclude STEMs with Delivery Date before 1 Jan 2026.',
+      'Applied the same hardcoded Delivery Date cutoff to Dispute Beta queue while keeping blank delivery-date STEMs visible.',
+    ],
+  },
   {
     version: '1.0.51',
     releasedAt: '2026-07-09',

@@ -23,6 +23,7 @@ const ACTIVE_DISPUTE_STATUSES = [
   'Closed with Buyer only',
   'Closed',
 ];
+const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
 const NOT_CLOSED_STATUSES = ACTIVE_DISPUTE_STATUSES.filter(status => status !== 'Closed');
 const BUYER_DISPUTE_STATUS_OPTIONS = [
   'No agreement yet',
@@ -39,6 +40,10 @@ const normalizeStatus = (value) => textValue(value, '').toLowerCase();
 const displayStatus = (value) =>
   ACTIVE_DISPUTE_STATUSES.find(status => normalizeStatus(status) === normalizeStatus(value)) || value;
 const isDeductBelowAmountStatus = (value) => /deduct\s+below\s+amount/i.test(textValue(value, ''));
+const isDeliveryDateAllowed = (row) => {
+  const deliveryDate = textValue(row?.Delivery_Date__c, '').slice(0, 10);
+  return !deliveryDate || deliveryDate >= DISPUTE_DELIVERY_DATE_MIN;
+};
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -237,6 +242,7 @@ export default function DisputeManagement() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(row => {
+      if (!isDeliveryDateAllowed(row)) return false;
       const isActiveDispute = normalizeStatus(row.Dispute_Status__c) !== 'no dispute';
       const statusMatch = selectedStatusKeys.has(normalizeStatus(row.Dispute_Status__c));
       const textMatch = !q || [

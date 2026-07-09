@@ -17,6 +17,7 @@ import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Approved - Pending Execution', 'Rejected', 'Revision Requested', 'Executed', 'Closed'];
+const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
 const ACTION_TYPES = [
   { value: 'hold_supplier_payment', label: 'Hold supplier payment', partyType: 'supplier' },
   { value: 'pay_full_supplier_invoice', label: 'Pay full supplier invoice amount', partyType: 'supplier' },
@@ -70,6 +71,10 @@ const numberOrNull = (value) => {
   if (value == null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+};
+const isDeliveryDateAllowed = (row) => {
+  const deliveryDate = textValue(row?.Delivery_Date__c, '').slice(0, 10);
+  return !deliveryDate || deliveryDate >= DISPUTE_DELIVERY_DATE_MIN;
 };
 
 const actionLabel = (type) => ACTION_TYPES.find((item) => item.value === type)?.label || type || 'Action';
@@ -777,6 +782,7 @@ export default function DisputeBeta() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
+      if (!isDeliveryDateAllowed(row)) return false;
       const beta = workflowFromRow(row);
       const stage = beta.case?.workflowStatus || 'Draft';
       const stageMatch = selectedStageSet.has(stage);
