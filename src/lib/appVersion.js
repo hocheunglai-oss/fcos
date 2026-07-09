@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.55';
+export const APP_VERSION = '1.0.56';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.56',
+    releasedAt: '2026-07-09',
+    title: 'Browser document scroll lock',
+    changes: [
+      'Locked the browser document to the viewport so app pages cannot scroll into blank space.',
+      'Kept scrolling inside the app layouts and route-owned table areas.',
+    ],
+  },
   {
     version: '1.0.55',
     releasedAt: '2026-07-09',
