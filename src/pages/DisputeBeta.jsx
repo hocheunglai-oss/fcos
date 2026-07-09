@@ -584,12 +584,12 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
-      <DialogContent className="flex max-h-[92vh] w-[min(1180px,96vw)] max-w-none flex-col overflow-hidden p-0">
-        <DialogHeader className="border-b border-border px-5 py-4">
+      <DialogContent className="flex h-[92vh] w-[min(1180px,96vw)] max-w-none flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
           <DialogTitle className="pr-8">Dispute Beta - {stem._Display_Name || stem.Name}</DialogTitle>
         </DialogHeader>
 
-        <div className="grid gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
+        <div className="grid shrink-0 gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Workflow</div>
             <span className={cn('mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(caseRow?.workflowStatus || 'Draft'))}>{caseRow?.workflowStatus || 'Draft'}</span>
@@ -600,7 +600,7 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
           <Summary label="Dispute P&L" value={fmtMoney(financials.settlementPnl)} align="right" strong tone={financials.settlementPnl >= 0 ? 'green' : 'red'} />
         </div>
 
-        <div className="space-y-4 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
           {caseRow?.salesforceWritebackStatus && caseRow.salesforceWritebackStatus !== 'not_started' && (
             <div className={cn('rounded-lg border p-3 text-xs', caseRow.salesforceWritebackStatus === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900')}>
@@ -717,7 +717,7 @@ function ManageBetaModal({ stem, open, onClose, onSaved, isDisputeAdmin }) {
           </section>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
           <div className="text-xs text-muted-foreground">
             {caseRow?.approvedByEmail ? `Approved by ${caseRow.approvedByEmail} at ${fmtDateTime(caseRow.approvedAt)}` : 'Approval required from Vincent Lee or Stanley Chui.'}
           </div>

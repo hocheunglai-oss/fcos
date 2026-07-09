@@ -1,6 +1,15 @@
-export const APP_VERSION = '1.0.52';
+export const APP_VERSION = '1.0.53';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '1.0.53',
+    releasedAt: '2026-07-09',
+    title: 'Dispute workflow modal scroll fix',
+    changes: [
+      'Constrained the Dispute Workflow manage modal to the browser height.',
+      'Pinned the modal header, summary, and footer while limiting scrolling to the modal body.',
+    ],
+  },
   {
     version: '1.0.52',
     releasedAt: '2026-07-09',
