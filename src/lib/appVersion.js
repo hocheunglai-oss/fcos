@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.6';
+export const APP_VERSION = '2.0.7';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.7',
+    releasedAt: '2026-07-10',
+    title: 'Account-ID dispute parties',
+    changes: [
+      'Changed dispute buyer and supplier identity to Salesforce Account IDs, including separate handling for same-name supplier accounts.',
+      'Added Salesforce structure validation using STEM line-item Original Supplier lookups and blocked extra-cost-only or inconsistent dispute parties.',
+      'Made workflow actions and documents party-aware, with server-derived writeback targets and multi-record Salesforce document links.',
+    ],
+  },
   {
     version: '2.0.6',
     releasedAt: '2026-07-10',

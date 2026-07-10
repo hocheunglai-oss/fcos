@@ -51,6 +51,8 @@ const DEFAULT_ACTION = {
   actionType: 'hold_supplier_payment',
   partyType: 'supplier',
   partyName: '',
+  partyAccountId: '',
+  partyKey: '',
   disputeIds: [],
   amount: '',
   specialSellPrice: '',
@@ -115,15 +117,18 @@ function queueDetailLines(row) {
     const seenSupplierGroups = new Set();
     return rows.map((dueRow, index) => {
       const supplierName = dueRow.supplierName || 'Supplier';
+      const supplierAccountSuffix = textValue(dueRow.supplierAccountId, '').slice(-6);
+      const supplierLabel = [supplierName, dueRow.paymentTerm, supplierAccountSuffix].filter(Boolean).join(' | ');
       const dueDate = dueRow.dueDate || null;
       const invoiceName = dueRow.invoiceName || '';
-      const groupKey = `${supplierName}\u0000${dueDate || ''}\u0000${invoiceName}`;
+      const groupKey = `${dueRow.supplierAccountId || supplierName}\u0000${dueDate || ''}\u0000${invoiceName}`;
       const showSupplier = !seenSupplierGroups.has(groupKey);
       seenSupplierGroups.add(groupKey);
       return {
         key: `${groupKey}\u0000${dueRow.productQuantityLabel || dueRow.productName || index}`,
         productLabel: dueRow.productQuantityLabel || dueRow.productName || '—',
         supplierName,
+        supplierLabel,
         dueDate,
         invoiceName,
         showSupplier,
@@ -206,50 +211,31 @@ function settlementFinancials(actions = []) {
 }
 
 function partyOptions(stem, type) {
-  if (!stem) return [];
+  const registry = stem?._Dispute_Parties;
+  if (!registry?.valid) return [];
   if (type === 'buyer') {
-    const buyerRows = Array.isArray(stem._Buyer_Dispute_Rows) ? stem._Buyer_Dispute_Rows : [];
-    if (buyerRows.length) {
-      return buyerRows.map((row, index) => ({
-        key: `buyer-${index}-${row.buyerName || stem._Buyer_Name || 'buyer'}`,
-        type: 'buyer',
-        name: row.buyerName || stem._Buyer_Name || 'Buyer',
-        disputeIds: row.disputeIds || [],
-        label: row.buyerName || stem._Buyer_Name || 'Buyer',
-      }));
-    }
+    if (!registry.buyer) return [];
     return [{
-      key: 'buyer-default',
+      key: registry.buyer.partyKey,
+      partyKey: registry.buyer.partyKey,
       type: 'buyer',
-      name: stem._Buyer_Name || 'Buyer',
-      disputeIds: [],
-      label: stem._Buyer_Name || 'Buyer',
+      name: registry.buyer.name,
+      accountId: registry.buyer.accountId,
+      disputeIds: registry.buyer.disputeIds || [],
+      label: registry.buyer.label || registry.buyer.name,
     }];
   }
-  const supplierRows = Array.isArray(stem._Supplier_Finance_Rows_All) && stem._Supplier_Finance_Rows_All.length
-    ? stem._Supplier_Finance_Rows_All
-    : Array.isArray(stem._Supplier_Dispute_Rows)
-      ? stem._Supplier_Dispute_Rows
-      : [];
-  if (supplierRows.length) {
-    return supplierRows.map((row, index) => ({
-      key: `supplier-${index}-${row.supplierName || 'supplier'}`,
+  return (registry.suppliers || []).map((party) => ({
+      key: party.partyKey,
+      partyKey: party.partyKey,
       type: 'supplier',
-      name: row.supplierName || 'Supplier',
-      disputeIds: row.disputeIds || [],
-      label: row.supplierName || 'Supplier',
+      name: party.name,
+      accountId: party.accountId,
+      disputeIds: party.disputeIds || [],
+      paymentTerms: party.paymentTerms || [],
+      products: party.products || [],
+      label: party.label || party.name,
     }));
-  }
-  return textValue(stem._Supplier_Names, '')
-    .split(',')
-    .map((name, index) => name.trim() && ({
-      key: `supplier-fallback-${index}`,
-      type: 'supplier',
-      name: name.trim(),
-      disputeIds: [],
-      label: name.trim(),
-    }))
-    .filter(Boolean);
 }
 
 function normalizeActionForSave(action) {
@@ -258,6 +244,8 @@ function normalizeActionForSave(action) {
     actionType: action.actionType,
     partyType: action.partyType,
     partyName: action.partyName,
+    partyAccountId: action.partyAccountId,
+    partyKey: action.partyKey,
     disputeIds: action.disputeIds || [],
     amount: numberOrNull(action.amount),
     specialSellPrice: numberOrNull(action.specialSellPrice),
@@ -320,7 +308,7 @@ function fileToBase64(file) {
 
 function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
   const parties = partyOptions(stem, draftAction.partyType);
-  const selectedPartyKey = parties.find((party) => party.name === draftAction.partyName)?.key || parties[0]?.key || '';
+  const selectedPartyKey = parties.find((party) => party.partyKey === draftAction.partyKey)?.key || parties[0]?.key || '';
   const showAmount = draftAction.actionType === 'deduct_specific_amount' || draftAction.actionType === 'issue_buyer_credit_note';
   const showSupplierClose = draftAction.actionType === 'close_supplier_dispute';
   const showBuyerClose = draftAction.actionType === 'close_buyer_dispute';
@@ -334,6 +322,8 @@ function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
       actionType: value,
       partyType: nextPartyType,
       partyName: firstParty?.name || '',
+      partyAccountId: firstParty?.accountId || '',
+      partyKey: firstParty?.partyKey || '',
       disputeIds: firstParty?.disputeIds || [],
     });
   };
@@ -345,6 +335,8 @@ function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
       ...prev,
       partyType: selected.type,
       partyName: selected.name,
+      partyAccountId: selected.accountId,
+      partyKey: selected.partyKey,
       disputeIds: selected.disputeIds,
     }));
   };
@@ -363,12 +355,13 @@ function ActionForm({ stem, draftAction, setDraftAction, onAdd, disabled }) {
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Party</Label>
-          <Select value={selectedPartyKey} onValueChange={updateParty} disabled={disabled}>
+          <Select value={selectedPartyKey} onValueChange={updateParty} disabled={disabled || !parties.length}>
             <SelectTrigger><SelectValue placeholder="Select party" /></SelectTrigger>
             <SelectContent>
               {parties.map((party) => <SelectItem key={party.key} value={party.key}>{party.label}</SelectItem>)}
             </SelectContent>
           </Select>
+          {!parties.length && <p className="text-[11px] text-destructive">No valid disputed {draftAction.partyType} party is available.</p>}
         </div>
         {showAmount && (
           <div className="space-y-1.5">
@@ -592,9 +585,10 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
               </div>
             </TabsContent>
             <TabsContent value="controls" className="mt-4 space-y-5 text-sm">
-              <section><h3 className="font-semibold text-foreground">Document rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Documents are stored in Salesforce and linked to the selected buyer or supplier dispute when available, otherwise to the STEM.</p><p>Every action marked “Agreement/document required” must have an action-linked document before submission and approval.</p><p>Files are named automatically by STEM, party side, party, document type, date, and sequence.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Party identity rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>The buyer is one logical party across every Dispute__c record carrying the same Buyer__c Account ID.</p><p>Each supplier is identified by Supplier__c Account ID and must have a non-cancelled STEM line item with the same Original_Supplier__c. Extra-cost-only suppliers are not disputeable.</p><p>Same-name supplier accounts remain separate. Missing, duplicate, or inconsistent Salesforce party records block workflow actions until corrected.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Document rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Documents are stored once in Salesforce and always linked to the STEM. Buyer files are also linked to every buyer-bearing dispute record; supplier files are linked to that supplier’s exact dispute record.</p><p>Every action marked “Agreement/document required” must have an action-linked document before submission and approval.</p><p>Files are named automatically by STEM, party side, party, Account ID suffix, document type, date, and sequence.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Accounting rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Instruction Issued requires an instruction date and either a reference or accounting note.</p><p>Settled requires a settlement date and either a settlement reference or action-linked settlement document.</p><p>Not Required requires an explanation.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Every action must be Settled or Not Required, all required documents must remain linked, and a final closure note is mandatory.</p><p>Closure succeeds only after Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Actions are optional for individual disputed parties, but every action that was added must be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
             </TabsContent>
           </Tabs>
@@ -644,9 +638,8 @@ function DocumentUploadModal({ caseRow, action, open, onClose, onUploaded }) {
       const res = await appClient.functions.invoke('disputeWorkflowUploadDocument', {
         caseId: caseRow.id,
         actionId: action.id,
-        partyType: action.partyType,
-        partyName: action.partyName,
-        disputeId: action.disputeIds?.[0] || null,
+        partyAccountId: action.partyAccountId,
+        partyKey: action.partyKey,
         documentType,
         originalFileName: file.name,
         contentType: file.type || 'application/octet-stream',
@@ -786,6 +779,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     setDraftAction({
       ...DEFAULT_ACTION,
       partyName: supplierParty?.name || '',
+      partyAccountId: supplierParty?.accountId || '',
+      partyKey: supplierParty?.partyKey || '',
       disputeIds: supplierParty?.disputeIds || [],
     });
     setError(null);
@@ -793,13 +788,17 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
   if (!open || !stem) return null;
 
-  const canEdit = editableWorkflow(caseRow);
+  const partyRegistry = stem._Dispute_Parties;
+  const partyIssues = Array.isArray(partyRegistry?.issues) ? partyRegistry.issues : [];
+  const partiesValid = partyRegistry?.valid === true;
+  const canEdit = editableWorkflow(caseRow) && partiesValid;
   const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
   const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
   const canSubmit = canEdit && actions.length > 0 && missingRequiredDocuments.length === 0;
-  const canApprove = capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval' && missingRequiredDocuments.length === 0;
+  const canReview = capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
+  const canApprove = partiesValid && canReview && missingRequiredDocuments.length === 0;
   const canAccount = capabilities?.canAccount && caseRow?.approvalStatus === 'Approved' && caseRow?.workflowStatus !== 'Closed';
-  const canClose = capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close';
+  const canClose = partiesValid && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close';
   const financials = settlementFinancials(actions);
   const basePnl = stemBasePnl(stem);
   const stemPnlIncludingDispute = basePnl == null ? null : basePnl + financials.settlementPnl;
@@ -826,8 +825,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   };
 
   const addAction = () => {
-    if (!draftAction.partyName) {
+    if (!draftAction.partyName || !draftAction.partyAccountId || !draftAction.partyKey) {
       setError('Select a buyer or supplier party before adding the action.');
+      return;
+    }
+    if (actions.some((action) => action.partyKey === draftAction.partyKey)) {
+      setError(`Only one action may be added for ${draftAction.partyName}.`);
       return;
     }
     if ((draftAction.actionType === 'deduct_specific_amount' || draftAction.actionType === 'issue_buyer_credit_note') && numberOrNull(draftAction.amount) == null) {
@@ -843,7 +846,15 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       return;
     }
     setActions((prev) => [...prev, { ...draftAction, clientId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, actionLabel: actionLabel(draftAction.actionType), accountingStatus: 'Pending Accounting' }]);
-    setDraftAction((prev) => ({ ...DEFAULT_ACTION, partyType: prev.partyType, actionType: prev.actionType, partyName: prev.partyName, disputeIds: prev.disputeIds }));
+    setDraftAction((prev) => ({
+      ...DEFAULT_ACTION,
+      partyType: prev.partyType,
+      actionType: prev.actionType,
+      partyName: prev.partyName,
+      partyAccountId: prev.partyAccountId,
+      partyKey: prev.partyKey,
+      disputeIds: prev.disputeIds,
+    }));
     setError(null);
   };
 
@@ -905,6 +916,18 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             </div>
           )}
 
+          {!partiesValid && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              <div className="flex items-center gap-2 font-semibold"><AlertCircle className="h-4 w-4" /> Correct Salesforce dispute parties</div>
+              <div className="mt-2 space-y-1">
+                {partyIssues.length
+                  ? partyIssues.map((issue) => <div key={`${issue.code}-${(issue.disputeIds || []).join('-')}`}>{issue.message}</div>)
+                  : <div>Account-ID-based dispute parties could not be resolved. Refresh after confirming the Salesforce line-item supplier lookup.</div>}
+              </div>
+              <div className="mt-2 text-xs">Trader editing, approval, document upload, and closure remain blocked until Salesforce is corrected.</div>
+            </div>
+          )}
+
           <FinancialExposureSection stem={stem} />
 
           <section className="space-y-3">
@@ -943,7 +966,10 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{action.partyName || '—'}</td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        <div>{action.partyName || '—'}</div>
+                        {action.partyAccountId && <div className="font-mono text-[10px]">{action.partyAccountId}</div>}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(action.amount)}</td>
                       <td className="px-3 py-2 text-muted-foreground">
                         <div>{action.closeReason || '—'}</div>
@@ -960,7 +986,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       </td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
-                          {action.id && (canEdit || canAccount || capabilities?.canApprove) && <Button type="button" variant="outline" size="sm" onClick={() => setUploadAction(action)} disabled={busy} title="Upload document"><Upload className="h-3.5 w-3.5" /></Button>}
+                          {partiesValid && action.id && (canEdit || canAccount || capabilities?.canApprove) && <Button type="button" variant="outline" size="sm" onClick={() => setUploadAction(action)} disabled={busy} title="Upload document"><Upload className="h-3.5 w-3.5" /></Button>}
                           {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
                           {canAccount && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
                           {!canEdit && !canAccount && !capabilities?.canApprove && '—'}
@@ -1044,8 +1070,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>Close</Button>
             {canEdit && <Button type="button" variant="outline" onClick={saveDraft} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Save Draft</Button>}
             {canEdit && actions.length > 0 && <Button type="button" onClick={submitForApproval} disabled={busy || !canSubmit} className="gap-2" title={!canSubmit ? 'Upload all required documents first' : undefined}><Send className="h-4 w-4" /> Submit for Approval</Button>}
-            {canApprove && <Button type="button" variant="outline" onClick={() => setDecisionMode('revision')} disabled={busy}>Request Revision</Button>}
-            {canApprove && <Button type="button" variant="outline" onClick={() => setDecisionMode('reject')} disabled={busy}>Reject</Button>}
+            {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('revision')} disabled={busy}>Request Revision</Button>}
+            {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('reject')} disabled={busy}>Reject</Button>}
             {canApprove && <Button type="button" onClick={() => setDecisionMode('approve')} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" /> Approve</Button>}
             {canClose && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
           </div>
@@ -1245,6 +1271,7 @@ export default function DisputeWorkflow() {
                   const workflow = workflowFromRow(row);
                   const stage = workflow.case?.workflowStatus || 'Draft';
                   const detailLines = queueDetailLines(row);
+                  const hasPartyIssues = row._Dispute_Parties?.valid !== true;
                   return (
                     <tr
                       key={row.Id}
@@ -1257,6 +1284,7 @@ export default function DisputeWorkflow() {
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5">
                         <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span>
+                        {hasPartyIssues && <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-destructive"><AlertCircle className="h-3 w-3" /> Salesforce party issue</div>}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 font-medium text-foreground">{nextWorkflowOwner(stage)}</td>
                       <td className="max-w-[240px] px-3 py-2.5">
@@ -1279,7 +1307,7 @@ export default function DisputeWorkflow() {
                             <div key={`supplier-${line.key}`} className="min-h-[30px] leading-tight">
                               {line.showSupplier ? (
                                 <>
-                                  <div className="truncate font-medium text-foreground" title={line.supplierName}>{line.supplierName || 'Supplier'}</div>
+                                  <div className="truncate font-medium text-foreground" title={line.supplierLabel || line.supplierName}>{line.supplierLabel || line.supplierName || 'Supplier'}</div>
                                   <div className="text-[11px] text-muted-foreground">
                                     {line.dueDate ? `Due ${fmtDate(line.dueDate)}` : 'Due —'}
                                     {line.invoiceName ? ` · ${line.invoiceName}` : ''}
