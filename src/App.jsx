@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/toaster"
+import { useEffect } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
@@ -20,6 +21,7 @@ import DisputeWorkflow from '@/pages/DisputeWorkflow';
 import Login from '@/pages/Login';
 import AdminControl from '@/pages/AdminControl';
 import UniversalAuditTrail from '@/pages/UniversalAuditTrail';
+import { clearLegacyPaymentReminderSmtpSettings } from '@/lib/smtpSettings';
 
 function AuthErrorScreen({ authError }) {
   if (authError?.type === 'user_not_registered') return <UserNotRegisteredError />;
@@ -46,6 +48,10 @@ function AuthErrorScreen({ authError }) {
 const AuthenticatedApp = () => {
   const location = useLocation();
   const { isLoadingAuth, isLoadingPublicSettings, authError, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    clearLegacyPaymentReminderSmtpSettings();
+  }, []);
 
   if (isLoadingPublicSettings || (isLoadingAuth && !isAuthenticated)) {
     return (

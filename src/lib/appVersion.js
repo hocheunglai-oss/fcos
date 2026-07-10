@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.5';
+export const APP_VERSION = '2.0.6';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.6',
+    releasedAt: '2026-07-10',
+    title: 'Shared external reminder sender',
+    changes: [
+      'Changed External Payment Reminders to use one centrally managed server SMTP sender for every user.',
+      'Removed browser-specific External Payment Reminder credentials and ignored legacy per-user SMTP overrides in the API.',
+      'Added automatic cleanup of previously stored browser reminder credentials and settings drafts.',
+    ],
+  },
   {
     version: '2.0.5',
     releasedAt: '2026-07-10',

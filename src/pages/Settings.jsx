@@ -27,9 +27,7 @@ import StateBlock from '@/components/common/StateBlock';
 import { appClient } from '@/api/appClient';
 import {
   hasUsableSmtpSettings,
-  readPaymentReminderSmtpSettings,
   readSmtpSettings,
-  savePaymentReminderSmtpSettings,
   saveSmtpSettings,
 } from '@/lib/smtpSettings';
 import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettings } from '@/lib/exchangeRateSettings';
@@ -54,7 +52,6 @@ function validSettingsTab(value) {
 function settingsSnapshot() {
   return {
     smtpSettings: readSmtpSettings(),
-    paymentReminderSmtpSettings: readPaymentReminderSmtpSettings(),
     exchangeRateSettings: readExchangeRateSettings(),
     documentSettings: readDocumentSettings(),
   };
@@ -282,7 +279,7 @@ function BrowserSmtpHealthRow({ id, name, settings, purpose }) {
   };
 }
 
-function SystemHealthPanel({ smtpSettings, paymentReminderSmtpSettings }) {
+function SystemHealthPanel({ smtpSettings }) {
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState(null);
   const [error, setError] = useState('');
@@ -294,13 +291,7 @@ function SystemHealthPanel({ smtpSettings, paymentReminderSmtpSettings }) {
       settings: smtpSettings,
       purpose: 'Manual internal reports and late payment interest requests when sent from this browser.',
     }),
-    BrowserSmtpHealthRow({
-      id: 'browser-external-payment-reminder-smtp',
-      name: 'Browser External Payment Reminder SMTP Sender',
-      settings: paymentReminderSmtpSettings,
-      purpose: 'Manual customer-facing payment reminder emails sent from Outstanding Buyer Invoices.',
-    }),
-  ]), [paymentReminderSmtpSettings, smtpSettings]);
+  ]), [smtpSettings]);
 
   const rows = useMemo(() => [...(health?.rows || []), ...browserRows], [browserRows, health?.rows]);
 
@@ -429,7 +420,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [smtpSettings, setSmtpSettings] = useState(readSmtpSettings);
-  const [paymentReminderSmtpSettings, setPaymentReminderSmtpSettings] = useState(readPaymentReminderSmtpSettings);
   const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
   const [baseSettings, setBaseSettings] = useState(settingsSnapshot);
@@ -444,7 +434,6 @@ export default function SettingsPage() {
       ? { ...base, ...draft.data }
       : base;
     setSmtpSettings(next.smtpSettings || base.smtpSettings);
-    setPaymentReminderSmtpSettings(next.paymentReminderSmtpSettings || base.paymentReminderSmtpSettings);
     setExchangeRateSettings(next.exchangeRateSettings || base.exchangeRateSettings);
     setDocumentSettings(next.documentSettings || base.documentSettings);
     setBaseSettings(base);
@@ -453,10 +442,9 @@ export default function SettingsPage() {
 
   const settingsDraftValue = useMemo(() => ({
     smtpSettings,
-    paymentReminderSmtpSettings,
     exchangeRateSettings,
     documentSettings,
-  }), [documentSettings, exchangeRateSettings, paymentReminderSmtpSettings, smtpSettings]);
+  }), [documentSettings, exchangeRateSettings, smtpSettings]);
   const settingsDirty = Boolean(baseSettings && !sameDraftValue(settingsDraftValue, baseSettings));
   useDraftAutosave(SETTINGS_DRAFT_KEY, settingsDraftValue, {
     enabled: true,
@@ -478,12 +466,10 @@ export default function SettingsPage() {
   const saveAll = async () => {
     setSaving(true);
     saveSmtpSettings(smtpSettings);
-    savePaymentReminderSmtpSettings(paymentReminderSmtpSettings);
     saveExchangeRateSettings(exchangeRateSettings);
     saveDocumentSettings(documentSettings);
     const savedValue = {
       smtpSettings,
-      paymentReminderSmtpSettings,
       exchangeRateSettings,
       documentSettings,
     };
@@ -499,7 +485,6 @@ export default function SettingsPage() {
     clearDraft(SETTINGS_DRAFT_KEY);
     if (baseSettings) {
       setSmtpSettings(baseSettings.smtpSettings || readSmtpSettings());
-      setPaymentReminderSmtpSettings(baseSettings.paymentReminderSmtpSettings || readPaymentReminderSmtpSettings());
       setExchangeRateSettings(baseSettings.exchangeRateSettings || readExchangeRateSettings());
       setDocumentSettings(baseSettings.documentSettings || readDocumentSettings());
     }
@@ -555,7 +540,7 @@ export default function SettingsPage() {
           <SettingsPanel
             icon={Mail}
             title="Email Senders"
-            description="Manage sender accounts for internal AR reports and customer-facing payment reminders."
+            description="Manage the browser sender for internal mail and review the shared server sender used for external payment reminders."
           >
             <Tabs value={activeEmailSenderTab} onValueChange={changeEmailSenderTab} className="space-y-4">
               <TabsList className="grid h-auto w-full grid-cols-1 gap-1 bg-muted/50 p-1 sm:w-fit sm:grid-cols-2">
@@ -580,13 +565,14 @@ export default function SettingsPage() {
               </TabsContent>
 
               <TabsContent value="external-payment-reminder" className="mt-0">
-                <SmtpAccountCard
-                  title="External Payment Reminder"
-                  description="Used only by customer-facing payment reminder emails. Keep this separate from the internal report sender."
-                  settings={paymentReminderSmtpSettings}
-                  onChange={setPaymentReminderSmtpSettings}
-                  enableLabel="Use this SMTP account for External Payment Reminder emails"
-                />
+                <div className="flex items-start gap-3 py-2">
+                  <Server className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">Shared server sender</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">Every user sends External Payment Reminders through the same centrally managed SMTP mailbox.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Credentials are stored in Vercel and are not saved in individual browsers. Connection status is available in System Health.</p>
+                  </div>
+                </div>
               </TabsContent>
             </Tabs>
           </SettingsPanel>
@@ -658,10 +644,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="health" className="mt-0">
-          <SystemHealthPanel
-            smtpSettings={smtpSettings}
-            paymentReminderSmtpSettings={paymentReminderSmtpSettings}
-          />
+          <SystemHealthPanel smtpSettings={smtpSettings} />
         </TabsContent>
       </Tabs>
 

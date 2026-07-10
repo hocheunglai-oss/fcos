@@ -12,12 +12,6 @@ export const DEFAULT_SMTP_SETTINGS = {
   fromEmail: 'info@cosulich.com.hk',
 };
 
-export const DEFAULT_PAYMENT_REMINDER_SMTP_SETTINGS = {
-  ...DEFAULT_SMTP_SETTINGS,
-  user: '',
-  fromEmail: '',
-};
-
 export function readSmtpSettings() {
   try {
     const raw = localStorage.getItem(SMTP_SETTINGS_KEY);
@@ -31,17 +25,20 @@ export function saveSmtpSettings(settings) {
   localStorage.setItem(SMTP_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_SMTP_SETTINGS, ...settings }));
 }
 
-export function readPaymentReminderSmtpSettings() {
+export function clearLegacyPaymentReminderSmtpSettings() {
+  if (typeof localStorage === 'undefined') return;
   try {
-    const raw = localStorage.getItem(PAYMENT_REMINDER_SMTP_SETTINGS_KEY);
-    return raw ? { ...DEFAULT_PAYMENT_REMINDER_SMTP_SETTINGS, ...JSON.parse(raw) } : DEFAULT_PAYMENT_REMINDER_SMTP_SETTINGS;
+    localStorage.removeItem(PAYMENT_REMINDER_SMTP_SETTINGS_KEY);
+    const draftKey = 'fcos:draft:settings:page';
+    const rawDraft = localStorage.getItem(draftKey);
+    if (!rawDraft) return;
+    const draft = JSON.parse(rawDraft);
+    if (!draft?.data?.paymentReminderSmtpSettings) return;
+    delete draft.data.paymentReminderSmtpSettings;
+    localStorage.setItem(draftKey, JSON.stringify(draft));
   } catch {
-    return DEFAULT_PAYMENT_REMINDER_SMTP_SETTINGS;
+    // Ignore cleanup failures in restricted browser storage.
   }
-}
-
-export function savePaymentReminderSmtpSettings(settings) {
-  localStorage.setItem(PAYMENT_REMINDER_SMTP_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_PAYMENT_REMINDER_SMTP_SETTINGS, ...settings }));
 }
 
 export function hasUsableSmtpSettings(settings) {

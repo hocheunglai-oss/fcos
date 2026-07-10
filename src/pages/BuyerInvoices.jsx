@@ -22,7 +22,6 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   hasUsableSmtpSettings,
-  readPaymentReminderSmtpSettings,
   readSmtpSettings,
   smtpFromAddress,
 } from '@/lib/smtpSettings';
@@ -1141,17 +1140,12 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
     }
     setSending(true);
     setError(null);
-    const smtpSettings = readPaymentReminderSmtpSettings();
-    const hasLocalSmtp = hasUsableSmtpSettings(smtpSettings);
     const hasServerEmailProvider = Boolean(data?.settings?.emailDelivery?.hasServerProvider);
-    if (!hasLocalSmtp && !hasServerEmailProvider) {
-      setError('Payment reminder email sending is not configured. Save External Payment Reminder credentials in Settings, or configure SMTP credentials in Vercel.');
+    if (!hasServerEmailProvider) {
+      setError('The shared External Payment Reminder sender is not configured on the server.');
       setSending(false);
       return;
     }
-    const credentials = hasLocalSmtp
-      ? { method: 'smtp', smtp: { ...smtpSettings, port: Number(smtpSettings.port || 587), from: smtpFromAddress(smtpSettings, data?.settings?.from) } }
-      : undefined;
     const res = await appClient.functions.invoke('buyerInvoicePaymentReminderSend', {
       stemId: row.stemId,
       invoiceStemIds: selectedIds,
@@ -1159,7 +1153,6 @@ function PaymentReminderModal({ row, open, daysAhead, onClose, onSent }) {
       recipientBatches: reviewedRecipientBatches,
       subject: form.subject,
       body: form.body,
-      credentials,
     });
     if (res.data?.error) {
       setError(res.data.error);

@@ -2077,6 +2077,8 @@ function serverEmailDeliveryStatus() {
   return {
     hasServerProvider: hasSmtp,
     provider: hasSmtp ? 'smtp' : 'none',
+    sender: hasSmtp ? maskValue(process.env.SMTP_USER) : null,
+    scope: hasSmtp ? 'shared_server' : 'none',
   };
 }
 
@@ -2409,9 +2411,9 @@ async function smtpHealthRow() {
   }) : null;
   return healthRow({
     id: 'server-smtp',
-    name: 'Server SMTP Sender',
+    name: 'Shared Server SMTP Sender',
     category: 'Email',
-    purpose: 'Scheduled/internal report email fallback when browser-saved SMTP credentials are not supplied.',
+    purpose: 'Shared sender for every External Payment Reminder, plus scheduled and server-generated email delivery.',
     scope: 'server',
     provider: 'SMTP',
     endpoint: process.env.SMTP_HOST || null,
@@ -8137,8 +8139,9 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
   const reviewedRecipientBatches = new Map(body.recipientBatches
     .filter((batch) => batch?.key)
     .map((batch) => [batch.key, batch]));
-  const credentials = body.credentials || {};
-  let smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
+  const sharedSmtp = { user: process.env.SMTP_USER };
+  const configuredFrom = process.env.PAYMENT_REMINDER_FROM || settings.from;
+  const smtpFrom = smtpAuthenticatedFromAddress(sharedSmtp, configuredFrom) || configuredFrom;
   const sendResults = [];
   const collectionResults = [];
   for (const group of routing.groups) {
@@ -8159,7 +8162,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     let result;
     try {
       const delivery = await sendWithSmtpSendAsFallback({
-        smtp: credentials.smtp || credentials,
+        smtp: sharedSmtp,
         from: smtpFrom,
         to,
         cc,
@@ -8169,12 +8172,11 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
         text: email.text,
       });
       result = delivery.result;
-      smtpFrom = delivery.from;
     } catch (error) {
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         message: error.message,
         provider: 'smtp',
-        hasRequestSmtp: Boolean(credentials.method === 'smtp' || credentials.smtp),
+        sharedServerSender: true,
         hasSmtpEnv: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD),
         toCount: to.length,
         ccCount: cc.length,
