@@ -1,8 +1,15 @@
 import { chunkIds, cleanRecord, getInstanceUrl, salesforceAuthMode, sendJson, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import {
+  disputeWorkflowDirectionLabel,
+  disputeWorkflowEditableFilename,
+  disputeWorkflowFileExtension,
+  disputeWorkflowHongKongDateToken,
+} from '../_disputeDocuments.js';
+import {
   buildDisputePartyRegistry,
   disputeSalesforceIdKey,
   findDisputeParty,
+  resolveExtraCostSupplierLookup,
   resolveOriginalSupplierLookup,
 } from '../_disputeParties.js';
 import { createClient } from '@supabase/supabase-js';
@@ -2023,10 +2030,12 @@ const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set([
   'other_support',
 ]);
 const DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
+const DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS = new Set(['from_supplier', 'to_supplier', 'from_buyer', 'to_buyer']);
 const DISPUTE_BETA_CASE_SELECT = 'id,stem_id,stem_name,buyer_name,supplier_names,current_salesforce_status,workflow_status,approval_status,latest_note,submitted_by,submitted_by_email,submitted_at,approved_by,approved_by_email,approved_at,rejected_by,rejected_by_email,rejected_at,rejection_reason,closed_by,closed_by_email,closed_at,settlement_financials,settlement_pnl,salesforce_writeback_status,salesforce_writeback_error,created_at,updated_at';
-const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_type,party_name,party_account_id,party_key,dispute_ids,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
+const DISPUTE_WORKFLOW_PARTY_SELECT = 'id,case_id,stem_id,account_id,account_key,account_name,roles,source_types,source_record_ids,payment_terms,products,cancelled_source_only,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
+const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_id,party_side,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
 const DISPUTE_BETA_EVENT_SELECT = 'id,case_id,action_id,stem_id,event_type,note,metadata,actor_user_id,actor_email,created_at';
-const DISPUTE_WORKFLOW_DOCUMENT_SELECT = 'id,case_id,action_id,stem_id,party_type,party_name,party_account_id,dispute_id,dispute_ids,document_type,original_filename,smart_filename,content_type,file_extension,content_size,salesforce_content_version_id,salesforce_content_document_id,salesforce_linked_record_id,salesforce_linked_record_ids,salesforce_url,uploaded_by,uploaded_by_email,created_at';
+const DISPUTE_WORKFLOW_DOCUMENT_SELECT = 'id,case_id,action_id,party_id,party_side,stem_id,party_name,party_account_id,document_direction,document_type,original_filename,requested_filename,smart_filename,upload_status,content_type,file_extension,content_size,salesforce_content_version_id,salesforce_content_document_id,salesforce_linked_record_id,salesforce_url,uploaded_by,uploaded_by_email,created_at';
 
 function canonicalDisputeBetaCloseReason(value, allowed = []) {
   const raw = String(value || '').trim();
@@ -3287,7 +3296,6 @@ async function salesforceStemDocuments(body = {}, req = null, accessContext = nu
     recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Invoices from Suppliers', 'Supplier Invoice'),
     recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Invoices to Buyer', 'Buyer / Factoring Invoice'),
     recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Contracts and Compliance', 'Nomination'),
-    recordsLinkedToStemByLookup('Dispute__c', actualStemId, 'Dispute / Support', 'Dispute'),
     recordsLinkedToStemByLookup('EmailMessage', actualStemId, 'Email', 'Email'),
   ]);
   for (const related of lookupRelatedGroups.flat()) {
@@ -8502,12 +8510,12 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const lineItemDescribe = await salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] }));
   const originalSupplierLookup = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
   const originalSupplierRelationship = originalSupplierLookup.relationshipName || 'Original_Supplier__r';
-  const disputeObjectDescribe = await salesforceObjectFields({ objectName: 'Dispute__c' }).catch(() => ({ fields: [] }));
-  const disputeObjectFields = disputeObjectDescribe.fields || [];
-  const disputeObjectFieldNames = disputeObjectFields.map((field) => field.name);
-  const disputeObjectFieldByName = Object.fromEntries(disputeObjectFields.map((field) => [field.name, field]));
-  const disputeBuyerRelationship = disputeObjectFieldByName.Buyer__c?.relationshipName;
-  const disputeSupplierRelationship = disputeObjectFieldByName.Supplier__c?.relationshipName;
+  const extraCostDescribe = await salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }).catch(() => ({ fields: [] }));
+  const extraCostFields = extraCostDescribe.fields || [];
+  const extraCostFieldNames = new Set(extraCostFields.map((field) => field.name));
+  const extraCostSupplierLookup = resolveExtraCostSupplierLookup(extraCostFields);
+  const extraCostSupplierField = extraCostSupplierLookup.fieldName;
+  const extraCostSupplierRelationship = extraCostSupplierLookup.relationshipName;
 
   const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
   for (const field of [
@@ -8558,7 +8566,6 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const extraCostsByStem = {};
   const supplierInvoicesByStem = {};
   const supplierInvoicePayableByStem = {};
-  const disputeRecordsByStem = {};
 
   if (stemIds.length) {
     const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
@@ -8580,11 +8587,18 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
       })),
       Promise.all(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        const extraCostSelectFields = [
+          'Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c',
+          'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
+          'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c',
+          'Supplier_Invoice__c', 'Cancelled__c',
+          extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null,
+          extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null,
+          extraCostSupplierLookup.valid ? extraCostSupplierField : null,
+          extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null,
+        ].filter(Boolean);
         return queryRows(`
-          SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c,
-                 Quantity_Range_Max__c, Is_Quantity_Range__c,
-                 Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c,
-                 Supplier_Invoice__c, Cancelled__c
+          SELECT ${[...new Set(extraCostSelectFields)].join(', ')}
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
@@ -8632,35 +8646,6 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
       supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
     }
 
-    if (disputeObjectFieldNames.includes('STEM__c')) {
-      const disputeSelectFields = ['Id', 'STEM__c'];
-      for (const field of ['Status_Buyer__c', 'Status_Supplier__c', 'Description_Buyer__c', 'Description_Supplier__c', 'Deduction_Amount_Supplier__c', 'Dispute_Status__c', 'Supplier_Key__c']) {
-        if (disputeObjectFieldNames.includes(field)) disputeSelectFields.push(field);
-      }
-      if (disputeObjectFieldNames.includes('Buyer__c')) {
-        disputeSelectFields.push('Buyer__c');
-        if (disputeBuyerRelationship) disputeSelectFields.push(`${disputeBuyerRelationship}.Name`);
-      }
-      if (disputeObjectFieldNames.includes('Supplier__c')) {
-        disputeSelectFields.push('Supplier__c');
-        if (disputeSupplierRelationship) disputeSelectFields.push(`${disputeSupplierRelationship}.Name`);
-      }
-
-      for (const chunk of chunkIds(stemIds)) {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        const disputeRows = await queryRows(`
-          SELECT ${[...new Set(disputeSelectFields)].join(', ')}
-          FROM Dispute__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `, { limit: 5000, softFail: true });
-        for (const dispute of disputeRows) {
-          if (!dispute.STEM__c) continue;
-          if (!disputeRecordsByStem[dispute.STEM__c]) disputeRecordsByStem[dispute.STEM__c] = [];
-          disputeRecordsByStem[dispute.STEM__c].push(dispute);
-        }
-      }
-    }
   }
 
   return {
@@ -8671,7 +8656,6 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const lineItems = lineItemsByStem[stem.Id] || [];
         const extraCosts = extraCostsByStem[stem.Id] || [];
         const supplierInvoices = supplierInvoicesByStem[stem.Id] || [];
-        const disputeRecords = disputeRecordsByStem[stem.Id] || [];
         const supplierNames = new Set();
         const productNames = new Set();
         const supplierProductPairs = [];
@@ -8849,34 +8833,19 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const disputePartyRegistry = buildDisputePartyRegistry({
           stem,
           lineItems,
-          disputeRecords,
+          extraCosts,
           originalSupplierRelationship,
-          disputeBuyerRelationship,
-          disputeSupplierRelationship,
-          schemaIssue: originalSupplierLookup.issue,
+          extraCostSupplierField,
+          extraCostSupplierRelationship,
+          schemaIssues: [originalSupplierLookup.issue, extraCostSupplierLookup.issue],
         });
-        const groupedBuyerDisputes = disputePartyRegistry.buyer ? [{
-          partyKey: disputePartyRegistry.buyer.partyKey,
-          accountId: disputePartyRegistry.buyer.accountId,
-          disputeIds: disputePartyRegistry.buyer.disputeIds,
-          buyerName: disputePartyRegistry.buyer.name,
-          status: disputePartyRegistry.buyer.status,
-          description: disputePartyRegistry.buyer.description,
-        }] : [];
-        const supplierDisputes = disputePartyRegistry.suppliers.map((party) => ({
-          id: party.disputeIds[0] || null,
-          partyKey: party.partyKey,
-          accountId: party.accountId,
-          supplierName: party.name,
-          status: party.status,
-          description: party.description,
-          deductionAmount: party.deductionAmount,
-        }));
-        const supplierDisputeRows = disputePartyRegistry.suppliers.map((party) => {
+        const supplierCandidateRows = disputePartyRegistry.suppliers.map((party) => {
           const finance = supplierFinanceByAccount.get(party.accountKey);
           return {
             ...party,
             supplierName: party.name,
+            status: null,
+            description: null,
             supplierInvoiceAmount: finance?.supplierInvoiceAmount ?? null,
             payableBalance: finance?.payableBalance ?? null,
           };
@@ -8892,17 +8861,17 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             supplierInvoiceAmount: finance.supplierInvoiceAmount,
             payableBalance: finance.payableBalance,
           }));
-        const supplierFinanceRowsAll = [...supplierDisputeRows, ...supplierFinanceOnlyRows];
-        const supplierFinanceRows = supplierDisputeRows.length
-          ? supplierDisputeRows
+        const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
+        const supplierFinanceRows = supplierCandidateRows.length
+          ? supplierCandidateRows
           : supplierFinanceOnlyRows;
         const buyerFinanceRow = {
           buyerName: disputePartyRegistry.buyer?.name || stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
           receivableBalance: stem.Receivable_Balance__c ?? null,
-          disputeRows: groupedBuyerDisputes,
-          status: groupedBuyerDisputes.map((dispute) => dispute.status).filter(Boolean).join('\n') || null,
-          description: groupedBuyerDisputes.map((dispute) => dispute.description).filter(Boolean).join('\n') || null,
+          disputeRows: [],
+          status: null,
+          description: null,
         };
 
         return {
@@ -8912,25 +8881,18 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           _Supplier_Names: [...supplierNames].sort().join(', ') || null,
           _Product_Names: [...productNames].sort().join(', ') || null,
           _Supplier_Product_Pairs: supplierProductPairs,
-          _Buyer_Disputes: groupedBuyerDisputes,
-          _Buyer_Dispute_Rows: groupedBuyerDisputes,
+          _Buyer_Disputes: [],
+          _Buyer_Dispute_Rows: [],
           _Buyer_Finance_Row: buyerFinanceRow,
-          _Supplier_Disputes: supplierDisputes,
+          _Supplier_Disputes: [],
           _Supplier_Dispute_Rows: supplierFinanceRows,
           _Supplier_Finance_Rows_All: supplierFinanceRowsAll,
           _Dispute_Parties: disputePartyRegistry,
           _Buyer_Invoice_Due_Date: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
           _Supplier_Invoice_Due_Rows: supplierInvoiceDueRows,
           _Stem_Base_Pnl: stemBasePnl,
-          _Buyer_Dispute_Label: groupedBuyerDisputes.map((dispute) => [dispute.buyerName, dispute.status, dispute.description].filter(Boolean).join(': ')).join('\n') || null,
-          _Supplier_Dispute_Label: supplierFinanceRows.map((dispute) => [
-            dispute.supplierName,
-            dispute.status,
-            /deduct\s+below\s+amount/i.test(String(dispute.status || '')) && dispute.deductionAmount != null
-              ? `Deduction Amount ${Number(dispute.deductionAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : null,
-            dispute.description,
-          ].filter(Boolean).join(': ')).join('\n') || null,
+          _Buyer_Dispute_Label: null,
+          _Supplier_Dispute_Label: null,
           _Supplier_Invoice_Split_Label: supplierFinanceRows.map((dispute) => dispute.supplierInvoiceAmount).join('\n') || null,
           _Payable_Balance_Split_Label: supplierFinanceRows.map((dispute) => dispute.payableBalance).join('\n') || null,
           _Payable_Balance: payableBalance,
@@ -8942,12 +8904,63 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   };
 }
 
-function assertValidDisputeParties(stem) {
-  const registry = stem?._Dispute_Parties;
-  if (!registry) throw appError('Salesforce dispute party data could not be resolved.', 502);
+function serializeDisputeWorkflowParty(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    caseId: row.case_id || row.caseId,
+    stemId: row.stem_id || row.stemId,
+    accountId: row.account_id || row.accountId,
+    accountKey: row.account_key || row.accountKey,
+    name: row.account_name || row.name || row.account_id || row.accountId,
+    roles: Array.isArray(row.roles) ? row.roles : [],
+    sourceTypes: Array.isArray(row.source_types) ? row.source_types : (row.sourceTypes || []),
+    sourceRecordIds: Array.isArray(row.source_record_ids) ? row.source_record_ids : (row.sourceRecordIds || []),
+    paymentTerms: Array.isArray(row.payment_terms) ? row.payment_terms : (row.paymentTerms || []),
+    products: Array.isArray(row.products) ? row.products : [],
+    cancelledSourceOnly: row.cancelled_source_only === true || row.cancelledSourceOnly === true,
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
+  };
+}
+
+function disputeRegistryWithSelection(registry, partyRows = []) {
+  const selected = [];
+  const issues = [...(registry?.issues || [])];
+  const candidateByKey = new Map((registry?.candidates || []).map((candidate) => [candidate.accountKey, candidate]));
+  for (const row of partyRows) {
+    const stored = serializeDisputeWorkflowParty(row);
+    const candidate = candidateByKey.get(stored.accountKey);
+    if (!candidate) {
+      issues.push({
+        code: 'selected_account_stale',
+        message: `${stored.name} is no longer the buyer or a supplier on this STEM.`,
+        recordIds: stored.sourceRecordIds,
+        details: { accountId: stored.accountId },
+      });
+      continue;
+    }
+    selected.push({ ...candidate, id: stored.id, caseId: stored.caseId, selected: true });
+  }
+  const candidateSchemaValid = registry?.candidateSchemaValid === true;
+  const selectionValid = selected.length > 0 && !issues.some((item) => item.code === 'selected_account_stale');
+  return {
+    ...registry,
+    candidateSchemaValid,
+    selectionValid,
+    valid: candidateSchemaValid && selectionValid,
+    selected,
+    issues,
+  };
+}
+
+function assertValidDisputeParties(stem, partyRows = []) {
+  const registry = disputeRegistryWithSelection(stem?._Dispute_Parties, partyRows);
+  if (!stem?._Dispute_Parties) throw appError('Salesforce dispute party candidates could not be resolved.', 502);
   if (registry.valid) return registry;
-  const messages = (registry.issues || []).map((item) => item.message).filter(Boolean);
-  throw appError(`Correct the Salesforce dispute records before continuing: ${messages.join(' ')}`, 400);
+  const messages = registry.issues.map((item) => item.message).filter(Boolean);
+  if (!registry.selectionValid && !messages.length) messages.push('Select at least one disputed Account.');
+  throw appError(`Correct the dispute party selection before continuing: ${messages.join(' ')}`, 400);
 }
 
 async function loadCurrentDisputeStem(stemId, accessContext) {
@@ -8957,14 +8970,12 @@ async function loadCurrentDisputeStem(stemId, accessContext) {
   return stem;
 }
 
-function canonicalDisputeActionTarget(input, partyType, registry) {
+function canonicalDisputeActionTarget(input, partySide, registry) {
   const accountId = String(input.partyAccountId || input.party_account_id || '').trim();
   if (!accountId) throw appError('A Salesforce party Account ID is required for every dispute action.', 400);
-  const party = findDisputeParty(registry, partyType, accountId);
-  if (!party) throw appError(`The selected ${partyType} is no longer a valid disputed party for this stem. Refresh and select the party again.`, 400);
-  if (!Array.isArray(party.disputeIds) || !party.disputeIds.length) {
-    throw appError(`The selected ${partyType} has no Salesforce Dispute__c record.`, 400);
-  }
+  const candidate = findDisputeParty(registry, partySide, accountId);
+  const party = (registry?.selected || []).find((selected) => selected.accountKey === candidate?.accountKey);
+  if (!candidate || !party) throw appError(`The selected ${partySide} Account is not selected for this dispute. Refresh and select the party again.`, 400);
   return party;
 }
 
@@ -9041,8 +9052,9 @@ function serializeDisputeBetaCase(row) {
   };
 }
 
-function serializeDisputeBetaAction(row) {
+function serializeDisputeBetaAction(row, partyMap = new Map()) {
   if (!row) return null;
+  const party = partyMap.get(row.party_id) || null;
   const actionType = row.action_type;
   const closeReason = actionType === 'close_supplier_dispute'
     ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS)
@@ -9053,11 +9065,13 @@ function serializeDisputeBetaAction(row) {
     id: row.id,
     caseId: row.case_id,
     stemId: row.stem_id,
-    partyType: row.party_type,
-    partyName: row.party_name || '',
-    partyAccountId: row.party_account_id || null,
-    partyKey: row.party_key || (row.party_account_id ? `${row.party_type}:${row.party_account_id}` : null),
-    disputeIds: Array.isArray(row.dispute_ids) ? row.dispute_ids : [],
+    partyId: row.party_id,
+    partySide: row.party_side,
+    partyType: row.party_side,
+    partyName: party?.account_name || party?.name || '',
+    partyAccountId: party?.account_id || party?.accountId || null,
+    partyKey: party?.account_id ? `account:${party.account_id}` : party?.accountId ? `account:${party.accountId}` : null,
+    partyRoles: party?.roles || [],
     actionType,
     actionLabel: row.action_label || DISPUTE_BETA_ACTION_LABELS[actionType] || actionType,
     amount: row.amount == null ? null : Number(row.amount),
@@ -9102,14 +9116,16 @@ function serializeDisputeWorkflowDocument(row) {
     id: row.id,
     caseId: row.case_id,
     actionId: row.action_id || null,
+    partyId: row.party_id,
     stemId: row.stem_id,
-    partyType: row.party_type,
+    partySide: row.party_side,
+    partyType: row.party_side,
     partyName: row.party_name || '',
     partyAccountId: row.party_account_id || null,
-    disputeId: row.dispute_id || null,
-    disputeIds: Array.isArray(row.dispute_ids) ? row.dispute_ids : (row.dispute_id ? [row.dispute_id] : []),
+    documentDirection: row.document_direction,
     documentType: row.document_type,
     originalFileName: row.original_filename,
+    requestedFileName: row.requested_filename || fileName,
     fileName,
     smartFileName: fileName,
     contentType: row.content_type || 'application/octet-stream',
@@ -9118,9 +9134,8 @@ function serializeDisputeWorkflowDocument(row) {
     contentVersionId: versionId,
     contentDocumentId: row.salesforce_content_document_id || null,
     linkedRecordId: row.salesforce_linked_record_id,
-    linkedRecordIds: Array.isArray(row.salesforce_linked_record_ids)
-      ? row.salesforce_linked_record_ids
-      : (row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : []),
+    linkedRecordIds: row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : [],
+    uploadStatus: row.upload_status || 'complete',
     salesforceUrl: row.salesforce_url || null,
     downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
     uploadedBy: row.uploaded_by || null,
@@ -9154,8 +9169,8 @@ function disputeBetaActionPartyType(actionType, inputPartyType) {
 function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry) {
   const actionType = String(input.actionType || input.action_type || '').trim();
   if (!DISPUTE_BETA_ACTION_LABELS[actionType]) throw appError('Valid dispute workflow action type is required.', 400);
-  const partyType = disputeBetaActionPartyType(actionType, input.partyType || input.party_type);
-  const party = canonicalDisputeActionTarget(input, partyType, registry);
+  const partySide = disputeBetaActionPartyType(actionType, input.partySide || input.party_side || input.partyType || input.party_type);
+  const party = canonicalDisputeActionTarget(input, partySide, registry);
   const amount = decimalOrNull(input.amount);
   if (actionType === 'deduct_specific_amount' && amount == null) throw appError('Deduction amount is required.', 400);
   if (actionType === 'issue_buyer_credit_note' && amount == null) throw appError('Credit note amount is required.', 400);
@@ -9178,11 +9193,9 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
 
   return {
     stem_id: caseRow.stem_id,
-    party_type: partyType,
-    party_name: party.name,
-    party_account_id: party.accountId,
-    party_key: party.partyKey,
-    dispute_ids: party.disputeIds,
+    party_id: party.id,
+    party_side: partySide,
+    party_account_key: party.accountKey,
     action_type: actionType,
     action_label: DISPUTE_BETA_ACTION_LABELS[actionType],
     amount,
@@ -9256,11 +9269,16 @@ function calculateDisputeBetaSettlement(actions = []) {
 async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
   const ids = [...new Set(stemIds.filter(Boolean))];
   if (!ids.length) return {};
-  const [casesRes, actionsRes, eventsRes, documentsRes] = await Promise.all([
+  const [casesRes, partiesRes, actionsRes, eventsRes, documentsRes] = await Promise.all([
     client
       .from('dispute_beta_cases')
       .select(DISPUTE_BETA_CASE_SELECT)
       .in('stem_id', ids),
+    client
+      .from('dispute_workflow_parties')
+      .select(DISPUTE_WORKFLOW_PARTY_SELECT)
+      .in('stem_id', ids)
+      .order('created_at', { ascending: true }),
     client
       .from('dispute_beta_actions')
       .select(DISPUTE_BETA_ACTION_SELECT)
@@ -9276,27 +9294,35 @@ async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
       .from('dispute_workflow_documents')
       .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
       .in('stem_id', ids)
+      .eq('upload_status', 'complete')
       .order('created_at', { ascending: false }),
   ]);
   if (casesRes.error) throw casesRes.error;
+  if (partiesRes.error) throw partiesRes.error;
   if (actionsRes.error) throw actionsRes.error;
   if (eventsRes.error) throw eventsRes.error;
   if (documentsRes.error) throw documentsRes.error;
 
   const map = {};
   for (const row of casesRes.data || []) {
-    map[row.stem_id] = { case: serializeDisputeBetaCase(row), actions: [], events: [], documents: [] };
+    map[row.stem_id] = { case: serializeDisputeBetaCase(row), parties: [], actions: [], events: [], documents: [] };
+  }
+  const partyById = new Map();
+  for (const row of partiesRes.data || []) {
+    partyById.set(row.id, row);
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], events: [], documents: [] };
+    map[row.stem_id].parties.push(serializeDisputeWorkflowParty(row));
   }
   for (const row of actionsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
-    map[row.stem_id].actions.push(serializeDisputeBetaAction(row));
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], events: [], documents: [] };
+    map[row.stem_id].actions.push(serializeDisputeBetaAction(row, partyById));
   }
   for (const row of eventsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], events: [], documents: [] };
     map[row.stem_id].events.push(serializeDisputeBetaEvent(row));
   }
   for (const row of documentsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, actions: [], events: [], documents: [] };
+    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], events: [], documents: [] };
     map[row.stem_id].documents.push(serializeDisputeWorkflowDocument(row));
   }
   return map;
@@ -9316,11 +9342,43 @@ async function writeDisputeBetaEvent(client, caseRow, eventType, profile, payloa
   if (error) throw error;
 }
 
+async function loadDisputeWorkflowParties(client, caseId) {
+  const { data, error } = await client
+    .from('dispute_workflow_parties')
+    .select(DISPUTE_WORKFLOW_PARTY_SELECT)
+    .eq('case_id', caseId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+function disputePartyRowMap(partyRows = []) {
+  return new Map(partyRows.map((party) => [party.id, party]));
+}
+
+async function loadDisputeWorkflowActions(client, caseId) {
+  const [partyRows, actionsResult] = await Promise.all([
+    loadDisputeWorkflowParties(client, caseId),
+    client
+      .from('dispute_beta_actions')
+      .select(DISPUTE_BETA_ACTION_SELECT)
+      .eq('case_id', caseId)
+      .order('created_at', { ascending: true }),
+  ]);
+  if (actionsResult.error) throw actionsResult.error;
+  return {
+    partyRows,
+    actionRows: actionsResult.data || [],
+    actions: (actionsResult.data || []).map((row) => serializeDisputeBetaAction(row, disputePartyRowMap(partyRows))),
+  };
+}
+
 async function loadDisputeWorkflowDocuments(client, caseId) {
   const { data, error } = await client
     .from('dispute_workflow_documents')
     .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
     .eq('case_id', caseId)
+    .eq('upload_status', 'complete')
     .order('created_at', { ascending: false });
   if (error) throw error;
   return data || [];
@@ -9337,7 +9395,7 @@ async function assertRequiredDisputeDocuments(client, actions = []) {
   if (!actions.some((action) => action.requires_attachment === true)) return documents;
   const missing = missingRequiredDisputeDocuments(actions, documents);
   if (missing.length) {
-    const labels = missing.map((action) => `${action.action_label || action.action_type} (${action.party_name || action.party_type})`);
+    const labels = missing.map((action) => `${action.action_label || action.action_type} (${action.party_side})`);
     throw appError(`Upload the required document for: ${labels.join(', ')}.`, 400);
   }
   return documents;
@@ -9379,21 +9437,6 @@ async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 
   return updatedCase;
 }
 
-function disputeWorkflowFilenameToken(value, fallback, maxLength = 42) {
-  const token = String(value || '')
-    .normalize('NFKD')
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, maxLength)
-    .replace(/-+$/g, '');
-  return token || fallback;
-}
-
-function disputeWorkflowFileExtension(fileName) {
-  const match = String(fileName || '').match(/\.([a-zA-Z0-9]{1,10})$/);
-  return match ? match[1].toLowerCase() : '';
-}
-
 async function upsertDisputeBetaCase(client, stem, extra = {}) {
   const nowIso = new Date().toISOString();
   const casePayload = {
@@ -9426,208 +9469,44 @@ async function getDisputeBetaCase(client, caseIdOrStemId) {
   return data;
 }
 
-async function replaceDisputeBetaActions(client, caseRow, actions, profile, registry) {
-  const normalizedActions = (actions || []).map((action) => ({
-    id: String(action.id || '').trim() || null,
-    values: normalizeDisputeBetaAction(action, caseRow, profile, registry),
-  }));
-  const seenParties = new Set();
-  for (const action of normalizedActions) {
-    if (seenParties.has(action.values.party_key)) {
-      throw appError(`Only one action may be added for ${action.values.party_name}.`, 400);
-    }
-    seenParties.add(action.values.party_key);
-  }
-  const financials = calculateDisputeBetaSettlement(normalizedActions.map((action) => action.values));
-  const { data: existingRows, error: existingError } = await client
-    .from('dispute_beta_actions')
-    .select('id')
-    .eq('case_id', caseRow.id);
-  if (existingError) throw existingError;
-  const existingIds = new Set((existingRows || []).map((row) => row.id));
-  const retainedIds = normalizedActions.map((action) => action.id).filter((id) => id && existingIds.has(id));
-  const removedIds = [...existingIds].filter((id) => !retainedIds.includes(id));
-  if (removedIds.length) {
-    const { error: deleteError } = await client
-      .from('dispute_beta_actions')
-      .delete()
-      .eq('case_id', caseRow.id)
-      .in('id', removedIds);
-    if (deleteError) throw deleteError;
-  }
-  for (const action of normalizedActions.filter((item) => item.id && existingIds.has(item.id))) {
-    const { error: updateError } = await client
-      .from('dispute_beta_actions')
-      .update({ ...action.values, updated_at: new Date().toISOString() })
-      .eq('case_id', caseRow.id)
-      .eq('id', action.id);
-    if (updateError) throw updateError;
-  }
-  const newActions = normalizedActions.filter((action) => !action.id || !existingIds.has(action.id));
-  if (newActions.length) {
-    const { error: insertError } = await client.from('dispute_beta_actions').insert(newActions.map((action) => ({
-      ...action.values,
-      case_id: caseRow.id,
-      created_by: profile.id,
-      created_by_email: profile.email,
-    })));
-    if (insertError) throw insertError;
-  }
-  const { data: updatedCase, error: caseError } = await client
-    .from('dispute_beta_cases')
-    .update({
-      settlement_financials: financials,
-      settlement_pnl: financials.settlementPnl,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (caseError) throw caseError;
-  const { data: actionRows, error: actionError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
-  if (actionError) throw actionError;
-  return { caseRow: updatedCase, actions: actionRows || [] };
-}
-
-function canonicalizeStoredDisputeActions(actions, registry) {
-  const seenParties = new Set();
-  return (actions || []).map((action) => {
-    const party = canonicalDisputeActionTarget(action, action.party_type, registry);
-    if (seenParties.has(party.partyKey)) throw appError(`Only one action may be added for ${party.name}.`, 400);
-    seenParties.add(party.partyKey);
+function selectedPartyRowsFromAccounts(registry, accountIds = []) {
+  const selectedKeys = new Set(accountIds.map(disputeSalesforceIdKey).filter(Boolean));
+  const candidateByKey = new Map((registry?.candidates || []).map((candidate) => [candidate.accountKey, candidate]));
+  const invalidKeys = [...selectedKeys].filter((key) => !candidateByKey.has(key));
+  if (invalidKeys.length) throw appError('One or more selected Accounts are no longer eligible for this STEM.', 400);
+  if (!selectedKeys.size) throw appError('Select at least one disputed Account before saving.', 400);
+  return [...selectedKeys].map((key) => {
+    const candidate = candidateByKey.get(key);
     return {
-      ...action,
-      party_name: party.name,
-      party_account_id: party.accountId,
-      party_key: party.partyKey,
-      dispute_ids: party.disputeIds,
+      id: null,
+      case_id: null,
+      stem_id: null,
+      account_id: candidate.accountId,
+      account_key: candidate.accountKey,
+      account_name: candidate.name,
+      roles: candidate.roles,
+      source_types: candidate.sourceTypes,
+      source_record_ids: candidate.sourceRecordIds,
+      payment_terms: candidate.paymentTerms,
+      products: candidate.products,
+      cancelled_source_only: candidate.cancelledSourceOnly,
     };
   });
 }
 
-async function refreshStoredDisputeActionTargets(client, caseRow, actions, registry, profile) {
-  const canonicalActions = canonicalizeStoredDisputeActions(actions, registry);
-  for (const action of canonicalActions) {
-    const { error } = await client
-      .from('dispute_beta_actions')
-      .update({
-        party_name: action.party_name,
-        party_account_id: action.party_account_id,
-        party_key: action.party_key,
-        dispute_ids: action.dispute_ids,
-        updated_by: profile?.id || action.updated_by || null,
-        updated_by_email: profile?.email || action.updated_by_email || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('case_id', caseRow.id)
-      .eq('id', action.id);
-    if (error) throw error;
+function validateStoredDisputeActions(actions, partyRows, registry) {
+  const partyById = disputePartyRowMap(partyRows);
+  const seen = new Set();
+  for (const action of actions || []) {
+    const party = partyById.get(action.party_id);
+    if (!party) throw appError(`Action ${action.action_label || action.id} has no selected disputed Account.`, 400);
+    const candidate = findDisputeParty(registry, action.party_side, party.account_id);
+    if (!candidate) throw appError(`${party.account_name} is no longer eligible on the ${action.party_side} side.`, 400);
+    const key = `${party.account_key}:${action.party_side}`;
+    if (seen.has(key)) throw appError(`Only one ${action.party_side} action may be added for ${party.account_name}.`, 400);
+    seen.add(key);
   }
-  return canonicalActions;
-}
-
-function disputeBetaWritebackForAction(action) {
-  const descriptionParts = [
-    `Dispute Workflow approved instruction: ${action.action_label || DISPUTE_BETA_ACTION_LABELS[action.action_type] || action.action_type}.`,
-    action.amount != null ? `Amount: ${Number(action.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.` : null,
-    action.close_reason ? `Close reason: ${action.close_reason}.` : null,
-    action.balance_payment_instruction ? `Balance payment: ${action.balance_payment_instruction}.` : null,
-    action.description || null,
-  ].filter(Boolean);
-
-  if (action.party_type === 'buyer') {
-    const buyerStatus = action.action_type === 'issue_buyer_credit_note'
-      ? 'Settlement Agreement Concluded'
-      : action.close_reason || 'Settlement Agreement Concluded';
-    return {
-      side: 'buyer',
-      updates: {
-        Status_Buyer__c: buyerStatus,
-        Description_Buyer__c: descriptionParts.join(' '),
-      },
-    };
-  }
-
-  const supplierStatusByAction = {
-    hold_supplier_payment: 'Decision Pending',
-    pay_full_supplier_invoice: 'Pay Full Supplier Invoice Amount',
-    deduct_specific_amount: 'Deduct below amount...',
-    close_supplier_dispute: action.close_reason || 'Settlement Agreement Concluded',
-  };
-  return {
-    side: 'supplier',
-    updates: {
-      Status_Supplier__c: supplierStatusByAction[action.action_type] || action.action_label || action.action_type,
-      Description_Supplier__c: descriptionParts.join(' '),
-      Deduction_Amount_Supplier__c: action.action_type === 'deduct_specific_amount' ? Number(action.amount || 0) : null,
-    },
-  };
-}
-
-async function writeDisputeBetaSummaryToSalesforce(client, caseRow, profile, actions = null) {
-  let actionRows = actions;
-  if (!actionRows) {
-    const { data, error } = await client
-      .from('dispute_beta_actions')
-      .select(DISPUTE_BETA_ACTION_SELECT)
-      .eq('case_id', caseRow.id);
-    if (error) throw error;
-    actionRows = data || [];
-  }
-  if (!actionRows.length) throw appError('At least one dispute action is required for Salesforce writeback.', 400);
-  for (const action of actionRows) {
-    const disputeIds = Array.isArray(action.dispute_ids) ? action.dispute_ids.filter(isSalesforceId) : [];
-    if (!action.party_account_id || !action.party_key || !disputeIds.length) {
-      throw appError(`Action ${action.action_label || action.id} has no valid Account-ID-based Salesforce target.`, 400);
-    }
-    if (action.party_type === 'supplier' && disputeIds.length !== 1) {
-      throw appError(`Supplier action ${action.action_label || action.id} must target exactly one Salesforce Dispute__c record.`, 400);
-    }
-  }
-  const results = [];
-  for (const action of actionRows) {
-    const disputeIds = Array.isArray(action.dispute_ids) ? action.dispute_ids.filter(isSalesforceId) : [];
-    const writeback = disputeBetaWritebackForAction(action);
-    for (const disputeId of disputeIds) {
-      try {
-        await sfRequest(`/sobjects/Dispute__c/${encodeURIComponent(disputeId)}`, {
-          method: 'PATCH',
-          body: writeback.updates,
-        });
-        results.push({ actionId: action.id, disputeId, status: 'success', side: writeback.side });
-      } catch (error) {
-        results.push({ actionId: action.id, disputeId, status: 'failed', side: writeback.side, message: error.message });
-      }
-    }
-  }
-
-  const failed = results.filter((result) => result.status === 'failed');
-  const succeeded = results.filter((result) => result.status === 'success');
-  const status = failed.length && succeeded.length ? 'partial' : failed.length ? 'failed' : 'success';
-  const errorMessage = failed.map((result) => `${result.disputeId}: ${result.message}`).join('\n') || null;
-  const { data: updatedCase, error: caseError } = await client
-    .from('dispute_beta_cases')
-    .update({
-      salesforce_writeback_status: status,
-      salesforce_writeback_error: errorMessage,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (caseError) throw caseError;
-  await writeDisputeBetaEvent(client, updatedCase, 'salesforce_writeback', profile, {
-    note: status === 'success' ? 'Salesforce summary writeback completed.' : 'Salesforce summary writeback needs review.',
-    metadata: { results },
-  });
-  if (status !== 'success') {
-    throw appError('Salesforce party writeback was incomplete. The case remains Pending Approval and can be approved again after the connection or record issue is corrected.', 502);
-  }
-  return { caseRow: updatedCase, results };
+  return actions || [];
 }
 
 async function disputeBetaList(body = {}, req, accessContext = null) {
@@ -9640,11 +9519,15 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
     isDisputeAccounting: isDisputeAccounting(profile),
     capabilities: disputeWorkflowCapabilities(profile),
     requiredSalesforceFieldsMissing: true,
-    fieldWarning: 'Detailed approval, accounting, document, and audit state is stored in Supabase. Salesforce receives the high-level Dispute Status and approved party instructions without requiring additional Salesforce fields.',
-    rows: rows.map((row) => ({
-      ...row,
-      _Dispute_Workflow: workflowMap[row.Id] || { case: null, actions: [], events: [], documents: [] },
-    })),
+    fieldWarning: 'Disputed Accounts, approval, accounting, documents, and audit state are stored in Supabase. Salesforce receives only the high-level STEM Dispute Status.',
+    rows: rows.map((row) => {
+      const workflow = workflowMap[row.Id] || { case: null, parties: [], actions: [], events: [], documents: [] };
+      return {
+        ...row,
+        _Dispute_Parties: disputeRegistryWithSelection(row._Dispute_Parties, workflow.parties),
+        _Dispute_Workflow: workflow,
+      };
+    }),
   };
 }
 
@@ -9654,7 +9537,11 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const stemId = stem.Id || body.stemId;
   if (!stemId) throw appError('stemId is required.', 400);
   const currentStem = await loadCurrentDisputeStem(stemId, accessContext || { client, profile });
-  const registry = assertValidDisputeParties(currentStem);
+  const candidateRegistry = currentStem._Dispute_Parties;
+  if (!candidateRegistry?.candidateSchemaValid) {
+    const messages = (candidateRegistry?.issues || []).map((item) => item.message).filter(Boolean);
+    throw appError(`Correct the Salesforce Account sources before continuing: ${messages.join(' ')}`, 400);
+  }
   const { data: existingCase, error: existingError } = await client
     .from('dispute_beta_cases')
     .select(DISPUTE_BETA_CASE_SELECT)
@@ -9664,20 +9551,79 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   if (existingCase && !['Draft', 'Rejected', 'Revision Requested'].includes(existingCase.workflow_status)) {
     throw appError('Trader instructions are locked after submission. Request a revision before editing them.', 400);
   }
-  const caseRow = await upsertDisputeBetaCase(client, currentStem, {
-    latestNote: body.latestNote,
-    workflowStatus: 'Draft',
-    approvalStatus: 'Draft',
+  const selectedPartyRows = selectedPartyRowsFromAccounts(candidateRegistry, body.selectedPartyAccountIds || []);
+  if (existingCase) {
+    const selectedAccountKeys = new Set(selectedPartyRows.map((party) => party.account_key));
+    const [storedPartiesResult, storedDocumentsResult] = await Promise.all([
+      client
+        .from('dispute_workflow_parties')
+        .select('id,account_key,account_name')
+        .eq('case_id', existingCase.id),
+      client
+        .from('dispute_workflow_documents')
+        .select('party_id')
+        .eq('case_id', existingCase.id),
+    ]);
+    if (storedPartiesResult.error) throw storedPartiesResult.error;
+    if (storedDocumentsResult.error) throw storedDocumentsResult.error;
+    const documentedPartyIds = new Set((storedDocumentsResult.data || []).map((document) => document.party_id).filter(Boolean));
+    const documentedRemovedParties = (storedPartiesResult.data || []).filter((party) => (
+      !selectedAccountKeys.has(party.account_key) && documentedPartyIds.has(party.id)
+    ));
+    if (documentedRemovedParties.length) {
+      const names = documentedRemovedParties.map((party) => party.account_name || party.account_key).join(', ');
+      throw appError(`Keep ${names} selected because dispute documents are already linked to the Account.`, 400);
+    }
+  }
+  const registry = disputeRegistryWithSelection(candidateRegistry, selectedPartyRows);
+  const caseInput = { id: existingCase?.id || null, stem_id: stemId };
+  const normalizedActions = (body.actions || []).map((action) => ({
+    id: String(action.id || '').trim() || null,
+    ...normalizeDisputeBetaAction(action, caseInput, profile, registry),
+  }));
+  const seenActionSides = new Set();
+  for (const action of normalizedActions) {
+    const key = `${action.party_account_key}:${action.party_side}`;
+    if (seenActionSides.has(key)) throw appError('Only one action per selected Account side is allowed.', 400);
+    seenActionSides.add(key);
+  }
+  const financials = calculateDisputeBetaSettlement(normalizedActions);
+  const casePayload = {
+    ...disputeBetaCaseFromStem(currentStem),
+    workflow_status: 'Draft',
+    approval_status: 'Draft',
+    latest_note: String(body.latestNote || '').trim(),
+    settlement_financials: financials,
+    settlement_pnl: financials.settlementPnl,
+  };
+  const { data: savedCaseId, error: saveError } = await client.rpc('save_dispute_workflow_draft', {
+    p_case: casePayload,
+    p_parties: selectedPartyRows.map((party) => ({
+      account_id: party.account_id,
+      account_key: party.account_key,
+      account_name: party.account_name,
+      roles: party.roles,
+      source_types: party.source_types,
+      source_record_ids: party.source_record_ids,
+      payment_terms: party.payment_terms,
+      products: party.products,
+      cancelled_source_only: party.cancelled_source_only,
+    })),
+    p_actions: normalizedActions,
+    p_actor: { id: profile.id, email: profile.email },
+    p_event_note: body.latestNote || 'Draft saved.',
   });
-  const { caseRow: updatedCase, actions } = await replaceDisputeBetaActions(client, caseRow, body.actions || [], profile, registry);
-  await writeDisputeBetaEvent(client, updatedCase, 'draft_saved', profile, { note: body.latestNote || 'Draft saved.' });
+  if (saveError) throw saveError;
+  const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
+  const { partyRows, actions } = await loadDisputeWorkflowActions(client, updatedCase.id);
   const statusCase = updatedCase.current_salesforce_status === 'Open - Trader Review'
     ? updatedCase
     : await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
   const documents = await loadDisputeWorkflowDocuments(client, updatedCase.id);
   return {
     case: serializeDisputeBetaCase(statusCase),
-    actions: actions.map(serializeDisputeBetaAction),
+    parties: partyRows.map(serializeDisputeWorkflowParty),
+    actions,
     documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }
@@ -9687,13 +9633,9 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  const registry = assertValidDisputeParties(currentStem);
-  const { data: actionRows, error: actionError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id);
-  if (actionError) throw actionError;
-  const actions = await refreshStoredDisputeActionTargets(client, caseRow, actionRows || [], registry, profile);
+  const { partyRows, actionRows, actions: serializedActions } = await loadDisputeWorkflowActions(client, caseRow.id);
+  const registry = assertValidDisputeParties(currentStem, partyRows);
+  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
   if (!actions?.length) throw appError('Add at least one trader action before submitting for approval.', 400);
   if (!['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status)) {
     throw appError('Only draft, rejected, or revision-requested cases can be submitted.', 400);
@@ -9720,7 +9662,8 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
   return {
     case: serializeDisputeBetaCase(statusCase),
-    actions: actions.map(serializeDisputeBetaAction),
+    parties: partyRows.map(serializeDisputeWorkflowParty),
+    actions: serializedActions,
     documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }
@@ -9732,17 +9675,11 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be approved.', 400);
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  const registry = assertValidDisputeParties(currentStem);
-  const { data: actionRows, error: actionsError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
-  if (actionsError) throw actionsError;
-  const actions = await refreshStoredDisputeActionTargets(client, caseRow, actionRows || [], registry, profile);
+  const { partyRows, actionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
+  const registry = assertValidDisputeParties(currentStem, partyRows);
+  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
   await assertRequiredDisputeDocuments(client, actions || []);
-  const writeback = await writeDisputeBetaSummaryToSalesforce(client, caseRow, profile, actions || []);
-  const salesforceCase = await writeDisputeWorkflowStatusToSalesforce(client, writeback.caseRow, profile, 'Approved - Pending Accounting', { required: true });
+  const salesforceCase = await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 'Approved - Pending Accounting', { required: true });
   const nowIso = new Date().toISOString();
   const { error: accountingResetError } = await client
     .from('dispute_beta_actions')
@@ -9785,11 +9722,13 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
     .order('created_at', { ascending: true });
   if (updatedActionsError) throw updatedActionsError;
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  const partyMap = disputePartyRowMap(partyRows);
   return {
     case: serializeDisputeBetaCase(updatedCase),
-    actions: (updatedActions || []).map(serializeDisputeBetaAction),
+    parties: partyRows.map(serializeDisputeWorkflowParty),
+    actions: (updatedActions || []).map((action) => serializeDisputeBetaAction(action, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
-    writebackResults: writeback.results,
+    writebackResults: [],
   };
 }
 
@@ -9839,7 +9778,8 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  const registry = assertValidDisputeParties(currentStem);
+  const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
+  const registry = assertValidDisputeParties(currentStem, partyRows);
   const canEdit = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
   if (!canEdit && !isDisputeBetaAdmin(profile) && !isDisputeAccounting(profile)) {
     throw appError('Only accounting or administrators can add documents after trader submission.', 403);
@@ -9858,11 +9798,24 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
     if (!data) throw appError('The selected workflow action was not found.', 404);
     action = data;
   }
-  if (!action) throw appError('A saved workflow action is required before uploading a dispute document.', 400);
-  const party = canonicalDisputeActionTarget(action, action.party_type, registry);
+  const partyId = String(body.partyId || action?.party_id || '').trim();
+  const partyRow = partyRows.find((party) => party.id === partyId);
+  if (!partyRow) throw appError('Select a saved disputed Account before uploading a document.', 400);
+  const partySide = String(body.partySide || action?.party_side || '').trim().toLowerCase();
+  if (!['buyer', 'supplier'].includes(partySide)) throw appError('Select the buyer or supplier side for this document.', 400);
+  const party = findDisputeParty(registry, partySide, partyRow.account_id);
+  if (!party || !(registry.selected || []).some((selected) => selected.accountKey === party.accountKey)) {
+    throw appError('The selected Account side is no longer valid for this STEM.', 400);
+  }
+  if (action && (action.party_id !== partyRow.id || action.party_side !== partySide)) {
+    throw appError('The selected action does not belong to this Account side.', 400);
+  }
 
   const documentType = String(body.documentType || '').trim();
   if (!DISPUTE_WORKFLOW_DOCUMENT_TYPES.has(documentType)) throw appError('Valid document type is required.', 400);
+  const documentDirection = String(body.documentDirection || '').trim().toLowerCase();
+  if (!DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS.has(documentDirection)) throw appError('Select a valid document direction.', 400);
+  if (!documentDirection.endsWith(`_${partySide}`)) throw appError(`Document direction must match the ${partySide} side.`, 400);
   const originalFileName = String(body.originalFileName || '').trim();
   if (!originalFileName) throw appError('Document filename is required.', 400);
   const rawBase64 = String(body.base64 || '').replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
@@ -9871,89 +9824,97 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   if (!buffer.length) throw appError('Document content is empty or invalid.', 400);
   if (buffer.length > DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES) throw appError('Document is too large. Maximum size is 3 MB.', 413);
 
-  const partyType = party.type;
   const partyName = party.name;
-  const disputeIds = party.disputeIds.filter(isSalesforceId);
-  const disputeId = disputeIds[0] || null;
-  const linkedRecordIds = [caseRow.stem_id, ...disputeIds].filter(isSalesforceId);
   const linkedRecordId = caseRow.stem_id;
-  const existingDocuments = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  const sequence = String(existingDocuments.length + 1).padStart(2, '0');
   const extension = disputeWorkflowFileExtension(originalFileName);
-  const dateToken = new Date().toISOString().slice(0, 10).replaceAll('-', '');
-  const stemToken = disputeWorkflowFilenameToken(caseRow.stem_name || caseRow.stem_id, 'STEM');
-  const partyToken = disputeWorkflowFilenameToken(partyName, partyType.toUpperCase());
-  const accountToken = disputeWorkflowFilenameToken(party.accountId.slice(-6), 'ACCOUNT', 8);
-  const typeToken = disputeWorkflowFilenameToken(documentType, 'DOCUMENT');
-  const smartFileName = `DISPUTE-${stemToken}-${partyType.toUpperCase()}-${partyToken}-${accountToken}-${typeToken}-${dateToken}-${sequence}${extension ? `.${extension}` : ''}`;
+  if (!extension) throw appError('The selected document must have a filename extension.', 400);
+  const directionLabel = disputeWorkflowDirectionLabel(documentDirection);
+  const suggestedBaseName = `${disputeWorkflowHongKongDateToken()} ${directionLabel}`;
+  const requestedInput = String(body.requestedFileName || '').replace(new RegExp(`\\.${extension}$`, 'i'), '');
+  const requestedBaseName = disputeWorkflowEditableFilename(requestedInput, suggestedBaseName);
   const contentType = String(body.contentType || 'application/octet-stream').trim() || 'application/octet-stream';
-  const title = extension ? smartFileName.slice(0, -(extension.length + 1)) : smartFileName;
-
-  const contentVersion = await sfRequest('/sobjects/ContentVersion', {
-    method: 'POST',
-    body: {
-      Title: title,
-      PathOnClient: `/${smartFileName}`,
-      VersionData: buffer.toString('base64'),
-      FirstPublishLocationId: linkedRecordId,
-    },
-  });
-  const contentVersionId = contentVersion?.id;
-  if (!isSalesforceId(contentVersionId)) throw appError('Salesforce did not return a ContentVersion id.', 502);
-  const versionRows = await queryRows(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id = '${escapeSoql(contentVersionId)}' LIMIT 1`, { softFail: true });
-  const contentDocumentId = versionRows[0]?.ContentDocumentId || null;
-  if (!isSalesforceId(contentDocumentId)) throw appError('Salesforce did not return a ContentDocument id.', 502);
-  try {
-    for (const recordId of disputeIds) {
-      await sfRequest('/sobjects/ContentDocumentLink', {
-        method: 'POST',
-        body: {
-          ContentDocumentId: contentDocumentId,
-          LinkedEntityId: recordId,
-          ShareType: 'V',
-          Visibility: 'AllUsers',
-        },
-      });
+  let documentRow = null;
+  for (let suffix = 0; suffix < 1000; suffix += 1) {
+    const smartFileName = `${requestedBaseName}${suffix ? `-${suffix}` : ''}.${extension}`;
+    const { data, error } = await client
+      .from('dispute_workflow_documents')
+      .insert({
+        case_id: caseRow.id,
+        action_id: actionId,
+        party_id: partyRow.id,
+        party_side: partySide,
+        stem_id: caseRow.stem_id,
+        party_name: partyName,
+        party_account_id: party.accountId,
+        document_direction: documentDirection,
+        document_type: documentType,
+        original_filename: originalFileName,
+        requested_filename: `${requestedBaseName}.${extension}`,
+        smart_filename: smartFileName,
+        upload_status: 'pending',
+        content_type: contentType,
+        file_extension: extension,
+        content_size: buffer.length,
+        salesforce_content_version_id: null,
+        salesforce_linked_record_id: linkedRecordId,
+        uploaded_by: profile.id,
+        uploaded_by_email: profile.email,
+      })
+      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
+      .single();
+    if (!error) {
+      documentRow = data;
+      break;
     }
-  } catch (error) {
-    await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(contentDocumentId)}`, { method: 'DELETE' }).catch(() => null);
-    throw appError(`Salesforce document links could not be completed: ${error.message}`, 502);
+    if (error.code !== '23505') throw error;
   }
-  const salesforceUrl = contentDocumentId
-    ? `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`
-    : `${getInstanceUrl()}/lightning/r/${linkedRecordId}/view`;
-  const { data: documentRow, error: documentError } = await client
-    .from('dispute_workflow_documents')
-    .insert({
-      case_id: caseRow.id,
-      action_id: actionId,
-      stem_id: caseRow.stem_id,
-      party_type: partyType,
-      party_name: partyName,
-      party_account_id: party.accountId,
-      dispute_id: disputeId,
-      dispute_ids: disputeIds,
-      document_type: documentType,
-      original_filename: originalFileName,
-      smart_filename: smartFileName,
-      content_type: contentType,
-      file_extension: extension || null,
-      content_size: buffer.length,
-      salesforce_content_version_id: contentVersionId,
-      salesforce_content_document_id: contentDocumentId,
-      salesforce_linked_record_id: linkedRecordId,
-      salesforce_linked_record_ids: linkedRecordIds,
-      salesforce_url: salesforceUrl,
-      uploaded_by: profile.id,
-      uploaded_by_email: profile.email,
-    })
-    .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
-    .single();
-  if (documentError) throw documentError;
+  if (!documentRow) throw appError('A unique document filename could not be reserved.', 409);
+
+  const smartFileName = documentRow.smart_filename;
+  const title = smartFileName.slice(0, -(extension.length + 1));
+  let contentVersionId = null;
+  let contentDocumentId = null;
+
+  try {
+    const contentVersion = await sfRequest('/sobjects/ContentVersion', {
+      method: 'POST',
+      body: {
+        Title: title,
+        PathOnClient: `/${smartFileName}`,
+        VersionData: buffer.toString('base64'),
+        FirstPublishLocationId: linkedRecordId,
+      },
+    });
+    contentVersionId = contentVersion?.id;
+    if (!isSalesforceId(contentVersionId)) throw appError('Salesforce did not return a ContentVersion id.', 502);
+    const versionRows = await queryRows(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id = '${escapeSoql(contentVersionId)}' LIMIT 1`, { softFail: true });
+    contentDocumentId = versionRows[0]?.ContentDocumentId || null;
+    if (!isSalesforceId(contentDocumentId)) throw appError('Salesforce did not return a ContentDocument id.', 502);
+    const salesforceUrl = `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`;
+    const { data: completedDocument, error: documentError } = await client
+      .from('dispute_workflow_documents')
+      .update({
+        upload_status: 'complete',
+        salesforce_content_version_id: contentVersionId,
+        salesforce_content_document_id: contentDocumentId,
+        salesforce_url: salesforceUrl,
+      })
+      .eq('id', documentRow.id)
+      .eq('upload_status', 'pending')
+      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
+      .single();
+    if (documentError) throw documentError;
+    documentRow = completedDocument;
+  } catch (error) {
+    if (contentDocumentId) await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(contentDocumentId)}`, { method: 'DELETE' }).catch(() => null);
+    else if (contentVersionId) await sfRequest(`/sobjects/ContentVersion/${encodeURIComponent(contentVersionId)}`, { method: 'DELETE' }).catch(() => null);
+    await client.from('dispute_workflow_documents').delete().eq('id', documentRow.id);
+    throw error;
+  }
   await writeDisputeBetaEvent(client, caseRow, 'document_uploaded', profile, {
     actionId,
     note: `${smartFileName} uploaded to Salesforce.`,
-    metadata: { documentId: documentRow.id, documentType, partyType, partyName, partyAccountId: party.accountId, contentVersionId, linkedRecordIds },
+    metadata: { documentId: documentRow.id, documentType, documentDirection, partySide, partyName, partyAccountId: party.accountId, contentVersionId: documentRow.salesforce_content_version_id, linkedRecordIds: [linkedRecordId] },
   });
   return { document: serializeDisputeWorkflowDocument(documentRow) };
 }
@@ -9972,6 +9933,10 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   if (!action) throw appError('Dispute Workflow action not found.', 404);
   const caseRow = await getDisputeBetaCase(client, action.case_id);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
+  const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
+  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  const registry = assertValidDisputeParties(currentStem, partyRows);
+  validateStoredDisputeActions([action], partyRows, registry);
   if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
     throw appError('Accounting can update actions only after approval and before closure.', 400);
   }
@@ -10056,10 +10021,12 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     .single();
   if (caseError) throw caseError;
   const salesforceCase = await writeDisputeWorkflowStatusToSalesforce(client, statusCase, profile, workflowStatus);
+  const partyMap = disputePartyRowMap(partyRows);
   return {
     case: serializeDisputeBetaCase(salesforceCase),
-    action: serializeDisputeBetaAction(updatedAction),
-    actions: (actions || []).map(serializeDisputeBetaAction),
+    parties: partyRows.map(serializeDisputeWorkflowParty),
+    action: serializeDisputeBetaAction(updatedAction, partyMap),
+    actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }
@@ -10080,18 +10047,13 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  const registry = assertValidDisputeParties(currentStem);
+  const { partyRows, actionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
+  const registry = assertValidDisputeParties(currentStem, partyRows);
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
   if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
   const finalNote = String(body.note || '').trim();
   if (!finalNote) throw appError('Final closure note is required.', 400);
-  const { data: actionRows, error: actionsError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
-  if (actionsError) throw actionsError;
-  const actions = await refreshStoredDisputeActionTargets(client, caseRow, actionRows || [], registry, profile);
+  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
   if (!(actions || []).length || !(actions || []).every((action) => action.execution_status === 'Settled' || action.execution_status === 'Not Required')) {
     throw appError('Every accounting action must be Settled or Not Required before closure.', 400);
   }
@@ -10116,9 +10078,11 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: finalNote });
+  const partyMap = disputePartyRowMap(partyRows);
   return {
     case: serializeDisputeBetaCase(updatedCase),
-    actions: (actions || []).map(serializeDisputeBetaAction),
+    parties: partyRows.map(serializeDisputeWorkflowParty),
+    actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }

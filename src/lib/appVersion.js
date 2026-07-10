@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.8';
+export const APP_VERSION = '2.0.9';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.9',
+    releasedAt: '2026-07-10',
+    title: 'Supabase-owned dispute parties',
+    changes: [
+      'Moved disputed Account selection and workflow instructions into Supabase without using the Salesforce Dispute object.',
+      'Included buyer, line-item supplier, and extra-cost supplier Accounts, including cancelled sources, with Account-ID deduplication.',
+      'Added account-first Salesforce document uploads with editable date-and-direction names and automatic duplicate suffixes.',
+    ],
+  },
   {
     version: '2.0.8',
     releasedAt: '2026-07-10',
