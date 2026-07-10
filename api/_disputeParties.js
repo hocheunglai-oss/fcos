@@ -21,10 +21,6 @@ function relatedName(record, relationshipName) {
   return text(relationshipName && record?.[relationshipName]?.Name);
 }
 
-function accountSuffix(accountId) {
-  return text(accountId).slice(-6);
-}
-
 function issue(code, message, recordIds = [], details = {}) {
   return { code, message, recordIds: unique(recordIds), details };
 }
@@ -140,17 +136,41 @@ function labelCandidates(candidates) {
     accountKeys.add(candidate.accountKey);
     accountsByName.set(nameKey, accountKeys);
   }
-  return candidates.map((candidate) => {
+  const labelled = candidates.map((candidate) => {
     const nameKey = text(candidate.name).replace(/\s+/g, ' ').toLowerCase();
     const collision = (accountsByName.get(nameKey)?.size || 0) > 1;
-    const roleLabel = candidate.roles.length > 1 ? 'Buyer & Supplier' : null;
+    const roleLabel = candidate.roles.length > 1
+      ? 'Buyer & Supplier'
+      : collision
+        ? candidate.roles[0] === 'buyer' ? 'Buyer' : 'Supplier'
+        : null;
     const terms = candidate.roles.includes('supplier') ? candidate.paymentTerms.join(', ') : null;
+    const products = collision && candidate.roles.includes('supplier') ? candidate.products.join(', ') : null;
+    const baseLabel = [candidate.name || 'Account', roleLabel, terms, products].filter(Boolean).join(' | ');
+    return {
+      candidate,
+      baseLabel,
+    };
+  });
+  const labelCounts = new Map();
+  for (const item of labelled) {
+    const key = item.baseLabel.toLowerCase();
+    labelCounts.set(key, (labelCounts.get(key) || 0) + 1);
+  }
+  const labelOccurrences = new Map();
+  return labelled.map(({ candidate, baseLabel }) => {
+    const labelKey = baseLabel.toLowerCase();
+    const occurrence = (labelOccurrences.get(labelKey) || 0) + 1;
+    labelOccurrences.set(labelKey, occurrence);
+    const optionLabel = (labelCounts.get(labelKey) || 0) > 1
+      ? `${candidate.roles.includes('supplier') ? 'Supplier' : 'Account'} option ${occurrence}`
+      : null;
     return {
       ...candidate,
       partyKey: `account:${candidate.accountId}`,
       type: candidate.roles.length > 1 ? 'buyer_supplier' : candidate.roles[0],
       cancelledSourceOnly: candidate.roles.includes('buyer') ? false : candidate.sourceCancellation.length > 0 && candidate.sourceCancellation.every(Boolean),
-      label: [candidate.name || 'Account', roleLabel, terms, collision ? accountSuffix(candidate.accountId) : null].filter(Boolean).join(' | '),
+      label: [baseLabel, optionLabel].filter(Boolean).join(' | '),
     };
   });
 }

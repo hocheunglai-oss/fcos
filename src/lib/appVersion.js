@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.9';
+export const APP_VERSION = '2.0.10';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.10',
+    releasedAt: '2026-07-10',
+    title: 'Dispute dates and document drop zone',
+    changes: [
+      'Removed Salesforce Account IDs from the user-facing dispute workflow while retaining Account-ID validation internally.',
+      'Added drag-and-drop document selection to the Salesforce dispute document upload modal.',
+      'Added delivery, buyer payment due, and supplier payment due dates to the workflow header and financial exposure section.',
+    ],
+  },
   {
     version: '2.0.9',
     releasedAt: '2026-07-10',

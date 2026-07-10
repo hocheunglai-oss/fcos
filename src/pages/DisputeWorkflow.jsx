@@ -47,6 +47,8 @@ const DOCUMENT_TYPES = [
   { value: 'correspondence', label: 'Correspondence' },
   { value: 'other_support', label: 'Other Support' },
 ];
+const DISPUTE_DOCUMENT_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx';
+const DISPUTE_DOCUMENT_EXTENSION_RE = /\.(pdf|png|jpe?g|webp|docx?|xlsx?)$/i;
 const DEFAULT_ACTION = {
   actionType: 'hold_supplier_payment',
   partyType: 'supplier',
@@ -116,21 +118,9 @@ function queueDetailLines(row) {
   const rows = supplierDueRows(row);
   if (rows.length) {
     const seenSupplierGroups = new Set();
-    const accountsBySupplierName = new Map();
-    rows.forEach((dueRow) => {
-      const nameKey = textValue(dueRow.supplierName, 'Supplier').replace(/\s+/g, ' ').toLowerCase();
-      const accountKey = textValue(dueRow.supplierAccountId, '').slice(0, 15);
-      if (!accountKey) return;
-      const accountKeys = accountsBySupplierName.get(nameKey) || new Set();
-      accountKeys.add(accountKey);
-      accountsBySupplierName.set(nameKey, accountKeys);
-    });
     return rows.map((dueRow, index) => {
       const supplierName = dueRow.supplierName || 'Supplier';
-      const nameKey = textValue(supplierName, 'Supplier').replace(/\s+/g, ' ').toLowerCase();
-      const hasNameCollision = (accountsBySupplierName.get(nameKey)?.size || 0) > 1;
-      const supplierAccountSuffix = hasNameCollision ? textValue(dueRow.supplierAccountId, '').slice(-6) : '';
-      const supplierLabel = [supplierName, dueRow.paymentTerm, supplierAccountSuffix].filter(Boolean).join(' | ');
+      const supplierLabel = [supplierName, dueRow.paymentTerm].filter(Boolean).join(' | ');
       const dueDate = dueRow.dueDate || null;
       const invoiceName = dueRow.invoiceName || '';
       const groupKey = `${dueRow.supplierAccountId || supplierName}\u0000${dueDate || ''}\u0000${invoiceName}`;
@@ -466,6 +456,7 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
   const buyerExposure = stem?._Buyer_Finance_Row || {
     buyerName: stem?._Buyer_Name,
     buyerInvoiceAmount: stem?.Total_Invoice_Amount__c,
+    paymentDueDate: stem?._Buyer_Invoice_Due_Date || stem?.Buyer_Pay_Term_Date__c,
     receivableBalance: stem?.Receivable_Balance__c,
     status: stem?._Buyer_Dispute_Label,
   };
@@ -489,6 +480,8 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
           <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 text-sm">
             <div className="text-muted-foreground">Buyer invoice amount</div>
             <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.buyerInvoiceAmount)}</div>
+            <div className="text-muted-foreground">Buyer payment due date</div>
+            <div className="font-semibold tabular-nums">{fmtDate(buyerExposure.paymentDueDate || stem?._Buyer_Invoice_Due_Date || stem?.Buyer_Pay_Term_Date__c)}</div>
             <div className="text-muted-foreground">Receivable balance</div>
             <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.receivableBalance)}</div>
             <div className="text-muted-foreground">Buyer dispute status</div>
@@ -498,11 +491,12 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
         </div>
 
         <div className="overflow-hidden rounded-lg border border-border bg-card">
-          <table className="w-full min-w-[620px] text-xs">
+          <table className="w-full min-w-[760px] text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/40">
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment Due Date</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable</th>
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Dispute</th>
               </tr>
@@ -512,6 +506,7 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
                 <tr key={`${row.supplierName || 'supplier'}-${index}`} className="border-b border-border/40">
                   <td className="px-3 py-2 font-medium text-foreground">{row.supplierName || 'Supplier'}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.supplierInvoiceAmount)}</td>
+                  <td className="px-3 py-2 tabular-nums text-muted-foreground">{(row.paymentDueDates?.length ? row.paymentDueDates : [row.paymentDueDate]).filter(Boolean).map(fmtDate).join(', ') || '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.payableBalance)}</td>
                   <td className="px-3 py-2 text-muted-foreground">
                     <div>{selectedKeys.has(String(row.accountId || '').slice(0, 15)) ? 'Selected for dispute' : 'Not selected'}</div>
@@ -520,7 +515,7 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
                 </tr>
               ))}
               {!supplierRows.length && (
-                <tr><td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">No supplier invoice or payable rows found for this STEM.</td></tr>
+                <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No supplier invoice or payable rows found for this STEM.</td></tr>
               )}
             </tbody>
           </table>
@@ -660,6 +655,7 @@ function DocumentUploadModal({ caseRow, party, partySide, action, existingDocume
   const [requestedName, setRequestedName] = useState('');
   const [nameEdited, setNameEdited] = useState(false);
   const [file, setFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -670,6 +666,7 @@ function DocumentUploadModal({ caseRow, party, partySide, action, existingDocume
     setRequestedName(availableDocumentBaseName(nextDirection, '', existingDocuments));
     setNameEdited(false);
     setFile(null);
+    setDragActive(false);
     setError('');
   }, [open, action?.id, party?.id, partySide]);
 
@@ -679,9 +676,21 @@ function DocumentUploadModal({ caseRow, party, partySide, action, existingDocume
     if (!nameEdited) setRequestedName(availableDocumentBaseName(value, extension, existingDocuments));
   };
   const updateFile = (nextFile) => {
+    if (nextFile && !DISPUTE_DOCUMENT_EXTENSION_RE.test(nextFile.name || '')) {
+      setFile(null);
+      setError('Select a PDF, image, Word, or Excel document.');
+      return;
+    }
     setFile(nextFile);
+    setError('');
     const nextExtension = String(nextFile?.name || '').match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() || '';
     if (!nameEdited) setRequestedName(availableDocumentBaseName(direction, nextExtension, existingDocuments));
+  };
+  const dropFile = (event) => {
+    event.preventDefault();
+    setDragActive(false);
+    if (busy) return;
+    updateFile(event.dataTransfer.files?.[0] || null);
   };
 
   const upload = async () => {
@@ -723,7 +732,26 @@ function DocumentUploadModal({ caseRow, party, partySide, action, existingDocume
           <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"><div className="font-semibold">{party?.name || party?.accountName}</div><div className="text-muted-foreground">{partySide === 'buyer' ? 'Buyer' : 'Supplier'}{action ? ` · ${action.actionLabel || actionLabel(action.actionType)}` : ''}</div></div>
           <div className="space-y-1.5"><Label>Direction</Label><Select value={direction} onValueChange={updateDirection}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={`from_${partySide}`}>From {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem><SelectItem value={`to_${partySide}`}>To {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem></SelectContent></Select></div>
           <div className="space-y-1.5"><Label>Document type</Label><Select value={documentType} onValueChange={setDocumentType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>)}</SelectContent></Select></div>
-          <div className="space-y-1.5"><Label htmlFor="dispute-document-file">File</Label><Input id="dispute-document-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx" onChange={(event) => updateFile(event.target.files?.[0] || null)} /><p className="text-xs text-muted-foreground">Maximum 3 MB.</p></div>
+          <div className="space-y-1.5">
+            <Label htmlFor="dispute-document-file">File</Label>
+            <label
+              htmlFor="dispute-document-file"
+              onDragEnter={(event) => { event.preventDefault(); if (!busy) setDragActive(true); }}
+              onDragOver={(event) => { event.preventDefault(); if (!busy) setDragActive(true); }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragActive(false); }}
+              onDrop={dropFile}
+              className={cn(
+                'flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-5 text-center transition-colors',
+                dragActive ? 'border-primary bg-primary/5' : 'border-input bg-muted/20 hover:border-primary/60',
+                busy && 'cursor-not-allowed opacity-60'
+              )}
+            >
+              <Upload className="h-5 w-5 text-muted-foreground" />
+              <span className="max-w-full truncate text-sm font-medium text-foreground">{file?.name || 'Drop document here or choose a file'}</span>
+              <span className="text-xs text-muted-foreground">PDF, image, Word, or Excel · Maximum 3 MB</span>
+              <input id="dispute-document-file" type="file" accept={DISPUTE_DOCUMENT_ACCEPT} onChange={(event) => updateFile(event.target.files?.[0] || null)} disabled={busy} className="sr-only" />
+            </label>
+          </div>
           <div className="space-y-1.5"><Label htmlFor="dispute-document-name">Salesforce filename</Label><div className="flex items-center"><Input id="dispute-document-name" value={requestedName} onChange={(event) => { setRequestedName(event.target.value); setNameEdited(true); }} className="rounded-r-none" /><div className="flex h-10 min-w-14 items-center rounded-r-md border border-l-0 border-input bg-muted px-3 text-xs text-muted-foreground">{extension ? `.${extension}` : '.file'}</div></div><p className="text-xs text-muted-foreground">If this name already exists on the STEM, FCOS adds -1, -2, and so on.</p></div>
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
         </div>
@@ -1053,7 +1081,10 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogContent className="flex h-[92vh] w-[min(1180px,96vw)] max-w-none flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
-          <DialogTitle className="pr-8">Dispute Workflow - {stem._Display_Name || stem.Name}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pr-8">
+            <span>Dispute Workflow - {stem._Display_Name || stem.Name}</span>
+            <span className="text-sm font-medium text-muted-foreground">Delivery {fmtDate(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || stem._Effective_Date)}</span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="grid shrink-0 gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
@@ -1107,7 +1138,6 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-semibold text-foreground">{candidate.name}</span>
                         <span className="mt-0.5 block text-xs text-muted-foreground">{roleLabel}{candidate.paymentTerms?.length ? ` · ${candidate.paymentTerms.join(', ')}` : ''}</span>
-                        <span className="mt-1 block font-mono text-[10px] text-muted-foreground">{candidate.accountId}</span>
                         {candidate.cancelledSourceOnly && <span className="mt-1 block text-[11px] text-amber-700">Eligible from cancelled source item</span>}
                       </span>
                     </label>
@@ -1158,7 +1188,6 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">
                         <div>{action.partyName || '—'}</div>
-                        {action.partyAccountId && <div className="font-mono text-[10px]">{action.partyAccountId}</div>}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(action.amount)}</td>
                       <td className="px-3 py-2 text-muted-foreground">

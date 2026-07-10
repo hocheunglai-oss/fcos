@@ -8824,6 +8824,15 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             });
           }
         }
+        const supplierPaymentDueDatesByAccount = new Map();
+        for (const dueRow of supplierInvoiceDueRows) {
+          const accountKey = disputeSalesforceIdKey(dueRow.supplierAccountId);
+          if (!accountKey || !dueRow.dueDate) continue;
+          const dueDates = supplierPaymentDueDatesByAccount.get(accountKey) || new Set();
+          dueDates.add(dueRow.dueDate);
+          supplierPaymentDueDatesByAccount.set(accountKey, dueDates);
+        }
+        const paymentDueDatesForAccount = (accountKey) => [...(supplierPaymentDueDatesByAccount.get(accountKey) || [])].sort();
         const supplementalLineBuyByAccount = (hasSupplierInvoice || supplierInvoices.length)
           ? uninvoicedSupplierLineBuyByAccount
           : supplierLineBuyByAccount;
@@ -8841,26 +8850,34 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         });
         const supplierCandidateRows = disputePartyRegistry.suppliers.map((party) => {
           const finance = supplierFinanceByAccount.get(party.accountKey);
+          const paymentDueDates = paymentDueDatesForAccount(party.accountKey);
           return {
             ...party,
             supplierName: party.name,
             status: null,
             description: null,
             supplierInvoiceAmount: finance?.supplierInvoiceAmount ?? null,
+            paymentDueDate: paymentDueDates[0] || null,
+            paymentDueDates,
             payableBalance: finance?.payableBalance ?? null,
           };
         });
         const disputedSupplierKeys = new Set(disputePartyRegistry.suppliers.map((party) => party.accountKey));
         const supplierFinanceOnlyRows = [...supplierFinanceByAccount.values()]
           .filter((finance) => !disputedSupplierKeys.has(finance.accountKey))
-          .map((finance) => ({
-            accountId: finance.accountId,
-            accountKey: finance.accountKey,
-            supplierName: finance.supplierName,
-            status: null,
-            supplierInvoiceAmount: finance.supplierInvoiceAmount,
-            payableBalance: finance.payableBalance,
-          }));
+          .map((finance) => {
+            const paymentDueDates = paymentDueDatesForAccount(finance.accountKey);
+            return {
+              accountId: finance.accountId,
+              accountKey: finance.accountKey,
+              supplierName: finance.supplierName,
+              status: null,
+              supplierInvoiceAmount: finance.supplierInvoiceAmount,
+              paymentDueDate: paymentDueDates[0] || null,
+              paymentDueDates,
+              payableBalance: finance.payableBalance,
+            };
+          });
         const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
         const supplierFinanceRows = supplierCandidateRows.length
           ? supplierCandidateRows
@@ -8868,6 +8885,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const buyerFinanceRow = {
           buyerName: disputePartyRegistry.buyer?.name || stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
+          paymentDueDate: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
           receivableBalance: stem.Receivable_Balance__c ?? null,
           disputeRows: [],
           status: null,

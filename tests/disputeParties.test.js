@@ -92,7 +92,7 @@ test('deduplicates one supplier ID across payment terms and source objects', () 
   assert.deepEqual(registry.suppliers[0].sourceTypes, ['line_item', 'extra_cost']);
 });
 
-test('keeps same-name supplier IDs separate and labels collisions', () => {
+test('keeps same-name supplier IDs separate without exposing IDs in labels', () => {
   const registry = buildDisputePartyRegistry({
     lineItems: [
       lineItem('a02000000000005AAA', SUPPLIER_A, 'Same Supplier', '30 days'),
@@ -100,8 +100,22 @@ test('keeps same-name supplier IDs separate and labels collisions', () => {
     ],
   });
   assert.equal(registry.suppliers.length, 2);
-  assert.match(registry.suppliers[0].label, /002AAA/);
-  assert.match(registry.suppliers[1].label, /003AAA/);
+  assert.match(registry.suppliers[0].label, /30 days/);
+  assert.match(registry.suppliers[1].label, /60 days/);
+  assert.doesNotMatch(registry.suppliers[0].label, /002AAA/);
+  assert.doesNotMatch(registry.suppliers[1].label, /003AAA/);
+});
+
+test('numbers indistinguishable same-name supplier options without exposing IDs', () => {
+  const registry = buildDisputePartyRegistry({
+    lineItems: [
+      lineItem('a02000000000009AAA', SUPPLIER_A, 'Same Supplier', '30 days'),
+      lineItem('a02000000000010AAA', SUPPLIER_B, 'Same Supplier', '30 days'),
+    ],
+  });
+  assert.match(registry.suppliers[0].label, /Supplier option 1/);
+  assert.match(registry.suppliers[1].label, /Supplier option 2/);
+  assert.doesNotMatch(registry.suppliers.map((party) => party.label).join(' '), /00[23]AAA/);
 });
 
 test('counts an Account that is buyer and supplier once with both roles', () => {
