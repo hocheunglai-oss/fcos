@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.7';
+export const APP_VERSION = '2.0.8';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.8',
+    releasedAt: '2026-07-10',
+    title: 'Dispute document upload access',
+    changes: [
+      'Added a visible party-aware document upload control inside the Manage Dispute Workflow modal.',
+      'Made document upload save new trader actions automatically before opening the Salesforce upload form.',
+      'Limited supplier Account ID suffixes to same-name supplier collisions instead of showing them on every queue row.',
+    ],
+  },
   {
     version: '2.0.7',
     releasedAt: '2026-07-10',

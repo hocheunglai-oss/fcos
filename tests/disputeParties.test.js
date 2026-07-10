@@ -58,6 +58,7 @@ test('supports a buyer-only dispute', () => {
   });
   assert.equal(registry.valid, true);
   assert.equal(registry.buyer.accountId, BUYER_ID);
+  assert.equal(registry.buyer.label, 'Buyer Account');
   assert.deepEqual(registry.suppliers, []);
 });
 
@@ -76,6 +77,7 @@ test('supports one record containing buyer and supplier', () => {
   assert.equal(registry.valid, true);
   assert.deepEqual(registry.buyer.disputeIds, ['a01000000000002AAA']);
   assert.equal(registry.suppliers[0].accountId, SUPPLIER_A);
+  assert.equal(registry.suppliers[0].label, 'Supplier A | 30 days');
 });
 
 test('keeps same-name suppliers with different IDs separate', () => {
@@ -95,6 +97,8 @@ test('keeps same-name suppliers with different IDs separate', () => {
   assert.notEqual(registry.suppliers[0].partyKey, registry.suppliers[1].partyKey);
   assert.match(registry.suppliers[0].label, /30 days/);
   assert.match(registry.suppliers[1].label, /60 days/);
+  assert.match(registry.suppliers[0].label, /002AAA/);
+  assert.match(registry.suppliers[1].label, /003AAA/);
 });
 
 test('rejects a supplier without a non-cancelled stem line item', () => {

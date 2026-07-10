@@ -29,6 +29,29 @@ function supplierLabel(name, paymentTerms, accountId) {
   return [name || 'Supplier', paymentTerms.join(', '), accountSuffix(accountId)].filter(Boolean).join(' | ');
 }
 
+function collisionAwareSupplierLabels(suppliers) {
+  const accountsByName = new Map();
+  for (const supplier of suppliers) {
+    const nameKey = text(supplier.name).replace(/\s+/g, ' ').toLowerCase();
+    const accountKeys = accountsByName.get(nameKey) || new Set();
+    accountKeys.add(supplier.accountKey || disputeSalesforceIdKey(supplier.accountId));
+    accountsByName.set(nameKey, accountKeys);
+  }
+
+  return suppliers.map((supplier) => {
+    const nameKey = text(supplier.name).replace(/\s+/g, ' ').toLowerCase();
+    const hasNameCollision = (accountsByName.get(nameKey)?.size || 0) > 1;
+    return {
+      ...supplier,
+      label: supplierLabel(
+        supplier.name,
+        supplier.paymentTerms || [],
+        hasNameCollision ? supplier.accountId : null
+      ),
+    };
+  });
+}
+
 function issue(code, message, disputeIds = [], details = {}) {
   return {
     code,
@@ -213,7 +236,6 @@ export function buildDisputePartyRegistry({
       accountId: row.accountId,
       accountKey: supplierKey,
       name,
-      label: supplierLabel(name, paymentTerms, row.accountId),
       paymentTerms,
       lineItemIds: eligible?.lineItemIds || [],
       products: eligible?.products || [],
@@ -242,18 +264,16 @@ export function buildDisputePartyRegistry({
   if (buyer) {
     buyer.status = buyer.statuses.join(' / ') || null;
     buyer.description = buyer.descriptions.join('\n') || null;
-    buyer.label = `${buyer.name} | ${accountSuffix(buyer.accountId)}`;
+    buyer.label = buyer.name;
   }
 
-  const eligibleSuppliers = [...eligibleByKey.values()].map((supplier) => ({
-    ...supplier,
-    label: supplierLabel(supplier.name, supplier.paymentTerms, supplier.accountId),
-  }));
+  const labeledSuppliers = collisionAwareSupplierLabels(suppliers);
+  const eligibleSuppliers = collisionAwareSupplierLabels([...eligibleByKey.values()]);
 
   return {
     valid: issues.length === 0,
     buyer,
-    suppliers,
+    suppliers: labeledSuppliers,
     eligibleSuppliers,
     issues,
   };

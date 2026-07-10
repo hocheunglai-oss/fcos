@@ -115,9 +115,20 @@ function queueDetailLines(row) {
   const rows = supplierDueRows(row);
   if (rows.length) {
     const seenSupplierGroups = new Set();
+    const accountsBySupplierName = new Map();
+    rows.forEach((dueRow) => {
+      const nameKey = textValue(dueRow.supplierName, 'Supplier').replace(/\s+/g, ' ').toLowerCase();
+      const accountKey = textValue(dueRow.supplierAccountId, '').slice(0, 15);
+      if (!accountKey) return;
+      const accountKeys = accountsBySupplierName.get(nameKey) || new Set();
+      accountKeys.add(accountKey);
+      accountsBySupplierName.set(nameKey, accountKeys);
+    });
     return rows.map((dueRow, index) => {
       const supplierName = dueRow.supplierName || 'Supplier';
-      const supplierAccountSuffix = textValue(dueRow.supplierAccountId, '').slice(-6);
+      const nameKey = textValue(supplierName, 'Supplier').replace(/\s+/g, ' ').toLowerCase();
+      const hasNameCollision = (accountsBySupplierName.get(nameKey)?.size || 0) > 1;
+      const supplierAccountSuffix = hasNameCollision ? textValue(dueRow.supplierAccountId, '').slice(-6) : '';
       const supplierLabel = [supplierName, dueRow.paymentTerm, supplierAccountSuffix].filter(Boolean).join(' | ');
       const dueDate = dueRow.dueDate || null;
       const invoiceName = dueRow.invoiceName || '';
@@ -629,6 +640,7 @@ function DocumentUploadModal({ caseRow, action, open, onClose, onUploaded }) {
   useEffect(() => { if (open) { setDocumentType('settlement_agreement'); setFile(null); setError(''); } }, [open, action?.id]);
 
   const upload = async () => {
+    if (!caseRow?.id || !action?.id) { setError('Save the dispute action before uploading a document.'); return; }
     if (!file) { setError('Select a document to upload.'); return; }
     if (file.size > 3 * 1024 * 1024) { setError('Maximum document size is 3 MB.'); return; }
     setBusy(true);
@@ -761,7 +773,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const [documents, setDocuments] = useState(workflow.documents || []);
   const [note, setNote] = useState(workflow.case?.latestNote || '');
   const [draftAction, setDraftAction] = useState(DEFAULT_ACTION);
-  const [uploadAction, setUploadAction] = useState(null);
+  const [uploadTarget, setUploadTarget] = useState(null);
+  const [documentPartyKey, setDocumentPartyKey] = useState('');
   const [accountingAction, setAccountingAction] = useState(null);
   const [previewDocument, setPreviewDocument] = useState(null);
   const [decisionMode, setDecisionMode] = useState(null);
@@ -783,6 +796,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       partyKey: supplierParty?.partyKey || '',
       disputeIds: supplierParty?.disputeIds || [],
     });
+    setDocumentPartyKey('');
     setError(null);
   }, [stem]);
 
@@ -802,6 +816,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const financials = settlementFinancials(actions);
   const basePnl = stemBasePnl(stem);
   const stemPnlIncludingDispute = basePnl == null ? null : basePnl + financials.settlementPnl;
+  const selectedDocumentAction = actions.find((action) => action.partyKey === documentPartyKey) || actions[0] || null;
 
   const refreshAfter = async (response) => {
     if (response?.case) setCaseRow(response.case);
@@ -864,6 +879,28 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     actions: actions.map(normalizeActionForSave),
     latestNote: note,
   });
+  const openUploadForAction = async (action) => {
+    if (!action?.partyKey) {
+      setError('Add a buyer or supplier action before uploading a dispute document.');
+      return;
+    }
+    if (action.id && caseRow?.id) {
+      setUploadTarget({ caseRow, action });
+      return;
+    }
+    if (!canEdit) {
+      setError('This workflow is locked and the selected action has not been saved.');
+      return;
+    }
+
+    const saved = await saveDraft();
+    const savedAction = (saved?.actions || []).find((item) => item.partyKey === action.partyKey);
+    if (!saved?.case?.id || !savedAction?.id) {
+      setError('The action could not be saved for document upload.');
+      return;
+    }
+    setUploadTarget({ caseRow: saved.case, action: savedAction });
+  };
   const submitForApproval = async () => {
     const saved = await saveDraft();
     if (!saved?.case?.id) return;
@@ -940,7 +977,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
               {!canEdit && <span className="text-xs text-muted-foreground">Actions are locked after submission.</span>}
             </div>
             <ActionForm stem={stem} draftAction={draftAction} setDraftAction={setDraftAction} onAdd={addAction} disabled={!canEdit || busy} />
-            <div className="overflow-hidden rounded-lg border border-border">
+            <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[980px] text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
@@ -986,7 +1023,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       </td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
-                          {partiesValid && action.id && (canEdit || canAccount || capabilities?.canApprove) && <Button type="button" variant="outline" size="sm" onClick={() => setUploadAction(action)} disabled={busy} title="Upload document"><Upload className="h-3.5 w-3.5" /></Button>}
+                          {partiesValid && (canEdit || (action.id && (canAccount || capabilities?.canApprove))) && <Button type="button" variant="outline" size="sm" onClick={() => openUploadForAction(action)} disabled={busy} className="gap-1.5" title={action.id ? 'Upload document' : 'Save draft and upload document'}><Upload className="h-3.5 w-3.5" /> Upload</Button>}
                           {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
                           {canAccount && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
                           {!canEdit && !canAccount && !capabilities?.canApprove && '—'}
@@ -1005,9 +1042,22 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <StepHeading step="3" title="Dispute Documents" description="Salesforce files are linked to the selected buyer or supplier dispute and named automatically for fast retrieval." />
-              <span className="text-xs text-muted-foreground">{documents.length} uploaded</span>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="text-xs text-muted-foreground">{documents.length} uploaded</span>
+                {partiesValid && selectedDocumentAction && (canEdit || (selectedDocumentAction.id && (canAccount || capabilities?.canApprove))) && (
+                  <>
+                    <Select value={selectedDocumentAction.partyKey} onValueChange={setDocumentPartyKey} disabled={busy}>
+                      <SelectTrigger className="h-8 w-[min(260px,70vw)] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {actions.map((action) => <SelectItem key={action.id || action.clientId || action.partyKey} value={action.partyKey}>{action.partyName} - {action.actionLabel || actionLabel(action.actionType)}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" variant="outline" size="sm" onClick={() => openUploadForAction(selectedDocumentAction)} disabled={busy} className="gap-1.5"><Upload className="h-3.5 w-3.5" /> Upload Document</Button>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="overflow-hidden rounded-lg border border-border">
+            <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[780px] text-xs">
                 <thead><tr className="border-b border-border bg-muted/40"><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Document</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party / Action</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Type</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Uploaded</th><th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Open</th></tr></thead>
                 <tbody>
@@ -1078,7 +1128,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
         </div>
       </DialogContent>
     </Dialog>
-    <DocumentUploadModal caseRow={caseRow} action={uploadAction} open={Boolean(uploadAction)} onClose={() => setUploadAction(null)} onUploaded={documentUploaded} />
+    <DocumentUploadModal caseRow={uploadTarget?.caseRow} action={uploadTarget?.action} open={Boolean(uploadTarget)} onClose={() => setUploadTarget(null)} onUploaded={documentUploaded} />
     <AccountingUpdateModal action={accountingAction} open={Boolean(accountingAction)} onClose={() => setAccountingAction(null)} onSaved={refreshAfter} />
     <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
     <WorkflowDecisionModal mode={decisionMode} open={Boolean(decisionMode)} onClose={() => setDecisionMode(null)} onConfirm={confirmDecision} busy={busy} />
