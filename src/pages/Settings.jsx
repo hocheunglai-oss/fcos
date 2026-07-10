@@ -95,7 +95,7 @@ function SmtpAccountCard({ title, description, settings, onChange, enableLabel }
           <h2 className="text-sm font-semibold text-foreground">{title}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{description}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            For Microsoft 365, if From Email differs from Email Username, the username mailbox must have Send As permission for that From Email.
+            Leave From Email blank to send from the Email Username. For Microsoft 365, a different From Email requires Send As permission.
           </p>
         </div>
       </div>

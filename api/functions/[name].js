@@ -8138,7 +8138,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     .filter((batch) => batch?.key)
     .map((batch) => [batch.key, batch]));
   const credentials = body.credentials || {};
-  const smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
+  let smtpFrom = credentials.smtp?.from || credentials.from || settings.from;
   const sendResults = [];
   const collectionResults = [];
   for (const group of routing.groups) {
@@ -8158,7 +8158,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     }, effectiveGroup);
     let result;
     try {
-      result = await sendWithSmtp({
+      const delivery = await sendWithSmtpSendAsFallback({
         smtp: credentials.smtp || credentials,
         from: smtpFrom,
         to,
@@ -8168,6 +8168,8 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
         html: email.html,
         text: email.text,
       });
+      result = delivery.result;
+      smtpFrom = delivery.from;
     } catch (error) {
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         message: error.message,
@@ -8257,6 +8259,55 @@ async function sendWithSmtp({ smtp = {}, from, to, cc, bcc, subject, html, text 
   });
   const result = await transporter.sendMail({ from, to, cc, bcc, subject, html, text });
   return { id: result.messageId, accepted: result.accepted, rejected: result.rejected };
+}
+
+function smtpAddressParts(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { name: '', email: '' };
+  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
+  const name = email ? raw.replace(email, '').replace(/[<>()"]/g, '').trim() : '';
+  return { name, email };
+}
+
+function smtpAuthenticatedFromAddress(smtp = {}, requestedFrom = '') {
+  const authenticatedEmail = smtpAddressParts(smtp.user).email;
+  if (!authenticatedEmail) return '';
+  const requested = smtpAddressParts(requestedFrom);
+  return requested.name ? `${requested.name} <${authenticatedEmail}>` : authenticatedEmail;
+}
+
+function isSmtpSendAsDenied(error) {
+  return /SendAsDenied|MapiExceptionSendAsDenied|not allowed to send as/i.test(String(error?.message || error || ''));
+}
+
+function smtpSendAsDeniedError(smtp = {}, requestedFrom = '') {
+  const authenticatedEmail = smtpAddressParts(smtp.user).email || 'the authenticated SMTP mailbox';
+  const requestedEmail = smtpAddressParts(requestedFrom).email || 'the configured From address';
+  return appError(`Microsoft 365 rejected ${requestedEmail} as the sender. Use ${authenticatedEmail} as From Email or grant that mailbox Send As permission.`, 400);
+}
+
+async function sendWithSmtpSendAsFallback(options) {
+  try {
+    return { result: await sendWithSmtp(options), from: options.from, sendAsFallback: false };
+  } catch (error) {
+    if (!isSmtpSendAsDenied(error)) throw error;
+    const authenticatedFrom = smtpAuthenticatedFromAddress(options.smtp, options.from);
+    const requestedEmail = smtpAddressParts(options.from).email.toLowerCase();
+    const authenticatedEmail = smtpAddressParts(authenticatedFrom).email.toLowerCase();
+    if (!authenticatedFrom || !authenticatedEmail || requestedEmail === authenticatedEmail) {
+      throw smtpSendAsDeniedError(options.smtp, options.from);
+    }
+    try {
+      return {
+        result: await sendWithSmtp({ ...options, from: authenticatedFrom }),
+        from: authenticatedFrom,
+        sendAsFallback: true,
+      };
+    } catch (retryError) {
+      if (isSmtpSendAsDenied(retryError)) throw smtpSendAsDeniedError(options.smtp, authenticatedFrom);
+      throw retryError;
+    }
+  }
 }
 
 async function startBuyerInvoiceEmailRun(window) {

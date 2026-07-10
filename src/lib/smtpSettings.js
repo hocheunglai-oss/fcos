@@ -59,7 +59,7 @@ function parseSenderAddress(value) {
 
 export function smtpFromAddress(settings, fallbackFrom = '') {
   const fallback = parseSenderAddress(fallbackFrom);
-  const email = String(settings?.fromEmail || fallback.email || settings?.user || '').trim();
+  const email = String(settings?.fromEmail || settings?.user || fallback.email || '').trim();
   if (!email) return '';
   const name = String(settings?.fromName || fallback.name || '').trim();
   return name ? `${name} <${email}>` : email;

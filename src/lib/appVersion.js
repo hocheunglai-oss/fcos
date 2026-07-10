@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.4';
+export const APP_VERSION = '2.0.5';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.5',
+    releasedAt: '2026-07-10',
+    title: 'External reminder sender fallback',
+    changes: [
+      'Changed blank External Payment Reminder From Email settings to use the authenticated SMTP username instead of the shared info mailbox.',
+      'Added a safe Microsoft 365 Send As fallback that retries from the authenticated mailbox only after a confirmed SendAsDenied rejection.',
+      'Replaced long Microsoft SMTP diagnostics with a concise sender-permission message when the authenticated mailbox is also rejected.',
+    ],
+  },
   {
     version: '2.0.4',
     releasedAt: '2026-07-10',
