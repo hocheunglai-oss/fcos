@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.12';
+export const APP_VERSION = '2.0.13';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.13',
+    releasedAt: '2026-07-13',
+    title: 'Faster dispute draft saves',
+    changes: [
+      'Updated only the active dispute queue row after Save Draft instead of reloading the full Salesforce queue.',
+      'Parallelized independent Salesforce and Supabase draft checks while preserving party revalidation and status writeback.',
+      'Refreshed the current case audit trail directly from the save response.',
+    ],
+  },
   {
     version: '2.0.12',
     releasedAt: '2026-07-10',

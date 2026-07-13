@@ -30,3 +30,15 @@ test('workflow queue includes invoiced and uninvoiced STEM extra-cost products',
   assert.match(source, /supplierInvoiceProductRowsById\.get\(item\.Supplier_Invoice__c\)/);
   assert.match(source, /uninvoicedExtraCostProductRows\.push/);
 });
+
+test('draft save avoids a full queue refresh and parallelizes independent reads', async () => {
+  const [source, page] = await Promise.all([
+    readFile(functionUrl, 'utf8'),
+    readFile(new URL('../src/pages/DisputeWorkflow.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(source, /const \[currentStem, existingCaseResult\] = await Promise\.all/);
+  assert.match(source, /const workflowPromise = loadDisputeWorkflowActions/);
+  assert.match(source, /events: events\.map\(serializeDisputeBetaEvent\)/);
+  assert.match(page, /\{ localOnly: true \}/);
+  assert.match(page, /options\.localOnly && response\?\.case/);
+});

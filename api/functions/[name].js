@@ -9801,6 +9801,17 @@ async function loadDisputeWorkflowDocuments(client, caseId) {
   return data || [];
 }
 
+async function loadDisputeWorkflowEvents(client, caseId, limit = 100) {
+  const { data, error } = await client
+    .from('dispute_beta_events')
+    .select(DISPUTE_BETA_EVENT_SELECT)
+    .eq('case_id', caseId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
 function missingRequiredDisputeDocuments(actions = [], documents = []) {
   const actionIdsWithDocuments = new Set(documents.map((document) => document.action_id).filter(Boolean));
   return actions.filter((action) => action.requires_attachment === true && !actionIdsWithDocuments.has(action.id));
@@ -9955,18 +9966,21 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const stem = body.stem || {};
   const stemId = stem.Id || body.stemId;
   if (!stemId) throw appError('stemId is required.', 400);
-  const currentStem = await loadCurrentDisputeStem(stemId, accessContext || { client, profile });
+  const [currentStem, existingCaseResult] = await Promise.all([
+    loadCurrentDisputeStem(stemId, accessContext || { client, profile }),
+    client
+      .from('dispute_beta_cases')
+      .select(DISPUTE_BETA_CASE_SELECT)
+      .eq('stem_id', stemId)
+      .maybeSingle(),
+  ]);
   const candidateRegistry = currentStem._Dispute_Parties;
   if (!candidateRegistry?.candidateSchemaValid) {
     const messages = (candidateRegistry?.issues || []).map((item) => item.message).filter(Boolean);
     throw appError(`Correct the Salesforce Account sources before continuing: ${messages.join(' ')}`, 400);
   }
-  const { data: existingCase, error: existingError } = await client
-    .from('dispute_beta_cases')
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .eq('stem_id', stemId)
-    .maybeSingle();
-  if (existingError) throw existingError;
+  if (existingCaseResult.error) throw existingCaseResult.error;
+  const existingCase = existingCaseResult.data;
   if (existingCase && !['Draft', 'Rejected', 'Revision Requested'].includes(existingCase.workflow_status)) {
     throw appError('Trader instructions are locked after submission. Request a revision before editing them.', 400);
   }
@@ -10034,15 +10048,21 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   });
   if (saveError) throw saveError;
   const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
-  const { partyRows, actions } = await loadDisputeWorkflowActions(client, updatedCase.id);
+  const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
+  const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
   const statusCase = updatedCase.current_salesforce_status === 'Open - Trader Review'
     ? updatedCase
     : await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
-  const documents = await loadDisputeWorkflowDocuments(client, updatedCase.id);
+  const [{ partyRows, actions }, documents, events] = await Promise.all([
+    workflowPromise,
+    documentsPromise,
+    loadDisputeWorkflowEvents(client, updatedCase.id),
+  ]);
   return {
     case: serializeDisputeBetaCase(statusCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
     actions,
+    events: events.map(serializeDisputeBetaEvent),
     documents: documents.map(serializeDisputeWorkflowDocument),
   };
 }

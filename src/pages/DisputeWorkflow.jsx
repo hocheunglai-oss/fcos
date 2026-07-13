@@ -259,6 +259,38 @@ function workflowFromRow(row) {
   return row?._Dispute_Workflow || { case: null, parties: [], actions: [], events: [], documents: [] };
 }
 
+function rowWithWorkflowResponse(row, response = {}) {
+  if (!row || !response?.case) return row;
+  const currentWorkflow = workflowFromRow(row);
+  const nextWorkflow = { ...currentWorkflow };
+  for (const key of ['case', 'parties', 'actions', 'events', 'documents']) {
+    if (response[key] !== undefined) nextWorkflow[key] = response[key];
+  }
+
+  let partyRegistry = row._Dispute_Parties;
+  if (partyRegistry && Array.isArray(response.parties)) {
+    const savedByAccount = new Map(response.parties.map((party) => [String(party.accountId || '').slice(0, 15), party]));
+    const selected = (partyRegistry.candidates || []).flatMap((candidate) => {
+      const saved = savedByAccount.get(String(candidate.accountId || '').slice(0, 15));
+      return saved ? [{ ...candidate, id: saved.id, caseId: saved.caseId, selected: true }] : [];
+    });
+    const selectionValid = selected.length > 0;
+    partyRegistry = {
+      ...partyRegistry,
+      selected,
+      selectionValid,
+      valid: partyRegistry.candidateSchemaValid === true && selectionValid,
+    };
+  }
+
+  return {
+    ...row,
+    Dispute_Status__c: response.case.currentSalesforceStatus || row.Dispute_Status__c,
+    _Dispute_Parties: partyRegistry,
+    _Dispute_Workflow: nextWorkflow,
+  };
+}
+
 function editableWorkflow(caseRow) {
   return !caseRow || ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflowStatus);
 }
@@ -944,29 +976,32 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   });
   const selectedDocumentTarget = selectedPartySides.find((target) => target.key === documentPartyKey) || selectedPartySides[0] || null;
 
-  const refreshAfter = async (response) => {
+  const refreshAfter = async (response, options = {}) => {
     if (response?.case) setCaseRow(response.case);
     if (response?.parties) {
       setParties(response.parties);
       setSelectedAccountIds(response.parties.map((party) => party.accountId));
     }
     if (response?.actions) setActions(response.actions);
+    if (response?.events) setEvents(response.events);
     if (response?.documents) setDocuments(response.documents);
-    await onSaved?.(stem.Id);
+    await onSaved?.(stem.Id, response, options);
   };
 
-  const invokeWorkflow = async (name, payload) => {
+  const invokeWorkflow = async (name, payload, options = {}) => {
     setBusy(true);
     setError(null);
-    const res = await appClient.functions.invoke(name, payload);
-    if (res.data?.error) {
-      setError(res.data.error);
+    try {
+      const res = await appClient.functions.invoke(name, payload);
+      if (res.data?.error) {
+        setError(res.data.error);
+        return null;
+      }
+      await refreshAfter(res.data, options);
+      return res.data;
+    } finally {
       setBusy(false);
-      return null;
     }
-    await refreshAfter(res.data);
-    setBusy(false);
-    return res.data;
   };
 
   const addAction = () => {
@@ -1005,12 +1040,16 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   };
 
   const removeAction = (index) => setActions((prev) => prev.filter((_, actionIndex) => actionIndex !== index));
-  const saveDraft = () => invokeWorkflow('disputeWorkflowSaveDraft', {
-    stem,
-    selectedPartyAccountIds: selectedAccountIds,
-    actions: actions.map(normalizeActionForSave),
-    latestNote: note,
-  });
+  const saveDraft = () => invokeWorkflow(
+    'disputeWorkflowSaveDraft',
+    {
+      stem,
+      selectedPartyAccountIds: selectedAccountIds,
+      actions: actions.map(normalizeActionForSave),
+      latestNote: note,
+    },
+    { localOnly: true },
+  );
   const toggleSelectedAccount = (candidate, checked) => {
     const accountKey = String(candidate.accountId || '').slice(0, 15);
     if (!checked && actions.some((action) => String(action.partyAccountId || '').slice(0, 15) === accountKey)) {
@@ -1410,7 +1449,17 @@ export default function DisputeWorkflow() {
     setSelectedStages((prev) => prev.includes(stage) ? prev.filter((item) => item !== stage) : [...prev, stage]);
   };
 
-  const refreshManagedStem = async (stemId) => {
+  const refreshManagedStem = async (stemId, response, options = {}) => {
+    if (options.localOnly && response?.case) {
+      setRows((current) => current.map((row) => (
+        row.Id === stemId ? rowWithWorkflowResponse(row, response) : row
+      )));
+      setManagedStem((current) => (
+        current?.Id === stemId ? rowWithWorkflowResponse(current, response) : current
+      ));
+      setLastRefresh(new Date());
+      return;
+    }
     const nextRows = await loadRows({ force: true });
     if (stemId) setManagedStem(nextRows.find((row) => row.Id === stemId) || null);
   };
