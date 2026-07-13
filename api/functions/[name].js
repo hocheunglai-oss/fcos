@@ -10050,14 +10050,15 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
   const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
   const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
-  const statusCase = updatedCase.current_salesforce_status === 'Open - Trader Review'
-    ? updatedCase
-    : await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
-  const [{ partyRows, actions }, documents, events] = await Promise.all([
+  const statusPromise = updatedCase.current_salesforce_status === 'Open - Trader Review'
+    ? Promise.resolve(updatedCase)
+    : writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
+  const [{ partyRows, actions }, documents, statusCase] = await Promise.all([
     workflowPromise,
     documentsPromise,
-    loadDisputeWorkflowEvents(client, updatedCase.id),
+    statusPromise,
   ]);
+  const events = await loadDisputeWorkflowEvents(client, updatedCase.id);
   return {
     case: serializeDisputeBetaCase(statusCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
