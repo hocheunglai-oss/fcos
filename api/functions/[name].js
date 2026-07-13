@@ -120,6 +120,14 @@ function appError(message, status = 500) {
   return error;
 }
 
+function isMissingRelationError(error, relationName) {
+  const message = String(error?.message || '').toLowerCase();
+  const relation = String(relationName || '').toLowerCase();
+  return message.includes(`'public.${relation}'`)
+    || message.includes(`relation \"public.${relation}\" does not exist`)
+    || (message.includes('schema cache') && message.includes(relation));
+}
+
 function redactedRequestUrl(req) {
   try {
     const url = new URL(req?.url || '', 'http://localhost');
@@ -169,24 +177,11 @@ function bearerToken(req) {
 }
 
 async function requireAdministrator(req) {
-  const token = bearerToken(req);
-  if (!token) throw appError('Administrator sign-in required.', 401);
-
-  const client = supabaseAdminClient();
-  const { data: userData, error: userError } = await client.auth.getUser(token);
-  if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
-
-  const { data: profile, error: profileError } = await client
-    .from('user_profiles')
-    .select('id,email,full_name,user_type,active,use_type_defaults')
-    .eq('id', userData.user.id)
-    .maybeSingle();
-  if (profileError) throw profileError;
-  if (!profile?.active || profile.user_type !== 'administrator') {
+  const context = await requireActiveUser(req);
+  if (context.profile.user_type !== 'administrator') {
     throw appError('Administrator access required.', 403);
   }
-
-  return { client, authUser: userData.user, profile };
+  return context;
 }
 
 function safeSupabaseAdminClient() {
@@ -205,11 +200,22 @@ async function requireActiveUser(req) {
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
 
-  const { data: profile, error: profileError } = await client
+  let { data: profile, error: profileError } = await client
     .from('user_profiles')
     .select('id,email,full_name,user_type,active,use_type_defaults')
     .eq('id', userData.user.id)
     .maybeSingle();
+  if (profileError && isMissingRelationError(profileError, 'user_profiles')) {
+    const compatibilityResult = await client
+      .from('fcos_user_access')
+      .select('id,email,full_name,user_type,active,use_type_defaults')
+      .eq('id', userData.user.id)
+      .maybeSingle();
+    profile = compatibilityResult.data
+      ? { ...compatibilityResult.data, _accessSource: 'erp' }
+      : null;
+    profileError = compatibilityResult.error;
+  }
   if (profileError) throw profileError;
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
@@ -223,6 +229,11 @@ async function authContext(body, req, accessContext) {
 
   if (profile.user_type === 'administrator') {
     permissionValues = ADMIN_FULL_ACCESS;
+  } else if (profile._accessSource === 'erp') {
+    permissionValues = normalizePermissions(
+      profile.user_type,
+      FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {},
+    );
   } else {
     const permissionQuery = profile.use_type_defaults === false
       ? client
@@ -444,6 +455,11 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
   const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
   if (!validModuleIds.length) return false;
 
+  if (profile?._accessSource === 'erp') {
+    const fallback = FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {};
+    return validModuleIds.some((moduleId) => permissionCanView(moduleId, fallback[moduleId]));
+  }
+
   if (profile?.use_type_defaults === false) {
     const { data, error } = await client
       .from('user_module_permissions')
@@ -469,6 +485,9 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
 async function userHasCapability(client, profile, capabilityId) {
   if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
   if (profile?.user_type === 'administrator') return true;
+  if (profile?._accessSource === 'erp') {
+    return FALLBACK_TYPE_CAPABILITIES[profile.user_type]?.[capabilityId] === true;
+  }
 
   const { data: userPermission, error: userError } = await client
     .from('user_module_permissions')
@@ -499,6 +518,9 @@ async function requireCapability(client, profile, capabilityId, message) {
 
 async function reportArchiveAccessForUser(client, profile) {
   if (profile?.user_type === 'administrator') return 'full';
+  if (profile?._accessSource === 'erp') {
+    return reportArchiveAccessLevel(FALLBACK_TYPE_PERMISSIONS[profile.user_type]?.[REPORT_ARCHIVE_MODULE_ID]);
+  }
 
   if (profile?.use_type_defaults === false) {
     const { data, error } = await client

@@ -6,6 +6,7 @@ const migrationUrl = new URL('../supabase/migrations/20260712120242_operational_
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const appClientUrl = new URL('../src/api/appClient.js', import.meta.url);
 const authContextUrl = new URL('../src/lib/AuthContext.jsx', import.meta.url);
+const erpAuthMigrationUrl = new URL('../supabase/migrations/20260713020716_fcos_erp_auth_compatibility.sql', import.meta.url);
 
 test('operational migration adds atomic collection and exception workflow writes', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -37,9 +38,10 @@ test('short-lived function cache expires and can be cleared at an auth boundary'
 });
 
 test('browser authentication loads protected profile data through the server API', async () => {
-  const [serverSource, clientSource] = await Promise.all([
+  const [serverSource, clientSource, migrationSource] = await Promise.all([
     readFile(functionUrl, 'utf8'),
     readFile(authContextUrl, 'utf8'),
+    readFile(erpAuthMigrationUrl, 'utf8'),
   ]);
   assert.match(serverSource, /async function authContext\(/);
   assert.match(serverSource, /authContext: \[\]/);
@@ -47,6 +49,11 @@ test('browser authentication loads protected profile data through the server API
   assert.doesNotMatch(clientSource, /\.from\('user_profiles'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_module_permissions'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_type_module_permissions'\)/);
+  assert.match(serverSource, /\.from\('fcos_user_access'\)/);
+  assert.match(serverSource, /profile\?\._accessSource === 'erp'/);
+  assert.match(migrationSource, /with \(security_invoker = true\)/i);
+  assert.match(migrationSource, /revoke all on public\.fcos_user_access from public, anon, authenticated/i);
+  assert.match(migrationSource, /grant select on public\.fcos_user_access to service_role/i);
 });
 
 test('report archive compensates cross-system failures', async () => {
