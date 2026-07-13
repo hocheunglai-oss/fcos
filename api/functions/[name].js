@@ -211,9 +211,65 @@ async function requireActiveUser(req) {
     .eq('id', userData.user.id)
     .maybeSingle();
   if (profileError) throw profileError;
-  if (!profile?.active) throw appError('User is inactive.', 403);
+  if (!profile) throw appError('User is not registered.', 403);
+  if (!profile.active) throw appError('User is inactive.', 403);
 
   return { client, authUser: userData.user, profile };
+}
+
+async function authContext(body, req, accessContext) {
+  const { client, authUser, profile } = accessContext || await requireActiveUser(req);
+  let permissionValues;
+
+  if (profile.user_type === 'administrator') {
+    permissionValues = ADMIN_FULL_ACCESS;
+  } else {
+    const permissionQuery = profile.use_type_defaults === false
+      ? client
+        .from('user_module_permissions')
+        .select('module_id,can_view')
+        .eq('user_id', profile.id)
+      : client
+        .from('user_type_module_permissions')
+        .select('module_id,can_view')
+        .eq('user_type_id', profile.user_type);
+    const { data: rows, error } = await permissionQuery;
+    if (error) throw error;
+
+    const fallback = profile.use_type_defaults === false
+      ? {}
+      : (FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {});
+    const rawPermissions = { ...fallback };
+    for (const row of rows || []) {
+      if (ADMIN_MODULE_IDS.has(row.module_id)) rawPermissions[row.module_id] = row.can_view === true;
+    }
+    rawPermissions[REPORT_ARCHIVE_MODULE_ID] = reportArchiveAccessFromRows(
+      rows || [],
+      fallback[REPORT_ARCHIVE_MODULE_ID],
+    );
+    permissionValues = normalizePermissions(profile.user_type, rawPermissions);
+  }
+
+  const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [
+    module.id,
+    permissionCanView(module.id, permissionValues[module.id]),
+  ]));
+
+  return {
+    user: {
+      id: profile.id,
+      full_name: profile.full_name || authUser.user_metadata?.full_name || profile.email || authUser.email,
+      email: profile.email || authUser.email,
+      role: profile.user_type === 'administrator' ? 'admin' : profile.user_type,
+      user_type: profile.user_type,
+      use_type_defaults: profile.use_type_defaults !== false,
+      active: profile.active === true,
+    },
+    moduleAccess,
+    moduleAccessLevels: {
+      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
+    },
+  };
 }
 
 function normalizePermissions(userType, permissions = {}) {
@@ -311,6 +367,7 @@ const AUTH_EXEMPT_HANDLERS = new Set([
 ]);
 
 const HANDLER_MODULE_ACCESS = {
+  authContext: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
   salesforceTopBuyers: ['dashboard'],
@@ -11082,6 +11139,7 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
 }
 
 const handlers = {
+  authContext,
   salesforceSchema,
   salesforceObjectFields,
   salesforceQuery,

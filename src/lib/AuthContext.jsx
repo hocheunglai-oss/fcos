@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { APP_MODULES, FULL_ACCESS } from '@/lib/authModules';
+import { FULL_ACCESS } from '@/lib/authModules';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { appClient } from '@/api/appClient';
 
@@ -15,45 +15,9 @@ const LOCAL_ADMIN_USER = {
 };
 
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
-const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
-
-function profileToUser(profile, authUser) {
-  return {
-    id: authUser.id,
-    full_name: profile.full_name || authUser.user_metadata?.full_name || authUser.email,
-    email: profile.email || authUser.email,
-    role: profile.user_type === 'administrator' ? 'admin' : profile.user_type,
-    user_type: profile.user_type,
-    use_type_defaults: profile.use_type_defaults !== false,
-    active: profile.active,
-  };
-}
 
 function fullAccessLevels() {
   return { [REPORT_ARCHIVE_MODULE_ID]: 'full' };
-}
-
-function normalizeAccess(permissionRows = []) {
-  const access = Object.fromEntries(APP_MODULES.map((module) => [module.id, false]));
-  const accessLevels = { [REPORT_ARCHIVE_MODULE_ID]: 'none' };
-  let hasReportArchivePermission = false;
-  let hasManageArchivePermission = false;
-  let canManageArchive = false;
-  for (const row of permissionRows || []) {
-    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
-      hasManageArchivePermission = true;
-      canManageArchive = row.can_view === true;
-      continue;
-    }
-    access[row.module_id] = row.can_view === true;
-    if (row.module_id === REPORT_ARCHIVE_MODULE_ID) {
-      hasReportArchivePermission = row.can_view === true;
-    }
-  }
-  if (hasReportArchivePermission) {
-    accessLevels[REPORT_ARCHIVE_MODULE_ID] = !hasManageArchivePermission || canManageArchive ? 'full' : 'read';
-  }
-  return { access, accessLevels };
 }
 
 async function loadSupabaseUser() {
@@ -61,49 +25,28 @@ async function loadSupabaseUser() {
   if (sessionError) throw sessionError;
   if (!sessionData?.session) return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
 
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError) {
-    const message = String(userError.message || '').toLowerCase();
-    if (message.includes('session missing') || message.includes('auth session missing')) {
+  const { data } = await appClient.functions.invoke('authContext', {}, { force: true });
+  if (data?.error) {
+    const message = String(data.error || 'Unable to verify your account.');
+    const normalizedMessage = message.toLowerCase();
+    if (normalizedMessage.includes('inactive')) {
+      return { user: null, access: {}, accessLevels: {}, error: { type: 'user_inactive' } };
+    }
+    if (normalizedMessage.includes('not registered')) {
+      return { user: null, access: {}, accessLevels: {}, error: { type: 'user_not_registered' } };
+    }
+    if (normalizedMessage.includes('sign-in required') || normalizedMessage.includes('expired session')) {
       return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
     }
-    throw userError;
+    throw new Error(message);
   }
-  const authUser = userData?.user;
-  if (!authUser) return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required' } };
-
-  const { data: profile, error: profileError } = await supabase
-    .from('user_profiles')
-    .select('id,email,full_name,user_type,active,use_type_defaults')
-    .eq('id', authUser.id)
-    .maybeSingle();
-  if (profileError) throw profileError;
-  if (!profile) return { user: null, access: {}, accessLevels: {}, error: { type: 'user_not_registered' } };
-  if (!profile.active) return { user: null, access: {}, accessLevels: {}, error: { type: 'user_inactive' } };
-
-  if (profile.user_type === 'administrator') {
-    return { user: profileToUser(profile, authUser), access: FULL_ACCESS, accessLevels: fullAccessLevels(), error: null };
-  }
-
-  if (profile.use_type_defaults !== false) {
-    const { data: permissions, error: permissionsError } = await supabase
-      .from('user_type_module_permissions')
-      .select('module_id,can_view')
-      .eq('user_type_id', profile.user_type);
-    if (permissionsError) throw permissionsError;
-
-    const normalized = normalizeAccess(permissions);
-    return { user: profileToUser(profile, authUser), access: normalized.access, accessLevels: normalized.accessLevels, error: null };
-  }
-
-  const { data: permissions, error: permissionsError } = await supabase
-    .from('user_module_permissions')
-    .select('module_id,can_view')
-    .eq('user_id', authUser.id);
-  if (permissionsError) throw permissionsError;
-
-  const normalized = normalizeAccess(permissions);
-  return { user: profileToUser(profile, authUser), access: normalized.access, accessLevels: normalized.accessLevels, error: null };
+  if (!data?.user) throw new Error('Unable to verify your account.');
+  return {
+    user: data.user,
+    access: data.moduleAccess || {},
+    accessLevels: data.moduleAccessLevels || {},
+    error: null,
+  };
 }
 
 export const AuthProvider = ({ children }) => {
@@ -173,7 +116,7 @@ export const AuthProvider = ({ children }) => {
         setIsLoadingAuth(false);
         return;
       }
-      checkUserAuth({ showLoader: false });
+      window.setTimeout(() => checkUserAuth({ showLoader: false }), 0);
     });
     return () => data?.subscription?.unsubscribe();
   }, [checkUserAuth]);

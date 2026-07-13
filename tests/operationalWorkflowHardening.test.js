@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const migrationUrl = new URL('../supabase/migrations/20260712120242_operational_workflow_hardening.sql', import.meta.url);
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const appClientUrl = new URL('../src/api/appClient.js', import.meta.url);
+const authContextUrl = new URL('../src/lib/AuthContext.jsx', import.meta.url);
 
 test('operational migration adds atomic collection and exception workflow writes', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -33,6 +34,19 @@ test('short-lived function cache expires and can be cleared at an auth boundary'
   assert.match(source, /Date\.now\(\) - cached\.cachedAtMs <= ttlMs/);
   assert.match(source, /functionResponseCache\.delete\(cacheKey\)/);
   assert.match(source, /clearFunctionCache\(\);\s*\n\s*if \(isSupabaseConfigured\) await supabase\.auth\.signOut/);
+});
+
+test('browser authentication loads protected profile data through the server API', async () => {
+  const [serverSource, clientSource] = await Promise.all([
+    readFile(functionUrl, 'utf8'),
+    readFile(authContextUrl, 'utf8'),
+  ]);
+  assert.match(serverSource, /async function authContext\(/);
+  assert.match(serverSource, /authContext: \[\]/);
+  assert.match(clientSource, /functions\.invoke\('authContext'/);
+  assert.doesNotMatch(clientSource, /\.from\('user_profiles'\)/);
+  assert.doesNotMatch(clientSource, /\.from\('user_module_permissions'\)/);
+  assert.doesNotMatch(clientSource, /\.from\('user_type_module_permissions'\)/);
 });
 
 test('report archive compensates cross-system failures', async () => {
