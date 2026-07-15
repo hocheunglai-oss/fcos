@@ -1,7 +1,64 @@
 import { createHmac, randomUUID } from 'node:crypto';
 
 export const FCOS_BACKBONE_BRIDGE_PATH = '/api/fcos/v1/bridge';
-export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-15.1';
+export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-16.2';
+export const FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS = new Set([
+  '2026-07-15.1',
+  FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
+]);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizedIdentityEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function identityDriftError() {
+  const error = new Error('FCOS sign-in and active profile identities are out of sync.');
+  error.status = 409;
+  return error;
+}
+
+export function backboneBridgeActor(accessContext) {
+  const authUserId = String(accessContext?.authUser?.id || '').trim();
+  const profileId = String(accessContext?.profile?.id || '').trim();
+  const authEmail = normalizedIdentityEmail(accessContext?.authUser?.email);
+  const profileEmail = normalizedIdentityEmail(accessContext?.profile?.email);
+
+  if (!UUID_PATTERN.test(authUserId)
+    || profileId !== authUserId
+    || !authEmail
+    || profileEmail !== authEmail
+    || accessContext?.profile?.active !== true) {
+    throw identityDriftError();
+  }
+
+  return { userId: authUserId, email: authEmail };
+}
+
+export function authenticatedBackboneBridgePayload(payload, accessContext) {
+  return {
+    ...payload,
+    actor: backboneBridgeActor(accessContext),
+  };
+}
+
+function withoutSalesforceRecordIds(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const safe = { ...value };
+  delete safe.salesforceEnquiryId;
+  delete safe.salesforceStemId;
+  return safe;
+}
+
+export function browserSafeBackboneTradeProjection(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return response;
+  const safe = { ...response };
+  if (safe.trade) safe.trade = withoutSalesforceRecordIds(safe.trade);
+  if (Array.isArray(safe.stems)) safe.stems = safe.stems.map(withoutSalesforceRecordIds);
+  if (Array.isArray(safe.items)) safe.items = safe.items.map(withoutSalesforceRecordIds);
+  return safe;
+}
 
 export function backboneBridgeConfig(env = process.env) {
   const baseUrl = String(env.FCOS_BACKBONE_URL || 'https://fcbhk-erp.vercel.app').trim().replace(/\/+$/, '');
@@ -63,7 +120,8 @@ export async function backboneBridgeRequest(payload, options = {}) {
     error.status = response.status;
     throw error;
   }
-  if (data.schemaVersion !== FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION || data.requestId !== requestId) {
+  if (!FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has(data.schemaVersion)
+    || data.requestId !== requestId) {
     const error = new Error('FCOS Backbone bridge returned an incompatible response.');
     error.status = 502;
     throw error;

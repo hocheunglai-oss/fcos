@@ -19,7 +19,12 @@ import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
-import { backboneBridgeConfig, backboneBridgeRequest } from '../_backboneBridge.js';
+import {
+  authenticatedBackboneBridgePayload,
+  backboneBridgeConfig,
+  backboneBridgeRequest,
+  browserSafeBackboneTradeProjection,
+} from '../_backboneBridge.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -2593,20 +2598,13 @@ async function supabaseHealthRow() {
   }, result);
 }
 
-function backboneBridgeActor(profile) {
-  return {
-    userId: profile.id,
-    email: String(profile.email || '').trim().toLowerCase(),
-  };
-}
-
-async function backboneBridgeHealthRow(profile) {
+async function backboneBridgeHealthRow(accessContext) {
   const config = backboneBridgeConfig();
   const result = config.configured ? await timedCheck(async () => {
-    const response = await backboneBridgeRequest({
-      operation: 'identity.resolve',
-      actor: backboneBridgeActor(profile),
-    });
+    const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload(
+      { operation: 'identity.resolve' },
+      accessContext,
+    ));
     return {
       schemaVersion: response.schemaVersion,
       identityLinked: Boolean(response.identity?.userId),
@@ -2868,7 +2866,7 @@ async function systemHealth(_body, _req, accessContext) {
   const rows = await Promise.all([
     salesforceHealthRow(),
     supabaseHealthRow(),
-    profile ? backboneBridgeHealthRow(profile) : Promise.resolve(healthRow({
+    profile ? backboneBridgeHealthRow(accessContext) : Promise.resolve(healthRow({
       id: 'fcos-backbone-bridge',
       name: 'FCOS Backbone Shared Boundary',
       category: 'Shared Platform',
@@ -2900,21 +2898,22 @@ async function systemHealth(_body, _req, accessContext) {
 }
 
 async function backboneBridgeIdentity(_body, req, accessContext = null) {
-  const { profile } = accessContext || await requireActiveUser(req);
-  return backboneBridgeRequest({
-    operation: 'identity.resolve',
-    actor: backboneBridgeActor(profile),
-  });
+  const context = accessContext || await requireActiveUser(req);
+  return backboneBridgeRequest(authenticatedBackboneBridgePayload(
+    { operation: 'identity.resolve' },
+    context,
+  ));
 }
 
 async function backboneTradeProjection(body, req, accessContext = null) {
-  const { profile } = accessContext || await requireActiveUser(req);
+  const context = accessContext || await requireActiveUser(req);
   const operation = String(body.operation || 'trade.find');
   if (!['trade.find', 'trade.changes', 'audit.list'].includes(operation)) {
     throw appError('Unsupported FCOS Backbone read operation.', 400);
   }
-  const payload = { ...body, operation, actor: backboneBridgeActor(profile) };
-  return backboneBridgeRequest(payload);
+  const payload = authenticatedBackboneBridgePayload({ ...body, operation }, context);
+  const response = await backboneBridgeRequest(payload);
+  return browserSafeBackboneTradeProjection(response);
 }
 
 function isSafeSalesforceFieldPath(value) {

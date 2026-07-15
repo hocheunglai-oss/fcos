@@ -2,16 +2,115 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FCOS_BACKBONE_BRIDGE_PATH,
+  FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
+  FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS,
+  authenticatedBackboneBridgePayload,
+  backboneBridgeActor,
   backboneBridgeConfig,
   backboneBridgeRequest,
+  browserSafeBackboneTradeProjection,
   canonicalBackboneBridgeRequest,
   signBackboneBridgeRequest,
 } from '../api/_backboneBridge.js';
+
+const authUserId = 'a39b8ff9-936f-4915-b762-b769d5f7ce75';
+
+function accessContext(overrides = {}) {
+  return {
+    authUser: {
+      id: authUserId,
+      email: 'Verified.User@Example.com',
+      ...(overrides.authUser || {}),
+    },
+    profile: {
+      id: authUserId,
+      email: ' verified.user@example.com ',
+      active: true,
+      ...(overrides.profile || {}),
+    },
+  };
+}
 
 test('bridge stays unconfigured without a 32-character server secret', () => {
   assert.equal(backboneBridgeConfig({}).configured, false);
   assert.equal(backboneBridgeConfig({ FCOS_BACKBONE_BRIDGE_SECRET: 'short' }).configured, false);
   assert.equal(backboneBridgeConfig({ FCOS_BACKBONE_BRIDGE_SECRET: 'x'.repeat(32) }).configured, true);
+});
+
+test('rolling deployment accepts the previous and current bridge schemas only', () => {
+  assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-15.1'), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has(FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-17.99'), false);
+});
+
+test('bridge actor comes from the verified auth user after active-profile equality', () => {
+  assert.deepEqual(backboneBridgeActor(accessContext()), {
+    userId: authUserId,
+    email: 'verified.user@example.com',
+  });
+});
+
+test('bridge actor rejects profile drift, inactive profiles, and missing verified identity', () => {
+  const cases = [
+    accessContext({ profile: { email: 'someone.else@example.com' } }),
+    accessContext({ profile: { id: '88de45f4-fb87-47ad-aefe-acaf191a17f9' } }),
+    accessContext({ profile: { active: false } }),
+    accessContext({ authUser: { email: '' } }),
+    accessContext({ authUser: { id: 'not-a-uuid' } }),
+  ];
+
+  for (const context of cases) {
+    assert.throws(
+      () => backboneBridgeActor(context),
+      (error) => error.status === 409 && /out of sync/i.test(error.message),
+    );
+  }
+});
+
+test('authenticated bridge payload rejects a browser-supplied actor override', () => {
+  const payload = authenticatedBackboneBridgePayload({
+    operation: 'trade.find',
+    actor: {
+      userId: '88de45f4-fb87-47ad-aefe-acaf191a17f9',
+      email: 'attacker@example.com',
+    },
+  }, accessContext());
+
+  assert.deepEqual(payload.actor, {
+    userId: authUserId,
+    email: 'verified.user@example.com',
+  });
+});
+
+test('browser projection removes Salesforce record ids from older Backbone responses', () => {
+  const response = {
+    schemaVersion: FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
+    requestId: authUserId,
+    trade: {
+      caseId: '9d6fcc2a-e540-45fb-8307-e8544174ad2a',
+      salesforceEnquiryId: '006234567890123AAA',
+      enquiryNumber: 'ENQ-26001',
+    },
+    stems: [{
+      stemId: '13555180-f26f-4af9-8a0f-cdb927e13ec5',
+      salesforceStemId: 'a01234567890123AAA',
+      stemNumber: 'HKG260001T',
+    }],
+    items: [{
+      caseId: '9d6fcc2a-e540-45fb-8307-e8544174ad2a',
+      salesforceEnquiryId: '006234567890123AAA',
+      enquiryNumber: 'ENQ-26001',
+    }],
+  };
+
+  const safe = browserSafeBackboneTradeProjection(response);
+  assert.equal('salesforceEnquiryId' in safe.trade, false);
+  assert.equal('salesforceStemId' in safe.stems[0], false);
+  assert.equal('salesforceEnquiryId' in safe.items[0], false);
+  assert.equal(safe.trade.enquiryNumber, 'ENQ-26001');
+  assert.equal(safe.stems[0].stemNumber, 'HKG260001T');
+  assert.equal(response.trade.salesforceEnquiryId, '006234567890123AAA');
+  assert.equal(response.stems[0].salesforceStemId, 'a01234567890123AAA');
 });
 
 test('FCOS and Backbone use the same canonical signed request', () => {
