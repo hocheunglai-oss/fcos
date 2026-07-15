@@ -18,6 +18,7 @@ import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
+import { backboneBridgeConfig, backboneBridgeRequest } from '../_backboneBridge.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -413,6 +414,8 @@ const HANDLER_MODULE_ACCESS = {
   reportExportDelete: ['report_archive'],
   reportExportDownload: ['report_archive'],
   systemHealth: ['settings'],
+  backboneBridgeIdentity: ['settings'],
+  backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
   salesforceSchema: ['admin'],
   salesforceObjectFields: ['admin'],
   salesforceFullSchema: ['admin'],
@@ -2589,6 +2592,48 @@ async function supabaseHealthRow() {
   }, result);
 }
 
+function backboneBridgeActor(profile) {
+  return {
+    userId: profile.id,
+    email: String(profile.email || '').trim().toLowerCase(),
+  };
+}
+
+async function backboneBridgeHealthRow(profile) {
+  const config = backboneBridgeConfig();
+  const result = config.configured ? await timedCheck(async () => {
+    const response = await backboneBridgeRequest({
+      operation: 'identity.resolve',
+      actor: backboneBridgeActor(profile),
+    });
+    return {
+      schemaVersion: response.schemaVersion,
+      identityLinked: Boolean(response.identity?.userId),
+      officeCodes: response.identity?.officeCodes || [],
+      roles: response.identity?.roles || [],
+      mode: response.authority?.mode || null,
+    };
+  }) : null;
+  return healthRow({
+    id: 'fcos-backbone-bridge',
+    name: 'FCOS Backbone Shared Boundary',
+    category: 'Shared Platform',
+    purpose: 'Resolves the current FCOS user to Backbone and reads scoped trade projections and audit without changing FCOS live operations.',
+    scope: 'server',
+    provider: 'FCOS Backbone',
+    endpoint: `${config.baseUrl}/api/fcos/v1/bridge`,
+    authType: 'Timestamped HMAC with one-time request id',
+    configured: config.configured,
+    configuredEnv: {
+      FCOS_BACKBONE_URL: Boolean(process.env.FCOS_BACKBONE_URL),
+      FCOS_BACKBONE_BRIDGE_SECRET: Boolean(process.env.FCOS_BACKBONE_BRIDGE_SECRET),
+    },
+    missingEnv: config.configured ? [] : ['FCOS_BACKBONE_BRIDGE_SECRET'],
+    tokenExpiry: 'Each signed request expires after five minutes and its request id cannot be replayed.',
+    notes: ['Read-only shadow boundary. Salesforce and the dedicated FCOS Supabase project remain live during parallel operation.'],
+  }, result);
+}
+
 async function googleDriveHealthRow() {
   const required = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'GOOGLE_DRIVE_REPORT_FOLDER_ID'];
   const configured = missingEnv(required).length === 0;
@@ -2817,10 +2862,23 @@ function googleFontsHealthRow() {
   });
 }
 
-async function systemHealth() {
+async function systemHealth(_body, _req, accessContext) {
+  const profile = accessContext?.profile;
   const rows = await Promise.all([
     salesforceHealthRow(),
     supabaseHealthRow(),
+    profile ? backboneBridgeHealthRow(profile) : Promise.resolve(healthRow({
+      id: 'fcos-backbone-bridge',
+      name: 'FCOS Backbone Shared Boundary',
+      category: 'Shared Platform',
+      purpose: 'Resolves FCOS identities and reads Backbone projections.',
+      scope: 'server',
+      provider: 'FCOS Backbone',
+      endpoint: null,
+      authType: 'Timestamped HMAC',
+      configured: false,
+      missingEnv: ['Active FCOS profile'],
+    })),
     googleDriveHealthRow(),
     frankfurterHealthRow(),
     nagerHealthRow(),
@@ -2838,6 +2896,24 @@ async function systemHealth() {
     externalActionGates: externalActionGates(),
     rows,
   };
+}
+
+async function backboneBridgeIdentity(_body, req, accessContext = null) {
+  const { profile } = accessContext || await requireActiveUser(req);
+  return backboneBridgeRequest({
+    operation: 'identity.resolve',
+    actor: backboneBridgeActor(profile),
+  });
+}
+
+async function backboneTradeProjection(body, req, accessContext = null) {
+  const { profile } = accessContext || await requireActiveUser(req);
+  const operation = String(body.operation || 'trade.find');
+  if (!['trade.find', 'trade.changes', 'audit.list'].includes(operation)) {
+    throw appError('Unsupported FCOS Backbone read operation.', 400);
+  }
+  const payload = { ...body, operation, actor: backboneBridgeActor(profile) };
+  return backboneBridgeRequest(payload);
 }
 
 function isSafeSalesforceFieldPath(value) {
@@ -11261,6 +11337,8 @@ const handlers = {
   reportExportDelete,
   reportExportDownload,
   systemHealth,
+  backboneBridgeIdentity,
+  backboneTradeProjection,
   adminUsersList,
   adminAuditLogs,
   adminUserSave,

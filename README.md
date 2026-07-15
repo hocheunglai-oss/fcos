@@ -30,6 +30,15 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
+The optional FCOS Backbone shadow bridge is server-only and does not replace a live FCOS read. Configure the same high-entropy secret in both Vercel projects only when the bridge is ready for identity and projection UAT:
+
+```bash
+FCOS_BACKBONE_URL=https://fcbhk-erp.vercel.app
+FCOS_BACKBONE_BRIDGE_SECRET=<shared server secret of at least 32 characters>
+```
+
+When configured, System Health resolves the current FCOS user to an active Backbone HKG identity. The server can then run bounded `trade.find`, `trade.changes`, and `audit.list` comparisons. FCOS continues using its current Salesforce and dedicated Supabase paths until an individual replacement is accepted and rehearsed.
+
 See [FCOS live continuity during the Backbone transition](docs/live-continuity-during-backbone-transition.md) for the preserved-function and replacement rules.
 
 Preferred permanent Salesforce authentication is OAuth JWT bearer. Set these in Vercel for Production and Preview:

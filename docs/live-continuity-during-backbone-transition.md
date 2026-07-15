@@ -12,6 +12,18 @@ FCOS is an in-use operational extension to Salesforce. Building FCOS Backbone do
 
 These paths must remain compatible until the replacement checklist records an approved successor, migration evidence, functional-owner acceptance, and a rehearsed rollback path. FCOS Backbone may consume shared or projected data, but it must not silently take ownership of an established FCOS action.
 
+## Backbone shadow bridge
+
+FCOS includes a server-only, signed bridge client for identity, trade-projection, changed-case, and workflow-audit comparisons. It is additive:
+
+- the current authenticated FCOS user is forwarded from the server, never accepted from browser input;
+- Backbone must find exactly one active HKG user with the same normalized email;
+- requests are timestamped, signed, body-bound, limited, and protected against request-id replay;
+- all bridge operations are read-only except Backbone's identity-link and request-audit records; and
+- an unavailable or unlinked bridge does not redirect or disable an existing FCOS function.
+
+System Health reports this boundary separately from Salesforce and the FCOS Supabase project. Production FCOS reads remain on their present paths until the relevant replacement evidence is accepted.
+
 ## Operational controls
 
 The established connectors are enabled by default. The following variables are emergency kill switches only:
@@ -36,4 +48,3 @@ Any replacement of a live FCOS function requires all of the following before pro
 4. Data reconciliation and audit evidence pass.
 5. A rollback procedure is tested.
 6. The change is deployed without removing the legacy path until the rollback window closes.
-
