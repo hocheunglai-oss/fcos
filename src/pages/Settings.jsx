@@ -72,6 +72,11 @@ function SettingsPanel({ title, description, icon: Icon, meta, children }) {
 }
 
 const STATUS_META = {
+  disabled: {
+    label: 'Disabled',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    icon: ShieldCheck,
+  },
   online: {
     label: 'Online',
     className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -178,10 +183,11 @@ function SystemHealthPanel() {
       meta={health?.generatedAt ? `Last checked ${formatHealthDate(health.generatedAt)}` : null}
     >
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="grid gap-2 sm:grid-cols-5">
+        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
           {[
             ['Total', summary.total, 'border-slate-200 bg-slate-50 text-slate-700'],
             ['Online', summary.online || 0, STATUS_META.online.className],
+            ['Disabled', summary.disabled || 0, STATUS_META.disabled.className],
             ['Warning', summary.warning || 0, STATUS_META.warning.className],
             ['Error', summary.error || 0, STATUS_META.error.className],
             ['Not Configured', summary.not_configured || 0, STATUS_META.not_configured.className],

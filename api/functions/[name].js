@@ -16,6 +16,7 @@ import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
+import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -1395,6 +1396,7 @@ function googleDriveConfig() {
 }
 
 async function googleDriveAccessToken() {
+  requireExternalActionGate('google_drive');
   const { clientId, clientSecret, refreshToken } = googleDriveConfig();
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -1489,6 +1491,7 @@ async function googleDriveDownloadFile(fileId) {
 
 async function reportExportCreate(body, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
+  requireExternalActionGate('google_drive');
   const reportType = String(body.reportType || body.report_type || 'xls_report').trim().toLowerCase();
   const fileName = safeReportFileName(body.fileName || body.file_name);
   const mimeType = String(body.mimeType || body.mime_type || REPORT_EXPORT_MIME_TYPE);
@@ -1618,6 +1621,7 @@ async function loadReportExportForAction(client, id) {
 
 async function reportExportRename(body, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
+  requireExternalActionGate('google_drive');
   await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
@@ -1650,6 +1654,7 @@ async function reportExportRename(body, req, accessContext = null) {
 
 async function reportExportDelete(body, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
+  requireExternalActionGate('google_drive');
   await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
@@ -1683,6 +1688,7 @@ async function reportExportDelete(body, req, accessContext = null) {
 
 async function reportExportDownload(body, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
+  requireExternalActionGate('google_drive');
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
   const current = await loadReportExportForAction(client, id);
@@ -2359,8 +2365,11 @@ function incomingPaymentStemUrl(settings = {}, stemId) {
 
 function serverEmailDeliveryStatus() {
   const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+  const enabled = isExternalActionEnabled('email_delivery');
   return {
-    hasServerProvider: hasSmtp,
+    hasServerProvider: hasSmtp && enabled,
+    configured: hasSmtp,
+    enabled,
     provider: hasSmtp ? 'smtp' : 'none',
     sender: hasSmtp ? maskValue(process.env.SMTP_USER) : null,
     scope: hasSmtp ? 'shared_server' : 'none',
@@ -2577,7 +2586,8 @@ async function supabaseHealthRow() {
 async function googleDriveHealthRow() {
   const required = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'GOOGLE_DRIVE_REPORT_FOLDER_ID'];
   const configured = missingEnv(required).length === 0;
-  const result = configured ? await timedCheck(async () => {
+  const gateEnabled = isExternalActionEnabled('google_drive');
+  const result = configured && gateEnabled ? await timedCheck(async () => {
     const { clientId, clientSecret, refreshToken, folderId } = googleDriveConfig();
     const token = await fetchJsonWithTimeout('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -2601,7 +2611,7 @@ async function googleDriveHealthRow() {
       folderTrashed: folder.trashed === true,
     };
   }) : null;
-  return healthRow({
+  const row = healthRow({
     id: 'google-drive',
     name: 'Google Drive Report Archive',
     category: 'Reports',
@@ -2614,8 +2624,42 @@ async function googleDriveHealthRow() {
     configuredEnv: configuredEnv(required),
     missingEnv: missingEnv(required),
     tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
-    notes: ['Files are uploaded as XLS files, not converted to Google Sheets.'],
+    details: { gateEnabled },
+    notes: gateEnabled
+      ? ['Files are uploaded as XLS files, not converted to Google Sheets.']
+      : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
   }, result);
+  return gateEnabled ? row : { ...row, status: 'disabled', latencyMs: null, error: null };
+}
+
+function externalActionGateHealthRow() {
+  const gates = externalActionGates();
+  const unexpected = Object.values(gates).filter((gate) => (
+    gate.expectedState === 'live' ? !gate.enabled : gate.enabled
+  ));
+  return {
+    id: 'external-action-gates',
+    name: 'External action gates',
+    category: 'Safety',
+    purpose: 'Keeps established FCOS integrations live while retaining emergency controls and UAT gates for new side effects.',
+    scope: 'server',
+    provider: 'FCOS',
+    endpoint: null,
+    authType: 'Deployment-controlled operational controls',
+    configured: true,
+    status: unexpected.length ? 'warning' : 'online',
+    checkedAt: new Date().toISOString(),
+    latencyMs: null,
+    error: null,
+    tokenExpiry: 'Not applicable.',
+    details: Object.fromEntries(Object.values(gates).map((gate) => [
+      gate.label,
+      `${gate.enabled ? 'Enabled' : 'Disabled'} (${gate.expectedState === 'live' ? 'existing live function' : 'UAT gated'})`,
+    ])),
+    notes: unexpected.length
+      ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`]
+      : ['Existing Salesforce, Google Drive, and email functions are live. New bank and payment-promotion actions remain UAT gated.'],
+  };
 }
 
 async function frankfurterHealthRow() {
@@ -2707,7 +2751,8 @@ async function smtpHealthRow() {
     configuredEnv: configuredEnv(['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE']),
     missingEnv: missingEnv(required),
     tokenExpiry: 'Not applicable.',
-    notes: ['This check verifies login only; it does not send an email.'],
+    details: { deliveryGateEnabled: isExternalActionEnabled('email_delivery') },
+    notes: ['This check verifies login only; it does not send an email. The emergency delivery control is reported separately.'],
   }, result);
 }
 
@@ -2717,7 +2762,7 @@ function cronHealthRow() {
     id: 'vercel-cron',
     name: 'Vercel Cron Protection',
     category: 'Scheduling',
-    purpose: 'Protects scheduled Outstanding Buyer Invoices internal daily report endpoint.',
+    purpose: 'Protects the retained scheduled Outstanding Buyer Invoices email path; delivery can be paused by its emergency control.',
     scope: 'server',
     provider: 'Vercel Cron',
     endpoint: '/api/functions/outstandingBuyerInvoicesEmailCron',
@@ -2726,6 +2771,7 @@ function cronHealthRow() {
     configuredEnv: configuredEnv(['CRON_SECRET']),
     missingEnv: configured ? [] : ['CRON_SECRET'],
     tokenExpiry: 'Not applicable.',
+    details: { deliveryGateEnabled: isExternalActionEnabled('email_delivery') },
   });
 }
 
@@ -2774,7 +2820,7 @@ async function systemHealth() {
     nagerHealthRow(),
     smtpHealthRow(),
   ]);
-  rows.push(cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
+  rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
   const summary = rows.reduce((acc, row) => {
     acc.total += 1;
     acc[row.status] = (acc[row.status] || 0) + 1;
@@ -2783,6 +2829,7 @@ async function systemHealth() {
   return {
     generatedAt: new Date().toISOString(),
     summary,
+    externalActionGates: externalActionGates(),
     rows,
   };
 }
@@ -8584,6 +8631,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
 }
 
 async function sendWithSmtp({ smtp = {}, from, to, cc, bcc, subject, html, text }) {
+  requireExternalActionGate('email_delivery');
   const host = smtp.host || process.env.SMTP_HOST;
   const port = Number(smtp.port || process.env.SMTP_PORT || 587);
   const user = smtp.user || process.env.SMTP_USER;
@@ -8775,6 +8823,14 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
 
 async function outstandingBuyerInvoicesEmailCron(body, req) {
   requireCronAuthorization(req);
+  if (!isExternalActionEnabled('email_delivery')) {
+    return {
+      sent: false,
+      skipped: true,
+      gated: true,
+      reason: 'Scheduled email delivery has been paused by an emergency operational control.',
+    };
+  }
   const stored = await loadStoredBuyerInvoiceEmailSettings();
   const settings = {
     ...buyerInvoiceEmailSettings(stored.settings),
@@ -10202,6 +10258,7 @@ async function disputeWorkflowDocuments(body = {}, req, accessContext = null) {
 
 async function disputeWorkflowUploadDocument(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
+  requireExternalActionGate('salesforce_write');
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });

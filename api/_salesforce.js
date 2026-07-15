@@ -1,4 +1,5 @@
 import { createSign } from 'node:crypto';
+import { requireExternalActionGate } from './_externalActionGates.js';
 
 const DEFAULT_INSTANCE_URL = 'https://fratellicosulich.my.salesforce.com';
 const DEFAULT_API_VERSION = 'v59.0';
@@ -191,10 +192,12 @@ export function cleanRecord(obj) {
 }
 
 export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSession = true } = {}) {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD'].includes(normalizedMethod)) requireExternalActionGate('salesforce_write');
   const accessToken = await getAccessToken();
   const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
   const res = await fetch(url, {
-    method,
+    method: normalizedMethod,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       ...(body ? { 'content-type': 'application/json' } : {}),
@@ -208,10 +211,10 @@ export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSess
   if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
     cachedToken = null;
     cachedTokenExpiresAt = 0;
-    return sfRequest(path, { method, body, retryOnExpiredSession: false });
+    return sfRequest(path, { method: normalizedMethod, body, retryOnExpiredSession: false });
   }
   if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
-    throw new Error(data.message || data[0]?.message || `${method} ${path} failed`);
+    throw new Error(data.message || data[0]?.message || `${normalizedMethod} ${path} failed`);
   }
   return data;
 }
