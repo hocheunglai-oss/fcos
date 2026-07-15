@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.15';
+export const APP_VERSION = '2.0.16';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.16',
+    releasedAt: '2026-07-16',
+    title: 'Consolidated payment reminder batches',
+    changes: [
+      'Grouped payment reminder batches by buyer Account ID, buyer broker Account IDs, and broker routing mode.',
+      'Merged and deduplicated invoice-specific trader and collection-handler recipients within each buyer and broker group.',
+      'Kept different buyer Accounts, broker Accounts, and routing instructions in separate email batches.',
+    ],
+  },
   {
     version: '2.0.15',
     releasedAt: '2026-07-15',

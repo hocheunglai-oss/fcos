@@ -15,6 +15,7 @@ import {
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
+import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
@@ -8304,36 +8305,7 @@ function paymentReminderRowRouting(row) {
 }
 
 function paymentReminderRoutingForRows(rows = []) {
-  const groups = new Map();
-  for (const row of rows) {
-    const routing = paymentReminderRowRouting(row);
-    const key = JSON.stringify({
-      mode: routing.mode,
-      to: routing.to.map((item) => item.toLowerCase()).sort(),
-      cc: routing.cc.map((item) => item.toLowerCase()).sort(),
-      bcc: routing.bcc.map((item) => item.toLowerCase()).sort(),
-      primaryRecipientName: routing.primaryRecipientName,
-    });
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        mode: routing.mode,
-        to: routing.to,
-        cc: routing.cc,
-        bcc: routing.bcc,
-        primaryRecipientName: routing.primaryRecipientName,
-        warnings: [],
-        rows: [],
-      });
-    }
-    const group = groups.get(key);
-    group.rows.push(row);
-    group.warnings.push(...(routing.warnings || []));
-  }
-  const resultGroups = [...groups.values()].map((group) => ({
-    ...group,
-    warnings: uniqueTextList(group.warnings),
-  }));
+  const resultGroups = groupPaymentReminderRows(rows, paymentReminderRowRouting);
   return {
     groups: resultGroups,
     to: uniqueEmailList(...resultGroups.map((group) => group.to)),
