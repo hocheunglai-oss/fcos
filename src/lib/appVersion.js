@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.13';
+export const APP_VERSION = '2.0.14';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.14',
+    releasedAt: '2026-07-15',
+    title: 'Correct buyer invoice due dates',
+    changes: [
+      'Corrected buyer invoice payment-term dates to count the delivery date as day one.',
+      'Applied the corrected due date consistently to invoice lists, reminders, cashflow, incoming payments, late-interest calculations, and stem details.',
+    ],
+  },
   {
     version: '2.0.13',
     releasedAt: '2026-07-13',

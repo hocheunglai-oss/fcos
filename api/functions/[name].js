@@ -13,6 +13,7 @@ import {
   resolveOriginalSupplierLookup,
 } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
+import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 
@@ -2115,20 +2116,6 @@ function addDays(dateString, days) {
   const date = new Date(`${dateString}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return dateOnly(date);
-}
-
-function paymentTermDays(value) {
-  const match = String(value ?? '').match(/-?\d+(\.\d+)?/);
-  if (!match) return null;
-  const days = Number(match[0]);
-  return Number.isFinite(days) ? Math.trunc(days) : null;
-}
-
-function calculatedBuyerPayTermDate(stem) {
-  const basisDate = stem.Delivery_Date__c || stem.Delivery_Date_Or_Expected__c || stem.Expected_Delivery_Date__c;
-  const days = paymentTermDays(stem.Payment_Term__c);
-  if (!basisDate || days == null) return null;
-  return addDays(basisDate, days);
 }
 
 function latestDate(values) {
