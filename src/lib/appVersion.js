@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.17';
+export const APP_VERSION = '2.0.18';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.18',
+    releasedAt: '2026-07-16',
+    title: 'Sidebar display modes',
+    changes: [
+      'Restored the left-edge hover rail as the default auto-hide sidebar mode.',
+      'Changed the arrow control to pin or unpin the sidebar with page space reserved while pinned.',
+      'Persisted the selected auto-hide or fixed sidebar mode across browser sessions.',
+    ],
+  },
   {
     version: '2.0.17',
     releasedAt: '2026-07-16',

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote,
+  ChevronLeft,
   ChevronRight,
   ClipboardCheck,
   DollarSign,
@@ -9,7 +10,6 @@ import {
   History,
   LayoutDashboard,
   LogOut,
-  PanelLeftClose,
   ReceiptText,
   RefreshCw,
   Settings,
@@ -54,7 +54,8 @@ const navGroups = [
 ];
 
 const VERSION_CHECK_INTERVAL_MS = 60_000;
-const SIDEBAR_HIDDEN_STORAGE_KEY = 'workspace-sidebar-hidden';
+const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
+const LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY = 'workspace-sidebar-hidden';
 
 export default function Layout() {
   const location = useLocation();
@@ -63,8 +64,7 @@ export default function Layout() {
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
-  const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY) === 'true');
-  const [sidebarRestoredOpen, setSidebarRestoredOpen] = useState(false);
+  const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
   const currentBuildIdRef = useRef(null);
 
   const accessibleGroups = useMemo(() => (
@@ -85,8 +85,9 @@ export default function Layout() {
   }, [density]);
 
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, String(sidebarHidden));
-  }, [sidebarHidden]);
+    localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarFixed));
+    localStorage.removeItem(LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY);
+  }, [sidebarFixed]);
 
   useEffect(() => {
     const onDirtyState = (event) => {
@@ -156,51 +157,41 @@ export default function Layout() {
 
   return (
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
-      {sidebarHidden ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          data-testid="show-sidebar"
-          className="fixed left-0 top-3 z-50 h-8 w-7 rounded-l-none rounded-r-md border-l-0 bg-white p-0 shadow-sm"
-          onClick={() => {
-            setSidebarHidden(false);
-            setSidebarRestoredOpen(true);
-          }}
-          aria-label="Show sidebar"
-          title="Show sidebar"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      ) : (
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        data-testid="toggle-fixed-sidebar"
+        className={cn(
+          'top-3 z-[60] h-8 w-7 rounded-md bg-white p-0 shadow-sm transition-[left] duration-200 ease-out',
+          sidebarFixed
+            ? 'absolute left-[240px]'
+            : 'fixed left-0 rounded-l-none border-l-0',
+        )}
+        onClick={() => setSidebarFixed((fixed) => !fixed)}
+        aria-label={sidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
+        title={sidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
+      >
+        {sidebarFixed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </Button>
+
       <aside
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-50 flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-transform duration-200 ease-out',
-          sidebarRestoredOpen ? 'translate-x-0' : '-translate-x-[260px] hover:translate-x-0 focus-within:translate-x-0',
+          'app-workspace-sidebar inset-y-0 left-0 z-50 flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-out',
+          sidebarFixed
+            ? 'relative translate-x-0'
+            : 'fixed -translate-x-[260px] shadow-xl shadow-slate-900/10 hover:translate-x-0 focus-within:translate-x-0',
         )}
-        onMouseLeave={() => setSidebarRestoredOpen(false)}
       >
-        <div className="border-b border-slate-200 px-5 py-4">
+        <div className={cn(
+          'border-b border-slate-200 py-4',
+          sidebarFixed ? 'pl-5 pr-12' : 'pl-10 pr-5',
+        )}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-950">FCOS</div>
               <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              data-testid="hide-sidebar"
-              className="h-7 w-7 shrink-0 text-slate-500 hover:text-slate-950"
-              onClick={() => {
-                setSidebarRestoredOpen(false);
-                setSidebarHidden(true);
-              }}
-              aria-label="Hide sidebar"
-              title="Hide sidebar"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </Button>
           </div>
         </div>
 
@@ -263,7 +254,6 @@ export default function Layout() {
           </Button>
         </div>
       </aside>
-      )}
 
       <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
         {versionUpdate && (
