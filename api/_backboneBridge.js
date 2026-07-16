@@ -6,6 +6,7 @@ export const FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS = new Set([
   '2026-07-15.1',
   FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
 ]);
+export const FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS = new Set(['primary', 'previous']);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -126,5 +127,11 @@ export async function backboneBridgeRequest(payload, options = {}) {
     error.status = 502;
     throw error;
   }
-  return data;
+  const credentialVersion = response.headers.get('x-fcos-bridge-key-version');
+  if (credentialVersion && !FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS.has(credentialVersion)) {
+    const error = new Error('FCOS Backbone bridge returned an incompatible credential status.');
+    error.status = 502;
+    throw error;
+  }
+  return { ...data, bridgeCredentialVersion: credentialVersion || 'unknown' };
 }

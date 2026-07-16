@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FCOS_BACKBONE_BRIDGE_PATH,
+  FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS,
   FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
   FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS,
   authenticatedBackboneBridgePayload,
@@ -41,6 +42,12 @@ test('rolling deployment accepts the previous and current bridge schemas only', 
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-15.1'), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has(FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-17.99'), false);
+});
+
+test('recognizes only the two non-secret Backbone credential rotation labels', () => {
+  assert.equal(FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS.has('primary'), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS.has('previous'), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS.has('unknown'), false);
 });
 
 test('bridge actor comes from the verified auth user after active-profile equality', () => {
@@ -149,12 +156,34 @@ test('bridge sends a signed request and validates response identity', async () =
       captured = { url: String(url), options };
       return new Response(JSON.stringify({ schemaVersion: '2026-07-15.1', requestId, identity: {} }), {
         status: 200,
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-fcos-bridge-key-version': 'primary',
+        },
       });
     },
   });
   assert.equal(data.requestId, requestId);
+  assert.equal(data.bridgeCredentialVersion, 'primary');
   assert.equal(captured.url, 'https://fcbhk-erp.vercel.app/api/fcos/v1/bridge');
   assert.match(captured.options.headers['x-fcos-signature'], /^[0-9a-f]{64}$/);
   assert.equal(captured.options.signal instanceof AbortSignal, true);
+});
+
+test('bridge stays compatible with an older Backbone response during a rolling deployment', async () => {
+  const requestId = 'a39b8ff9-936f-4915-b762-b769d5f7ce75';
+  const data = await backboneBridgeRequest({
+    operation: 'identity.resolve',
+    actor: { userId: requestId, email: 'user@example.com' },
+  }, {
+    env: { FCOS_BACKBONE_BRIDGE_SECRET: 'x'.repeat(32) },
+    requestId,
+    timestamp: '1784131200',
+    signal: null,
+    fetchImpl: async () => new Response(JSON.stringify({ schemaVersion: '2026-07-15.1', requestId, identity: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+  assert.equal(data.bridgeCredentialVersion, 'unknown');
 });

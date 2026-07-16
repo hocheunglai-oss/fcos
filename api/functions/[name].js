@@ -2611,6 +2611,7 @@ async function backboneBridgeHealthRow(accessContext) {
       officeCodes: response.identity?.officeCodes || [],
       roles: response.identity?.roles || [],
       mode: response.authority?.mode || null,
+      credentialVersion: response.bridgeCredentialVersion,
     };
   }) : null;
   return healthRow({
@@ -2622,6 +2623,9 @@ async function backboneBridgeHealthRow(accessContext) {
     provider: 'FCOS Backbone',
     endpoint: `${config.baseUrl}/api/fcos/v1/bridge`,
     authType: 'Timestamped HMAC with one-time request id',
+    details: {
+      credentialRotation: 'Backbone reports only the accepted credential label after a valid signed request.',
+    },
     configured: config.configured,
     configuredEnv: {
       FCOS_BACKBONE_URL: Boolean(process.env.FCOS_BACKBONE_URL),
@@ -2629,7 +2633,10 @@ async function backboneBridgeHealthRow(accessContext) {
     },
     missingEnv: config.configured ? [] : ['FCOS_BACKBONE_BRIDGE_SECRET'],
     tokenExpiry: 'Each signed request expires after five minutes and its request id cannot be replayed.',
-    notes: ['Read-only shadow boundary. Salesforce and the dedicated FCOS Supabase project remain live during parallel operation.'],
+    notes: [
+      'Read-only shadow boundary. Salesforce and the dedicated FCOS Supabase project remain live during parallel operation.',
+      'During a rotation window, credentialVersion should return primary before the previous Backbone secret is removed.',
+    ],
   }, result);
 }
 

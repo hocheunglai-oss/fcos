@@ -37,6 +37,8 @@ FCOS_BACKBONE_URL=https://fcbhk-erp.vercel.app
 FCOS_BACKBONE_BRIDGE_SECRET=<shared server secret of at least 32 characters>
 ```
 
+Backbone supports a zero-interruption rotation window: first set its primary secret to a newly generated value and `FCOS_BRIDGE_SHARED_SECRET_PREVIOUS` to the still-live value, then deploy Backbone; update this FCOS secret to the new value and deploy FCOS; confirm FCOS System Health reports `credentialVersion: primary`; after the signed-request window and rollback margin, remove Backbone's previous-secret variable. Secrets never belong in source control or browser variables.
+
 When configured, System Health resolves the current FCOS user to an active Backbone HKG identity. The server can then run bounded `trade.find`, `trade.changes`, and `audit.list` comparisons. FCOS continues using its current Salesforce and dedicated Supabase paths until an individual replacement is accepted and rehearsed.
 
 See [FCOS live continuity during the Backbone transition](docs/live-continuity-during-backbone-transition.md) for the preserved-function and replacement rules.

@@ -24,6 +24,10 @@ FCOS includes a server-only, signed bridge client for identity, trade-projection
 
 System Health reports this boundary separately from Salesforce and the FCOS Supabase project. Production FCOS reads remain on their present paths until the relevant replacement evidence is accepted.
 
+### Bridge credential rotation
+
+The shared HMAC secret is rotated without stopping FCOS by deploying Backbone first with its new primary secret and its current secret in the short-lived `FCOS_BRIDGE_SHARED_SECRET_PREVIOUS` fallback. FCOS then receives the new value through its existing server-only `FCOS_BACKBONE_BRIDGE_SECRET`. A valid Backbone response reports the non-secret `primary` or `previous` credential label, surfaced as `credentialVersion` in FCOS System Health. Finish only after the signed probe reports `primary`, then remove Backbone's fallback after the five-minute request/replay horizon and a rollback margin. Existing FCOS Salesforce, Supabase, Google Drive, scheduled-email, and manual-email paths are not changed by this control.
+
 ## Operational controls
 
 The established connectors are enabled by default. The following variables are emergency kill switches only:
