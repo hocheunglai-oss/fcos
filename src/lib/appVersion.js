@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.16';
+export const APP_VERSION = '2.0.17';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.17',
+    releasedAt: '2026-07-16',
+    title: 'Explicit sidebar visibility',
+    changes: [
+      'Added a sidebar header control that completely hides the navigation drawer and its edge rail.',
+      'Added a compact top-left arrow to restore the sidebar when it is hidden.',
+      'Persisted the sidebar visibility preference across browser sessions.',
+    ],
+  },
   {
     version: '2.0.16',
     releasedAt: '2026-07-16',
