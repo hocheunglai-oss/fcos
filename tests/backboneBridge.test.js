@@ -9,6 +9,7 @@ import {
   backboneBridgeActor,
   backboneBridgeConfig,
   backboneBridgeRequest,
+  browserSafeBackboneFinanceHandoff,
   browserSafeBackboneTradeProjection,
   canonicalBackboneBridgeRequest,
   signBackboneBridgeRequest,
@@ -41,6 +42,7 @@ test('bridge stays unconfigured without a 32-character server secret', () => {
 test('rolling deployment accepts the previous and current bridge schemas only', () => {
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-15.1'), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-16.2'), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-17.1'), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has(FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-17.99'), false);
 });
@@ -69,6 +71,36 @@ test('bridge preserves the Finance handoff operation in the signed server payloa
     operation: 'finance.handoffs',
     actor: { userId: requestId, email: 'user@example.com' },
     limit: 50,
+  });
+});
+
+test('bridge preserves one immutable Finance-handoff detail request in the signed server payload', async () => {
+  const requestId = 'a39b8ff9-936f-4915-b762-b769d5f7ce75';
+  const handoffId = 'ed5bc71c-c71c-41b8-9fb2-4e0aa2ed2a9a';
+  let captured;
+  await backboneBridgeRequest({
+    operation: 'finance.handoff.detail',
+    actor: { userId: requestId, email: 'user@example.com' },
+    handoffId,
+  }, {
+    env: { FCOS_BACKBONE_BRIDGE_SECRET: 'x'.repeat(32) },
+    requestId,
+    timestamp: '1784131200',
+    signal: null,
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        schemaVersion: FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
+        requestId,
+        handoff: { handoffId, enquiryNumber: 'ENQ-1' },
+        package: {},
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.deepEqual(captured, {
+    operation: 'finance.handoff.detail',
+    actor: { userId: requestId, email: 'user@example.com' },
+    handoffId,
   });
 });
 
@@ -146,6 +178,24 @@ test('browser projection removes Salesforce record ids from older Backbone respo
   assert.equal(safe.stems[0].stemNumber, 'HKG260001T');
   assert.equal(response.trade.salesforceEnquiryId, '006234567890123AAA');
   assert.equal(response.stems[0].salesforceStemId, 'a01234567890123AAA');
+});
+
+test('Finance handoff detail recursively removes Salesforce fields before browser delivery', () => {
+  const safe = browserSafeBackboneFinanceHandoff({
+    handoff: { enquiryNumber: 'ENQ-26001', salesforceEnquiryId: '006234567890123AAA' },
+    package: {
+      trade: { buyerName: 'Buyer A', salesforceStemId: 'a01234567890123AAA' },
+      allocations: [{ productName: 'VLSFO', nested: { salesforceRecordId: 'hidden' } }],
+    },
+  });
+
+  assert.deepEqual(safe, {
+    handoff: { enquiryNumber: 'ENQ-26001' },
+    package: {
+      trade: { buyerName: 'Buyer A' },
+      allocations: [{ productName: 'VLSFO', nested: {} }],
+    },
+  });
 });
 
 test('FCOS and Backbone use the same canonical signed request', () => {

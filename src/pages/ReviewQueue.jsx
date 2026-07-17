@@ -13,6 +13,7 @@ import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -134,6 +135,12 @@ export default function ReviewQueue() {
   const [selectedWorkflowRow, setSelectedWorkflowRow] = useState(null);
   const [workflowSaving, setWorkflowSaving] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
+  const [backboneHandoffs, setBackboneHandoffs] = useState([]);
+  const [backboneHandoffError, setBackboneHandoffError] = useState('');
+  const [selectedBackboneHandoff, setSelectedBackboneHandoff] = useState(null);
+  const [backboneHandoffDetail, setBackboneHandoffDetail] = useState(null);
+  const [backboneHandoffDetailError, setBackboneHandoffDetailError] = useState('');
+  const [backboneHandoffDetailLoading, setBackboneHandoffDetailLoading] = useState(false);
   const [workflowForm, setWorkflowForm] = useState({
     status: 'Open', department: 'Unassigned', ownerUserId: '', priority: 'High', dueDate: '', latestNote: '', resolutionNote: '',
   });
@@ -154,8 +161,18 @@ export default function ReviewQueue() {
   const load = async (yrs = selectedYears, mos = selectedMonths, options = {}) => {
     setLoading(true);
     setError(null);
+    setBackboneHandoffError('');
     const where = buildDeliveryWhere(yrs, mos);
-    const res = await appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR }, { cache: true, force: options.force });
+    const [res, handoffsRes] = await Promise.all([
+      appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR }, { cache: true, force: options.force }),
+      appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: true, force: options.force }),
+    ]);
+    if (handoffsRes.data?.error) {
+      setBackboneHandoffError(handoffsRes.data.error);
+      setBackboneHandoffs([]);
+    } else {
+      setBackboneHandoffs(handoffsRes.data?.handoffs || []);
+    }
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -251,6 +268,20 @@ export default function ReviewQueue() {
       },
     }));
     setSelectedWorkflowRow(null);
+  };
+
+  const openBackboneHandoff = async (handoff) => {
+    setSelectedBackboneHandoff(handoff);
+    setBackboneHandoffDetail(null);
+    setBackboneHandoffDetailError('');
+    setBackboneHandoffDetailLoading(true);
+    const res = await appClient.functions.invoke('backboneFinanceHandoffDetail', { handoffId: handoff.handoffId }, { cache: true });
+    setBackboneHandoffDetailLoading(false);
+    if (res.data?.error) {
+      setBackboneHandoffDetailError(res.data.error);
+      return;
+    }
+    setBackboneHandoffDetail(res.data);
   };
 
   const exportCsv = () => {
@@ -402,6 +433,13 @@ export default function ReviewQueue() {
         </div>
       )}
 
+      <BackboneFinanceHandoffPanel
+        handoffs={backboneHandoffs}
+        loading={loading && !data}
+        error={backboneHandoffError}
+        onOpen={openBackboneHandoff}
+      />
+
       <TableShell
         title="Exception List"
         meta={`${reviewRows.length.toLocaleString()} matching items`}
@@ -515,6 +553,19 @@ export default function ReviewQueue() {
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
         onUpdated={() => load(selectedYears, selectedMonths, { force: true })}
+      />
+
+      <BackboneFinanceHandoffDialog
+        selected={selectedBackboneHandoff}
+        detail={backboneHandoffDetail}
+        loading={backboneHandoffDetailLoading}
+        error={backboneHandoffDetailError}
+        onOpenChange={(open) => {
+          if (open) return;
+          setSelectedBackboneHandoff(null);
+          setBackboneHandoffDetail(null);
+          setBackboneHandoffDetailError('');
+        }}
       />
 
       <Dialog open={Boolean(selectedWorkflowRow)} onOpenChange={(open) => !open && setSelectedWorkflowRow(null)}>

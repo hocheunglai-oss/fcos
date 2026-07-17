@@ -23,6 +23,7 @@ import {
   authenticatedBackboneBridgePayload,
   backboneBridgeConfig,
   backboneBridgeRequest,
+  browserSafeBackboneFinanceHandoff,
   browserSafeBackboneTradeProjection,
 } from '../_backboneBridge.js';
 
@@ -423,6 +424,7 @@ const HANDLER_MODULE_ACCESS = {
   backboneBridgeIdentity: ['settings'],
   backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
   backboneFinanceHandoffs: ['review'],
+  backboneFinanceHandoffDetail: ['review'],
   salesforceSchema: ['admin'],
   salesforceObjectFields: ['admin'],
   salesforceFullSchema: ['admin'],
@@ -2934,6 +2936,19 @@ async function backboneFinanceHandoffs(body = {}, req, accessContext = null) {
     { operation: 'finance.handoffs', limit },
     context,
   ));
+}
+
+async function backboneFinanceHandoffDetail(body = {}, req, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const handoffId = String(body.handoffId || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoffId)) {
+    throw appError('A valid Finance handoff is required.', 400);
+  }
+  const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload(
+    { operation: 'finance.handoff.detail', handoffId },
+    context,
+  ));
+  return browserSafeBackboneFinanceHandoff(response);
 }
 
 function isSafeSalesforceFieldPath(value) {
@@ -11331,6 +11346,7 @@ const handlers = {
   backboneBridgeIdentity,
   backboneTradeProjection,
   backboneFinanceHandoffs,
+  backboneFinanceHandoffDetail,
   adminUsersList,
   adminAuditLogs,
   adminUserSave,

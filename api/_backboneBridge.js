@@ -1,10 +1,11 @@
 import { createHmac, randomUUID } from 'node:crypto';
 
 export const FCOS_BACKBONE_BRIDGE_PATH = '/api/fcos/v1/bridge';
-export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-17.1';
+export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-17.2';
 export const FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS = new Set([
   '2026-07-15.1',
   '2026-07-16.2',
+  '2026-07-17.1',
   FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
 ]);
 export const FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS = new Set(['primary', 'previous']);
@@ -53,6 +54,14 @@ function withoutSalesforceRecordIds(value) {
   return safe;
 }
 
+function withoutNestedSalesforceRecordIds(value) {
+  if (Array.isArray(value)) return value.map(withoutNestedSalesforceRecordIds);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/salesforce/i.test(key))
+    .map(([key, nested]) => [key, withoutNestedSalesforceRecordIds(nested)]));
+}
+
 export function browserSafeBackboneTradeProjection(response) {
   if (!response || typeof response !== 'object' || Array.isArray(response)) return response;
   const safe = { ...response };
@@ -60,6 +69,10 @@ export function browserSafeBackboneTradeProjection(response) {
   if (Array.isArray(safe.stems)) safe.stems = safe.stems.map(withoutSalesforceRecordIds);
   if (Array.isArray(safe.items)) safe.items = safe.items.map(withoutSalesforceRecordIds);
   return safe;
+}
+
+export function browserSafeBackboneFinanceHandoff(response) {
+  return withoutNestedSalesforceRecordIds(response);
 }
 
 export function backboneBridgeConfig(env = process.env) {
