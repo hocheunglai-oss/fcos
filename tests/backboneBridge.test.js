@@ -40,8 +40,36 @@ test('bridge stays unconfigured without a 32-character server secret', () => {
 
 test('rolling deployment accepts the previous and current bridge schemas only', () => {
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-15.1'), true);
+  assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-16.2'), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has(FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION), true);
   assert.equal(FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS.has('2026-07-17.99'), false);
+});
+
+test('bridge preserves the Finance handoff operation in the signed server payload', async () => {
+  const requestId = 'a39b8ff9-936f-4915-b762-b769d5f7ce75';
+  let captured;
+  await backboneBridgeRequest({
+    operation: 'finance.handoffs',
+    actor: { userId: requestId, email: 'user@example.com' },
+    limit: 50,
+  }, {
+    env: { FCOS_BACKBONE_BRIDGE_SECRET: 'x'.repeat(32) },
+    requestId,
+    timestamp: '1784131200',
+    signal: null,
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return new Response(JSON.stringify({ schemaVersion: FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION, requestId, handoffs: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  assert.deepEqual(captured, {
+    operation: 'finance.handoffs',
+    actor: { userId: requestId, email: 'user@example.com' },
+    limit: 50,
+  });
 });
 
 test('recognizes only the two non-secret Backbone credential rotation labels', () => {

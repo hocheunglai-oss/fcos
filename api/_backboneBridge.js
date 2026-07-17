@@ -1,9 +1,10 @@
 import { createHmac, randomUUID } from 'node:crypto';
 
 export const FCOS_BACKBONE_BRIDGE_PATH = '/api/fcos/v1/bridge';
-export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-16.2';
+export const FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION = '2026-07-17.1';
 export const FCOS_BACKBONE_BRIDGE_SUPPORTED_SCHEMA_VERSIONS = new Set([
   '2026-07-15.1',
+  '2026-07-16.2',
   FCOS_BACKBONE_BRIDGE_SCHEMA_VERSION,
 ]);
 export const FCOS_BACKBONE_BRIDGE_CREDENTIAL_VERSIONS = new Set(['primary', 'previous']);

@@ -422,6 +422,7 @@ const HANDLER_MODULE_ACCESS = {
   systemHealth: ['settings'],
   backboneBridgeIdentity: ['settings'],
   backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
+  backboneFinanceHandoffs: ['review'],
   salesforceSchema: ['admin'],
   salesforceObjectFields: ['admin'],
   salesforceFullSchema: ['admin'],
@@ -2921,6 +2922,18 @@ async function backboneTradeProjection(body, req, accessContext = null) {
   const payload = authenticatedBackboneBridgePayload({ ...body, operation }, context);
   const response = await backboneBridgeRequest(payload);
   return browserSafeBackboneTradeProjection(response);
+}
+
+async function backboneFinanceHandoffs(body = {}, req, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const limit = body.limit == null ? 50 : Number(body.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw appError('Finance handoff limit must be between 1 and 100.', 400);
+  }
+  return backboneBridgeRequest(authenticatedBackboneBridgePayload(
+    { operation: 'finance.handoffs', limit },
+    context,
+  ));
 }
 
 function isSafeSalesforceFieldPath(value) {
@@ -11317,6 +11330,7 @@ const handlers = {
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,
+  backboneFinanceHandoffs,
   adminUsersList,
   adminAuditLogs,
   adminUserSave,
