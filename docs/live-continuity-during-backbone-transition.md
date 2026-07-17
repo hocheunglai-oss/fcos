@@ -12,6 +12,8 @@ FCOS is an in-use operational extension to Salesforce. Building FCOS Backbone do
 
 These paths must remain compatible until the replacement checklist records an approved successor, migration evidence, functional-owner acceptance, and a rehearsed rollback path. FCOS Backbone may consume shared or projected data, but it must not silently take ownership of an established FCOS action.
 
+The eventual replacement work is sequenced by finance workflow—rather than as one FCOS cutover—in the [FCOS finance workflow execution plan](https://github.com/hocheunglai-oss/fcbhk-erp/blob/main/docs/fcos-finance-workflow-execution.md). That plan is an inventory and UAT order; it does not change any live FCOS owner or connector.
+
 ## Backbone shadow bridge
 
 FCOS includes a server-only, signed bridge client for identity, trade-projection, changed-case, and workflow-audit comparisons. It is additive:
