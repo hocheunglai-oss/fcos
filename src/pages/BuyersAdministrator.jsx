@@ -178,9 +178,8 @@ export default function BuyersAdministrator() {
   };
 
   const addTrader = () => {
-    const available = activeUsers.find((user) => !selectedTraderIds.includes(user.id));
-    if (!available || selectedTraderIds.length >= 3) return;
-    setSelectedTraderIds((current) => [...current, available.id]);
+    if (selectedTraderIds.length >= 3 || selectedTraderIds.some((userId) => !userId)) return;
+    setSelectedTraderIds((current) => [...current, '']);
   };
 
   const changeTrader = (index, userId) => {
@@ -192,7 +191,7 @@ export default function BuyersAdministrator() {
   };
 
   const saveAssignments = async () => {
-    if (!editingBuyer) return;
+    if (!editingBuyer || selectedTraderIds.some((userId) => !userId || !usersById.get(userId)?.active)) return;
     setSaving(true);
     const response = await appClient.functions.invoke('buyersAdministratorSave', {
       buyerAccountId: editingBuyer.buyerAccountId,
@@ -221,7 +220,9 @@ export default function BuyersAdministrator() {
     });
   };
 
+  const hasInvalidTraderSelection = selectedTraderIds.some((userId) => !userId || !usersById.get(userId)?.active);
   const noMoreUsers = selectedTraderIds.length >= 3
+    || selectedTraderIds.some((userId) => !userId)
     || !activeUsers.some((user) => !selectedTraderIds.includes(user.id));
 
   return (
@@ -413,11 +414,11 @@ export default function BuyersAdministrator() {
                 {selectedTraderIds.map((userId, index) => {
                   const selectedUser = usersById.get(userId);
                   return (
-                    <div key={userId} className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
+                    <div key={userId || 'pending-trader'} className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
                       <div className="min-w-0 flex-1">
-                        <Select value={userId} onValueChange={(value) => changeTrader(index, value)} disabled={saving}>
+                        <Select value={userId || undefined} onValueChange={(value) => changeTrader(index, value)} disabled={saving}>
                           <SelectTrigger aria-label={`Assigned trader ${index + 1}`}>
-                            <SelectValue>{selectedUser?.fullName || selectedUser?.email || 'Select trader'}</SelectValue>
+                            <SelectValue placeholder="Select a trader">{selectedUser?.fullName || selectedUser?.email}</SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             {users
@@ -470,7 +471,7 @@ export default function BuyersAdministrator() {
 
           <DialogFooter className="border-t border-border bg-muted/30 px-5 py-4">
             <Button type="button" variant="outline" onClick={closeEditor} disabled={saving}>Cancel</Button>
-            <Button type="button" onClick={saveAssignments} disabled={saving}>
+            <Button type="button" onClick={saveAssignments} disabled={saving || hasInvalidTraderSelection}>
               {saving ? <Loader2 className="animate-spin" /> : <UsersRound />}
               Save Assignments
             </Button>

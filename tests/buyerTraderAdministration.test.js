@@ -9,6 +9,7 @@ import {
 
 const migrationUrl = new URL('../supabase/migrations/20260722032251_buyer_trader_assignments.sql', import.meta.url);
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
+const pageUrl = new URL('../src/pages/BuyersAdministrator.jsx', import.meta.url);
 
 test('normalizes Salesforce Account IDs to one 15-character identity', () => {
   assert.equal(buyerAccountIdKey('0012x00000AAAAA'), '0012x00000AAAAA');
@@ -78,4 +79,11 @@ test('server revalidates buyer usage in Salesforce before saving', async () => {
   assert.doesNotMatch(source, /COUNT\(Id\) stemCount/);
   assert.match(source, /buyersAdministratorList: \['buyers_administrator'\]/);
   assert.match(source, /buyersAdministratorSave: \['buyers_administrator'\]/);
+});
+
+test('adding a trader requires an explicit active-user selection before save', async () => {
+  const source = await readFile(pageUrl, 'utf8');
+  assert.match(source, /setSelectedTraderIds\(\(current\) => \[\.\.\.current, ''\]\)/);
+  assert.match(source, /placeholder="Select a trader"/);
+  assert.match(source, /disabled=\{saving \|\| hasInvalidTraderSelection\}/);
 });

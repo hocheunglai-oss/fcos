@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.20';
+export const APP_VERSION = '2.0.21';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.21',
+    releasedAt: '2026-07-22',
+    title: 'Explicit buyer trader selection',
+    changes: [
+      'Changed Add Trader to open an empty selection instead of automatically choosing the first active user.',
+      'Disabled assignment saving until every added trader slot contains a deliberately selected active FCOS user.',
+      'Kept zero-trader saves available when no assignment rows have been added.',
+    ],
+  },
   {
     version: '2.0.20',
     releasedAt: '2026-07-22',
