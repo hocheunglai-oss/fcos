@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.23';
+export const APP_VERSION = '2.0.24';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.24',
+    releasedAt: '2026-07-22',
+    title: 'Account notes and GROUP-first directory',
+    changes: [
+      'Moved active GROUP Accounts to the top of the Account Managers directory.',
+      'Added independent 255-character Account notes with inline editing, attribution, and note-aware search.',
+      'Kept child Account notes separate from GROUP manager propagation and Salesforce synchronization.',
+    ],
+  },
   {
     version: '2.0.23',
     releasedAt: '2026-07-22',

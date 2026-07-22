@@ -432,6 +432,7 @@ const HANDLER_MODULE_ACCESS = {
   buyersAdministratorSave: ['buyers_administrator'],
   accountManagersList: ['buyers_administrator'],
   accountManagersSave: ['buyers_administrator'],
+  accountManagersSaveNote: ['buyers_administrator'],
   accountManagersRetrySync: ['buyers_administrator'],
   systemHealth: ['settings'],
   backboneBridgeIdentity: ['settings'],
@@ -1325,7 +1326,7 @@ async function adminBootstrap(body = {}) {
 
 function accountManagerStorageError(error) {
   const message = String(error?.message || '');
-  if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_manager_(?:groups|assignments).*does not exist/i.test(message)) {
+  if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_manager_(?:groups|assignments|notes).*does not exist/i.test(message)) {
     return appError('Account Manager storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
   if (error?.code === 'PGRST202' || /(?:save|finalize)_account_manager/i.test(message) && /schema cache|could not find/i.test(message)) {
@@ -1426,7 +1427,7 @@ function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] 
   };
 }
 
-async function currentEligibleAccountGroup(body = {}) {
+async function currentEligibleAccountGroup(body = {}, { includeGroupChildren = true } = {}) {
   await accountManagerSchema();
   let requestedName = String(body.accountName || body.buyerName || '').trim();
   const legacyAccountId = String(body.buyerAccountId || '').trim();
@@ -1457,7 +1458,7 @@ async function currentEligibleAccountGroup(body = {}) {
     throw appError('This Account name no longer has an active Buyer, Buyer & Supplier, or Broker record. Refresh the page and review the latest Salesforce data.', 409);
   }
   group.directSalesforceAccountIds = group.salesforceAccountIds.slice();
-  if (group.isGroupAccount) {
+  if (group.isGroupAccount && includeGroupChildren) {
     const parentIds = group.directSalesforceAccountIds.map((id) => `'${escapeSoql(id)}'`).join(',');
     const childResult = await queryResult(`
       SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
@@ -1538,7 +1539,7 @@ async function syncAccountManagerToSalesforce(client, groupRow, profile) {
 async function accountManagersList(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
   await accountManagerSchema();
-  const [salesforceAccountResult, groupsResult, assignmentsResult, profilesResult] = await Promise.all([
+  const [salesforceAccountResult, groupsResult, assignmentsResult, profilesResult, notesResult] = await Promise.all([
     queryResult(`
       SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
       FROM Account
@@ -1556,9 +1557,12 @@ async function accountManagersList(body = {}, req = null, accessContext = null) 
       .from('user_profiles')
       .select('id,email,full_name,user_type,active')
       .order('full_name', { ascending: true }),
+    client
+      .from('account_manager_notes')
+      .select('account_name_key,account_name,account_note,revision,updated_at,updated_by_email'),
   ]);
 
-  for (const result of [groupsResult, assignmentsResult, profilesResult]) {
+  for (const result of [groupsResult, assignmentsResult, profilesResult, notesResult]) {
     if (result.error) throw accountManagerStorageError(result.error);
   }
   const salesforceAccounts = salesforceAccountResult.records || [];
@@ -1572,11 +1576,50 @@ async function accountManagersList(body = {}, req = null, accessContext = null) 
     managedGroups: groupsResult.data || [],
     assignments: assignmentsResult.data || [],
     profiles,
+    accountNotes: notesResult.data || [],
   });
   return {
     accounts,
     buyers: accounts,
     users: profiles.map(accountManagerProfile),
+  };
+}
+
+async function accountManagersSaveNote(body = {}, req = null, accessContext = null) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+
+  const salesforceGroup = await currentEligibleAccountGroup(body, { includeGroupChildren: false });
+  const accountNote = String(body.accountNote ?? body.note ?? '').trim();
+  if (Array.from(accountNote).length > 255) {
+    throw appError('Account note cannot exceed 255 characters.', 400);
+  }
+
+  const { data, error } = await client.rpc('save_account_manager_note', {
+    p_account_name_key: salesforceGroup.accountNameKey,
+    p_account_name: salesforceGroup.accountName,
+    p_account_note: accountNote,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: Number(body.expectedRevision ?? body.noteRevision ?? 0),
+  });
+  if (error) {
+    const storageError = accountManagerStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|cannot exceed 255|active FCOS user/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+
+  return {
+    note: {
+      accountNameKey: salesforceGroup.accountNameKey,
+      accountName: salesforceGroup.accountName,
+      accountNote: data?.account_note || '',
+      noteRevision: Number(data?.revision || 0),
+      noteUpdatedAt: data?.updated_at || null,
+      noteUpdatedByEmail: data?.updated_by_email || null,
+    },
   };
 }
 
@@ -11717,6 +11760,7 @@ const handlers = {
   buyersAdministratorSave,
   accountManagersList,
   accountManagersSave,
+  accountManagersSaveNote,
   accountManagersRetrySync,
   systemHealth,
   backboneBridgeIdentity,

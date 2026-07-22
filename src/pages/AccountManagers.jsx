@@ -38,6 +38,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 
 const PAGE_SIZE = 100;
@@ -134,6 +135,9 @@ export default function AccountManagers() {
   const [draftManagers, setDraftManagers] = useState([]);
   const [savingKey, setSavingKey] = useState('');
   const [retryingKey, setRetryingKey] = useState('');
+  const [noteEditingKey, setNoteEditingKey] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteSavingKey, setNoteSavingKey] = useState('');
   const [groupEditAccount, setGroupEditAccount] = useState(null);
   const [methodologyOpen, setMethodologyOpen] = useState(false);
   const nextDraftKey = useRef(0);
@@ -153,6 +157,8 @@ export default function AccountManagers() {
         setSelectedManagerKeys(null);
         setEditingKey('');
         setDraftManagers([]);
+        setNoteEditingKey('');
+        setNoteDraft('');
       }
     }
     setLoading(false);
@@ -207,6 +213,7 @@ export default function AccountManagers() {
         ...(account.childAccountNames || []),
         ...(account.roles || []).map((role) => ROLE_LABELS[role] || role),
         ...account.managers.flatMap((manager) => [manager.fullName, manager.email]),
+        account.accountNote,
       ].join(' ').toLowerCase();
       return searchable.includes(keyword);
     });
@@ -322,6 +329,43 @@ export default function AccountManagers() {
     }
   };
 
+  const beginNoteEdit = (account) => {
+    setNoteEditingKey(account.accountNameKey);
+    setNoteDraft(account.accountNote || '');
+  };
+
+  const cancelNoteEdit = () => {
+    if (noteSavingKey) return;
+    setNoteEditingKey('');
+    setNoteDraft('');
+  };
+
+  const saveNote = async (account) => {
+    const accountNote = noteDraft.trim();
+    if (Array.from(accountNote).length > 255) return;
+    setNoteSavingKey(account.accountNameKey);
+    const response = await appClient.functions.invoke('accountManagersSaveNote', {
+      accountNameKey: account.accountNameKey,
+      accountName: account.accountName,
+      accountNote,
+      expectedRevision: account.noteRevision,
+    });
+    setNoteSavingKey('');
+
+    if (response.data?.error) {
+      toast({ title: 'Account note not saved', description: response.data.error, variant: 'destructive' });
+      return;
+    }
+
+    replaceAccount(response.data.note);
+    setNoteEditingKey('');
+    setNoteDraft('');
+    toast({
+      title: 'Account note updated',
+      description: accountNote ? account.accountName : `${account.accountName}: note cleared`,
+    });
+  };
+
   const toggleManagerFilter = (key) => {
     setSelectedManagerKeys((current) => {
       const selected = current === null ? allManagerFilterKeys : current;
@@ -429,12 +473,13 @@ export default function AccountManagers() {
           />
         ) : filteredAccounts.length ? (
           <>
-            <Table className="min-w-[1080px]">
+            <Table className="min-w-[1400px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
                 <TableRow>
                   <TableHead>Account</TableHead>
                   <TableHead>Account Type</TableHead>
                   <TableHead>Account Managers</TableHead>
+                  <TableHead>Notes</TableHead>
                   <TableHead>Last Updated</TableHead>
                   <TableHead className="w-28 text-right">Actions</TableHead>
                 </TableRow>
@@ -443,13 +488,18 @@ export default function AccountManagers() {
                 {paginatedAccounts.map((account) => {
                   const editing = editingKey === account.accountNameKey;
                   const saving = savingKey === account.accountNameKey;
+                  const noteEditing = noteEditingKey === account.accountNameKey;
+                  const noteSaving = noteSavingKey === account.accountNameKey;
                   const invalidSelection = draftManagerIds.some((userId) => !userId || !usersById.get(userId)?.active);
                   const dirty = editing && !sameIds(draftManagerIds, account.managers.map((manager) => manager.id));
+                  const normalizedNoteDraft = noteDraft.trim();
+                  const noteDirty = noteEditing && normalizedNoteDraft !== (account.accountNote || '');
+                  const noteLength = Array.from(noteDraft).length;
                   const noMoreUsers = draftManagerIds.length >= 3
                     || draftManagerIds.some((userId) => !userId)
                     || !activeUsers.some((user) => !draftManagerIds.includes(user.id));
                   return (
-                    <TableRow key={account.accountNameKey} className={editing ? 'bg-muted/25' : undefined}>
+                    <TableRow key={account.accountNameKey} className={editing || noteEditing ? 'bg-muted/25' : undefined}>
                       <TableCell className="min-w-[250px] align-top">
                         <div className="font-medium text-foreground">{account.accountName}</div>
                         <div className="mt-1 text-xs text-muted-foreground">
@@ -550,6 +600,74 @@ export default function AccountManagers() {
                           />
                         )}
                       </TableCell>
+                      <TableCell className="min-w-[320px] max-w-[420px] align-top">
+                        {noteEditing ? (
+                          <div className="space-y-2">
+                            <Textarea
+                              value={noteDraft}
+                              onChange={(event) => setNoteDraft(event.target.value)}
+                              maxLength={255}
+                              rows={3}
+                              disabled={noteSaving}
+                              className="min-h-20 resize-y"
+                              aria-label={`Note for ${account.accountName}`}
+                              placeholder="Add an internal Account note"
+                            />
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs tabular-nums text-muted-foreground">{noteLength}/255</span>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={cancelNoteEdit}
+                                  disabled={noteSaving}
+                                  aria-label="Cancel note changes"
+                                  title="Cancel note changes"
+                                >
+                                  <X />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  onClick={() => saveNote(account)}
+                                  disabled={noteSaving || !noteDirty || noteLength > 255}
+                                  aria-label="Save Account note"
+                                  title="Save Account note"
+                                >
+                                  {noteSaving ? <Loader2 className="animate-spin" /> : <Check />}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex min-w-0 items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className={`max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm ${account.accountNote ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                {account.accountNote || 'No note'}
+                              </div>
+                              {account.noteUpdatedAt && (
+                                <div className="mt-1.5 text-xs text-muted-foreground">
+                                  Updated {formatDateTime(account.noteUpdatedAt)}
+                                  {account.noteUpdatedByEmail ? ` by ${account.noteUpdatedByEmail}` : ''}
+                                </div>
+                              )}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => beginNoteEdit(account)}
+                              disabled={Boolean(noteEditingKey || editingKey || retryingKey || savingKey || noteSavingKey)}
+                              aria-label={`Edit note for ${account.accountName}`}
+                              title="Edit Account note"
+                              className="shrink-0"
+                            >
+                              <Pencil />
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell className="min-w-[190px] align-top text-xs">
                         <div>{formatDateTime(account.updatedAt)}</div>
                         {account.updatedByEmail && <div className="mt-0.5 truncate text-muted-foreground">{account.updatedByEmail}</div>}
@@ -596,7 +714,7 @@ export default function AccountManagers() {
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => retrySync(account)}
-                                  disabled={Boolean(retryingKey || savingKey)}
+                                  disabled={Boolean(retryingKey || savingKey || noteEditingKey || noteSavingKey)}
                                   aria-label="Retry Salesforce sync"
                                   title="Retry Salesforce sync"
                                 >
@@ -607,7 +725,7 @@ export default function AccountManagers() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => requestEdit(account)}
-                                disabled={Boolean(editingKey || retryingKey || savingKey)}
+                                disabled={Boolean(editingKey || retryingKey || savingKey || noteEditingKey || noteSavingKey)}
                                 aria-label={`Edit managers for ${account.accountName}`}
                                 title="Edit Account managers"
                               >
@@ -666,7 +784,7 @@ export default function AccountManagers() {
             <section>
               <h3 className="font-semibold">Account coverage</h3>
               <p className="mt-1 text-muted-foreground">
-                The directory shows active Buyer, Buyer &amp; Supplier, Broker, and GROUP Account names. Same-name Salesforce Account records are managed together; inactive and supplier-only Accounts are not listed.
+                The directory shows active Buyer, Buyer &amp; Supplier, Broker, and GROUP Account names. GROUP Accounts appear first. Same-name Salesforce Account records are managed together; inactive and supplier-only Accounts are not listed.
               </p>
             </section>
             <section>
@@ -688,9 +806,15 @@ export default function AccountManagers() {
               </p>
             </section>
             <section>
+              <h3 className="font-semibold">Account notes</h3>
+              <p className="mt-1 text-muted-foreground">
+                Each displayed Account name has an independent FCOS note of up to 255 characters. Notes do not propagate from GROUP Accounts and do not write to Salesforce.
+              </p>
+            </section>
+            <section>
               <h3 className="font-semibold">Search and filters</h3>
               <p className="mt-1 text-muted-foreground">
-                Search matches Account names, parent GROUP names, GROUP child names, Account type, manager name, and manager email. The manager filter includes inherited assignments and Unassigned Accounts.
+                Search matches Account names, parent GROUP names, GROUP child names, Account type, manager name, manager email, and note text. The manager filter includes inherited assignments and Unassigned Accounts.
               </p>
             </section>
           </div>

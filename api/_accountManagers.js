@@ -103,7 +103,8 @@ export function groupEligibleSalesforceAccounts(records = []) {
       childAccountNames: [...new Set(childGroups.map((child) => child.accountName))].sort(compareText),
       childAccountCount: childGroups.reduce((total, child) => total + child.salesforceAccountIds.length, 0),
     };
-  });
+  }).sort((left, right) => Number(right.isGroupAccount) - Number(left.isGroupAccount)
+    || compareText(left.accountName, right.accountName));
 }
 
 export function managerDisplayText(profiles = []) {
@@ -118,9 +119,11 @@ export function buildAccountManagerRows({
   managedGroups = [],
   assignments = [],
   profiles = [],
+  accountNotes = [],
 } = {}) {
   const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
   const storedByKey = new Map(managedGroups.map((group) => [group.account_name_key, group]));
+  const notesByKey = new Map(accountNotes.map((note) => [note.account_name_key, note]));
   const assignmentsByKey = new Map();
 
   for (const assignment of assignments) {
@@ -151,6 +154,7 @@ export function buildAccountManagerRows({
       : '';
     const assignmentKey = directStored ? group.accountNameKey : inheritedKey;
     const stored = storedByKey.get(assignmentKey) || {};
+    const note = notesByKey.get(group.accountNameKey) || {};
     const managers = assignmentKey ? managersForKey(assignmentKey) : [];
     const expectedManagerText = managerDisplayText(managers);
     const salesforceValues = new Set(group.records.map((record) => text(record.Account_Manager__c)));
@@ -173,6 +177,10 @@ export function buildAccountManagerRows({
       managerCount: managers.length,
       assignmentSource: directStored ? 'direct' : inheritedKey ? 'group' : 'none',
       inheritedFromGroupName: inheritedKey ? stored.account_name || group.parentGroupNames[0] || '' : '',
+      accountNote: note.account_note || '',
+      noteRevision: Number(note.revision || 0),
+      noteUpdatedAt: note.updated_at || null,
+      noteUpdatedByEmail: note.updated_by_email || null,
       revision: Number(directStored?.revision || 0),
       updatedAt: stored.updated_at || null,
       updatedByEmail: stored.updated_by_email || null,
