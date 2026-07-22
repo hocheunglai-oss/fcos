@@ -44,6 +44,11 @@ const PAGE_COPY = {
     title: 'Report Archive',
     description: 'Find exported XLS reports and audit file actions.',
   },
+  'Buyers Administrator': {
+    eyebrow: 'Ownership',
+    title: 'Buyers Administrator',
+    description: 'Maintain the internal traders responsible for each Salesforce buyer account.',
+  },
   Settings: {
     eyebrow: 'System',
     title: 'Settings',

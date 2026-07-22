@@ -16,6 +16,11 @@ import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
+import {
+  buildBuyerTraderRows,
+  buyerAccountIdKey,
+  normalizeBuyerTraderUserIds,
+} from '../_buyerTraderAdministration.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
@@ -49,6 +54,7 @@ const ADMIN_APP_MODULES = [
   { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
+  { id: 'buyers_administrator', label: 'Buyers Administrator', path: '/buyers-administrator', sortOrder: 85 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];
@@ -75,11 +81,11 @@ const DEFAULT_USER_TYPES = [
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
   administrator: ADMIN_FULL_ACCESS,
-  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, settings: true, admin: false },
-  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, settings: false, admin: false },
-  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: true, brokers: false, report_archive: false, settings: false, admin: false },
-  interoffice: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: false, settings: false, admin: false },
-  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: false, brokers: false, report_archive: false, settings: false, admin: false },
+  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, buyers_administrator: false, settings: true, admin: false },
+  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, buyers_administrator: false, settings: false, admin: false },
+  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: true, brokers: false, report_archive: false, buyers_administrator: false, settings: false, admin: false },
+  interoffice: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: false, buyers_administrator: false, settings: false, admin: false },
+  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: false, brokers: false, report_archive: false, buyers_administrator: false, settings: false, admin: false },
 };
 const FALLBACK_TYPE_CAPABILITIES = {
   administrator: ADMIN_FULL_CAPABILITIES,
@@ -420,6 +426,8 @@ const HANDLER_MODULE_ACCESS = {
   reportExportRename: ['report_archive'],
   reportExportDelete: ['report_archive'],
   reportExportDownload: ['report_archive'],
+  buyersAdministratorList: ['buyers_administrator'],
+  buyersAdministratorSave: ['buyers_administrator'],
   systemHealth: ['settings'],
   backboneBridgeIdentity: ['settings'],
   backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
@@ -1308,6 +1316,142 @@ async function adminBootstrap(body = {}) {
   }, { id: null, email: 'bootstrap' });
 
   return { bootstrapped: true, user: { id: user.id, email: user.email, full_name: user.full_name, user_type: user.user_type } };
+}
+
+function buyerTraderStorageError(error) {
+  const message = String(error?.message || '');
+  if (error?.code === '42P01' || error?.code === 'PGRST205' || /buyer_trader_(?:accounts|assignments).*does not exist/i.test(message)) {
+    return appError('Buyer trader storage is not ready. Apply the latest Supabase migration and try again.', 503);
+  }
+  if (error?.code === 'PGRST202' || /save_buyer_trader_account/i.test(message) && /schema cache|could not find/i.test(message)) {
+    return appError('Buyer trader storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
+  }
+  return error;
+}
+
+function buyerTraderProfile(profile = {}) {
+  return {
+    id: profile.id,
+    fullName: profile.full_name || profile.email || 'Unknown user',
+    email: profile.email || '',
+    userType: profile.user_type || '',
+    active: profile.active === true,
+  };
+}
+
+async function buyersAdministratorList(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  const [salesforceBuyers, accountsResult, assignmentsResult, profilesResult] = await Promise.all([
+    queryRows(`
+      SELECT Account__c buyerAccountId,
+        Account__r.Name buyerName,
+        COUNT(Id) stemCount,
+        MAX(Delivery_Date__c) latestDeliveryDate
+      FROM stem__c
+      WHERE Account__c != null
+      GROUP BY Account__c, Account__r.Name
+      ORDER BY Account__r.Name ASC
+      LIMIT 2000
+    `, { limit: 2000 }),
+    client
+      .from('buyer_trader_accounts')
+      .select('buyer_account_key,buyer_account_id,buyer_account_name,updated_at,updated_by_email'),
+    client
+      .from('buyer_trader_assignments')
+      .select('buyer_account_key,trader_user_id,assignment_order'),
+    client
+      .from('user_profiles')
+      .select('id,email,full_name,user_type,active')
+      .order('full_name', { ascending: true }),
+  ]);
+
+  for (const result of [accountsResult, assignmentsResult, profilesResult]) {
+    if (result.error) throw buyerTraderStorageError(result.error);
+  }
+
+  const profiles = profilesResult.data || [];
+  return {
+    buyers: buildBuyerTraderRows({
+      salesforceBuyers,
+      managedAccounts: accountsResult.data || [],
+      assignments: assignmentsResult.data || [],
+      profiles,
+    }),
+    users: profiles.map(buyerTraderProfile),
+  };
+}
+
+async function buyersAdministratorSave(body = {}, req = null, accessContext = null) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+
+  const accountId = String(body.buyerAccountId || '').trim();
+  const accountKey = buyerAccountIdKey(accountId);
+  if (!accountKey) throw appError('A valid Salesforce buyer Account ID is required.', 400);
+
+  let traderUserIds;
+  try {
+    traderUserIds = normalizeBuyerTraderUserIds(body.traderUserIds || []);
+  } catch (error) {
+    throw appError(error.message, 400);
+  }
+
+  const buyerRows = await queryRows(`
+    SELECT Account__c, Account__r.Name
+    FROM stem__c
+    WHERE Account__c = '${escapeSoql(accountKey)}'
+    LIMIT 1
+  `, { limit: 1 });
+  const buyerStem = buyerRows[0];
+  if (!buyerStem?.Account__c) {
+    throw appError('This Salesforce Account is not used as a buyer on any STEM and cannot be assigned.', 400);
+  }
+
+  let selectedProfiles = [];
+  if (traderUserIds.length) {
+    const { data, error } = await client
+      .from('user_profiles')
+      .select('id,email,full_name,user_type,active')
+      .in('id', traderUserIds);
+    if (error) throw error;
+    selectedProfiles = data || [];
+    if (selectedProfiles.length !== traderUserIds.length || selectedProfiles.some((candidate) => candidate.active !== true)) {
+      throw appError('Every assigned trader must be an active FCOS user.', 400);
+    }
+  }
+
+  const buyerName = String(buyerStem.Account__r?.Name || body.buyerName || accountId).trim();
+  const canonicalAccountId = String(buyerStem.Account__c || accountId).trim();
+  const { data, error } = await client.rpc('save_buyer_trader_account', {
+    p_buyer_account_id: canonicalAccountId,
+    p_buyer_account_name: buyerName,
+    p_trader_user_ids: traderUserIds,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_updated_at: body.expectedUpdatedAt || null,
+  });
+  if (error) {
+    const storageError = buyerTraderStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|at most three|same trader|active FCOS user/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+
+  const profilesById = new Map(selectedProfiles.map((candidate) => [candidate.id, candidate]));
+  const account = data?.account || {};
+  const traders = traderUserIds.map((userId) => buyerTraderProfile(profilesById.get(userId) || { id: userId }));
+  return {
+    buyer: {
+      buyerAccountKey: accountKey,
+      buyerAccountId: account.buyer_account_id || canonicalAccountId,
+      buyerName: account.buyer_account_name || buyerName,
+      traders,
+      traderCount: traders.length,
+      updatedAt: account.updated_at || null,
+      updatedByEmail: account.updated_by_email || profile.email || null,
+    },
+  };
 }
 
 const REPORT_EXPORT_MAX_BYTES = 15 * 1024 * 1024;
@@ -11342,6 +11486,8 @@ const handlers = {
   reportExportRename,
   reportExportDelete,
   reportExportDownload,
+  buyersAdministratorList,
+  buyersAdministratorSave,
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,

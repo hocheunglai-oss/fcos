@@ -23,6 +23,7 @@ const DisputeWorkflow = lazy(() => import('@/pages/DisputeWorkflow'));
 const Login = lazy(() => import('@/pages/Login'));
 const AdminControl = lazy(() => import('@/pages/AdminControl'));
 const UniversalAuditTrail = lazy(() => import('@/pages/UniversalAuditTrail'));
+const BuyersAdministrator = lazy(() => import('@/pages/BuyersAdministrator'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -94,6 +95,7 @@ const AuthenticatedApp = () => {
             <Route path="/cashflow-forecast" element={<ModuleGate moduleId="cashflow_forecast"><CashflowForecast /></ModuleGate>} />
             <Route path="/brokers" element={<ModuleGate moduleId="brokers"><BrokerRegister /></ModuleGate>} />
             <Route path="/report-archive" element={<ModuleGate moduleId="report_archive"><ReportArchive /></ModuleGate>} />
+            <Route path="/buyers-administrator" element={<ModuleGate moduleId="buyers_administrator"><BuyersAdministrator /></ModuleGate>} />
             <Route path="/audit-trail" element={<ModuleGate moduleId="admin"><UniversalAuditTrail /></ModuleGate>} />
             <Route path="/admin" element={<ModuleGate moduleId="admin"><AdminControl /></ModuleGate>} />
             <Route path="*" element={<PageNotFound />} />

@@ -17,6 +17,7 @@ export const APP_MODULES = [
   { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
+  { id: 'buyers_administrator', label: 'Buyers Administrator', path: '/buyers-administrator', sortOrder: 85 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];

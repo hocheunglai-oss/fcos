@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.18';
+export const APP_VERSION = '2.0.19';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.19',
+    releasedAt: '2026-07-22',
+    title: 'Buyer trader administration',
+    changes: [
+      'Added a Buyers Administrator page for assigning zero to three internal traders to each Salesforce buyer Account.',
+      'Kept same-name buyer Accounts separate by Salesforce Account ID and revalidated buyer usage before every save.',
+      'Added atomic assignment saves, active-user checks, edit-conflict protection, and administrator audit events.',
+    ],
+  },
   {
     version: '2.0.18',
     releasedAt: '2026-07-16',
