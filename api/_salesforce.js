@@ -67,8 +67,8 @@ function jwtBearerConfig() {
   return { clientId, username, privateKey };
 }
 
-function hasEnvKey(name) {
-  return Object.prototype.hasOwnProperty.call(process.env, name);
+function hasNonBlankEnv(name) {
+  return Boolean(String(process.env[name] || '').trim());
 }
 
 function hasJwtBearerConfig() {
@@ -78,7 +78,7 @@ function hasJwtBearerConfig() {
 
 function hasAnyJwtBearerEnv() {
   return ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_USERNAME']
-    .some(hasEnvKey);
+    .some(hasNonBlankEnv);
 }
 
 function refreshTokenConfig() {
@@ -95,7 +95,7 @@ function hasRefreshTokenConfig() {
 }
 
 function hasAnyRefreshTokenEnv() {
-  return ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'].some(hasEnvKey);
+  return ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'].some(hasNonBlankEnv);
 }
 
 function missingOrBlankDurableAuthVars() {
@@ -158,8 +158,8 @@ async function jwtBearerAccessToken() {
 export function salesforceAuthMode() {
   if (hasJwtBearerConfig()) return 'jwt';
   if (hasRefreshTokenConfig()) return 'refresh_token';
-  if (hasAnyJwtBearerEnv() || hasAnyRefreshTokenEnv()) return 'misconfigured';
   if (process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
+  if (hasAnyJwtBearerEnv() || hasAnyRefreshTokenEnv()) return 'misconfigured';
   return 'missing';
 }
 
@@ -174,12 +174,12 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
     return refreshAccessToken();
   }
 
+  if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
+
   const missingDurableVars = missingOrBlankDurableAuthVars();
   if (missingDurableVars.length > 0) {
     throw new Error(`Salesforce OAuth env vars are missing or blank: ${missingDurableVars.join(', ')}. Fix these in Vercel instead of using SALESFORCE_ACCESS_TOKEN.`);
   }
-
-  if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
 
   throw new Error('Missing Salesforce env vars. Configure Salesforce JWT bearer env vars or set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
 }

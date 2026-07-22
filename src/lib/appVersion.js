@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.21';
+export const APP_VERSION = '2.0.22';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.22',
+    releasedAt: '2026-07-22',
+    title: 'Account Manager administration',
+    changes: [
+      'Replaced Buyers Administrator with Account Managers for active Buyer, Buyer & Supplier, and Broker Account names.',
+      'Added inline zero-to-three manager editing, manager-name filters, Salesforce synchronization, and explicit Save and Cancel controls.',
+      'Expanded legacy manager initials in Salesforce, replaced Sam Yip with Vincent Lee, and seeded the active assignments in FCOS.',
+    ],
+  },
   {
     version: '2.0.21',
     releasedAt: '2026-07-22',

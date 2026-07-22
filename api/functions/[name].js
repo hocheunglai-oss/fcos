@@ -17,10 +17,12 @@ import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import {
-  buildBuyerTraderRows,
-  buyerAccountIdKey,
-  normalizeBuyerTraderUserIds,
-} from '../_buyerTraderAdministration.js';
+  accountNameKey,
+  buildAccountManagerRows,
+  groupEligibleSalesforceAccounts,
+  managerDisplayText,
+  normalizeAccountManagerUserIds,
+} from '../_accountManagers.js';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
@@ -54,7 +56,7 @@ const ADMIN_APP_MODULES = [
   { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
-  { id: 'buyers_administrator', label: 'Buyers Administrator', path: '/buyers-administrator', sortOrder: 85 },
+  { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];
@@ -428,6 +430,9 @@ const HANDLER_MODULE_ACCESS = {
   reportExportDownload: ['report_archive'],
   buyersAdministratorList: ['buyers_administrator'],
   buyersAdministratorSave: ['buyers_administrator'],
+  accountManagersList: ['buyers_administrator'],
+  accountManagersSave: ['buyers_administrator'],
+  accountManagersRetrySync: ['buyers_administrator'],
   systemHealth: ['settings'],
   backboneBridgeIdentity: ['settings'],
   backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
@@ -1318,18 +1323,18 @@ async function adminBootstrap(body = {}) {
   return { bootstrapped: true, user: { id: user.id, email: user.email, full_name: user.full_name, user_type: user.user_type } };
 }
 
-function buyerTraderStorageError(error) {
+function accountManagerStorageError(error) {
   const message = String(error?.message || '');
-  if (error?.code === '42P01' || error?.code === 'PGRST205' || /buyer_trader_(?:accounts|assignments).*does not exist/i.test(message)) {
-    return appError('Buyer trader storage is not ready. Apply the latest Supabase migration and try again.', 503);
+  if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_manager_(?:groups|assignments).*does not exist/i.test(message)) {
+    return appError('Account Manager storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
-  if (error?.code === 'PGRST202' || /save_buyer_trader_account/i.test(message) && /schema cache|could not find/i.test(message)) {
-    return appError('Buyer trader storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
+  if (error?.code === 'PGRST202' || /(?:save|finalize)_account_manager/i.test(message) && /schema cache|could not find/i.test(message)) {
+    return appError('Account Manager storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
   }
   return error;
 }
 
-function buyerTraderProfile(profile = {}) {
+function accountManagerProfile(profile = {}) {
   return {
     id: profile.id,
     fullName: profile.full_name || profile.email || 'Unknown user',
@@ -1339,123 +1344,288 @@ function buyerTraderProfile(profile = {}) {
   };
 }
 
-async function buyersAdministratorList(body = {}, req = null, accessContext = null) {
-  const client = accessContext?.client || supabaseAdminClient();
-  const [salesforceBuyerResult, accountsResult, assignmentsResult, profilesResult] = await Promise.all([
-    queryResult(`
+const ACCOUNT_MANAGER_ACCOUNT_FIELDS = [
+  'Id',
+  'Name',
+  'Buyer_Payment_Term__c',
+  'Supplier_Payment_Term__c',
+  'Is_Broker__c',
+  'Inactive_Suspended__c',
+  'Account_Manager__c',
+];
+
+let cachedAccountManagerSchema = null;
+
+async function accountManagerSchema() {
+  if (cachedAccountManagerSchema) return cachedAccountManagerSchema;
+  const describe = await sfRequest('/sobjects/Account/describe/');
+  const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
+  const requiredFields = [
+    ['Buyer_Payment_Term__c', null],
+    ['Supplier_Payment_Term__c', null],
+    ['Is_Broker__c', 'boolean'],
+    ['Inactive_Suspended__c', 'boolean'],
+    ['Account_Manager__c', 'string'],
+  ];
+
+  for (const [fieldName, expectedType] of requiredFields) {
+    const field = fieldsByName.get(fieldName);
+    if (!field || expectedType && field.type !== expectedType) {
+      throw appError(`Salesforce Account.${fieldName} is missing or has an incompatible type. Account Managers is unavailable until the schema is corrected.`, 503);
+    }
+  }
+
+  const managerField = fieldsByName.get('Account_Manager__c');
+  if (managerField.updateable !== true) {
+    throw appError('Salesforce Account.Account_Manager__c is not writable. Account Managers is unavailable until field access is corrected.', 503);
+  }
+  if (Number(managerField.length || 0) < 255) {
+    throw appError(`Salesforce Account.Account_Manager__c supports only ${Number(managerField.length || 0)} characters. Increase it to 255 before using Account Managers.`, 503);
+  }
+
+  cachedAccountManagerSchema = { managerFieldLength: Number(managerField.length || 0) };
+  return cachedAccountManagerSchema;
+}
+
+function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] }) {
+  const status = groupRow.salesforce_sync_status || 'synced';
+  return {
+    accountNameKey: salesforceGroup.accountNameKey,
+    accountName: salesforceGroup.accountName,
+    roles: salesforceGroup.roles,
+    salesforceAccountCount: salesforceGroup.salesforceAccountIds.length,
+    managers,
+    managerCount: managers.length,
+    revision: Number(groupRow.revision || 0),
+    updatedAt: groupRow.updated_at || null,
+    updatedByEmail: groupRow.updated_by_email || null,
+    salesforceSyncStatus: status,
+    salesforceSyncError: groupRow.salesforce_sync_error || null,
+    salesforceSyncedAt: groupRow.salesforce_synced_at || null,
+    salesforceActive: true,
+    buyerAccountKey: salesforceGroup.accountNameKey,
+    buyerAccountId: salesforceGroup.salesforceAccountIds[0],
+    buyerName: salesforceGroup.accountName,
+    traders: managers,
+    traderCount: managers.length,
+  };
+}
+
+async function currentEligibleAccountGroup(body = {}) {
+  await accountManagerSchema();
+  let requestedName = String(body.accountName || body.buyerName || '').trim();
+  const legacyAccountId = String(body.buyerAccountId || '').trim();
+
+  if (!requestedName && legacyAccountId) {
+    const legacyRows = await queryRows(`
       SELECT Id, Name
       FROM Account
-      WHERE Id IN (
-        SELECT Account__c
-        FROM stem__c
-        WHERE Account__c != null
-      )
+      WHERE Id = '${escapeSoql(legacyAccountId)}'
+      LIMIT 1
+    `, { limit: 1 });
+    requestedName = String(legacyRows[0]?.Name || '').trim();
+  }
+  if (!requestedName) throw appError('Account name is required.', 400);
+
+  const rows = await queryRows(`
+    SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
+    FROM Account
+    WHERE Name = '${escapeSoql(requestedName)}'
+      AND Inactive_Suspended__c = false
+      AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
+    ORDER BY Id ASC
+    LIMIT 200
+  `, { limit: 200 });
+  const requestedKey = String(body.accountNameKey || body.buyerAccountKey || accountNameKey(requestedName));
+  const group = groupEligibleSalesforceAccounts(rows).find((candidate) => candidate.accountNameKey === requestedKey);
+  if (!group) {
+    throw appError('This Account name no longer has an active Buyer, Buyer & Supplier, or Broker record. Refresh the page and review the latest Salesforce data.', 409);
+  }
+  return group;
+}
+
+async function finalizeAccountManagerSync(client, groupRow, status, error, profile) {
+  const result = await client.rpc('finalize_account_manager_sync', {
+    p_account_name_key: groupRow.account_name_key,
+    p_revision: groupRow.revision,
+    p_sync_status: status,
+    p_sync_error: error || null,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (result.error) throw accountManagerStorageError(result.error);
+  return result.data || groupRow;
+}
+
+async function syncAccountManagerToSalesforce(client, groupRow, profile) {
+  try {
+    const records = (groupRow.salesforce_account_ids || []).map((accountId) => ({
+      attributes: { type: 'Account' },
+      Id: accountId,
+      Account_Manager__c: groupRow.salesforce_manager_text || null,
+    }));
+    if (!records.length) throw new Error('No active eligible Salesforce Accounts were found for synchronization.');
+
+    const result = await sfRequest('/composite/sobjects', {
+      method: 'PATCH',
+      body: { allOrNone: true, records },
+    });
+    const failures = (Array.isArray(result) ? result : []).filter((item) => item?.success !== true);
+    if (failures.length) {
+      const message = failures.flatMap((item) => item.errors || []).map((item) => item.message).filter(Boolean).join('; ');
+      throw new Error(message || 'Salesforce rejected the Account Manager update.');
+    }
+
+    return {
+      groupRow: await finalizeAccountManagerSync(client, groupRow, 'synced', null, profile),
+      syncError: null,
+    };
+  } catch (error) {
+    const message = String(error?.message || 'Salesforce Account Manager synchronization failed.').slice(0, 2000);
+    let failedRow = { ...groupRow, salesforce_sync_status: 'failed', salesforce_sync_error: message };
+    try {
+      failedRow = await finalizeAccountManagerSync(client, groupRow, 'failed', message, profile);
+    } catch (finalizeError) {
+      failedRow.salesforce_sync_error = `${message} Sync status could not be finalized: ${finalizeError.message}`.slice(0, 2000);
+    }
+    return { groupRow: failedRow, syncError: message };
+  }
+}
+
+async function accountManagersList(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  await accountManagerSchema();
+  const [salesforceAccountResult, groupsResult, assignmentsResult, profilesResult] = await Promise.all([
+    queryResult(`
+      SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE Inactive_Suspended__c = false
+        AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
       ORDER BY Name ASC
     `, { limit: 10000 }),
     client
-      .from('buyer_trader_accounts')
-      .select('buyer_account_key,buyer_account_id,buyer_account_name,updated_at,updated_by_email'),
+      .from('account_manager_groups')
+      .select('account_name_key,account_name,salesforce_account_ids,account_roles,salesforce_manager_text,salesforce_sync_status,salesforce_sync_error,salesforce_synced_at,revision,updated_at,updated_by_email'),
     client
-      .from('buyer_trader_assignments')
-      .select('buyer_account_key,trader_user_id,assignment_order'),
+      .from('account_manager_assignments')
+      .select('account_name_key,manager_user_id,assignment_order'),
     client
       .from('user_profiles')
       .select('id,email,full_name,user_type,active')
       .order('full_name', { ascending: true }),
   ]);
 
-  for (const result of [accountsResult, assignmentsResult, profilesResult]) {
-    if (result.error) throw buyerTraderStorageError(result.error);
+  for (const result of [groupsResult, assignmentsResult, profilesResult]) {
+    if (result.error) throw accountManagerStorageError(result.error);
   }
-  const salesforceBuyers = salesforceBuyerResult.records || [];
-  if (Number(salesforceBuyerResult.totalSize || 0) > salesforceBuyers.length) {
-    throw appError('The Salesforce buyer directory exceeds 10,000 Accounts. Narrow the server query before managing assignments.', 503);
+  const salesforceAccounts = salesforceAccountResult.records || [];
+  if (Number(salesforceAccountResult.totalSize || 0) > salesforceAccounts.length) {
+    throw appError('The active Salesforce Account directory exceeds 10,000 records. Narrow the server query before managing assignments.', 503);
   }
 
   const profiles = profilesResult.data || [];
+  const accounts = buildAccountManagerRows({
+    salesforceAccounts,
+    managedGroups: groupsResult.data || [],
+    assignments: assignmentsResult.data || [],
+    profiles,
+  });
   return {
-    buyers: buildBuyerTraderRows({
-      salesforceBuyers,
-      managedAccounts: accountsResult.data || [],
-      assignments: assignmentsResult.data || [],
-      profiles,
-    }),
-    users: profiles.map(buyerTraderProfile),
+    accounts,
+    buyers: accounts,
+    users: profiles.map(accountManagerProfile),
   };
 }
 
-async function buyersAdministratorSave(body = {}, req = null, accessContext = null) {
+async function accountManagersSave(body = {}, req = null, accessContext = null) {
   const { client, profile } = accessContext || {};
   if (!client || !profile) throw appError('Sign-in required.', 401);
 
-  const accountId = String(body.buyerAccountId || '').trim();
-  const accountKey = buyerAccountIdKey(accountId);
-  if (!accountKey) throw appError('A valid Salesforce buyer Account ID is required.', 400);
-
-  let traderUserIds;
+  let managerUserIds;
   try {
-    traderUserIds = normalizeBuyerTraderUserIds(body.traderUserIds || []);
+    managerUserIds = normalizeAccountManagerUserIds(body.managerUserIds || body.traderUserIds || []);
   } catch (error) {
     throw appError(error.message, 400);
   }
 
-  const buyerRows = await queryRows(`
-    SELECT Account__c, Account__r.Name
-    FROM stem__c
-    WHERE Account__c = '${escapeSoql(accountKey)}'
-    LIMIT 1
-  `, { limit: 1 });
-  const buyerStem = buyerRows[0];
-  if (!buyerStem?.Account__c) {
-    throw appError('This Salesforce Account is not used as a buyer on any STEM and cannot be assigned.', 400);
-  }
-
+  const salesforceGroup = await currentEligibleAccountGroup(body);
   let selectedProfiles = [];
-  if (traderUserIds.length) {
+  if (managerUserIds.length) {
     const { data, error } = await client
       .from('user_profiles')
       .select('id,email,full_name,user_type,active')
-      .in('id', traderUserIds);
+      .in('id', managerUserIds);
     if (error) throw error;
-    selectedProfiles = data || [];
-    if (selectedProfiles.length !== traderUserIds.length || selectedProfiles.some((candidate) => candidate.active !== true)) {
-      throw appError('Every assigned trader must be an active FCOS user.', 400);
+    const profilesById = new Map((data || []).map((candidate) => [candidate.id, candidate]));
+    selectedProfiles = managerUserIds.map((userId) => profilesById.get(userId)).filter(Boolean);
+    if (selectedProfiles.length !== managerUserIds.length || selectedProfiles.some((candidate) => candidate.active !== true)) {
+      throw appError('Every assigned manager must be an active FCOS user.', 400);
     }
   }
 
-  const buyerName = String(buyerStem.Account__r?.Name || body.buyerName || accountId).trim();
-  const canonicalAccountId = String(buyerStem.Account__c || accountId).trim();
-  const { data, error } = await client.rpc('save_buyer_trader_account', {
-    p_buyer_account_id: canonicalAccountId,
-    p_buyer_account_name: buyerName,
-    p_trader_user_ids: traderUserIds,
+  const managerText = managerDisplayText(selectedProfiles);
+  const schema = await accountManagerSchema();
+  if (managerText.length > schema.managerFieldLength) {
+    throw appError(`Selected manager names exceed the Salesforce ${schema.managerFieldLength}-character limit.`, 400);
+  }
+
+  const { data, error } = await client.rpc('save_account_manager_group', {
+    p_account_name_key: salesforceGroup.accountNameKey,
+    p_account_name: salesforceGroup.accountName,
+    p_salesforce_account_ids: salesforceGroup.salesforceAccountIds,
+    p_account_roles: salesforceGroup.roles,
+    p_salesforce_manager_text: managerText || null,
+    p_manager_user_ids: managerUserIds,
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
-    p_expected_updated_at: body.expectedUpdatedAt || null,
+    p_expected_revision: Number(body.expectedRevision ?? body.revision ?? 0),
   });
   if (error) {
-    const storageError = buyerTraderStorageError(error);
+    const storageError = accountManagerStorageError(error);
     if (storageError !== error) throw storageError;
     if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
-    if (/required|at most three|same trader|active FCOS user/i.test(error.message || '')) throw appError(error.message, 400);
+    if (/required|at most three|same manager|active FCOS user|exceeds 255/i.test(error.message || '')) throw appError(error.message, 400);
     throw error;
   }
 
-  const profilesById = new Map(selectedProfiles.map((candidate) => [candidate.id, candidate]));
-  const account = data?.account || {};
-  const traders = traderUserIds.map((userId) => buyerTraderProfile(profilesById.get(userId) || { id: userId }));
-  return {
-    buyer: {
-      buyerAccountKey: accountKey,
-      buyerAccountId: account.buyer_account_id || canonicalAccountId,
-      buyerName: account.buyer_account_name || buyerName,
-      traders,
-      traderCount: traders.length,
-      updatedAt: account.updated_at || null,
-      updatedByEmail: account.updated_by_email || profile.email || null,
-    },
-  };
+  const syncResult = await syncAccountManagerToSalesforce(client, data || {}, profile);
+  const managers = selectedProfiles.map(accountManagerProfile);
+  const account = accountManagerResponse({ salesforceGroup, groupRow: syncResult.groupRow, managers });
+  return { account, buyer: account, syncError: syncResult.syncError };
 }
+
+async function accountManagersRetrySync(body = {}, req = null, accessContext = null) {
+  const { client } = accessContext || {};
+  if (!client) throw appError('Sign-in required.', 401);
+  const key = String(body.accountNameKey || '').trim();
+  if (!/^[a-f0-9]{64}$/.test(key)) throw appError('A valid Account name key is required.', 400);
+
+  const [groupResult, assignmentResult] = await Promise.all([
+    client
+      .from('account_manager_groups')
+      .select('account_name_key,account_name,revision')
+      .eq('account_name_key', key)
+      .maybeSingle(),
+    client
+      .from('account_manager_assignments')
+      .select('manager_user_id,assignment_order')
+      .eq('account_name_key', key)
+      .order('assignment_order', { ascending: true }),
+  ]);
+  if (groupResult.error) throw accountManagerStorageError(groupResult.error);
+  if (assignmentResult.error) throw accountManagerStorageError(assignmentResult.error);
+  if (!groupResult.data) throw appError('This Account Manager assignment no longer exists.', 404);
+
+  return accountManagersSave({
+    accountNameKey: key,
+    accountName: groupResult.data.account_name,
+    managerUserIds: (assignmentResult.data || []).map((row) => row.manager_user_id),
+    expectedRevision: groupResult.data.revision,
+  }, req, accessContext);
+}
+
+const buyersAdministratorList = accountManagersList;
+const buyersAdministratorSave = accountManagersSave;
 
 const REPORT_EXPORT_MAX_BYTES = 15 * 1024 * 1024;
 const REPORT_EXPORT_MIME_TYPE = 'application/vnd.ms-excel';
@@ -1956,6 +2126,10 @@ async function salesforceObjectFields(body) {
     groupable: f.groupable,
     aggregatable: f.aggregatable,
     custom: f.custom,
+    length: f.length || 0,
+    updateable: f.updateable === true,
+    createable: f.createable === true,
+    nillable: f.nillable === true,
     relationshipName: f.relationshipName || null,
     referenceTo: f.referenceTo || [],
   }));
@@ -11491,6 +11665,9 @@ const handlers = {
   reportExportDownload,
   buyersAdministratorList,
   buyersAdministratorSave,
+  accountManagersList,
+  accountManagersSave,
+  accountManagersRetrySync,
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,

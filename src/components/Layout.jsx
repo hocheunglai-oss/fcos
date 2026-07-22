@@ -47,7 +47,7 @@ const navGroups = [
     label: 'System',
     items: [
       { to: '/report-archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
-      { to: '/buyers-administrator', label: 'Buyers Administrator', moduleId: 'buyers_administrator', icon: UsersRound },
+      { to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
       { to: '/settings', label: 'Settings', moduleId: 'settings', icon: Settings },
       { to: '/audit-trail', label: 'Audit Trail', moduleId: 'admin', icon: History },
       { to: '/admin', label: 'Admin Control', moduleId: 'admin', icon: ShieldCheck },

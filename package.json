@@ -9,6 +9,7 @@
     "build": "node scripts/write-app-version.mjs && vite build",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
+    "migrate:account-managers": "node --env-file=.env.local scripts/migrate-account-managers.mjs",
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview"
   },
