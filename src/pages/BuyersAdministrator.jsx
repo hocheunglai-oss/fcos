@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CircleAlert,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Pencil,
   Plus,
@@ -42,21 +44,10 @@ const ASSIGNMENT_FILTERS = [
   { value: '2', label: '2 traders' },
   { value: '3', label: '3 traders' },
 ];
+const PAGE_SIZE = 100;
 
 function compareText(left, right) {
   return String(left || '').localeCompare(String(right || ''), undefined, { sensitivity: 'base' });
-}
-
-function formatDate(value) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Hong_Kong',
-  }).format(date);
 }
 
 function formatDateTime(value) {
@@ -108,6 +99,7 @@ export default function BuyersAdministrator() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [assignmentFilter, setAssignmentFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingBuyer, setEditingBuyer] = useState(null);
   const [selectedTraderIds, setSelectedTraderIds] = useState([]);
 
@@ -121,6 +113,7 @@ export default function BuyersAdministrator() {
     } else {
       setBuyers(response.data?.buyers || []);
       setUsers(response.data?.users || []);
+      setCurrentPage(1);
     }
     setLoading(false);
     setRefreshing(false);
@@ -166,6 +159,12 @@ export default function BuyersAdministrator() {
       return searchable.includes(keyword);
     });
   }, [assignmentFilter, buyers, search]);
+  const pageCount = Math.max(1, Math.ceil(filteredBuyers.length / PAGE_SIZE));
+  const visiblePage = Math.min(currentPage, pageCount);
+  const paginatedBuyers = useMemo(() => {
+    const start = (visiblePage - 1) * PAGE_SIZE;
+    return filteredBuyers.slice(start, start + PAGE_SIZE);
+  }, [filteredBuyers, visiblePage]);
 
   const openEditor = (buyer) => {
     setEditingBuyer(buyer);
@@ -262,13 +261,19 @@ export default function BuyersAdministrator() {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setCurrentPage(1);
+                }}
                 className="pl-9"
                 placeholder="Search buyers or traders"
                 aria-label="Search buyers or traders"
               />
             </div>
-            <Select value={assignmentFilter} onValueChange={setAssignmentFilter}>
+            <Select value={assignmentFilter} onValueChange={(value) => {
+              setAssignmentFilter(value);
+              setCurrentPage(1);
+            }}>
               <SelectTrigger className="w-[160px]" aria-label="Filter by assignment count">
                 <SelectValue />
               </SelectTrigger>
@@ -291,19 +296,18 @@ export default function BuyersAdministrator() {
             action={<Button variant="outline" onClick={() => loadBuyers()}>Try again</Button>}
           />
         ) : filteredBuyers.length ? (
-          <Table className="min-w-[920px]">
+          <>
+          <Table className="min-w-[760px]">
             <TableHeader className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
               <TableRow>
                 <TableHead>Buyer Account</TableHead>
                 <TableHead>Buyer Traders</TableHead>
-                <TableHead className="text-right">STEMs</TableHead>
-                <TableHead>Latest Delivery</TableHead>
                 <TableHead>Last Updated</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredBuyers.map((buyer) => {
+              {paginatedBuyers.map((buyer) => {
                 const duplicateName = duplicateNameCounts.get(String(buyer.buyerName || '').trim().toLowerCase()) > 1;
                 return (
                   <TableRow key={buyer.buyerAccountKey}>
@@ -331,8 +335,6 @@ export default function BuyersAdministrator() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{buyer.stemCount.toLocaleString()}</TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">{formatDate(buyer.latestDeliveryDate)}</TableCell>
                     <TableCell className="min-w-[180px] text-xs">
                       <div>{formatDateTime(buyer.updatedAt)}</div>
                       {buyer.updatedByEmail && <div className="mt-0.5 truncate text-muted-foreground">{buyer.updatedByEmail}</div>}
@@ -354,6 +356,35 @@ export default function BuyersAdministrator() {
               })}
             </TableBody>
           </Table>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+            <div className="text-xs text-muted-foreground">
+              Showing {((visiblePage - 1) * PAGE_SIZE + 1).toLocaleString()}–{Math.min(visiblePage * PAGE_SIZE, filteredBuyers.length).toLocaleString()} of {filteredBuyers.length.toLocaleString()}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={visiblePage <= 1}
+                aria-label="Previous page"
+                title="Previous page"
+              >
+                <ChevronLeft />
+              </Button>
+              <span className="min-w-24 text-center text-xs font-medium text-foreground">Page {visiblePage} of {pageCount}</span>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
+                disabled={visiblePage >= pageCount}
+                aria-label="Next page"
+                title="Next page"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          </div>
+          </>
         ) : (
           <StateBlock title="No buyer accounts found" description="No accounts match the current search and assignment filter." />
         )}

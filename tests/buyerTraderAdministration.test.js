@@ -34,8 +34,8 @@ test('keeps same-name buyer Accounts separate and joins traders by Account ID', 
   const secondUserId = '22222222-2222-4222-8222-222222222222';
   const rows = buildBuyerTraderRows({
     salesforceBuyers: [
-      { buyerAccountId: '0012x00000AAAAAABC', buyerName: 'Shared Buyer', stemCount: 3 },
-      { buyerAccountId: '0012x00000BBBBBDEF', buyerName: 'Shared Buyer', stemCount: 7 },
+      { Id: '0012x00000AAAAAABC', Name: 'Shared Buyer' },
+      { Id: '0012x00000BBBBBDEF', Name: 'Shared Buyer' },
     ],
     managedAccounts: [
       { buyer_account_key: '0012x00000AAAAA', buyer_account_id: '0012x00000AAAAAABC', buyer_account_name: 'Shared Buyer' },
@@ -74,6 +74,8 @@ test('migration enforces the assignment limit, RLS, atomic save, and service-rol
 test('server revalidates buyer usage in Salesforce before saving', async () => {
   const source = await readFile(functionUrl, 'utf8');
   assert.match(source, /buyersAdministratorSave[\s\S]*FROM stem__c[\s\S]*WHERE Account__c =/i);
+  assert.match(source, /FROM Account[\s\S]*SELECT Account__c[\s\S]*FROM stem__c/i);
+  assert.doesNotMatch(source, /COUNT\(Id\) stemCount/);
   assert.match(source, /buyersAdministratorList: \['buyers_administrator'\]/);
   assert.match(source, /buyersAdministratorSave: \['buyers_administrator'\]/);
 });

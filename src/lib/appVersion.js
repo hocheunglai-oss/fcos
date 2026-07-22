@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.19';
+export const APP_VERSION = '2.0.20';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.20',
+    releasedAt: '2026-07-22',
+    title: 'Complete buyer directory pagination',
+    changes: [
+      'Changed Buyers Administrator to fetch the complete Salesforce buyer Account set without the 2,000-row aggregate ceiling.',
+      'Paginated the buyer table at 100 rows per page for faster rendering and easier navigation.',
+      'Focused the directory columns on buyer identity, trader ownership, update history, and management actions.',
+    ],
+  },
   {
     version: '2.0.19',
     releasedAt: '2026-07-22',

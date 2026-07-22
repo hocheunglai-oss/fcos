@@ -56,7 +56,7 @@ export function buildBuyerTraderRows({
   }
 
   for (const buyer of salesforceBuyers) {
-    const accountId = text(buyer.buyerAccountId || buyer.Account__c);
+    const accountId = text(buyer.buyerAccountId || buyer.Account__c || buyer.Id);
     const key = buyerAccountIdKey(accountId);
     if (!key) continue;
     const existing = accountsByKey.get(key) || {};
@@ -64,7 +64,7 @@ export function buildBuyerTraderRows({
       ...existing,
       buyerAccountKey: key,
       buyerAccountId: accountId,
-      buyerName: text(buyer.buyerName || buyer.Account__r?.Name) || existing.buyerName || accountId,
+      buyerName: text(buyer.buyerName || buyer.Account__r?.Name || buyer.Name) || existing.buyerName || accountId,
       stemCount: Number(buyer.stemCount || 0),
       latestDeliveryDate: buyer.latestDeliveryDate || null,
       salesforceActive: true,

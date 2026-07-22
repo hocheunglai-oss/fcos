@@ -1341,18 +1341,17 @@ function buyerTraderProfile(profile = {}) {
 
 async function buyersAdministratorList(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
-  const [salesforceBuyers, accountsResult, assignmentsResult, profilesResult] = await Promise.all([
-    queryRows(`
-      SELECT Account__c buyerAccountId,
-        Account__r.Name buyerName,
-        COUNT(Id) stemCount,
-        MAX(Delivery_Date__c) latestDeliveryDate
-      FROM stem__c
-      WHERE Account__c != null
-      GROUP BY Account__c, Account__r.Name
-      ORDER BY Account__r.Name ASC
-      LIMIT 2000
-    `, { limit: 2000 }),
+  const [salesforceBuyerResult, accountsResult, assignmentsResult, profilesResult] = await Promise.all([
+    queryResult(`
+      SELECT Id, Name
+      FROM Account
+      WHERE Id IN (
+        SELECT Account__c
+        FROM stem__c
+        WHERE Account__c != null
+      )
+      ORDER BY Name ASC
+    `, { limit: 10000 }),
     client
       .from('buyer_trader_accounts')
       .select('buyer_account_key,buyer_account_id,buyer_account_name,updated_at,updated_by_email'),
@@ -1367,6 +1366,10 @@ async function buyersAdministratorList(body = {}, req = null, accessContext = nu
 
   for (const result of [accountsResult, assignmentsResult, profilesResult]) {
     if (result.error) throw buyerTraderStorageError(result.error);
+  }
+  const salesforceBuyers = salesforceBuyerResult.records || [];
+  if (Number(salesforceBuyerResult.totalSize || 0) > salesforceBuyers.length) {
+    throw appError('The Salesforce buyer directory exceeds 10,000 Accounts. Narrow the server query before managing assignments.', 503);
   }
 
   const profiles = profilesResult.data || [];
