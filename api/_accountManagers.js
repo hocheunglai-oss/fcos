@@ -53,25 +53,57 @@ export function groupEligibleSalesforceAccounts(records = []) {
         accountNameKey: key,
         accountName: name,
         salesforceAccountIds: [],
+        parentAccounts: [],
         roles: [],
         records: [],
+        isGroupAccount: false,
       });
     }
 
     const group = groups.get(key);
     if (!group.salesforceAccountIds.includes(id)) group.salesforceAccountIds.push(id);
     if (!group.roles.includes(role)) group.roles.push(role);
+    const parentId = text(record.ParentId);
+    const parentName = text(record.Parent?.Name);
+    if (SALESFORCE_ACCOUNT_ID_RE.test(parentId)
+      && !group.parentAccounts.some((parent) => parent.id === parentId)) {
+      group.parentAccounts.push({ id: parentId, name: parentName || 'Unnamed Group' });
+    }
+    if (text(record.RecordType?.Name).toLowerCase() === 'group') group.isGroupAccount = true;
     group.records.push(record);
   }
 
   const roleOrder = new Map([['buyer', 1], ['buyer_supplier', 2], ['broker', 3]]);
-  return [...groups.values()]
+  const groupedAccounts = [...groups.values()]
     .map((group) => ({
       ...group,
       salesforceAccountIds: group.salesforceAccountIds.slice().sort(compareText),
+      parentAccounts: group.parentAccounts.slice().sort((left, right) => compareText(left.name, right.name)),
       roles: group.roles.slice().sort((left, right) => roleOrder.get(left) - roleOrder.get(right)),
     }))
     .sort((left, right) => compareText(left.accountName, right.accountName));
+
+  const groupBySalesforceId = new Map();
+  for (const group of groupedAccounts) {
+    for (const id of group.salesforceAccountIds) groupBySalesforceId.set(id, group);
+  }
+
+  return groupedAccounts.map((group) => {
+    const parentGroups = group.parentAccounts
+      .map((parent) => groupBySalesforceId.get(parent.id))
+      .filter(Boolean);
+    const childGroups = group.isGroupAccount
+      ? groupedAccounts.filter((candidate) => candidate.parentAccounts.some((parent) => group.salesforceAccountIds.includes(parent.id)))
+      : [];
+    return {
+      ...group,
+      parentGroupKeys: [...new Set(parentGroups.map((parent) => parent.accountNameKey))],
+      parentGroupNames: [...new Set(group.parentAccounts.map((parent) => parent.name).filter(Boolean))],
+      childAccountNameKeys: [...new Set(childGroups.map((child) => child.accountNameKey))],
+      childAccountNames: [...new Set(childGroups.map((child) => child.accountName))].sort(compareText),
+      childAccountCount: childGroups.reduce((total, child) => total + child.salesforceAccountIds.length, 0),
+    };
+  });
 }
 
 export function managerDisplayText(profiles = []) {
@@ -96,11 +128,11 @@ export function buildAccountManagerRows({
     assignmentsByKey.get(assignment.account_name_key).push(assignment);
   }
 
-  return groupEligibleSalesforceAccounts(salesforceAccounts).map((group) => {
-    const stored = storedByKey.get(group.accountNameKey) || {};
-    const managers = (assignmentsByKey.get(group.accountNameKey) || [])
+  const managerIdsForKey = (key) => (assignmentsByKey.get(key) || [])
+    .slice()
+    .sort((left, right) => Number(left.assignment_order || 0) - Number(right.assignment_order || 0));
+  const managersForKey = (key) => managerIdsForKey(key)
       .slice()
-      .sort((left, right) => Number(left.assignment_order || 0) - Number(right.assignment_order || 0))
       .map((assignment) => {
         const profile = profilesById.get(assignment.manager_user_id);
         return {
@@ -111,6 +143,15 @@ export function buildAccountManagerRows({
           active: profile?.active === true,
         };
       });
+
+  return groupEligibleSalesforceAccounts(salesforceAccounts).map((group) => {
+    const directStored = storedByKey.get(group.accountNameKey);
+    const inheritedKey = !directStored && group.parentGroupKeys.length === 1 && storedByKey.has(group.parentGroupKeys[0])
+      ? group.parentGroupKeys[0]
+      : '';
+    const assignmentKey = directStored ? group.accountNameKey : inheritedKey;
+    const stored = storedByKey.get(assignmentKey) || {};
+    const managers = assignmentKey ? managersForKey(assignmentKey) : [];
     const expectedManagerText = managerDisplayText(managers);
     const salesforceValues = new Set(group.records.map((record) => text(record.Account_Manager__c)));
     const salesforceMatches = salesforceValues.size === 1 && salesforceValues.has(expectedManagerText);
@@ -124,9 +165,15 @@ export function buildAccountManagerRows({
       accountName: group.accountName,
       roles: group.roles,
       salesforceAccountCount: group.salesforceAccountIds.length,
+      isGroupAccount: group.isGroupAccount,
+      parentGroupNames: group.parentGroupNames,
+      childAccountCount: group.childAccountCount,
+      childAccountNames: group.childAccountNames,
       managers,
       managerCount: managers.length,
-      revision: Number(stored.revision || 0),
+      assignmentSource: directStored ? 'direct' : inheritedKey ? 'group' : 'none',
+      inheritedFromGroupName: inheritedKey ? stored.account_name || group.parentGroupNames[0] || '' : '',
+      revision: Number(directStored?.revision || 0),
       updatedAt: stored.updated_at || null,
       updatedByEmail: stored.updated_by_email || null,
       salesforceSyncStatus,

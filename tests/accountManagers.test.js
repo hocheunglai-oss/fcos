@@ -12,6 +12,7 @@ import {
 } from '../api/_accountManagers.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260722053528_account_managers.sql', import.meta.url);
+const groupPropagationMigrationUrl = new URL('../supabase/migrations/20260722064852_account_manager_group_propagation.sql', import.meta.url);
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const pageUrl = new URL('../src/pages/AccountManagers.jsx', import.meta.url);
 
@@ -64,6 +65,32 @@ test('groups active same-name records once and excludes supplier-only records', 
   assert.deepEqual(groups[0].roles, ['buyer', 'buyer_supplier']);
 });
 
+test('identifies GROUP parents and their eligible child Account names', () => {
+  const groupAccount = buyer({
+    Id: '0012x00000GROUPAAB',
+    Name: 'GROUP - SHARED',
+    RecordType: { Name: 'Group' },
+  });
+  const groups = groupEligibleSalesforceAccounts([
+    groupAccount,
+    buyer({
+      Id: '0012x00000CHILDAAB',
+      Name: 'Shared Child',
+      ParentId: groupAccount.Id,
+      Parent: { Name: groupAccount.Name },
+      RecordType: { Name: 'Buyer' },
+    }),
+  ]);
+
+  const parent = groups.find((group) => group.accountName === groupAccount.Name);
+  const child = groups.find((group) => group.accountName === 'Shared Child');
+  assert.equal(parent.isGroupAccount, true);
+  assert.deepEqual(parent.childAccountNames, ['Shared Child']);
+  assert.equal(parent.childAccountCount, 1);
+  assert.deepEqual(child.parentGroupNames, ['GROUP - SHARED']);
+  assert.deepEqual(child.parentGroupKeys, [parent.accountNameKey]);
+});
+
 test('accepts zero to three unique manager users and rejects invalid assignments', () => {
   const first = '11111111-1111-4111-8111-111111111111';
   const second = '22222222-2222-4222-8222-222222222222';
@@ -94,6 +121,52 @@ test('joins assignments by Account name and reports Salesforce drift', () => {
   assert.equal(rows[0].salesforceSyncStatus, 'drift');
 });
 
+test('inherits ordered GROUP managers when a child has no direct override', () => {
+  const first = '11111111-1111-4111-8111-111111111111';
+  const second = '22222222-2222-4222-8222-222222222222';
+  const groupAccount = buyer({
+    Id: '0012x00000GROUPAAB',
+    Name: 'GROUP - SHARED',
+    RecordType: { Name: 'Group' },
+    Account_Manager__c: 'Vincent Lee / Otto Lai',
+  });
+  const groupKey = accountNameKey(groupAccount.Name);
+  const rows = buildAccountManagerRows({
+    salesforceAccounts: [
+      groupAccount,
+      buyer({
+        Id: '0012x00000CHILDAAB',
+        Name: 'Shared Child',
+        ParentId: groupAccount.Id,
+        Parent: { Name: groupAccount.Name },
+        RecordType: { Name: 'Buyer' },
+        Account_Manager__c: 'Vincent Lee / Otto Lai',
+      }),
+    ],
+    managedGroups: [{
+      account_name_key: groupKey,
+      account_name: groupAccount.Name,
+      revision: 3,
+      salesforce_sync_status: 'synced',
+    }],
+    assignments: [
+      { account_name_key: groupKey, manager_user_id: first, assignment_order: 1 },
+      { account_name_key: groupKey, manager_user_id: second, assignment_order: 2 },
+    ],
+    profiles: [
+      { id: first, full_name: 'Vincent Lee', email: 'vincent@example.com', active: true },
+      { id: second, full_name: 'Otto Lai', email: 'otto@example.com', active: true },
+    ],
+  });
+
+  const child = rows.find((row) => row.accountName === 'Shared Child');
+  assert.deepEqual(child.managers.map((manager) => manager.fullName), ['Vincent Lee', 'Otto Lai']);
+  assert.equal(child.assignmentSource, 'group');
+  assert.equal(child.inheritedFromGroupName, 'GROUP - SHARED');
+  assert.equal(child.revision, 0);
+  assert.equal(child.salesforceSyncStatus, 'synced');
+});
+
 test('expands legacy initials and replaces Sam Yip with Vincent Lee', () => {
   assert.equal(expandLegacyAccountManager('KZ / SC / OL'), 'Kelvin Zeng / Stanley Chui / Otto Lai');
   assert.equal(expandLegacyAccountManager('SY'), 'Vincent Lee');
@@ -103,6 +176,7 @@ test('expands legacy initials and replaces Sam Yip with Vincent Lee', () => {
 
 test('migration enforces limits, revision locking, RLS, and service-role-only access', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
+  const groupSql = await readFile(groupPropagationMigrationUrl, 'utf8');
   assert.match(sql, /assignment_order between 1 and 3/i);
   assert.match(sql, /unique \(account_name_key, assignment_order\)/i);
   assert.match(sql, /enable row level security/i);
@@ -112,6 +186,10 @@ test('migration enforces limits, revision locking, RLS, and service-role-only ac
   assert.match(sql, /changed after it was opened/i);
   assert.match(sql, /account_managers_updated/i);
   assert.match(sql, /grant execute on function public\.save_account_manager_group[\s\S]*to service_role/i);
+  assert.match(groupSql, /create or replace function public\.save_account_manager_group_family/i);
+  assert.match(groupSql, /delete from public\.account_manager_groups[\s\S]*account_name_key = any\(v_child_keys\)/i);
+  assert.match(groupSql, /security invoker/i);
+  assert.match(groupSql, /revoke all on function public\.save_account_manager_group_family[\s\S]*from public, anon, authenticated/i);
 });
 
 test('server revalidates eligibility and updates every grouped Salesforce Account atomically', async () => {
@@ -119,6 +197,10 @@ test('server revalidates eligibility and updates every grouped Salesforce Accoun
   assert.match(source, /Inactive_Suspended__c = false[\s\S]*Is_Broker__c = true OR Buyer_Payment_Term__c != null/i);
   assert.match(source, /Account_Manager__c supports only[\s\S]*Increase it to 255/i);
   assert.match(source, /body: \{ allOrNone: true, records \}/);
+  assert.match(source, /save_account_manager_group_family/);
+  assert.match(source, /childRecords\s*\.map\(\(record\) => accountNameKey\(record\.Name\)\)/);
+  assert.match(source, /RecordType\.Name/);
+  assert.match(source, /ParentId IN/);
   assert.match(source, /accountManagersList: \['buyers_administrator'\]/);
   assert.match(source, /accountManagersSave: \['buyers_administrator'\]/);
   assert.match(source, /accountManagersRetrySync: \['buyers_administrator'\]/);
@@ -130,7 +212,11 @@ test('page edits rows inline with explicit save and cancel controls', async () =
   assert.match(source, /invoke\('accountManagersSave'/);
   assert.match(source, /title="Cancel changes"/);
   assert.match(source, /title="Save Account managers"/);
+  assert.match(source, /<DragDropContext/);
+  assert.match(source, /Drag to change priority/);
+  assert.match(source, /Edit GROUP Account managers\?/);
+  assert.match(source, /Account Managers Methodology/);
+  assert.match(source, /Search Accounts, groups or managers/);
   assert.match(source, /Unassigned/);
-  assert.doesNotMatch(source, /<Dialog/);
   assert.doesNotMatch(source, />Manage</);
 });

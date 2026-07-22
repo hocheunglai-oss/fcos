@@ -1347,6 +1347,9 @@ function accountManagerProfile(profile = {}) {
 const ACCOUNT_MANAGER_ACCOUNT_FIELDS = [
   'Id',
   'Name',
+  'RecordType.Name',
+  'ParentId',
+  'Parent.Name',
   'Buyer_Payment_Term__c',
   'Supplier_Payment_Term__c',
   'Is_Broker__c',
@@ -1361,6 +1364,7 @@ async function accountManagerSchema() {
   const describe = await sfRequest('/sobjects/Account/describe/');
   const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
   const requiredFields = [
+    ['ParentId', 'reference'],
     ['Buyer_Payment_Term__c', null],
     ['Supplier_Payment_Term__c', null],
     ['Is_Broker__c', 'boolean'],
@@ -1373,6 +1377,11 @@ async function accountManagerSchema() {
     if (!field || expectedType && field.type !== expectedType) {
       throw appError(`Salesforce Account.${fieldName} is missing or has an incompatible type. Account Managers is unavailable until the schema is corrected.`, 503);
     }
+  }
+
+  const parentField = fieldsByName.get('ParentId');
+  if (!parentField.referenceTo?.includes('Account')) {
+    throw appError('Salesforce Account.ParentId is not an Account lookup. Account Managers is unavailable until the schema is corrected.', 503);
   }
 
   const managerField = fieldsByName.get('Account_Manager__c');
@@ -1393,9 +1402,15 @@ function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] 
     accountNameKey: salesforceGroup.accountNameKey,
     accountName: salesforceGroup.accountName,
     roles: salesforceGroup.roles,
-    salesforceAccountCount: salesforceGroup.salesforceAccountIds.length,
+    salesforceAccountCount: (salesforceGroup.directSalesforceAccountIds || salesforceGroup.salesforceAccountIds).length,
+    isGroupAccount: salesforceGroup.isGroupAccount === true,
+    parentGroupNames: salesforceGroup.parentGroupNames || [],
+    childAccountCount: Number(salesforceGroup.childAccountCount || 0),
+    childAccountNames: salesforceGroup.childAccountNames || [],
     managers,
     managerCount: managers.length,
+    assignmentSource: 'direct',
+    inheritedFromGroupName: '',
     revision: Number(groupRow.revision || 0),
     updatedAt: groupRow.updated_at || null,
     updatedByEmail: groupRow.updated_by_email || null,
@@ -1440,6 +1455,34 @@ async function currentEligibleAccountGroup(body = {}) {
   const group = groupEligibleSalesforceAccounts(rows).find((candidate) => candidate.accountNameKey === requestedKey);
   if (!group) {
     throw appError('This Account name no longer has an active Buyer, Buyer & Supplier, or Broker record. Refresh the page and review the latest Salesforce data.', 409);
+  }
+  group.directSalesforceAccountIds = group.salesforceAccountIds.slice();
+  if (group.isGroupAccount) {
+    const parentIds = group.directSalesforceAccountIds.map((id) => `'${escapeSoql(id)}'`).join(',');
+    const childResult = await queryResult(`
+      SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE ParentId IN (${parentIds})
+      ORDER BY Name ASC, Id ASC
+    `, { limit: 5000 });
+    if (Number(childResult.totalSize || 0) > (childResult.records || []).length) {
+      throw appError('This GROUP has more than 5,000 direct child Accounts and cannot be updated safely.', 409);
+    }
+
+    const childRecords = childResult.records || [];
+    const childGroups = groupEligibleSalesforceAccounts(childRecords);
+    group.childAccountNameKeys = [...new Set(childRecords
+      .map((record) => accountNameKey(record.Name))
+      .filter(Boolean))];
+    group.childAccountNames = [...new Set(childGroups.map((child) => child.accountName))];
+    group.childAccountCount = childRecords.length;
+    group.salesforceAccountIds = [...new Set([
+      ...group.directSalesforceAccountIds,
+      ...childRecords.map((record) => String(record.Id || '').trim()).filter(Boolean),
+    ])];
+    if (group.salesforceAccountIds.length > 200) {
+      throw appError(`This GROUP contains ${group.salesforceAccountIds.length} Account records, which exceeds the 200-record all-or-none Salesforce update limit.`, 409);
+    }
   }
   return group;
 }
@@ -1569,7 +1612,10 @@ async function accountManagersSave(body = {}, req = null, accessContext = null) 
     throw appError(`Selected manager names exceed the Salesforce ${schema.managerFieldLength}-character limit.`, 400);
   }
 
-  const { data, error } = await client.rpc('save_account_manager_group', {
+  const rpcName = salesforceGroup.isGroupAccount
+    ? 'save_account_manager_group_family'
+    : 'save_account_manager_group';
+  const rpcPayload = {
     p_account_name_key: salesforceGroup.accountNameKey,
     p_account_name: salesforceGroup.accountName,
     p_salesforce_account_ids: salesforceGroup.salesforceAccountIds,
@@ -1579,7 +1625,11 @@ async function accountManagersSave(body = {}, req = null, accessContext = null) 
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
     p_expected_revision: Number(body.expectedRevision ?? body.revision ?? 0),
-  });
+  };
+  if (salesforceGroup.isGroupAccount) {
+    rpcPayload.p_child_account_name_keys = salesforceGroup.childAccountNameKeys || [];
+  }
+  const { data, error } = await client.rpc(rpcName, rpcPayload);
   if (error) {
     const storageError = accountManagerStorageError(error);
     if (storageError !== error) throw storageError;

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import {
   Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  CircleHelp,
+  GripVertical,
   Loader2,
   Pencil,
   Plus,
@@ -20,6 +23,17 @@ import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -66,22 +80,31 @@ function SummaryMetric({ label, value }) {
   );
 }
 
-function ManagerCoverage({ managers }) {
+function ManagerCoverage({ managers, assignmentSource, inheritedFromGroupName }) {
   if (!managers.length) {
     return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">Unassigned</Badge>;
   }
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {managers.map((manager) => (
-        <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-red-200 bg-red-50 text-red-700'}>
-          {manager.fullName}{manager.active ? '' : ' (inactive)'}
-        </Badge>
-      ))}
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {managers.map((manager, index) => (
+          <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-red-200 bg-red-50 text-red-700'}>
+            <span className="mr-1 font-semibold tabular-nums">{index + 1}.</span>
+            {manager.fullName}{manager.active ? '' : ' (inactive)'}
+          </Badge>
+        ))}
+      </div>
+      {assignmentSource === 'group' && inheritedFromGroupName && (
+        <div className="mt-1.5 text-xs text-muted-foreground">Inherited from {inheritedFromGroupName}</div>
+      )}
     </div>
   );
 }
 
-function RoleBadges({ roles }) {
+function RoleBadges({ roles, isGroupAccount }) {
+  if (isGroupAccount) {
+    return <Badge variant="outline" className="border-slate-300 bg-slate-100 text-slate-800">Group</Badge>;
+  }
   return (
     <div className="flex flex-wrap gap-1.5">
       {(roles || []).map((role) => (
@@ -108,9 +131,12 @@ export default function AccountManagers() {
   const [selectedManagerKeys, setSelectedManagerKeys] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [editingKey, setEditingKey] = useState('');
-  const [draftManagerIds, setDraftManagerIds] = useState([]);
+  const [draftManagers, setDraftManagers] = useState([]);
   const [savingKey, setSavingKey] = useState('');
   const [retryingKey, setRetryingKey] = useState('');
+  const [groupEditAccount, setGroupEditAccount] = useState(null);
+  const [methodologyOpen, setMethodologyOpen] = useState(false);
+  const nextDraftKey = useRef(0);
 
   const loadAccounts = useCallback(async ({ background = false } = {}) => {
     if (background) setRefreshing(true);
@@ -122,10 +148,12 @@ export default function AccountManagers() {
     } else {
       setAccounts(response.data?.accounts || []);
       setUsers(response.data?.users || []);
-      setCurrentPage(1);
-      setSelectedManagerKeys(null);
-      setEditingKey('');
-      setDraftManagerIds([]);
+      if (!background) {
+        setCurrentPage(1);
+        setSelectedManagerKeys(null);
+        setEditingKey('');
+        setDraftManagers([]);
+      }
     }
     setLoading(false);
     setRefreshing(false);
@@ -136,6 +164,7 @@ export default function AccountManagers() {
   }, [loadAccounts]);
 
   const usersById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
+  const draftManagerIds = useMemo(() => draftManagers.map((manager) => manager.userId), [draftManagers]);
   const activeUsers = useMemo(() => users
     .filter((user) => user.active)
     .sort((left, right) => compareText(left.fullName || left.email, right.fullName || right.email)), [users]);
@@ -173,6 +202,9 @@ export default function AccountManagers() {
       if (!keyword) return true;
       const searchable = [
         account.accountName,
+        account.isGroupAccount ? 'Group' : '',
+        ...(account.parentGroupNames || []),
+        ...(account.childAccountNames || []),
         ...(account.roles || []).map((role) => ROLE_LABELS[role] || role),
         ...account.managers.flatMap((manager) => [manager.fullName, manager.email]),
       ].join(' ').toLowerCase();
@@ -195,26 +227,47 @@ export default function AccountManagers() {
 
   const beginEdit = (account) => {
     setEditingKey(account.accountNameKey);
-    setDraftManagerIds(account.managers.map((manager) => manager.id));
+    setDraftManagers(account.managers.map((manager) => ({ key: `manager-${manager.id}`, userId: manager.id })));
+  };
+
+  const requestEdit = (account) => {
+    if (account.isGroupAccount) {
+      setGroupEditAccount(account);
+      return;
+    }
+    beginEdit(account);
   };
 
   const cancelEdit = () => {
     if (savingKey) return;
     setEditingKey('');
-    setDraftManagerIds([]);
+    setDraftManagers([]);
   };
 
   const addManager = () => {
     if (draftManagerIds.length >= 3 || draftManagerIds.some((userId) => !userId)) return;
-    setDraftManagerIds((current) => [...current, '']);
+    nextDraftKey.current += 1;
+    setDraftManagers((current) => [...current, { key: `draft-${nextDraftKey.current}`, userId: '' }]);
   };
 
   const changeManager = (index, userId) => {
-    setDraftManagerIds((current) => current.map((value, itemIndex) => itemIndex === index ? userId : value));
+    setDraftManagers((current) => current.map((manager, itemIndex) => itemIndex === index
+      ? { ...manager, userId }
+      : manager));
   };
 
   const removeManager = (index) => {
-    setDraftManagerIds((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setDraftManagers((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const reorderManagers = ({ source, destination }) => {
+    if (!destination || source.index === destination.index) return;
+    setDraftManagers((current) => {
+      const reordered = current.slice();
+      const [moved] = reordered.splice(source.index, 1);
+      reordered.splice(destination.index, 0, moved);
+      return reordered;
+    });
   };
 
   const saveAccount = async (account) => {
@@ -236,7 +289,8 @@ export default function AccountManagers() {
 
     replaceAccount(response.data.account);
     setEditingKey('');
-    setDraftManagerIds([]);
+    setDraftManagers([]);
+    if (account.isGroupAccount) await loadAccounts({ background: true });
     if (response.data.syncError) {
       toast({ title: 'Saved with a Salesforce sync issue', description: response.data.syncError, variant: 'destructive' });
     } else {
@@ -260,6 +314,7 @@ export default function AccountManagers() {
       return;
     }
     replaceAccount(response.data.account);
+    if (account.isGroupAccount) await loadAccounts({ background: true });
     if (response.data.syncError) {
       toast({ title: 'Salesforce sync not completed', description: response.data.syncError, variant: 'destructive' });
     } else {
@@ -282,16 +337,22 @@ export default function AccountManagers() {
         title="Account Managers"
         meta={`${stats.total.toLocaleString()} active Account names`}
         actions={(
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => loadAccounts({ background: true })}
-            disabled={loading || refreshing}
-            aria-label="Refresh Accounts"
-            title="Refresh Accounts"
-          >
-            <RefreshCw className={refreshing ? 'animate-spin' : ''} />
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setMethodologyOpen(true)}>
+              <CircleHelp />
+              Methodology
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => loadAccounts({ background: true })}
+              disabled={loading || refreshing}
+              aria-label="Refresh Accounts"
+              title="Refresh Accounts"
+            >
+              <RefreshCw className={refreshing ? 'animate-spin' : ''} />
+            </Button>
+          </>
         )}
       />
 
@@ -316,8 +377,8 @@ export default function AccountManagers() {
                 setCurrentPage(1);
               }}
               className="pl-9"
-              placeholder="Search Accounts or managers"
-              aria-label="Search Accounts or managers"
+              placeholder="Search Accounts, groups or managers"
+              aria-label="Search Accounts, groups or managers"
             />
           </div>
         )}
@@ -394,48 +455,86 @@ export default function AccountManagers() {
                         <div className="mt-1 text-xs text-muted-foreground">
                           {account.salesforceAccountCount} active Salesforce Account{account.salesforceAccountCount === 1 ? '' : 's'}
                         </div>
+                        {account.isGroupAccount ? (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {account.childAccountCount} active listed child Account{account.childAccountCount === 1 ? '' : 's'}
+                          </div>
+                        ) : account.parentGroupNames?.length ? (
+                          <div className="mt-1 text-xs text-muted-foreground">Group: {account.parentGroupNames.join(', ')}</div>
+                        ) : null}
                       </TableCell>
-                      <TableCell className="min-w-[190px] align-top"><RoleBadges roles={account.roles} /></TableCell>
+                      <TableCell className="min-w-[190px] align-top">
+                        <RoleBadges roles={account.roles} isGroupAccount={account.isGroupAccount} />
+                      </TableCell>
                       <TableCell className="min-w-[390px] align-top">
                         {editing ? (
                           <div className="space-y-2">
-                            {draftManagerIds.length ? draftManagerIds.map((userId, index) => {
-                              const selectedUser = usersById.get(userId);
-                              return (
-                                <div key={`${account.accountNameKey}-${index}`} className="flex items-center gap-2">
-                                  <Select value={userId || undefined} onValueChange={(value) => changeManager(index, value)} disabled={saving}>
-                                    <SelectTrigger className="h-9 min-w-0 flex-1" aria-label={`Account manager ${index + 1}`}>
-                                      <SelectValue placeholder="Select a manager">{selectedUser?.fullName || selectedUser?.email}</SelectValue>
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {users
-                                        .slice()
-                                        .sort((left, right) => compareText(left.fullName || left.email, right.fullName || right.email))
-                                        .map((user) => (
-                                          <SelectItem
-                                            key={user.id}
-                                            value={user.id}
-                                            disabled={!user.active || draftManagerIds.some((selectedId, selectedIndex) => selectedIndex !== index && selectedId === user.id)}
-                                          >
-                                            {user.fullName || user.email}{user.active ? '' : ' · Inactive'}
-                                          </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                  </Select>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => removeManager(index)}
-                                    disabled={saving}
-                                    aria-label={`Remove ${selectedUser?.fullName || selectedUser?.email || 'manager'}`}
-                                    title="Remove manager"
-                                  >
-                                    <Trash2 />
-                                  </Button>
-                                </div>
-                              );
-                            }) : (
+                            {draftManagers.length ? (
+                              <DragDropContext onDragEnd={reorderManagers}>
+                                <Droppable droppableId={`account-manager-priority-${account.accountNameKey}`}>
+                                  {(droppableProvided) => (
+                                    <div ref={droppableProvided.innerRef} {...droppableProvided.droppableProps} className="space-y-2">
+                                      {draftManagers.map((draftManager, index) => {
+                                        const selectedUser = usersById.get(draftManager.userId);
+                                        return (
+                                          <Draggable key={draftManager.key} draggableId={draftManager.key} index={index} isDragDisabled={saving}>
+                                            {(draggableProvided, draggableSnapshot) => (
+                                              <div
+                                                ref={draggableProvided.innerRef}
+                                                {...draggableProvided.draggableProps}
+                                                className={`flex min-w-0 items-center gap-2 rounded-md border bg-background p-1 ${draggableSnapshot.isDragging ? 'border-primary shadow-lg' : 'border-border'}`}
+                                              >
+                                                <button
+                                                  type="button"
+                                                  {...draggableProvided.dragHandleProps}
+                                                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                                                  aria-label={`Move priority ${index + 1}`}
+                                                  title="Drag to change priority"
+                                                >
+                                                  <GripVertical className="h-4 w-4" />
+                                                </button>
+                                                <span className="w-5 shrink-0 text-center text-xs font-semibold tabular-nums text-muted-foreground">{index + 1}</span>
+                                                <Select value={draftManager.userId || undefined} onValueChange={(value) => changeManager(index, value)} disabled={saving}>
+                                                  <SelectTrigger className="h-9 min-w-0 flex-1" aria-label={`Account manager priority ${index + 1}`}>
+                                                    <SelectValue placeholder="Select a manager" />
+                                                  </SelectTrigger>
+                                                  <SelectContent>
+                                                    {users
+                                                      .slice()
+                                                      .sort((left, right) => compareText(left.fullName || left.email, right.fullName || right.email))
+                                                      .map((user) => (
+                                                        <SelectItem
+                                                          key={user.id}
+                                                          value={user.id}
+                                                          disabled={!user.active || draftManagerIds.some((selectedId, selectedIndex) => selectedIndex !== index && selectedId === user.id)}
+                                                        >
+                                                          {user.fullName || user.email}{user.active ? '' : ' · Inactive'}
+                                                        </SelectItem>
+                                                      ))}
+                                                  </SelectContent>
+                                                </Select>
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  onClick={() => removeManager(index)}
+                                                  disabled={saving}
+                                                  aria-label={`Remove ${selectedUser?.fullName || selectedUser?.email || 'manager'}`}
+                                                  title="Remove manager"
+                                                >
+                                                  <Trash2 />
+                                                </Button>
+                                              </div>
+                                            )}
+                                          </Draggable>
+                                        );
+                                      })}
+                                      {droppableProvided.placeholder}
+                                    </div>
+                                  )}
+                                </Droppable>
+                              </DragDropContext>
+                            ) : (
                               <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">Unassigned</Badge>
                             )}
                             <Button type="button" variant="outline" size="sm" onClick={addManager} disabled={saving || noMoreUsers}>
@@ -444,7 +543,11 @@ export default function AccountManagers() {
                             </Button>
                           </div>
                         ) : (
-                          <ManagerCoverage managers={account.managers} />
+                          <ManagerCoverage
+                            managers={account.managers}
+                            assignmentSource={account.assignmentSource}
+                            inheritedFromGroupName={account.inheritedFromGroupName}
+                          />
                         )}
                       </TableCell>
                       <TableCell className="min-w-[190px] align-top text-xs">
@@ -503,7 +606,7 @@ export default function AccountManagers() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => beginEdit(account)}
+                                onClick={() => requestEdit(account)}
                                 disabled={Boolean(editingKey || retryingKey || savingKey)}
                                 aria-label={`Edit managers for ${account.accountName}`}
                                 title="Edit Account managers"
@@ -552,6 +655,78 @@ export default function AccountManagers() {
           <StateBlock title="No Accounts found" description="No active Account names match the current filters." />
         )}
       </TableShell>
+
+      <Dialog open={methodologyOpen} onOpenChange={setMethodologyOpen}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Account Managers Methodology</DialogTitle>
+            <DialogDescription>How Account coverage, manager priority, GROUP propagation, and synchronization work.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 text-sm text-foreground">
+            <section>
+              <h3 className="font-semibold">Account coverage</h3>
+              <p className="mt-1 text-muted-foreground">
+                The directory shows active Buyer, Buyer &amp; Supplier, Broker, and GROUP Account names. Same-name Salesforce Account records are managed together; inactive and supplier-only Accounts are not listed.
+              </p>
+            </section>
+            <section>
+              <h3 className="font-semibold">Manager priority</h3>
+              <p className="mt-1 text-muted-foreground">
+                Each Account can have up to three managers. Priority 1 is highest. Drag the handle to reorder managers, then use Save to apply the ordered list.
+              </p>
+            </section>
+            <section>
+              <h3 className="font-semibold">GROUP Accounts</h3>
+              <p className="mt-1 text-muted-foreground">
+                A GROUP assignment is applied to the GROUP Account and all direct child Salesforce Accounts. Child Account names inherit that ordered list unless they are edited directly. Saving the GROUP again replaces direct child overrides.
+              </p>
+            </section>
+            <section>
+              <h3 className="font-semibold">Salesforce synchronization</h3>
+              <p className="mt-1 text-muted-foreground">
+                FCOS stores the ordered users and writes their display names to Salesforce Account Manager. GROUP families are written all-or-none; failed or mismatched rows remain visible as sync issues for retry.
+              </p>
+            </section>
+            <section>
+              <h3 className="font-semibold">Search and filters</h3>
+              <p className="mt-1 text-muted-foreground">
+                Search matches Account names, parent GROUP names, GROUP child names, Account type, manager name, and manager email. The manager filter includes inherited assignments and Unassigned Accounts.
+              </p>
+            </section>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(groupEditAccount)} onOpenChange={(open) => {
+        if (!open) setGroupEditAccount(null);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Edit GROUP Account managers?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Saving this ordered manager list will apply it to the GROUP Account and every direct child Account in Salesforce.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {groupEditAccount && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="font-medium">{groupEditAccount.accountName}</div>
+              <div className="mt-1">
+                {groupEditAccount.childAccountCount} active child Account{groupEditAccount.childAccountCount === 1 ? '' : 's'} currently appear in this directory. Existing direct child assignments will be replaced when the GROUP is saved.
+              </div>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              const account = groupEditAccount;
+              setGroupEditAccount(null);
+              if (account) beginEdit(account);
+            }}>
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

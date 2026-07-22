@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.22';
+export const APP_VERSION = '2.0.23';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.23',
+    releasedAt: '2026-07-22',
+    title: 'Account manager priority and GROUP coverage',
+    changes: [
+      'Added drag-and-drop manager priority with stable unsaved rows for second and third assignments.',
+      'Added GROUP Account confirmation, child-account propagation, inherited assignments, and group-aware search.',
+      'Added an Account Managers methodology guide beside Refresh.',
+    ],
+  },
   {
     version: '2.0.22',
     releasedAt: '2026-07-22',
