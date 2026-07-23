@@ -2686,6 +2686,7 @@ async function salesforceDashboardFiltered(body) {
   if (fieldNames.includes('QLIK_STEM_Line_Item_Total_Cost__c')) plFields.push('QLIK_STEM_Line_Item_Total_Cost__c');
   if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
   if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
+  if (fieldNames.includes('Port__c')) plFields.push('Port__c', 'Port__r.Name', 'Port__r.Country__c');
 
   const [totalRes, recentRes, buyerRes, supplierRes, costsRes, monthlyRes] = await Promise.all([
     sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
@@ -4722,6 +4723,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   if (fieldNames.includes('QLIK_STEM_Line_Item_Total_Cost__c')) plFields.push('QLIK_STEM_Line_Item_Total_Cost__c');
   if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
   if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
+  if (fieldNames.includes('Port__c')) plFields.push('Port__c', 'Port__r.Name', 'Port__r.Country__c');
 
   const queries = [
     queryResult(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
@@ -4952,6 +4954,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     const productQuantities = productQuantitiesByStem[stem.Id] || [];
     const buyerAccount = stem['Account__r'] || {};
     const buyerGroup = buyerAccount.Group_Name__c || buyerAccount.Parent?.Name || null;
+    const port = stem['Port__r'] || {};
     const supplierAmountMap = { ...(supplierInvoiceAmountByStem[stem.Id] || {}) };
     if (unassignedExtraCostBuyByStem[stem.Id]) {
       supplierAmountMap['Unassigned Extra Costs'] = (supplierAmountMap['Unassigned Extra Costs'] || 0) + unassignedExtraCostBuyByStem[stem.Id];
@@ -4980,6 +4983,8 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       [bf]: calc.buyer ?? null,
       [sf2]: calc.supplier || null,
       _Buyer_Group: buyerGroup,
+      _Port_Name: port.Name || null,
+      _Port_Country: port.Country__c || null,
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
       _Supplier_Invoice_Amount_List: supplierInvoiceAmountList,

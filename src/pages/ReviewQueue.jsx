@@ -14,6 +14,7 @@ import StateBlock from '@/components/common/StateBlock';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
+import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -217,12 +218,7 @@ export default function ReviewQueue() {
     const filteredByType = activeReviewType === 'all'
       ? scopedRows
       : scopedRows.filter(row => row.reviewReasons.some(reason => reason.key === activeReviewType));
-    if (!search.trim()) return filteredByType;
-    const q = search.toLowerCase();
-    return filteredByType.filter(row =>
-      [row.Name, row.KeyStem__c, row.Buyer_Name__c, row.Buyer__c, row.ETA_Start_Date__c, row.Delivery_Date__c]
-        .some(value => value != null && String(value).toLowerCase().includes(q))
-    );
+    return filteredByType.filter(row => matchesExceptionReviewSearch(row, search));
   }, [data?.recentStems, activeReviewType, search, workflowByStemId, workflowScope]);
 
   const classifiedRows = useMemo(() => (data?.recentStems || []).map(classifyStem), [data?.recentStems]);
@@ -447,7 +443,7 @@ export default function ReviewQueue() {
           <div className="relative w-full sm:w-80">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
-              placeholder="Search stem, buyer, or date..."
+              placeholder="Search stem, buyer, port, country, or date..."
               value={search}
               onChange={event => setSearch(event.target.value)}
               className="pl-8 h-8 text-xs"

@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.31';
+export const APP_VERSION = '2.0.32';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.32',
+    releasedAt: '2026-07-24',
+    title: 'Exception Review port-country search',
+    changes: [
+      'Extended Exception Review search to match the Salesforce port name and its country.',
+      'Added port identity to the Exception Review data response without changing the existing search workflow.',
+    ],
+  },
   {
     version: '2.0.31',
     releasedAt: '2026-07-23',
