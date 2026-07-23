@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.25';
+export const APP_VERSION = '2.0.26';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.26',
+    releasedAt: '2026-07-23',
+    title: 'Buyer payment reminder rules',
+    changes: [
+      'Added Account-ID reminder rules for active Buyer, Buyer & Supplier, and GROUP Accounts.',
+      'Added continuous GROUP inheritance, direct child overrides, notes, attribution, and revision protection.',
+      'Blocked external reminders for restricted not-yet-overdue invoices while preserving broker-only routing and internal reports.',
+    ],
+  },
   {
     version: '2.0.25',
     releasedAt: '2026-07-22',

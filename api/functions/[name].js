@@ -17,6 +17,13 @@ import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import {
+  applyBuyerReminderRules,
+  buyerReminderAccountType,
+  buyerReminderRuleMap,
+  canonicalSalesforceAccountId,
+  evaluateBuyerReminderSelection,
+} from '../_buyerInvoiceReminderRules.js';
+import {
   accountNameKey,
   buildAccountManagerRows,
   groupEligibleSalesforceAccounts,
@@ -406,6 +413,9 @@ const HANDLER_MODULE_ACCESS = {
   buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
   buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
   buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
+  buyerInvoiceReminderRulesList: ['buyer_invoices'],
+  buyerInvoiceReminderRuleSave: ['buyer_invoices'],
+  buyerInvoiceReminderRuleRemove: ['buyer_invoices'],
   buyerInvoicePaymentReminderPrepare: ['buyer_invoices'],
   buyerInvoicePaymentReminderSend: ['buyer_invoices'],
   outstandingBuyerInvoicesEmailReport: ['buyer_invoices'],
@@ -1767,6 +1777,303 @@ async function accountManagersRetrySync(body = {}, req = null, accessContext = n
 
 const buyersAdministratorList = accountManagersList;
 const buyersAdministratorSave = accountManagersSave;
+
+const BUYER_REMINDER_RULE_SELECT = 'salesforce_account_id,account_name,account_type,parent_salesforce_account_id,policy,note,inherit_to_children,revision,updated_by_email,created_at,updated_at';
+const BUYER_REMINDER_ACCOUNT_FIELDS = [
+  'Id',
+  'Name',
+  'RecordType.Name',
+  'ParentId',
+  'Parent.Name',
+  'Buyer_Payment_Term__c',
+  'Supplier_Payment_Term__c',
+  'Is_Broker__c',
+  'Inactive_Suspended__c',
+];
+
+function buyerReminderStorageError(error) {
+  const message = String(error?.message || '');
+  if (
+    error?.code === '42P01'
+    || error?.code === 'PGRST205'
+    || /buyer_invoice_reminder_rules.*does not exist/i.test(message)
+  ) {
+    return appError('Buyer Invoice reminder rule storage is not ready. Apply the latest Supabase migration and try again.', 503);
+  }
+  if (
+    error?.code === 'PGRST202'
+    || /buyer_invoice_reminder_rule/i.test(message) && /schema cache|could not find/i.test(message)
+  ) {
+    return appError('Buyer Invoice reminder rule storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
+  }
+  return error;
+}
+
+async function loadBuyerInvoiceReminderRules({ required = false, client = null } = {}) {
+  const supabase = client || safeSupabaseAdminClient();
+  if (!supabase) {
+    if (required) throw appError('Buyer Invoice reminder rule storage is unavailable. External payment reminders are disabled.', 503);
+    return { available: false, rules: [], error: 'storage_unavailable' };
+  }
+
+  const { data, error } = await supabase
+    .from('buyer_invoice_reminder_rules')
+    .select(BUYER_REMINDER_RULE_SELECT);
+  if (error) {
+    if (required) throw buyerReminderStorageError(error);
+    console.error('[buyerInvoiceReminderRules] storage unavailable', { code: error.code, message: error.message });
+    return { available: false, rules: [], error: 'storage_unavailable' };
+  }
+  return { available: true, rules: data || [], error: null };
+}
+
+let cachedBuyerReminderAccountSchema = null;
+
+async function buyerReminderAccountSchema() {
+  if (cachedBuyerReminderAccountSchema) return cachedBuyerReminderAccountSchema;
+  const describe = await sfRequest('/sobjects/Account/describe/');
+  const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
+  const requiredFields = [
+    ['RecordTypeId', 'reference'],
+    ['ParentId', 'reference'],
+    ['Buyer_Payment_Term__c', null],
+    ['Supplier_Payment_Term__c', null],
+    ['Is_Broker__c', 'boolean'],
+    ['Inactive_Suspended__c', 'boolean'],
+  ];
+  for (const [fieldName, expectedType] of requiredFields) {
+    const field = fieldsByName.get(fieldName);
+    if (!field || expectedType && field.type !== expectedType) {
+      throw appError(`Salesforce Account.${fieldName} is missing or has an incompatible type. Reminder Rules is unavailable until the schema is corrected.`, 503);
+    }
+  }
+  if (!fieldsByName.get('ParentId')?.referenceTo?.includes('Account')) {
+    throw appError('Salesforce Account.ParentId is not an Account lookup. Reminder Rules is unavailable until the schema is corrected.', 503);
+  }
+  cachedBuyerReminderAccountSchema = true;
+  return true;
+}
+
+function buyerReminderAccountSnapshot(account = {}) {
+  const accountId = canonicalSalesforceAccountId(account.Id);
+  const parentAccountId = canonicalSalesforceAccountId(account.ParentId);
+  const accountType = buyerReminderAccountType(account);
+  return {
+    accountId,
+    accountName: String(account.Name || '').trim(),
+    accountType,
+    accountTypeLabel: accountType === 'group'
+      ? 'GROUP'
+      : accountType === 'buyer_supplier'
+        ? 'Buyer & Supplier'
+        : 'Buyer',
+    parentAccountId: parentAccountId || null,
+    parentAccountName: String(account.Parent?.Name || '').trim(),
+    isGroup: accountType === 'group',
+  };
+}
+
+function isActiveBuyerReminderAccount(account = {}) {
+  return account.Inactive_Suspended__c === false && Boolean(buyerReminderAccountType(account));
+}
+
+async function loadBuyerReminderAccountDirectory() {
+  await buyerReminderAccountSchema();
+  const result = await queryResult(`
+    SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
+    FROM Account
+    WHERE Inactive_Suspended__c = false
+      AND Is_Broker__c = false
+      AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
+    ORDER BY Name ASC, Id ASC
+  `, { limit: 10000 });
+  const records = (result.records || []).filter(isActiveBuyerReminderAccount);
+  if (Number(result.totalSize || 0) > records.length) {
+    throw appError('The active Buyer Account directory exceeds 10,000 records. Narrow the Salesforce directory before managing reminder rules.', 503);
+  }
+  return records;
+}
+
+async function currentBuyerReminderAccount(accountId, { includeChildren = false } = {}) {
+  await buyerReminderAccountSchema();
+  const canonicalId = canonicalSalesforceAccountId(accountId);
+  if (!canonicalId) throw appError('A valid Salesforce Account ID is required.', 400);
+  const records = await queryRows(`
+    SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
+    FROM Account
+    WHERE Id = '${escapeSoql(canonicalId)}'
+    LIMIT 1
+  `, { limit: 1 });
+  const account = records[0];
+  if (!account || !isActiveBuyerReminderAccount(account)) {
+    throw appError('This Account is no longer an active Buyer, Buyer & Supplier, or GROUP Account. Refresh Reminder Rules.', 409);
+  }
+
+  const snapshot = buyerReminderAccountSnapshot(account);
+  let children = [];
+  if (includeChildren && snapshot.isGroup) {
+    const result = await queryResult(`
+      SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE ParentId = '${escapeSoql(canonicalId)}'
+        AND Inactive_Suspended__c = false
+        AND Is_Broker__c = false
+        AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
+      ORDER BY Name ASC, Id ASC
+    `, { limit: 10000 });
+    children = (result.records || []).filter(isActiveBuyerReminderAccount);
+    if (Number(result.totalSize || 0) > children.length) {
+      throw appError('This GROUP has more than 10,000 eligible direct child Accounts and cannot be updated safely.', 409);
+    }
+  }
+  return { account, snapshot, children };
+}
+
+function serializeBuyerReminderRule(rule = null) {
+  if (!rule) return null;
+  return {
+    accountId: canonicalSalesforceAccountId(rule.salesforce_account_id || rule.accountId),
+    accountName: rule.account_name || rule.accountName || '',
+    accountType: rule.account_type || rule.accountType || '',
+    parentAccountId: canonicalSalesforceAccountId(rule.parent_salesforce_account_id || rule.parentAccountId) || null,
+    policy: rule.policy === 'overdue_only' ? 'overdue_only' : 'standard',
+    note: rule.note || '',
+    inheritToChildren: rule.inherit_to_children === true || rule.inheritToChildren === true,
+    revision: Number(rule.revision || 0),
+    updatedAt: rule.updated_at || rule.updatedAt || null,
+    updatedByEmail: rule.updated_by_email || rule.updatedByEmail || null,
+  };
+}
+
+async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  const [salesforceAccounts, stored] = await Promise.all([
+    loadBuyerReminderAccountDirectory(),
+    loadBuyerInvoiceReminderRules({ required: true, client }),
+  ]);
+  const ruleMap = buyerReminderRuleMap(stored.rules);
+  const snapshots = salesforceAccounts.map(buyerReminderAccountSnapshot);
+  const childrenByParent = new Map();
+  for (const account of snapshots) {
+    if (!account.parentAccountId) continue;
+    if (!childrenByParent.has(account.parentAccountId)) childrenByParent.set(account.parentAccountId, []);
+    childrenByParent.get(account.parentAccountId).push(account);
+  }
+
+  const accounts = snapshots.map((account) => {
+    const directRule = ruleMap.get(account.accountId) || null;
+    const parentRule = ruleMap.get(account.parentAccountId);
+    const inheritedRule = !directRule && parentRule?.inheritToChildren ? parentRule : null;
+    const effectiveRule = directRule || inheritedRule || null;
+    const availableGroupRule = parentRule?.inheritToChildren ? parentRule : null;
+    const children = childrenByParent.get(account.accountId) || [];
+    const childOverrideCount = children.filter((child) => ruleMap.has(child.accountId)).length;
+    return {
+      ...account,
+      policy: effectiveRule?.policy || 'standard',
+      note: effectiveRule?.note || '',
+      source: directRule ? 'direct' : inheritedRule ? 'group' : 'default',
+      sourceAccountId: inheritedRule?.accountId || directRule?.accountId || null,
+      sourceAccountName: inheritedRule?.accountName || directRule?.accountName || '',
+      hasDirectRule: Boolean(directRule),
+      canUseGroupRule: Boolean(directRule && availableGroupRule),
+      availableGroupRule: serializeBuyerReminderRule(availableGroupRule),
+      directRule: serializeBuyerReminderRule(directRule),
+      revision: Number(directRule?.revision || 0),
+      inheritToChildren: directRule?.inheritToChildren === true,
+      childCount: children.length,
+      childOverrideCount,
+      updatedAt: (directRule || inheritedRule)?.updatedAt || null,
+      updatedByEmail: (directRule || inheritedRule)?.updatedByEmail || null,
+    };
+  }).sort((left, right) => (
+    Number(right.isGroup) - Number(left.isGroup)
+    || left.accountName.localeCompare(right.accountName, undefined, { sensitivity: 'base' })
+    || left.accountId.localeCompare(right.accountId)
+  ));
+
+  return { accounts };
+}
+
+async function buyerInvoiceReminderRuleSave(body = {}, req = null, accessContext = null) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+  const policy = body.policy === 'overdue_only' ? 'overdue_only' : body.policy === 'standard' ? 'standard' : '';
+  if (!policy) throw appError('Reminder policy must be Standard or Overdue only.', 400);
+  const note = String(body.note || '').trim();
+  if (Array.from(note).length > 255) throw appError('Reminder rule note cannot exceed 255 characters.', 400);
+
+  const requestedScope = String(body.groupScope || body.scope || 'group_only');
+  if (!['group_only', 'group_children'].includes(requestedScope)) {
+    throw appError('GROUP scope must be GROUP only or GROUP + children.', 400);
+  }
+  const replaceChildOverrides = body.replaceChildOverrides === true;
+  const includeChildren = requestedScope === 'group_children';
+  const { snapshot, children } = await currentBuyerReminderAccount(body.accountId, { includeChildren: true });
+  if (!snapshot.isGroup && (includeChildren || replaceChildOverrides)) {
+    throw appError('Only GROUP Accounts can apply a reminder rule to child Accounts.', 400);
+  }
+  if (replaceChildOverrides && !includeChildren) {
+    throw appError('Replace direct child overrides is available only with GROUP + children.', 400);
+  }
+
+  const expectedRevision = Number(body.expectedRevision || 0);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw appError('Reminder rule revision is invalid. Refresh Reminder Rules.', 400);
+  }
+  const { data, error } = await client.rpc('save_buyer_invoice_reminder_rule', {
+    p_salesforce_account_id: snapshot.accountId,
+    p_account_name: snapshot.accountName,
+    p_account_type: snapshot.accountType,
+    p_parent_salesforce_account_id: snapshot.parentAccountId,
+    p_policy: policy,
+    p_note: note,
+    p_inherit_to_children: snapshot.isGroup && includeChildren,
+    p_replace_child_overrides: replaceChildOverrides,
+    p_child_account_ids: includeChildren
+      ? children.map((child) => canonicalSalesforceAccountId(child.Id)).filter(Boolean)
+      : [],
+    p_expected_revision: expectedRevision,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (error) {
+    const storageError = buyerReminderStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|eligible|policy|cannot exceed|only GROUP|active FCOS/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+  return {
+    saved: true,
+    rule: serializeBuyerReminderRule(data),
+    replacedChildOverrideCount: Number(data?.replaced_child_override_count || 0),
+  };
+}
+
+async function buyerInvoiceReminderRuleRemove(body = {}, req = null, accessContext = null) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+  const { snapshot } = await currentBuyerReminderAccount(body.accountId);
+  const expectedRevision = Number(body.expectedRevision || 0);
+  if (!Number.isInteger(expectedRevision) || expectedRevision <= 0) {
+    throw appError('A current direct reminder rule revision is required.', 400);
+  }
+  const { data, error } = await client.rpc('remove_buyer_invoice_reminder_rule', {
+    p_salesforce_account_id: snapshot.accountId,
+    p_expected_revision: expectedRevision,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (error) {
+    const storageError = buyerReminderStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|active FCOS/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+  return data || { removed: true, accountId: snapshot.accountId };
+}
 
 const REPORT_EXPORT_MAX_BYTES = 15 * 1024 * 1024;
 const REPORT_EXPORT_MIME_TYPE = 'application/vnd.ms-excel';
@@ -5000,7 +5307,7 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
   if (fieldNames.includes('Account__c')) {
     fields.push('Account__c', 'Account__r.Name');
     if (accountFieldNames.includes('Group_Name__c')) fields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.includes('ParentId')) fields.push('Account__r.Parent.Name');
+    if (accountFieldNames.includes('ParentId')) fields.push('Account__r.ParentId', 'Account__r.Parent.Name');
     if (accountFieldNames.includes('Accounts_Email__c')) fields.push('Account__r.Accounts_Email__c');
   }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
@@ -5198,6 +5505,7 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
         stemName: formatStemName(stem),
         keyStem: stem.KeyStem__c || null,
         buyerAccountId: stem.Account__c || null,
+        buyerParentAccountId: account.ParentId || null,
         buyerGroupName: account.Group_Name__c || account.Parent?.Name || null,
         buyerName: stem.Buyer_Name__c || account.Name || stem.Buyer__c || null,
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
@@ -5224,7 +5532,10 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
       return String(a.stemName || '').localeCompare(String(b.stemName || ''));
     });
 
-  const collectionMap = await loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId));
+  const [collectionMap, reminderRulesState] = await Promise.all([
+    loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId)),
+    loadBuyerInvoiceReminderRules(),
+  ]);
   const rowsWithCollection = allRows.map((row) => {
     const collection = collectionMap[row.stemId] || {};
     const paymentHandlerName = collection.item?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
@@ -5248,8 +5559,13 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
       collectionEvents: collection.events || [],
     };
   });
+  const rowsWithReminderRules = applyBuyerReminderRules(
+    rowsWithCollection,
+    reminderRulesState.rules,
+    reminderRulesState.available,
+  );
 
-  const buyerTraderOptions = [...new Set(rowsWithCollection.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))].sort((a, b) => a.localeCompare(b));
+  const buyerTraderOptions = [...new Set(rowsWithReminderRules.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))].sort((a, b) => a.localeCompare(b));
   const selectedBuyerTraders = selectedBuyerTradersInput
     .map((name) => String(name || '').trim())
     .filter((name) => buyerTraderOptions.includes(name));
@@ -5258,10 +5574,20 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
   const rows = hasBuyerTraderFilter && !activeBuyerTraderSet.size
     ? []
     : activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length
-    ? rowsWithCollection.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name)))
-    : rowsWithCollection;
+    ? rowsWithReminderRules.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name)))
+    : rowsWithReminderRules;
 
-  return { rows, today, dueThrough, daysAhead, receivableThreshold, buyerTraderOptions, selectedBuyerTraders: activeBuyerTraders, hasBuyerTraderFilter };
+  return {
+    rows,
+    today,
+    dueThrough,
+    daysAhead,
+    receivableThreshold,
+    buyerTraderOptions,
+    selectedBuyerTraders: activeBuyerTraders,
+    hasBuyerTraderFilter,
+    paymentReminderRulesAvailable: reminderRulesState.available,
+  };
 }
 
 const INCOMING_PAYMENT_SETTINGS_ID = 'default';
@@ -9000,6 +9326,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
   const report = await salesforceBuyerInvoicesDue({
     daysAhead: body.daysAhead ?? settings.daysAhead,
   }, null, accessContext);
+  if (report.paymentReminderRulesAvailable !== true) {
+    throw appError('Buyer Invoice reminder rules are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
+  }
   const stemId = String(body.stemId || body.stem_id || '').trim();
   const selected = report.rows.find((row) => row.stemId === stemId);
   if (!selected) throw appError('Selected invoice is no longer in the current outstanding invoice window.', 404);
@@ -9015,10 +9344,14 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
 async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
   if (!accessContext) await requireActiveUser(req);
   const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, accessContext);
-  const routing = paymentReminderRoutingForRows(candidates);
+  if (selected.paymentReminderEligible !== true) {
+    throw appError(selected.paymentReminderBlockingReason || 'This invoice is not eligible for an external payment reminder.', 409);
+  }
+  const eligibleCandidates = candidates.filter((row) => row.paymentReminderEligible === true);
+  const routing = paymentReminderRoutingForRows(eligibleCandidates);
   const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
     || routing.groups[0]
-    || { key: 'default', rows: candidates, to: [], cc: [], bcc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
+    || { key: 'default', rows: eligibleCandidates, to: [], cc: [], bcc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
   const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
   const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
   const preparedGroups = routing.groups.map((group) => {
@@ -9068,8 +9401,19 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
   const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean));
-  const rows = candidates.filter((row) => selectedStemIds.has(row.stemId));
-  if (!rows.length) throw appError('Select at least one invoice to include in the payment reminder.', 400);
+  if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
+  const selection = evaluateBuyerReminderSelection(candidates, [...selectedStemIds]);
+  if (selection.unknownStemIds.length) {
+    throw appError('The selected invoice list is stale or does not belong to this buyer reminder. Reopen the preview and review the current invoices.', 409);
+  }
+  if (selection.restrictedRows.length) {
+    throw appError(
+      selection.restrictedRows[0].paymentReminderBlockingReason
+        || 'One or more selected invoices are no longer eligible for an external payment reminder. Reopen the preview.',
+      409,
+    );
+  }
+  const rows = selection.rows;
 
   const routing = paymentReminderRoutingForRows(rows);
   if (!routing.groups.length) throw appError('No payment reminder recipient group could be built.', 400);
@@ -11764,6 +12108,9 @@ const handlers = {
   buyerInvoiceCollectionEventCreate,
   buyerInvoiceEmailSettingsGet,
   buyerInvoiceEmailSettingsSave,
+  buyerInvoiceReminderRulesList,
+  buyerInvoiceReminderRuleSave,
+  buyerInvoiceReminderRuleRemove,
   buyerInvoicePaymentReminderPrepare,
   buyerInvoicePaymentReminderSend,
   outstandingBuyerInvoicesEmailReport,

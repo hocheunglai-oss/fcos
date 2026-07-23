@@ -1,5 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CalendarClock, Check, Copy, Eye, Loader2, Mail, MessageSquareText, RefreshCw, ReceiptText, Save, Search, Send, X } from 'lucide-react';
+import {
+  AlertCircle,
+  CalendarClock,
+  Check,
+  Copy,
+  Eye,
+  Loader2,
+  Mail,
+  MessageSquareText,
+  Pencil,
+  RefreshCw,
+  ReceiptText,
+  RotateCcw,
+  Save,
+  Search,
+  Send,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
@@ -9,6 +27,7 @@ import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -886,6 +905,385 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
   );
 }
 
+function reminderPolicyLabel(policy) {
+  return policy === 'overdue_only' ? 'Overdue only' : 'Standard';
+}
+
+function ReminderRulesModal({ open, onClose, onChanged }) {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState('');
+  const [search, setSearch] = useState('');
+  const [editingAccountId, setEditingAccountId] = useState(null);
+  const [form, setForm] = useState({
+    policy: 'standard',
+    note: '',
+    groupScope: 'group_only',
+    replaceChildOverrides: false,
+  });
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    const res = await appClient.functions.invoke('buyerInvoiceReminderRulesList', {}, { cache: false, force: true });
+    if (res.data?.error) {
+      setError(res.data.error);
+      setAccounts([]);
+    } else {
+      setAccounts(res.data?.accounts || []);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setSearch('');
+    setEditingAccountId(null);
+    setMessage('');
+    load();
+  }, [open]);
+
+  const editingAccount = accounts.find((account) => account.accountId === editingAccountId) || null;
+  const filteredAccounts = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return accounts;
+    return accounts.filter((account) => [
+      account.accountName,
+      account.accountTypeLabel,
+      account.parentAccountName,
+      account.sourceAccountName,
+      account.note,
+      account.accountId,
+      reminderPolicyLabel(account.policy),
+    ].some((value) => String(value || '').toLowerCase().includes(keyword)));
+  }, [accounts, search]);
+
+  const startEditing = (account) => {
+    setEditingAccountId(account.accountId);
+    setForm({
+      policy: account.hasDirectRule ? account.directRule?.policy || 'standard' : account.policy || 'standard',
+      note: account.hasDirectRule ? account.directRule?.note || '' : account.note || '',
+      groupScope: account.inheritToChildren ? 'group_children' : 'group_only',
+      replaceChildOverrides: false,
+    });
+    setError(null);
+    setMessage('');
+  };
+
+  const save = async () => {
+    if (!editingAccount) return;
+    setBusy(true);
+    setError(null);
+    setMessage('');
+    const res = await appClient.functions.invoke('buyerInvoiceReminderRuleSave', {
+      accountId: editingAccount.accountId,
+      policy: form.policy,
+      note: form.note,
+      expectedRevision: editingAccount.revision || 0,
+      groupScope: editingAccount.isGroup ? form.groupScope : 'group_only',
+      replaceChildOverrides: editingAccount.isGroup
+        && form.groupScope === 'group_children'
+        && form.replaceChildOverrides,
+    });
+    if (res.data?.error) {
+      setError(res.data.error);
+    } else {
+      const replaced = Number(res.data?.replacedChildOverrideCount || 0);
+      setMessage(replaced
+        ? `Rule saved. ${replaced.toLocaleString()} direct child override${replaced === 1 ? '' : 's'} removed.`
+        : 'Reminder rule saved.');
+      setEditingAccountId(null);
+      appClient.functions.clearCache();
+      await load();
+      onChanged?.();
+    }
+    setBusy(false);
+  };
+
+  const removeDirectReminderRule = async (account) => {
+    setBusy(true);
+    setError(null);
+    setMessage('');
+    const res = await appClient.functions.invoke('buyerInvoiceReminderRuleRemove', {
+      accountId: account.accountId,
+      expectedRevision: account.revision,
+    });
+    if (res.data?.error) {
+      setError(res.data.error);
+    } else {
+      setMessage(`${account.accountName} now uses its GROUP reminder rule.`);
+      if (editingAccountId === account.accountId) setEditingAccountId(null);
+      appClient.functions.clearCache();
+      await load();
+      onChanged?.();
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!nextOpen && !busy) onClose();
+    }}>
+      <DialogContent className="max-h-[92vh] w-[96vw] max-w-[1280px] gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border px-5 py-4 text-left">
+          <DialogTitle>Reminder Rules</DialogTitle>
+          <DialogDescription>
+            Control when active Buyer, Buyer & Supplier, and GROUP Accounts may receive external payment reminders.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[calc(92vh-138px)] overflow-auto">
+          <div className="sticky top-0 z-20 border-b border-border bg-background px-5 py-3">
+            <div className="relative max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search Account, GROUP, rule, note, or ID"
+                className="pl-9"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="mx-5 mt-4 flex gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              {error}
+            </div>
+          )}
+          {message && (
+            <div className="mx-5 mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+              {message}
+            </div>
+          )}
+
+          {editingAccount && (
+            <div className="border-b border-border bg-muted/25 px-5 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-foreground">{editingAccount.accountName}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {editingAccount.accountTypeLabel} · Account …{editingAccount.accountId.slice(-6)}
+                    {editingAccount.parentAccountName ? ` · ${editingAccount.parentAccountName}` : ''}
+                  </div>
+                </div>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setEditingAccountId(null)} disabled={busy}>
+                  <X className="h-4 w-4" />
+                  <span className="sr-only">Close editor</span>
+                </Button>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(240px,0.8fr)_minmax(320px,1.4fr)]">
+                <div className="space-y-2">
+                  <Label>Policy</Label>
+                  <div className="inline-flex rounded-md border border-border bg-background p-1">
+                    {[
+                      ['standard', 'Standard'],
+                      ['overdue_only', 'Overdue only'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setForm((previous) => ({ ...previous, policy: value }))}
+                        className={cn(
+                          'rounded px-3 py-1.5 text-sm font-medium transition-colors',
+                          form.policy === value ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="reminder-rule-note">Note</Label>
+                    <span className="text-xs text-muted-foreground">{Array.from(form.note).length}/255</span>
+                  </div>
+                  <Textarea
+                    id="reminder-rule-note"
+                    value={form.note}
+                    maxLength={255}
+                    onChange={(event) => setForm((previous) => ({ ...previous, note: event.target.value }))}
+                    placeholder="Optional reason or handling instruction"
+                    className="min-h-20"
+                  />
+                </div>
+              </div>
+
+              {editingAccount.isGroup && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <Label>Apply GROUP rule to</Label>
+                  <div className="mt-2 inline-flex rounded-md border border-border bg-background p-1">
+                    {[
+                      ['group_only', 'GROUP only'],
+                      ['group_children', 'GROUP + children'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setForm((previous) => ({
+                          ...previous,
+                          groupScope: value,
+                          replaceChildOverrides: value === 'group_children' ? previous.replaceChildOverrides : false,
+                        }))}
+                        className={cn(
+                          'rounded px-3 py-1.5 text-sm font-medium transition-colors',
+                          form.groupScope === value ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    GROUP + children continuously applies to current and future direct child Buyer Accounts unless a child has a direct override.
+                  </p>
+                  {form.groupScope === 'group_children' && (
+                    <label className="mt-3 flex max-w-xl items-start gap-2 text-sm">
+                      <Checkbox
+                        checked={form.replaceChildOverrides}
+                        onCheckedChange={(checked) => setForm((previous) => ({
+                          ...previous,
+                          replaceChildOverrides: checked === true,
+                        }))}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">Replace direct child overrides</span>
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          Unchecked by default. This would remove {editingAccount.childOverrideCount.toLocaleString()} current direct override{editingAccount.childOverrideCount === 1 ? '' : 's'} across {editingAccount.childCount.toLocaleString()} eligible direct child Account{editingAccount.childCount === 1 ? '' : 's'}.
+                        </span>
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setEditingAccountId(null)} disabled={busy}>Cancel</Button>
+                <Button type="button" onClick={save} disabled={busy} className="gap-2">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  Save Rule
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p-5">
+              <StateBlock icon={Loader2} title="Loading reminder rules..." description="Checking the current active Account directory in Salesforce." />
+            </div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="w-full min-w-[1080px] text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/35">
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Account</th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type</th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Effective Rule</th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Note</th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Source</th>
+                    <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredAccounts.map((account) => (
+                    <tr key={account.accountId} className={cn('border-b border-border/50', account.isGroup && 'bg-muted/20')}>
+                      <td className="px-5 py-3">
+                        <div className="font-medium text-foreground">{account.accountName}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          …{account.accountId.slice(-6)}
+                          {account.parentAccountName ? ` · ${account.parentAccountName}` : ''}
+                          {account.isGroup ? ` · ${account.childCount.toLocaleString()} direct children` : ''}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-muted-foreground">{account.accountTypeLabel}</td>
+                      <td className="px-3 py-3">
+                        <span className={cn(
+                          'inline-flex rounded-full border px-2 py-0.5 text-xs font-medium',
+                          account.policy === 'overdue_only'
+                            ? 'border-amber-300 bg-amber-50 text-amber-800'
+                            : 'border-border bg-background text-muted-foreground',
+                        )}>
+                          {reminderPolicyLabel(account.policy)}
+                        </span>
+                        {account.isGroup && account.inheritToChildren && (
+                          <div className="mt-1 text-xs text-muted-foreground">Continuous for direct children</div>
+                        )}
+                      </td>
+                      <td className="max-w-[320px] px-3 py-3 text-muted-foreground">
+                        <div className="line-clamp-2" title={account.note || ''}>{account.note || '-'}</div>
+                      </td>
+                      <td className="px-3 py-3 text-muted-foreground">
+                        {account.source === 'group' ? (
+                          <div>
+                            <div className="font-medium text-foreground">Inherited</div>
+                            <div className="text-xs">{account.sourceAccountName}</div>
+                          </div>
+                        ) : account.source === 'direct' ? (
+                          <div>
+                            <div className="font-medium text-foreground">Direct</div>
+                            {account.updatedByEmail && <div className="text-xs">{account.updatedByEmail}</div>}
+                          </div>
+                        ) : 'Default'}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex justify-end gap-1.5">
+                          {account.canUseGroupRule && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              title={`Remove the direct override and use ${account.availableGroupRule?.accountName || 'the GROUP'} rule`}
+                              onClick={() => removeDirectReminderRule(account)}
+                              disabled={busy}
+                              className="gap-1.5"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              Use GROUP rule
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            title={`Edit reminder rule for ${account.accountName}`}
+                            onClick={() => startEditing(account)}
+                            disabled={busy}
+                            className="gap-1.5"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            Edit
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!filteredAccounts.length && (
+                <div className="p-5">
+                  <StateBlock title="No Accounts found" description="No active eligible Accounts match this search." />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="border-t border-border px-5 py-3">
+          <Button type="button" variant="outline" onClick={load} disabled={loading || busy} className="gap-2">
+            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose, onSent }) {
   const draftKey = row?.stemId ? `buyer-invoices:payment-reminder:${row.stemId}:${daysAhead}` : null;
   const [loading, setLoading] = useState(false);
@@ -939,7 +1337,9 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
           subject: res.data.subject || '',
           body: richTemplateValue(res.data.body || ''),
         };
-        const baseSelectedIds = candidates.map((candidate) => candidate.stemId);
+        const baseSelectedIds = candidates
+          .filter((candidate) => candidate.paymentReminderEligible === true)
+          .map((candidate) => candidate.stemId);
         const draft = readDraft(draftKey);
         const candidateIds = new Set(baseSelectedIds);
         const draftSelectedIds = Array.isArray(draft?.data?.selectedIds)
@@ -973,10 +1373,14 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   }, [daysAhead, draftKey, open, row]);
 
   const candidates = data?.candidates || [];
+  const eligibleCandidates = useMemo(
+    () => candidates.filter((candidate) => candidate.paymentReminderEligible === true),
+    [candidates],
+  );
   const selectedRows = useMemo(() => {
     const selected = new Set(selectedIds);
-    return candidates.filter((candidate) => selected.has(candidate.stemId));
-  }, [candidates, selectedIds]);
+    return eligibleCandidates.filter((candidate) => selected.has(candidate.stemId));
+  }, [eligibleCandidates, selectedIds]);
   const selectedReceivable = useMemo(() => (
     selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0)
   ), [selectedRows]);
@@ -1105,6 +1509,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     insertReminderBodyToken(token);
   };
   const toggleInvoice = (stemId) => {
+    if (!eligibleCandidates.some((candidate) => candidate.stemId === stemId)) return;
     setSelectedIds((prev) => (
       prev.includes(stemId)
         ? prev.filter((id) => id !== stemId)
@@ -1113,7 +1518,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   };
   const toggleAll = () => {
     setSelectedIds((prev) => (
-      prev.length === candidates.length ? [] : candidates.map((candidate) => candidate.stemId)
+      prev.length === eligibleCandidates.length ? [] : eligibleCandidates.map((candidate) => candidate.stemId)
     ));
   };
   const sendReminder = async () => {
@@ -1331,7 +1736,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                       <p className="text-xs text-slate-500">Same buyer and buyer group invoices in the current due window.</p>
                     </div>
                     <Button type="button" variant="outline" size="sm" onClick={toggleAll}>
-                      {selectedIds.length === candidates.length ? 'Clear all' : 'Select all'}
+                      {selectedIds.length === eligibleCandidates.length ? 'Clear all' : 'Select eligible'}
                     </Button>
                   </div>
                   <div className="max-h-[52vh] overflow-auto rounded-lg border border-slate-200 bg-white">
@@ -1350,12 +1755,22 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                         </tr>
                       </thead>
                       <tbody>
-                        {candidates.map((candidate) => (
-                          <tr key={candidate.stemId} className={`border-b border-l-4 border-slate-100 bg-white transition-colors hover:bg-slate-50 ${reminderRowAccentClass(candidate)}`}>
+                        {candidates.map((candidate) => {
+                          const reminderEligible = candidate.paymentReminderEligible === true;
+                          return (
+                          <tr
+                            key={candidate.stemId}
+                            className={cn(
+                              `border-b border-l-4 border-slate-100 bg-white transition-colors ${reminderRowAccentClass(candidate)}`,
+                              reminderEligible ? 'hover:bg-slate-50' : 'bg-slate-50/70 text-slate-500',
+                            )}
+                          >
                             <td className="px-3 py-2">
                               <input
                                 type="checkbox"
-                                checked={selectedIds.includes(candidate.stemId)}
+                                checked={reminderEligible && selectedIds.includes(candidate.stemId)}
+                                disabled={!reminderEligible}
+                                title={candidate.paymentReminderBlockingReason || undefined}
                                 onChange={() => toggleInvoice(candidate.stemId)}
                               />
                             </td>
@@ -1363,6 +1778,21 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                             <td className="px-3 py-2">
                               <div className="font-medium text-slate-900">{candidate.buyerName || '-'}</div>
                               {candidate.buyerGroupName && <div className="text-[11px] text-slate-500">{candidate.buyerGroupName}</div>}
+                              {candidate.effectiveReminderPolicy === 'overdue_only' && (
+                                <div className="mt-1">
+                                  <span
+                                    className="inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                                    title={candidate.reminderRuleNote || candidate.paymentReminderBlockingReason || 'Buyer accepts reminders only when overdue'}
+                                  >
+                                    Overdue reminders only
+                                  </span>
+                                </div>
+                              )}
+                              {!reminderEligible && candidate.paymentReminderBlockingReason && (
+                                <div className="mt-1 max-w-xs text-[11px] leading-4 text-amber-800">
+                                  {candidate.paymentReminderBlockingReason}
+                                </div>
+                              )}
                             </td>
                             <td className="px-3 py-2 text-slate-600">
                               <div className="font-medium text-slate-800">{candidate.buyerBrokerNames || '-'}</div>
@@ -1386,7 +1816,8 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                               </span>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1700,6 +2131,7 @@ export default function BuyerInvoices() {
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [selectedCollectionRow, setSelectedCollectionRow] = useState(null);
   const [selectedReminderRow, setSelectedReminderRow] = useState(null);
+  const [showReminderRules, setShowReminderRules] = useState(false);
   const [copySelection, setCopySelection] = useState(null);
   const [showEmailSchedule, setShowEmailSchedule] = useState(false);
   const [savedEmailSettings, setSavedEmailSettings] = useState(readLegacyEmailSettings);
@@ -2024,6 +2456,9 @@ export default function BuyerInvoices() {
         meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} invoices` : undefined}
         actions={(
           <>
+            <Button variant="outline" onClick={() => setShowReminderRules(true)} className="gap-2 w-fit">
+              <ShieldCheck className="h-4 w-4" /> Reminder Rules
+            </Button>
             <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
               <Mail className="h-4 w-4" /> Outstanding Buyer Invoices - Internal Daily Report
             </Button>
@@ -2033,6 +2468,13 @@ export default function BuyerInvoices() {
           </>
         )}
       />
+
+      {meta?.paymentReminderRulesAvailable === false && (
+        <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          Buyer Invoice reminder rules are temporarily unavailable. Invoice data remains available, but external payment reminder sending is disabled.
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-end gap-3">
@@ -2397,7 +2839,22 @@ export default function BuyerInvoices() {
                         className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
                       >
                       <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '-'}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.buyerName || '-'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        <div>{row.buyerName || '-'}</div>
+                        {row.effectiveReminderPolicy === 'overdue_only' && (
+                          <span
+                            className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                            title={[
+                              row.reminderRuleSource === 'group' && row.reminderRuleSourceAccountName
+                                ? `Inherited from ${row.reminderRuleSourceAccountName}.`
+                                : '',
+                              row.reminderRuleNote || '',
+                            ].filter(Boolean).join(' ')}
+                          >
+                            Overdue reminders only
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground">{row.buyerBrokerNames || '-'}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
                       <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
@@ -2431,8 +2888,13 @@ export default function BuyerInvoices() {
                             type="button"
                             size="sm"
                             variant="outline"
-                            title={reminderSentToday ? 'Payment reminder sent today' : 'Send payment reminder'}
+                            title={row.paymentReminderEligible !== true
+                              ? row.paymentReminderBlockingReason || 'External payment reminder sending is unavailable.'
+                              : reminderSentToday
+                                ? 'Payment reminder sent today'
+                                : 'Send payment reminder'}
                             aria-label={`Send payment reminder for ${row.stemName || 'invoice'}`}
+                            disabled={row.paymentReminderEligible !== true}
                             className={cn(
                               'h-7 px-2',
                               reminderSentToday && 'border-zinc-700 bg-zinc-800 text-white shadow-sm hover:bg-zinc-700 hover:text-white',
@@ -2504,6 +2966,11 @@ export default function BuyerInvoices() {
         canManageSettings={canManageEmailSettings}
         onClose={() => setSelectedReminderRow(null)}
         onSent={handleReminderSent}
+      />
+      <ReminderRulesModal
+        open={showReminderRules}
+        onClose={() => setShowReminderRules(false)}
+        onChanged={() => loadRows({ force: true })}
       />
       <CopyInvoiceSelectionModal
         row={copySelection?.row}
