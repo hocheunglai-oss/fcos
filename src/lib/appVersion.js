@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.32';
+export const APP_VERSION = '2.0.33';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.33',
+    releasedAt: '2026-07-24',
+    title: 'Exception Review Schedule ranges',
+    changes: [
+      'Replaced Expected Delivery Date throughout Exception Review with the selected Salesforce ETA or ETB Schedule range.',
+      'Used the Hong Kong STEM creation date for PROMPT or missing Schedule dates, including period selection and Potential Delay.',
+      'Updated Exception Review date filtering, display, search, methodology, and CSV export to use one consistent Schedule rule.',
+    ],
+  },
   {
     version: '2.0.32',
     releasedAt: '2026-07-24',

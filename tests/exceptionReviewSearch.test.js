@@ -31,6 +31,22 @@ test('Exception Review search supports raw Salesforce port relationship data', (
   }, 'netherlands'), true);
 });
 
+test('Exception Review search matches the normalized Schedule type and date range', () => {
+  const scheduleRow = {
+    Name: 'HK2627003T',
+    _Exception_Schedule: {
+      type: 'ETB',
+      startDate: '2026-08-02',
+      endDate: '2026-08-04',
+      source: 'schedule',
+      displayLabel: 'ETB · 2-4 Aug 2026',
+    },
+  };
+
+  assert.equal(matchesExceptionReviewSearch(scheduleRow, 'ETB'), true);
+  assert.equal(matchesExceptionReviewSearch(scheduleRow, '4 Aug 2026'), true);
+});
+
 test('live dashboard route selects and normalizes Salesforce port identity', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const liveFunction = source.slice(

@@ -40,6 +40,13 @@ import {
   browserSafeBackboneFinanceHandoff,
   browserSafeBackboneTradeProjection,
 } from '../_backboneBridge.js';
+import {
+  EXCEPTION_REVIEW_DATE_BASIS,
+  EXCEPTION_SCHEDULE_FIELDS,
+  buildExceptionReviewScheduleWhere,
+  exceptionScheduleSchemaIssues,
+  normalizeExceptionSchedule,
+} from '../../src/lib/exceptionReviewSchedule.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -4645,10 +4652,30 @@ async function salesforceDocumentDownload(req, res) {
 }
 
 async function salesforceDashboardFilteredFull(body, req = null, accessContext = null) {
-  const { where, trendYear, disputeOnly, portCountry, companyKeyword, companyFilterMode } = body;
+  const {
+    where,
+    trendYear,
+    disputeOnly,
+    portCountry,
+    companyKeyword,
+    companyFilterMode,
+    dateBasis,
+    dateWindows,
+  } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
+  if (dateBasis && dateBasis !== EXCEPTION_REVIEW_DATE_BASIS) {
+    throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
+  }
+  const exceptionScheduleMode = dateBasis === EXCEPTION_REVIEW_DATE_BASIS;
+  const missingScheduleFields = exceptionScheduleMode ? exceptionScheduleSchemaIssues(fieldNames) : [];
+  if (missingScheduleFields.length) {
+    throw new Error(`Exception Review Schedule schema error: missing Salesforce STEM fields ${missingScheduleFields.join(', ')}.`);
+  }
+  const effectiveWhere = exceptionScheduleMode
+    ? buildExceptionReviewScheduleWhere(dateWindows)
+    : where;
   const accountDescribe = fieldNames.includes('Account__c')
     ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
     : { fields: [] };
@@ -4696,7 +4723,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
           ].filter(Boolean).join(' OR ')
         : ''
     : '';
-  const baseWhereConditions = [where, companyCondition, interofficeCondition].filter(Boolean);
+  const baseWhereConditions = [effectiveWhere, companyCondition, interofficeCondition].filter(Boolean);
   const baseWhere = combineWhereConditions(baseWhereConditions);
   const combinedWhere = combineWhereConditions([...baseWhereConditions, disputeCondition]);
   const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
@@ -4724,6 +4751,11 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
   if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
   if (fieldNames.includes('Port__c')) plFields.push('Port__c', 'Port__r.Name', 'Port__r.Country__c');
+  if (exceptionScheduleMode) {
+    for (const field of EXCEPTION_SCHEDULE_FIELDS) {
+      if (!plFields.includes(field)) plFields.push(field);
+    }
+  }
 
   const queries = [
     queryResult(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
@@ -4985,6 +5017,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       _Buyer_Group: buyerGroup,
       _Port_Name: port.Name || null,
       _Port_Country: port.Country__c || null,
+      _Exception_Schedule: exceptionScheduleMode ? normalizeExceptionSchedule(stem) : null,
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
       _Supplier_Invoice_Amount_List: supplierInvoiceAmountList,
@@ -5132,6 +5165,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     monthlyNetPnlYear: currentYear,
     productFamilyQuantities,
     monthlyProductVolumes,
+    dateBasis: exceptionScheduleMode ? EXCEPTION_REVIEW_DATE_BASIS : null,
   };
 }
 

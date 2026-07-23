@@ -15,6 +15,12 @@ import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
 import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
+import {
+  EXCEPTION_REVIEW_DATE_BASIS,
+  buildExceptionReviewDateWindows,
+  exceptionScheduleDaysSinceEnd,
+  normalizeExceptionSchedule,
+} from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -34,8 +40,6 @@ const REVIEW_FILTERS = [
   { key: 'negative-gross', label: 'Negative gross profit' },
 ];
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 const fmtMoney = (value) => {
   if (value == null || value === '') return '-';
   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -46,24 +50,6 @@ const fmtDate = (value) => {
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return value; }
 };
 
-const dateOnlyUtc = (value) => {
-  if (!value) return null;
-  const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
-  if (!year || !month || !day) return null;
-  return Date.UTC(year, month - 1, day);
-};
-
-const todayUtc = () => {
-  const today = new Date();
-  return Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-};
-
-const daysSinceDate = (value) => {
-  const date = dateOnlyUtc(value);
-  if (date == null) return null;
-  return Math.floor((todayUtc() - date) / MS_PER_DAY);
-};
-
 function classifyStem(row) {
   const buyer = row[BUYER_FIELD];
   const supplier = row[SUPPLIER_FIELD];
@@ -72,13 +58,14 @@ function classifyStem(row) {
   const brokerTotal = buyerBroker + supplierBroker;
   const grossProfit = row.__netPnlCalc != null
     ? row.__netPnlCalc
-    : buyer != null && supplier != null
+      : buyer != null && supplier != null
       ? buyer - supplier - brokerTotal
       : null;
   const reasons = [];
-  const expectedDelayDays = daysSinceDate(row.Expected_Delivery_Date__c);
+  const exceptionSchedule = row._Exception_Schedule || normalizeExceptionSchedule(row);
+  const scheduleDelayDays = exceptionScheduleDaysSinceEnd(exceptionSchedule);
 
-  if (!row.Delivery_Date__c && expectedDelayDays != null && expectedDelayDays >= 3) {
+  if (!row.Delivery_Date__c && scheduleDelayDays != null && scheduleDelayDays >= 3) {
     reasons.push({ key: 'potential-delay', label: 'Potential Delay', severity: 'high' });
   }
   if (buyer == null || Number(buyer) === 0) {
@@ -96,9 +83,10 @@ function classifyStem(row) {
     reviewReasons: reasons,
     reviewSeverity: severity,
     grossProfit,
-    expectedDelayDays,
-    effectiveDate: row.Delivery_Date__c || row.Expected_Delivery_Date__c,
-    usesFallbackDate: !row.Delivery_Date__c && !!row.Expected_Delivery_Date__c,
+    _Exception_Schedule: exceptionSchedule,
+    scheduleDelayDays,
+    effectiveDate: row.Delivery_Date__c || exceptionSchedule.endDate,
+    usesScheduleDate: !row.Delivery_Date__c,
   };
 }
 
@@ -164,8 +152,14 @@ export default function ReviewQueue() {
     setError(null);
     setBackboneHandoffError('');
     const where = buildDeliveryWhere(yrs, mos);
+    const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
     const [res, handoffsRes] = await Promise.all([
-      appClient.functions.invoke('salesforceDashboardFiltered', { where, trendYear: THIS_YEAR }, { cache: true, force: options.force }),
+      appClient.functions.invoke('salesforceDashboardFiltered', {
+        where,
+        trendYear: THIS_YEAR,
+        dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
+        dateWindows,
+      }, { cache: true, force: options.force }),
       appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: true, force: options.force }),
     ]);
     if (handoffsRes.data?.error) {
@@ -282,14 +276,14 @@ export default function ReviewQueue() {
 
   const exportCsv = () => {
     if (!reviewRows.length) return;
-    const headers = ['Priority', 'Exception Reason', 'Name', 'Buyer Name', 'Delivery Date', 'Expected Delivery', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
+    const headers = ['Priority', 'Exception Reason', 'Name', 'Buyer Name', 'Delivery Date', 'Schedule Range', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
     const rows = reviewRows.map(row => [
       row.reviewSeverity,
       row.reviewReasons.map(reason => reason.label).join('; '),
       row.Name || '',
       row.Buyer_Name__c || row.Buyer__c || '',
       row.Delivery_Date__c || '',
-      row.Expected_Delivery_Date__c || '',
+      row._Exception_Schedule?.displayLabel || '',
       row[BUYER_FIELD] ?? '',
       row[SUPPLIER_FIELD] ?? '',
       row.grossProfit ?? '',
@@ -403,7 +397,7 @@ export default function ReviewQueue() {
             <FilterSummary className="mt-4" title="Queue Scope">
               <FilterChip label="Year" value={selectedYearLabel || 'None'} tone="active" />
               <FilterChip label="Month" value={selectedMonthLabel || 'None'} tone="active" />
-              <FilterChip label="Date logic" value="Delivery Date, else Expected Delivery" />
+              <FilterChip label="Date logic" value="Delivery Date, else Schedule range; Created date if unavailable" />
               <FilterChip label="Workflow" value={workflowScope === 'active' ? 'Active items' : workflowScope === 'resolved' ? 'Resolved items' : 'All items'} />
             </FilterSummary>
           </div>
@@ -424,7 +418,7 @@ export default function ReviewQueue() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <StatCard label="Open Exceptions" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
           <StatCard label="Urgent Exceptions" value={highPriorityCount.toLocaleString()} sub="Potential delay, missing invoice, or negative profit" icon={AlertTriangle} color="red" />
-          <StatCard label="Potential Delays" value={potentialDelayCount.toLocaleString()} sub="Delivery blank and expected date 3+ days past" icon={RefreshCw} color="amber" />
+          <StatCard label="Potential Delays" value={potentialDelayCount.toLocaleString()} sub="Delivery blank and Schedule end or Created date 3+ days past" icon={RefreshCw} color="amber" />
           <StatCard label="No Exceptions" value={clearCount.toLocaleString()} sub="No exception reason" icon={CheckCircle2} color="green" />
         </div>
       )}
@@ -472,7 +466,7 @@ export default function ReviewQueue() {
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Exception Reason</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Name</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery Date</th>
+                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery / Schedule</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Owner</th>
                   <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Due</th>
@@ -501,10 +495,9 @@ export default function ReviewQueue() {
                     <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{row.Name || '-'}</td>
                     <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{row.Buyer_Name__c || row.Buyer__c || '-'}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
-                      <div className="flex flex-col">
-                        <span className="text-foreground">{fmtDate(row.Delivery_Date__c)}</span>
-                        {row.usesFallbackDate && <span className="text-[11px] text-amber-600">Expected: {fmtDate(row.Expected_Delivery_Date__c)}</span>}
-                      </div>
+                      {row.Delivery_Date__c
+                        ? <span className="text-foreground">{fmtDate(row.Delivery_Date__c)}</span>
+                        : <span className="text-[11px] font-medium text-amber-700">{row._Exception_Schedule?.displayLabel || 'Schedule unavailable'}</span>}
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <div className="font-medium text-foreground">{row.exceptionWorkflow?.status || 'Open'}</div>
