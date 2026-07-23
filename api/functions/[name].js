@@ -1909,6 +1909,7 @@ async function loadBuyerReminderGroupChildCounts() {
     SELECT ParentId parentAccountId, COUNT(Id) childCount
     FROM Account
     WHERE ParentId != null
+      AND Inactive_Suspended__c = false
     GROUP BY ParentId
   `, { limit: 10000 });
   const records = result.records || [];

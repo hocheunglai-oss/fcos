@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.27';
+export const APP_VERSION = '2.0.28';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.28',
+    releasedAt: '2026-07-23',
+    title: 'Active GROUP child counts',
+    changes: [
+      'Excluded inactive Salesforce Accounts from Reminder Rules direct-child totals.',
+      'Continued counting active direct children across Account types while keeping reminder propagation limited to eligible Buyer Accounts.',
+    ],
+  },
   {
     version: '2.0.27',
     releasedAt: '2026-07-23',
