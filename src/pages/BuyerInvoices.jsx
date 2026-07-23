@@ -119,6 +119,7 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
   },
 ];
 const PAYMENT_REMINDER_STEPS = ['Select invoices', 'Review recipients', 'Email preview'];
+const REMINDER_RULES_PAGE_SIZE = 100;
 
 const COPY_ROW_FIELDS = [
   (row) => row.stemName || '-',
@@ -916,6 +917,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
   const [error, setError] = useState(null);
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
+  const [visibleLimit, setVisibleLimit] = useState(REMINDER_RULES_PAGE_SIZE);
   const [editingAccountId, setEditingAccountId] = useState(null);
   const [form, setForm] = useState({
     policy: 'standard',
@@ -940,6 +942,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
   useEffect(() => {
     if (!open) return;
     setSearch('');
+    setVisibleLimit(REMINDER_RULES_PAGE_SIZE);
     setEditingAccountId(null);
     setMessage('');
     load();
@@ -959,6 +962,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
       reminderPolicyLabel(account.policy),
     ].some((value) => String(value || '').toLowerCase().includes(keyword)));
   }, [accounts, search]);
+  const visibleAccounts = filteredAccounts.slice(0, visibleLimit);
 
   const startEditing = (account) => {
     setEditingAccountId(account.accountId);
@@ -1040,7 +1044,10 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setVisibleLimit(REMINDER_RULES_PAGE_SIZE);
+                }}
                 placeholder="Search Account, GROUP, rule, note, or ID"
                 className="pl-9"
               />
@@ -1189,7 +1196,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAccounts.map((account) => (
+                  {visibleAccounts.map((account) => (
                     <tr key={account.accountId} className={cn('border-b border-border/50', account.isGroup && 'bg-muted/20')}>
                       <td className="px-5 py-3">
                         <div className="font-medium text-foreground">{account.accountName}</div>
@@ -1266,6 +1273,23 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
               {!filteredAccounts.length && (
                 <div className="p-5">
                   <StateBlock title="No Accounts found" description="No active eligible Accounts match this search." />
+                </div>
+              )}
+              {filteredAccounts.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/20 px-5 py-3">
+                  <span className="text-xs text-muted-foreground">
+                    Showing {visibleAccounts.length.toLocaleString()} of {filteredAccounts.length.toLocaleString()} matching Accounts
+                  </span>
+                  {visibleAccounts.length < filteredAccounts.length && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setVisibleLimit((current) => current + REMINDER_RULES_PAGE_SIZE)}
+                    >
+                      Load 100 more
+                    </Button>
+                  )}
                 </div>
               )}
             </div>

@@ -41,6 +41,8 @@ test('Buyer Invoices exposes rule management and disables restricted selections'
   assert.match(source, /Replace direct child overrides/);
   assert.match(source, /Use GROUP rule/);
   assert.match(source, /Overdue reminders only/);
+  assert.match(source, /REMINDER_RULES_PAGE_SIZE = 100/);
+  assert.match(source, /visibleAccounts = filteredAccounts\.slice/);
   assert.match(source, /disabled=\{row\.paymentReminderEligible !== true\}/);
   assert.match(source, /disabled=\{!reminderEligible\}/);
 });
