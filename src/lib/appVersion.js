@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.29';
+export const APP_VERSION = '2.0.30';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.30',
+    releasedAt: '2026-07-23',
+    title: 'CL Key required for reminder rules',
+    changes: [
+      'Filtered Accounts without a Salesforce CL Key out of Reminder Rules.',
+      'Applied the same CL Key requirement to GROUP child totals and server-side save revalidation.',
+    ],
+  },
   {
     version: '2.0.29',
     releasedAt: '2026-07-23',

@@ -1884,7 +1884,9 @@ function buyerReminderAccountSnapshot(account = {}) {
 }
 
 function isActiveBuyerReminderAccount(account = {}) {
-  return account.Inactive_Suspended__c === false && Boolean(buyerReminderAccountType(account));
+  return account.Inactive_Suspended__c === false
+    && Boolean(buyerReminderAccountType(account))
+    && Boolean(String(account.Company_Code__c || '').trim());
 }
 
 async function loadBuyerReminderAccountDirectory() {
@@ -1894,6 +1896,7 @@ async function loadBuyerReminderAccountDirectory() {
     FROM Account
     WHERE Inactive_Suspended__c = false
       AND Is_Broker__c = false
+      AND Company_Code__c != null
       AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
     ORDER BY Name ASC, Id ASC
   `, { limit: 10000 });
@@ -1916,7 +1919,7 @@ async function currentBuyerReminderAccount(accountId, { includeChildren = false 
   `, { limit: 1 });
   const account = records[0];
   if (!account || !isActiveBuyerReminderAccount(account)) {
-    throw appError('This Account is no longer an active Buyer, Buyer & Supplier, or GROUP Account. Refresh Reminder Rules.', 409);
+    throw appError('This Account is no longer an active Buyer, Buyer & Supplier, or GROUP Account with a CL Key. Refresh Reminder Rules.', 409);
   }
 
   const snapshot = buyerReminderAccountSnapshot(account);
@@ -1928,6 +1931,7 @@ async function currentBuyerReminderAccount(accountId, { includeChildren = false 
       WHERE ParentId = '${escapeSoql(canonicalId)}'
         AND Inactive_Suspended__c = false
         AND Is_Broker__c = false
+        AND Company_Code__c != null
         AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
       ORDER BY Name ASC, Id ASC
     `, { limit: 10000 });
