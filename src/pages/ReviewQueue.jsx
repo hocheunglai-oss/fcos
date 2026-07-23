@@ -19,6 +19,7 @@ import {
   EXCEPTION_REVIEW_DATE_BASIS,
   buildExceptionReviewDateWindows,
   exceptionScheduleDaysSinceEnd,
+  isExceptionPotentialDelay,
   normalizeExceptionSchedule,
 } from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
@@ -65,7 +66,7 @@ function classifyStem(row) {
   const exceptionSchedule = row._Exception_Schedule || normalizeExceptionSchedule(row);
   const scheduleDelayDays = exceptionScheduleDaysSinceEnd(exceptionSchedule);
 
-  if (!row.Delivery_Date__c && scheduleDelayDays != null && scheduleDelayDays >= 3) {
+  if (isExceptionPotentialDelay({ ...row, _Exception_Schedule: exceptionSchedule })) {
     reasons.push({ key: 'potential-delay', label: 'Potential Delay', severity: 'high' });
   }
   if (buyer == null || Number(buyer) === 0) {
@@ -398,6 +399,7 @@ export default function ReviewQueue() {
               <FilterChip label="Year" value={selectedYearLabel || 'None'} tone="active" />
               <FilterChip label="Month" value={selectedMonthLabel || 'None'} tone="active" />
               <FilterChip label="Date logic" value="Delivery Date, else Schedule range; Created date if unavailable" />
+              <FilterChip label="Delay eligibility" value="At least one uncancelled STEM line product" />
               <FilterChip label="Workflow" value={workflowScope === 'active' ? 'Active items' : workflowScope === 'resolved' ? 'Resolved items' : 'All items'} />
             </FilterSummary>
           </div>
@@ -418,7 +420,7 @@ export default function ReviewQueue() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <StatCard label="Open Exceptions" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
           <StatCard label="Urgent Exceptions" value={highPriorityCount.toLocaleString()} sub="Potential delay, missing invoice, or negative profit" icon={AlertTriangle} color="red" />
-          <StatCard label="Potential Delays" value={potentialDelayCount.toLocaleString()} sub="Delivery blank and Schedule end or Created date 3+ days past" icon={RefreshCw} color="amber" />
+          <StatCard label="Potential Delays" value={potentialDelayCount.toLocaleString()} sub="Active line product and Schedule end or Created date 3+ days past" icon={RefreshCw} color="amber" />
           <StatCard label="No Exceptions" value={clearCount.toLocaleString()} sub="No exception reason" icon={CheckCircle2} color="green" />
         </div>
       )}

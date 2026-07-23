@@ -4855,6 +4855,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   const supplierInvoiceAmountByStem = {};
   const unassignedExtraCostBuyByStem = {};
   const productQuantitiesByStem = {};
+  const stemsWithUncancelledLineProductItems = new Set();
   const addSupplierInvoiceAmount = (stemId, supplierName, amount) => {
     if (!stemId) return;
     const numericAmount = Number(amount || 0);
@@ -4866,6 +4867,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   for (const li of lineItems) {
     const id = li.STEM__c;
     if (!id || li.Cancelled__c) continue;
+    stemsWithUncancelledLineProductItems.add(id);
     const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
     const lineSell = lineSellAmount(li, stemHasDelivery);
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
@@ -5021,6 +5023,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       _Supplier_Name_List: supplierNames,
       _Supplier_Names: supplierNames.join(', ') || null,
       _Supplier_Invoice_Amount_List: supplierInvoiceAmountList,
+      _Has_Uncancelled_Line_Product_Item: stemsWithUncancelledLineProductItems.has(stem.Id),
       _Product_Quantity_List: productQuantities,
       _Product_Quantities: productQuantities.map((item) => `${item.productName} ${item.quantityLabel}`).join(', ') || null,
       _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,

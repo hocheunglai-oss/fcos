@@ -126,8 +126,15 @@ export function exceptionScheduleDaysSinceEnd(schedule, today = new Date()) {
   return Math.floor((todayEpoch - endEpoch) / DAY_MS);
 }
 
+export function hasUncancelledStemLineProductItem(row) {
+  if (typeof row?._Has_Uncancelled_Line_Product_Item === 'boolean') {
+    return row._Has_Uncancelled_Line_Product_Item;
+  }
+  return Array.isArray(row?._Product_Quantity_List) && row._Product_Quantity_List.length > 0;
+}
+
 export function isExceptionPotentialDelay(row, today = new Date()) {
-  if (row?.Delivery_Date__c) return false;
+  if (row?.Delivery_Date__c || !hasUncancelledStemLineProductItem(row)) return false;
   const schedule = row?._Exception_Schedule || normalizeExceptionSchedule(row);
   const daysSinceEnd = exceptionScheduleDaysSinceEnd(schedule, today);
   return daysSinceEnd != null && daysSinceEnd >= 3;

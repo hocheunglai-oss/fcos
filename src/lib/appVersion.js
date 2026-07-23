@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.33';
+export const APP_VERSION = '2.0.34';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.34',
+    releasedAt: '2026-07-24',
+    title: 'Potential Delay line-product eligibility',
+    changes: [
+      'Excluded STEMs without an uncancelled STEM line product item from the Potential Delay exception.',
+      'Kept missing-invoice and negative-profit checks independent for those STEMs.',
+      'Displayed the active line-product requirement in the Exception Review queue methodology.',
+    ],
+  },
   {
     version: '2.0.33',
     releasedAt: '2026-07-24',

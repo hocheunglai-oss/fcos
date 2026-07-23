@@ -7,6 +7,7 @@ import {
   buildExceptionReviewScheduleWhere,
   exceptionScheduleDaysSinceEnd,
   exceptionScheduleSchemaIssues,
+  hasUncancelledStemLineProductItem,
   hongKongDateOnly,
   isExceptionPotentialDelay,
   normalizeExceptionSchedule,
@@ -86,6 +87,7 @@ test('PROMPT and missing Schedule dates use the Hong Kong STEM creation date', (
 test('Potential Delay begins on the third Hong Kong day after the effective range end', () => {
   const row = {
     Delivery_Date__c: null,
+    _Has_Uncancelled_Line_Product_Item: true,
     _Exception_Schedule: {
       type: 'ETA',
       startDate: '2026-07-20',
@@ -100,6 +102,32 @@ test('Potential Delay begins on the third Hong Kong day after the effective rang
   assert.equal(exceptionScheduleDaysSinceEnd(row._Exception_Schedule, '2026-07-23T16:00:00Z'), 3);
   assert.equal(isExceptionPotentialDelay(row, '2026-07-23T16:00:00Z'), true);
   assert.equal(isExceptionPotentialDelay({ ...row, Delivery_Date__c: '2026-07-22' }, '2026-07-23T16:00:00Z'), false);
+});
+
+test('Potential Delay excludes STEMs without an uncancelled line product item', () => {
+  const delayedRow = {
+    Delivery_Date__c: null,
+    _Exception_Schedule: {
+      type: 'ETA',
+      startDate: '2026-07-20',
+      endDate: '2026-07-20',
+      source: 'schedule',
+      displayLabel: 'ETA · 20 Jul 2026',
+    },
+  };
+
+  assert.equal(isExceptionPotentialDelay({
+    ...delayedRow,
+    _Has_Uncancelled_Line_Product_Item: false,
+  }, '2026-07-24T08:00:00Z'), false);
+  assert.equal(isExceptionPotentialDelay({
+    ...delayedRow,
+    _Has_Uncancelled_Line_Product_Item: true,
+  }, '2026-07-24T08:00:00Z'), true);
+  assert.equal(hasUncancelledStemLineProductItem({
+    ...delayedRow,
+    _Product_Quantity_List: [{ productName: 'VLSFO' }],
+  }), true);
 });
 
 test('builds selected-month windows and Schedule-overlap Salesforce filters', () => {
@@ -138,7 +166,9 @@ test('live dashboard route and Exception Review UI use the Schedule interface', 
 
   assert.match(liveFunction, /buildExceptionReviewScheduleWhere\(dateWindows\)/);
   assert.match(liveFunction, /_Exception_Schedule: exceptionScheduleMode \? normalizeExceptionSchedule\(stem\) : null/);
+  assert.match(liveFunction, /_Has_Uncancelled_Line_Product_Item: stemsWithUncancelledLineProductItems\.has\(stem\.Id\)/);
   assert.match(pageSource, new RegExp(`dateBasis: EXCEPTION_REVIEW_DATE_BASIS`));
+  assert.match(pageSource, /isExceptionPotentialDelay/);
   assert.match(pageSource, /Delivery \/ Schedule/);
   assert.match(pageSource, /Schedule Range/);
   assert.doesNotMatch(pageSource, /Expected_Delivery_Date__c|Expected Delivery/);
