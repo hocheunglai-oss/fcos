@@ -24,7 +24,10 @@ test('server validates Salesforce Accounts and enforces eligibility again before
   const source = await readFile(functionUrl, 'utf8');
   assert.match(source, /\['ParentId', 'reference'\]/);
   assert.match(source, /referenceTo\?\.includes\('Account'\)/);
+  assert.match(source, /\['Company_Code__c', 'string'\]/);
   assert.match(source, /\['Is_Broker__c', 'boolean'\]/);
+  assert.match(source, /WHERE ParentId != null[\s\S]*GROUP BY ParentId/);
+  assert.match(source, /eligibleChildCount: children\.length/);
   assert.match(source, /buyerInvoiceReminderRulesList: \['buyer_invoices'\]/);
   assert.match(source, /report\.paymentReminderRulesAvailable !== true/);
   assert.match(source, /evaluateBuyerReminderSelection\(candidates/);
@@ -43,6 +46,9 @@ test('Buyer Invoices exposes rule management and disables restricted selections'
   assert.match(source, /Overdue reminders only/);
   assert.match(source, /REMINDER_RULES_PAGE_SIZE = 100/);
   assert.match(source, /visibleAccounts = filteredAccounts\.slice/);
+  assert.match(source, /Search Account name, CL Key, GROUP, rule, or note/);
+  assert.match(source, /accountClKeyLabel\(account\.clKey\)/);
+  assert.doesNotMatch(source, /account\.accountId\.slice\(-6\)/);
   assert.match(source, /disabled=\{row\.paymentReminderEligible !== true\}/);
   assert.match(source, /disabled=\{!reminderEligible\}/);
 });

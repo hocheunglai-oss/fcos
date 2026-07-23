@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.26';
+export const APP_VERSION = '2.0.27';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.27',
+    releasedAt: '2026-07-23',
+    title: 'Account identity and GROUP counts',
+    changes: [
+      'Replaced Salesforce Account ID suffixes with authoritative CL Keys in searchable Account views.',
+      'Changed Reminder Rules GROUP counts to include every direct Salesforce child while keeping rule propagation limited to active eligible children.',
+      'Added CL Key search and display to Reminder Rules and Account Managers, including parent GROUP references.',
+    ],
+  },
   {
     version: '2.0.26',
     releasedAt: '2026-07-23',

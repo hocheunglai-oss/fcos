@@ -40,6 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';
@@ -213,7 +214,9 @@ export default function AccountManagers() {
       if (!keyword) return true;
       const searchable = [
         account.accountName,
+        ...(account.clKeys || []),
         account.isGroupAccount ? 'Group' : '',
+        ...(account.parentAccounts || []).flatMap((parent) => [parent.name, parent.clKey]),
         ...(account.parentGroupNames || []),
         ...(account.childAccountNames || []),
         ...(account.roles || []).map((role) => ROLE_LABELS[role] || role),
@@ -535,14 +538,23 @@ export default function AccountManagers() {
                       <TableCell className="min-w-[250px] align-top">
                         <div className="font-medium text-foreground">{account.accountName}</div>
                         <div className="mt-1 text-xs text-muted-foreground">
+                          {accountClKeyLabel(account.clKeys)}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
                           {account.salesforceAccountCount} active Salesforce Account{account.salesforceAccountCount === 1 ? '' : 's'}
                         </div>
                         {account.isGroupAccount ? (
                           <div className="mt-1 text-xs text-muted-foreground">
                             {account.childAccountCount} active listed child Account{account.childAccountCount === 1 ? '' : 's'}
                           </div>
+                        ) : account.parentAccounts?.length ? (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            GROUP: {account.parentAccounts.map((parent) => accountSearchDisplayText(parent.name, parent.clKey)).join(', ')}
+                          </div>
                         ) : account.parentGroupNames?.length ? (
-                          <div className="mt-1 text-xs text-muted-foreground">Group: {account.parentGroupNames.join(', ')}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            GROUP: {account.parentGroupNames.map((name) => accountSearchDisplayText(name, null)).join(', ')}
+                          </div>
                         ) : null}
                       </TableCell>
                       <TableCell className="min-w-[190px] align-top">
@@ -866,7 +878,7 @@ export default function AccountManagers() {
             <section>
               <h3 className="font-semibold">Search and filters</h3>
               <p className="mt-1 text-muted-foreground">
-                Search matches Account names, parent GROUP names, GROUP child names, Account type, manager name, manager email, and note text. The manager filter includes inherited assignments and Unassigned Accounts.
+                Every Account search result shows the Account name and Salesforce CL Key. Search matches Account names, CL Keys, parent GROUP names, GROUP child names, Account type, manager name, manager email, and note text. The manager filter includes inherited assignments and Unassigned Accounts.
               </p>
             </section>
           </div>

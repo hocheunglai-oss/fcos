@@ -52,6 +52,7 @@ export function groupEligibleSalesforceAccounts(records = []) {
       groups.set(key, {
         accountNameKey: key,
         accountName: name,
+        clKeys: [],
         salesforceAccountIds: [],
         parentAccounts: [],
         roles: [],
@@ -61,13 +62,20 @@ export function groupEligibleSalesforceAccounts(records = []) {
     }
 
     const group = groups.get(key);
+    const clKey = text(record.Company_Code__c);
+    if (clKey && !group.clKeys.includes(clKey)) group.clKeys.push(clKey);
     if (!group.salesforceAccountIds.includes(id)) group.salesforceAccountIds.push(id);
     if (!group.roles.includes(role)) group.roles.push(role);
     const parentId = text(record.ParentId);
     const parentName = text(record.Parent?.Name);
+    const parentClKey = text(record.Parent?.Company_Code__c);
     if (SALESFORCE_ACCOUNT_ID_RE.test(parentId)
       && !group.parentAccounts.some((parent) => parent.id === parentId)) {
-      group.parentAccounts.push({ id: parentId, name: parentName || 'Unnamed Group' });
+      group.parentAccounts.push({
+        id: parentId,
+        name: parentName || 'Unnamed Group',
+        clKey: parentClKey,
+      });
     }
     if (text(record.RecordType?.Name).toLowerCase() === 'group') group.isGroupAccount = true;
     group.records.push(record);
@@ -77,8 +85,11 @@ export function groupEligibleSalesforceAccounts(records = []) {
   const groupedAccounts = [...groups.values()]
     .map((group) => ({
       ...group,
+      clKeys: group.clKeys.slice().sort(compareText),
       salesforceAccountIds: group.salesforceAccountIds.slice().sort(compareText),
-      parentAccounts: group.parentAccounts.slice().sort((left, right) => compareText(left.name, right.name)),
+      parentAccounts: group.parentAccounts.slice().sort((left, right) => (
+        compareText(left.name, right.name) || compareText(left.clKey, right.clKey)
+      )),
       roles: group.roles.slice().sort((left, right) => roleOrder.get(left) - roleOrder.get(right)),
     }))
     .sort((left, right) => compareText(left.accountName, right.accountName));
@@ -170,9 +181,11 @@ export function buildAccountManagerRows({
     return {
       accountNameKey: group.accountNameKey,
       accountName: group.accountName,
+      clKeys: group.clKeys,
       roles: group.roles,
       salesforceAccountCount: group.salesforceAccountIds.length,
       isGroupAccount: group.isGroupAccount,
+      parentAccounts: group.parentAccounts,
       parentGroupNames: group.parentGroupNames,
       childAccountCount: group.childAccountCount,
       childAccountNames: group.childAccountNames,

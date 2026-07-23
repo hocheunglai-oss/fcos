@@ -21,6 +21,7 @@ const pageUrl = new URL('../src/pages/AccountManagers.jsx', import.meta.url);
 const buyer = (overrides = {}) => ({
   Id: '0012x00000AAAAAABC',
   Name: 'Shared Account',
+  Company_Code__c: 'CL-SHARED',
   Buyer_Payment_Term__c: '30 days',
   Supplier_Payment_Term__c: null,
   Is_Broker__c: false,
@@ -63,6 +64,7 @@ test('groups active same-name records once and excludes supplier-only records', 
 
   assert.equal(groups.length, 1);
   assert.equal(groups[0].accountName, 'Shared Account');
+  assert.deepEqual(groups[0].clKeys, ['CL-SHARED']);
   assert.deepEqual(groups[0].salesforceAccountIds, ['0012x00000AAAAAABC', '0012x00000BBBBBDEF']);
   assert.deepEqual(groups[0].roles, ['buyer', 'buyer_supplier']);
 });
@@ -79,7 +81,7 @@ test('identifies GROUP parents and their eligible child Account names', () => {
       Id: '0012x00000CHILDAAB',
       Name: 'AAA Shared Child',
       ParentId: groupAccount.Id,
-      Parent: { Name: groupAccount.Name },
+      Parent: { Name: groupAccount.Name, Company_Code__c: 'CL-GROUP' },
       RecordType: { Name: 'Buyer' },
     }),
   ]);
@@ -91,6 +93,11 @@ test('identifies GROUP parents and their eligible child Account names', () => {
   assert.deepEqual(parent.childAccountNames, ['AAA Shared Child']);
   assert.equal(parent.childAccountCount, 1);
   assert.deepEqual(child.parentGroupNames, ['GROUP - SHARED']);
+  assert.deepEqual(child.parentAccounts, [{
+    id: groupAccount.Id,
+    name: 'GROUP - SHARED',
+    clKey: 'CL-GROUP',
+  }]);
   assert.deepEqual(child.parentGroupKeys, [parent.accountNameKey]);
 });
 
@@ -276,6 +283,7 @@ test('migration enforces limits, revision locking, RLS, and service-role-only ac
 
 test('server revalidates eligibility and updates every grouped Salesforce Account atomically', async () => {
   const source = await readFile(functionUrl, 'utf8');
+  assert.match(source, /Company_Code__c/);
   assert.match(source, /Inactive_Suspended__c = false[\s\S]*Is_Broker__c = true OR Buyer_Payment_Term__c != null/i);
   assert.match(source, /Account_Manager__c supports only[\s\S]*Increase it to 255/i);
   assert.match(source, /body: \{ allOrNone: true, records \}/);
@@ -314,6 +322,8 @@ test('page edits rows inline with explicit save and cancel controls', async () =
   assert.match(source, /GROUP \+ children replaces existing child notes/);
   assert.match(source, /Account Managers Methodology/);
   assert.match(source, /Search Accounts, groups or managers/);
+  assert.match(source, /accountClKeyLabel\(account\.clKeys\)/);
+  assert.match(source, /Search matches Account names, CL Keys/);
   assert.match(source, /Unassigned/);
   assert.doesNotMatch(source, />Manage</);
 });

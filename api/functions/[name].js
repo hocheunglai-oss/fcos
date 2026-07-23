@@ -1358,9 +1358,11 @@ function accountManagerProfile(profile = {}) {
 const ACCOUNT_MANAGER_ACCOUNT_FIELDS = [
   'Id',
   'Name',
+  'Company_Code__c',
   'RecordType.Name',
   'ParentId',
   'Parent.Name',
+  'Parent.Company_Code__c',
   'Buyer_Payment_Term__c',
   'Supplier_Payment_Term__c',
   'Is_Broker__c',
@@ -1376,6 +1378,7 @@ async function accountManagerSchema() {
   const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
   const requiredFields = [
     ['ParentId', 'reference'],
+    ['Company_Code__c', 'string'],
     ['Buyer_Payment_Term__c', null],
     ['Supplier_Payment_Term__c', null],
     ['Is_Broker__c', 'boolean'],
@@ -1412,9 +1415,11 @@ function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] 
   return {
     accountNameKey: salesforceGroup.accountNameKey,
     accountName: salesforceGroup.accountName,
+    clKeys: salesforceGroup.clKeys || [],
     roles: salesforceGroup.roles,
     salesforceAccountCount: (salesforceGroup.directSalesforceAccountIds || salesforceGroup.salesforceAccountIds).length,
     isGroupAccount: salesforceGroup.isGroupAccount === true,
+    parentAccounts: salesforceGroup.parentAccounts || [],
     parentGroupNames: salesforceGroup.parentGroupNames || [],
     childAccountCount: Number(salesforceGroup.childAccountCount || 0),
     childAccountNames: salesforceGroup.childAccountNames || [],
@@ -1782,9 +1787,11 @@ const BUYER_REMINDER_RULE_SELECT = 'salesforce_account_id,account_name,account_t
 const BUYER_REMINDER_ACCOUNT_FIELDS = [
   'Id',
   'Name',
+  'Company_Code__c',
   'RecordType.Name',
   'ParentId',
   'Parent.Name',
+  'Parent.Company_Code__c',
   'Buyer_Payment_Term__c',
   'Supplier_Payment_Term__c',
   'Is_Broker__c',
@@ -1836,6 +1843,7 @@ async function buyerReminderAccountSchema() {
   const requiredFields = [
     ['RecordTypeId', 'reference'],
     ['ParentId', 'reference'],
+    ['Company_Code__c', 'string'],
     ['Buyer_Payment_Term__c', null],
     ['Supplier_Payment_Term__c', null],
     ['Is_Broker__c', 'boolean'],
@@ -1861,6 +1869,7 @@ function buyerReminderAccountSnapshot(account = {}) {
   return {
     accountId,
     accountName: String(account.Name || '').trim(),
+    clKey: String(account.Company_Code__c || '').trim(),
     accountType,
     accountTypeLabel: accountType === 'group'
       ? 'GROUP'
@@ -1869,6 +1878,7 @@ function buyerReminderAccountSnapshot(account = {}) {
         : 'Buyer',
     parentAccountId: parentAccountId || null,
     parentAccountName: String(account.Parent?.Name || '').trim(),
+    parentClKey: String(account.Parent?.Company_Code__c || '').trim(),
     isGroup: accountType === 'group',
   };
 }
@@ -1892,6 +1902,23 @@ async function loadBuyerReminderAccountDirectory() {
     throw appError('The active Buyer Account directory exceeds 10,000 records. Narrow the Salesforce directory before managing reminder rules.', 503);
   }
   return records;
+}
+
+async function loadBuyerReminderGroupChildCounts() {
+  const result = await queryResult(`
+    SELECT ParentId parentAccountId, COUNT(Id) childCount
+    FROM Account
+    WHERE ParentId != null
+    GROUP BY ParentId
+  `, { limit: 10000 });
+  const records = result.records || [];
+  if (Number(result.totalSize || 0) > records.length) {
+    throw appError('The Salesforce Account hierarchy exceeds 10,000 direct-parent groups. Reminder Rules cannot show reliable child counts.', 503);
+  }
+  return new Map(records.map((record) => [
+    canonicalSalesforceAccountId(record.parentAccountId),
+    Number(record.childCount || 0),
+  ]).filter(([accountId]) => Boolean(accountId)));
 }
 
 async function currentBuyerReminderAccount(accountId, { includeChildren = false } = {}) {
@@ -1947,9 +1974,10 @@ function serializeBuyerReminderRule(rule = null) {
 
 async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
-  const [salesforceAccounts, stored] = await Promise.all([
+  const [salesforceAccounts, stored, directChildCounts] = await Promise.all([
     loadBuyerReminderAccountDirectory(),
     loadBuyerInvoiceReminderRules({ required: true, client }),
+    loadBuyerReminderGroupChildCounts(),
   ]);
   const ruleMap = buyerReminderRuleMap(stored.rules);
   const snapshots = salesforceAccounts.map(buyerReminderAccountSnapshot);
@@ -1981,7 +2009,8 @@ async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContex
       directRule: serializeBuyerReminderRule(directRule),
       revision: Number(directRule?.revision || 0),
       inheritToChildren: directRule?.inheritToChildren === true,
-      childCount: children.length,
+      childCount: directChildCounts.get(account.accountId) || 0,
+      eligibleChildCount: children.length,
       childOverrideCount,
       updatedAt: (directRule || inheritedRule)?.updatedAt || null,
       updatedByEmail: (directRule || inheritedRule)?.updatedByEmail || null,

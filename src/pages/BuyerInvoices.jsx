@@ -39,6 +39,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
@@ -954,11 +955,12 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
     if (!keyword) return accounts;
     return accounts.filter((account) => [
       account.accountName,
+      account.clKey,
       account.accountTypeLabel,
       account.parentAccountName,
+      account.parentClKey,
       account.sourceAccountName,
       account.note,
-      account.accountId,
       reminderPolicyLabel(account.policy),
     ].some((value) => String(value || '').toLowerCase().includes(keyword)));
   }, [accounts, search]);
@@ -1048,7 +1050,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
                   setSearch(event.target.value);
                   setVisibleLimit(REMINDER_RULES_PAGE_SIZE);
                 }}
-                placeholder="Search Account, GROUP, rule, note, or ID"
+                placeholder="Search Account name, CL Key, GROUP, rule, or note"
                 className="pl-9"
               />
             </div>
@@ -1072,9 +1074,13 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
                 <div>
                   <div className="text-base font-semibold text-foreground">{editingAccount.accountName}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {editingAccount.accountTypeLabel} · Account …{editingAccount.accountId.slice(-6)}
-                    {editingAccount.parentAccountName ? ` · ${editingAccount.parentAccountName}` : ''}
+                    {editingAccount.accountTypeLabel} · {accountClKeyLabel(editingAccount.clKey)}
                   </div>
+                  {editingAccount.parentAccountName && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      GROUP: {editingAccount.parentAccountName} · {accountClKeyLabel(editingAccount.parentClKey)}
+                    </div>
+                  )}
                 </div>
                 <Button type="button" size="sm" variant="ghost" onClick={() => setEditingAccountId(null)} disabled={busy}>
                   <X className="h-4 w-4" />
@@ -1160,7 +1166,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
                       <span>
                         <span className="font-medium text-foreground">Replace direct child overrides</span>
                         <span className="mt-0.5 block text-xs text-muted-foreground">
-                          Unchecked by default. This would remove {editingAccount.childOverrideCount.toLocaleString()} current direct override{editingAccount.childOverrideCount === 1 ? '' : 's'} across {editingAccount.childCount.toLocaleString()} eligible direct child Account{editingAccount.childCount === 1 ? '' : 's'}.
+                          Unchecked by default. This would remove {editingAccount.childOverrideCount.toLocaleString()} current direct override{editingAccount.childOverrideCount === 1 ? '' : 's'} across {editingAccount.eligibleChildCount.toLocaleString()} eligible direct child Account{editingAccount.eligibleChildCount === 1 ? '' : 's'}.
                         </span>
                       </span>
                     </label>
@@ -1201,10 +1207,14 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
                       <td className="px-5 py-3">
                         <div className="font-medium text-foreground">{account.accountName}</div>
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          …{account.accountId.slice(-6)}
-                          {account.parentAccountName ? ` · ${account.parentAccountName}` : ''}
+                          {accountClKeyLabel(account.clKey)}
                           {account.isGroup ? ` · ${account.childCount.toLocaleString()} direct children` : ''}
                         </div>
+                        {account.parentAccountName && (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            GROUP: {account.parentAccountName} · {accountClKeyLabel(account.parentClKey)}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-muted-foreground">{account.accountTypeLabel}</td>
                       <td className="px-3 py-3">

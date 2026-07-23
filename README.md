@@ -43,6 +43,10 @@ When configured, System Health resolves the current FCOS user to an active Backb
 
 See [FCOS live continuity during the Backbone transition](docs/live-continuity-during-backbone-transition.md) for the preserved-function and replacement rules.
 
+## Account Identity
+
+Every searchable Account result must display the Account name together with the authoritative Salesforce CL Key from `Account.Company_Code__c`. Use `accountClKeyLabel` or `accountSearchDisplayText` from `src/lib/accountDisplay.js`; never expose a Salesforce Account ID or ID suffix as the user-facing identifier. Search must match both Account name and CL Key.
+
 Preferred permanent Salesforce authentication is OAuth JWT bearer. Set these in Vercel for Production and Preview:
 
 ```bash
