@@ -7,7 +7,7 @@ import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -867,7 +867,10 @@ function DocumentUploadModal({ caseRow, party, partySide, action, supplierInstru
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}>
       <DialogContent className="sm:max-w-xl">
-        <DialogHeader><DialogTitle>Upload Dispute Document</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>Upload Dispute Document</DialogTitle>
+          <DialogDescription className="sr-only">Attach a named document to the selected disputed Account and optional supplier invoice instruction.</DialogDescription>
+        </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"><div className="font-semibold">{party?.name || party?.accountName}</div><div className="text-muted-foreground">{partySide === 'buyer' ? 'Buyer' : 'Supplier'}{action ? ` · ${action.actionLabel || actionLabel(action.actionType)}` : ''}{supplierInstruction ? ` · ${supplierInstruction.instructionLabel || 'Supplier instruction'}: ${supplierInstruction.sourceSupplierInvoiceName || 'Invoice'}` : ''}</div></div>
           <div className="space-y-1.5"><Label>Direction</Label><Select value={direction} onValueChange={updateDirection}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={`from_${partySide}`}>From {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem><SelectItem value={`to_${partySide}`}>To {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem></SelectContent></Select></div>
@@ -1387,6 +1390,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <span>Dispute Workflow - {stem._Display_Name || stem.Name}</span>
             <span className="text-sm font-medium text-muted-foreground">Delivery {fmtDate(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || stem._Effective_Date)}</span>
           </DialogTitle>
+          <DialogDescription className="sr-only">Manage disputed Accounts, commercial actions, invoice-level Finance instructions, documents, approval, settlement, and closure.</DialogDescription>
         </DialogHeader>
 
         <div className="grid shrink-0 gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
