@@ -191,7 +191,7 @@ export function cleanRecord(obj) {
   return Object.fromEntries(Object.entries(rest).map(([key, value]) => [key, cleanRecord(value)]));
 }
 
-export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSession = true } = {}) {
+export async function sfRequest(path, { method = 'GET', body, headers = {}, retryOnExpiredSession = true } = {}) {
   const normalizedMethod = String(method || 'GET').toUpperCase();
   if (!['GET', 'HEAD'].includes(normalizedMethod)) requireExternalActionGate('salesforce_write');
   const accessToken = await getAccessToken();
@@ -201,6 +201,7 @@ export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSess
     headers: {
       Authorization: `Bearer ${accessToken}`,
       ...(body ? { 'content-type': 'application/json' } : {}),
+      ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -211,10 +212,18 @@ export async function sfRequest(path, { method = 'GET', body, retryOnExpiredSess
   if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
     cachedToken = null;
     cachedTokenExpiresAt = 0;
-    return sfRequest(path, { method: normalizedMethod, body, retryOnExpiredSession: false });
+    return sfRequest(path, {
+      method: normalizedMethod,
+      body,
+      headers,
+      retryOnExpiredSession: false,
+    });
   }
   if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
-    throw new Error(data.message || data[0]?.message || `${normalizedMethod} ${path} failed`);
+    const error = new Error(data.message || data[0]?.message || `${normalizedMethod} ${path} failed`);
+    error.status = res.status;
+    error.code = errorCode || null;
+    throw error;
   }
   return data;
 }

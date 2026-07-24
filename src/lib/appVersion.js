@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.36';
+export const APP_VERSION = '2.0.37';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.37',
+    releasedAt: '2026-07-24',
+    title: 'Salesforce dispute closure synchronization',
+    changes: [
+      'Made a Closed Salesforce dispute status authoritative in the queue while preserving the internal FCOS workflow stage.',
+      'Showed directly closed cases as read-only, with their prior approval, accounting, action, document, and settlement history intact.',
+      'Added a final Salesforce conflict check so FCOS cannot overwrite a newly closed dispute with an active workflow status.',
+    ],
+  },
   {
     version: '2.0.36',
     releasedAt: '2026-07-24',

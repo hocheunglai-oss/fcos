@@ -942,6 +942,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
   const partyRegistry = stem._Dispute_Parties;
   const legacyReadOnly = caseRow?.legacyReadOnly === true;
+  const externalClosure = caseRow?.externalClosure === true;
   const partyIssues = Array.isArray(partyRegistry?.issues) ? partyRegistry.issues : [];
   const candidateSchemaValid = partyRegistry?.candidateSchemaValid === true;
   const selectionValid = legacyReadOnly || selectedAccountIds.length > 0;
@@ -950,10 +951,13 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
   const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
   const canSubmit = canEdit && selectionValid && actions.length > 0 && missingRequiredDocuments.length === 0;
-  const canReview = capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
+  const canReview = !legacyReadOnly && capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
   const canApprove = partiesValid && canReview && missingRequiredDocuments.length === 0;
   const canAccount = capabilities?.canAccount && caseRow?.approvalStatus === 'Approved' && caseRow?.workflowStatus !== 'Closed';
   const canClose = partiesValid && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close';
+  const canManageDocuments = !legacyReadOnly
+    && caseRow?.workflowStatus !== 'Closed'
+    && (canEdit || canAccount || capabilities?.canApprove);
   const financials = settlementFinancials(actions);
   const basePnl = stemBasePnl(stem);
   const stemPnlIncludingDispute = basePnl == null ? null : basePnl + financials.settlementPnl;
@@ -1134,9 +1138,21 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-          {legacyReadOnly && (
+          {legacyReadOnly && !externalClosure && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
               This dispute was already closed in Salesforce before FCOS workflow tracking. It is shown as read-only history and is not assigned back to a trader.
+            </div>
+          )}
+          {externalClosure && (
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-semibold">Closed directly in Salesforce.</div>
+                <div>
+                  FCOS is showing this case as read-only Closed. Its preserved internal stage is {caseRow.internalWorkflowStatus || 'Draft'}.
+                  Reopen the dispute in Salesforce to continue that workflow.
+                </div>
+              </div>
             </div>
           )}
           {missingRequiredDocuments.length > 0 && (
@@ -1145,7 +1161,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
               <div><span className="font-semibold">Required documents missing.</span> Save the draft, then upload evidence against each flagged action before submission or approval.</div>
             </div>
           )}
-          {caseRow?.salesforceWritebackStatus && caseRow.salesforceWritebackStatus !== 'not_started' && (
+          {!externalClosure && caseRow?.salesforceWritebackStatus && caseRow.salesforceWritebackStatus !== 'not_started' && (
             <div className={cn('rounded-lg border p-3 text-xs', caseRow.salesforceWritebackStatus === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900')}>
               Salesforce writeback: {caseRow.salesforceWritebackStatus}
               {caseRow.salesforceWritebackError ? <pre className="mt-1 whitespace-pre-wrap font-mono text-[11px]">{caseRow.salesforceWritebackError}</pre> : null}
@@ -1244,10 +1260,10 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       </td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
-                          {partiesValid && (canEdit || (action.id && (canAccount || capabilities?.canApprove))) && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: action.partySide || action.partyType, action })} disabled={busy} className="gap-1.5" title={action.id ? 'Upload document' : 'Save draft and upload document'}><Upload className="h-3.5 w-3.5" /> Upload</Button>}
+                          {partiesValid && canManageDocuments && (canEdit || action.id) && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: action.partySide || action.partyType, action })} disabled={busy} className="gap-1.5" title={action.id ? 'Upload document' : 'Save draft and upload document'}><Upload className="h-3.5 w-3.5" /> Upload</Button>}
                           {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
                           {canAccount && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
-                          {!canEdit && !canAccount && !capabilities?.canApprove && '—'}
+                          {!canEdit && !canAccount && !canManageDocuments && '—'}
                         </div>
                       </td>
                     </tr>
@@ -1265,7 +1281,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
               <StepHeading step="4" title="Dispute Documents" description="Upload Salesforce files against a selected Account, with an optional action link." />
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="text-xs text-muted-foreground">{documents.length} uploaded</span>
-                {partiesValid && selectedDocumentTarget && (canEdit || canAccount || capabilities?.canApprove) && (
+                {partiesValid && selectedDocumentTarget && canManageDocuments && (
                   <>
                     <Select value={selectedDocumentTarget.key} onValueChange={setDocumentPartyKey} disabled={busy}>
                       <SelectTrigger className="h-8 w-[min(260px,70vw)] text-xs"><SelectValue /></SelectTrigger>
@@ -1567,6 +1583,7 @@ export default function DisputeWorkflow() {
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5">
                         <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', stageTone(stage))}>{stage}</span>
+                        {workflow.case?.externalClosure && <div className="mt-1 text-[11px] font-medium text-amber-700">Changed directly in Salesforce</div>}
                         {hasPartyIssues && <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-destructive"><AlertCircle className="h-3 w-3" /> Salesforce party issue</div>}
                         {needsPartySelection && <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-amber-700"><AlertCircle className="h-3 w-3" /> Party selection required</div>}
                       </td>

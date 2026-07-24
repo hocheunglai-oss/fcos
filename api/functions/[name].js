@@ -51,6 +51,11 @@ import {
   DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS,
   DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS,
 } from '../../src/lib/disputeWorkflowOptions.js';
+import {
+  hasRecordedFcosClosureWriteback,
+  isSalesforceDisputeClosed,
+  projectExternalDisputeClosure,
+} from '../_disputeWorkflowStatus.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -10411,7 +10416,7 @@ function disputeBetaCaseFromStem(stem = {}) {
 
 function legacyClosedDisputeCase(stem = {}) {
   const salesforceStatus = String(stem.Dispute_Status__c || '').trim();
-  if (!/^closed\b/i.test(salesforceStatus)) return null;
+  if (!isSalesforceDisputeClosed(salesforceStatus)) return null;
   return {
     id: null,
     stemId: stem.Id,
@@ -10753,6 +10758,22 @@ async function writeDisputeBetaEvent(client, caseRow, eventType, profile, payloa
   if (error) throw error;
 }
 
+function assertSalesforceDisputeIsOpen(stem = {}) {
+  if (!isSalesforceDisputeClosed(stem.Dispute_Status__c)) return;
+  throw appError(
+    `This dispute is already ${String(stem.Dispute_Status__c).trim()} in Salesforce. FCOS has locked the workflow; refresh the Dispute Workflow queue to synchronize it.`,
+    409,
+  );
+}
+
+function projectExternallyClosedDisputeWorkflows(stems = [], workflowMap = {}) {
+  for (const stem of stems) {
+    const workflow = workflowMap[stem.Id];
+    const projection = projectExternalDisputeClosure(workflow?.case, stem);
+    if (projection) workflow.case = { ...workflow.case, ...projection };
+  }
+}
+
 async function loadDisputeWorkflowParties(client, caseId) {
   const { data, error } = await client
     .from('dispute_workflow_parties')
@@ -10823,18 +10844,49 @@ async function assertRequiredDisputeDocuments(client, actions = []) {
   return documents;
 }
 
-async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, salesforceStatus, options = {}) {
-  let writebackStatus = 'success';
-  let writebackError = null;
+async function patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus) {
+  const currentRows = await queryRows(`
+    SELECT Id, Dispute_Status__c, LastModifiedDate
+    FROM stem__c
+    WHERE Id = '${escapeSoql(caseRow.stem_id)}'
+    LIMIT 1
+  `);
+  const currentStem = currentRows[0];
+  if (!currentStem) throw appError('The disputed STEM no longer exists in Salesforce.', 404);
+
+  if (isSalesforceDisputeClosed(currentStem.Dispute_Status__c)) {
+    const continuingRecordedClose = isSalesforceDisputeClosed(salesforceStatus)
+      && isSalesforceDisputeClosed(caseRow.current_salesforce_status)
+      && caseRow.salesforce_writeback_status === 'success';
+    if (continuingRecordedClose) return;
+    assertSalesforceDisputeIsOpen(currentStem);
+  }
+
+  const ifUnmodifiedSince = currentStem.LastModifiedDate
+    ? new Date(currentStem.LastModifiedDate).toUTCString()
+    : null;
   try {
     await sfRequest(`/sobjects/stem__c/${encodeURIComponent(caseRow.stem_id)}`, {
       method: 'PATCH',
       body: { Dispute_Status__c: salesforceStatus },
+      headers: ifUnmodifiedSince ? { 'If-Unmodified-Since': ifUnmodifiedSince } : undefined,
     });
   } catch (error) {
-    writebackStatus = 'failed';
-    writebackError = error.message;
+    if (error.status === 412) {
+      throw appError('Salesforce changed while FCOS was saving this workflow. Refresh the Dispute Workflow queue and try again.', 409);
+    }
+    throw error;
   }
+}
+
+async function recordDisputeWorkflowSalesforceWriteback(
+  client,
+  caseRow,
+  profile,
+  salesforceStatus,
+  writebackStatus = 'success',
+  writebackError = null,
+) {
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
     .update({
@@ -10853,7 +10905,30 @@ async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 
       : `Salesforce dispute status update to ${salesforceStatus} failed.`,
     metadata: { salesforceStatus, error: writebackError },
   });
+  return updatedCase;
+}
+
+async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, salesforceStatus, options = {}) {
+  let writebackStatus = 'success';
+  let writebackError = null;
+  let writebackFailure = null;
+  try {
+    await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
+  } catch (error) {
+    writebackStatus = 'failed';
+    writebackError = error.message;
+    writebackFailure = error;
+  }
+  const updatedCase = await recordDisputeWorkflowSalesforceWriteback(
+    client,
+    caseRow,
+    profile,
+    salesforceStatus,
+    writebackStatus,
+    writebackError,
+  );
   if (options.required && writebackStatus === 'failed') {
+    if (writebackFailure?.status) throw writebackFailure;
     throw appError(`Salesforce dispute status could not be updated: ${writebackError}`, 502);
   }
   return updatedCase;
@@ -10935,8 +11010,11 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
   const salesforceData = await salesforceDisputeStems({ limit: body.limit || 10000 }, null, accessContext || { client, profile });
   const rows = salesforceData.rows || [];
-  const workflowMap = await loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id));
-  const capabilities = await disputeWorkflowCapabilities(client, profile);
+  const [workflowMap, capabilities] = await Promise.all([
+    loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id)),
+    disputeWorkflowCapabilities(client, profile),
+  ]);
+  projectExternallyClosedDisputeWorkflows(rows, workflowMap);
   return {
     isDisputeAdmin: capabilities.canApprove,
     isDisputeAccounting: capabilities.canAccount,
@@ -10968,6 +11046,7 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
       .eq('stem_id', stemId)
       .maybeSingle(),
   ]);
+  assertSalesforceDisputeIsOpen(currentStem);
   const candidateRegistry = currentStem._Dispute_Parties;
   if (!candidateRegistry?.candidateSchemaValid) {
     const messages = (candidateRegistry?.issues || []).map((item) => item.message).filter(Boolean);
@@ -11015,8 +11094,10 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
     seenActionSides.add(key);
   }
   const financials = calculateDisputeBetaSettlement(normalizedActions);
+  await patchDisputeWorkflowStatusInSalesforce(existingCase || { stem_id: stemId }, 'Open - Trader Review');
   const casePayload = {
     ...disputeBetaCaseFromStem(currentStem),
+    current_salesforce_status: 'Open - Trader Review',
     workflow_status: 'Draft',
     approval_status: 'Draft',
     latest_note: String(body.latestNote || '').trim(),
@@ -11044,9 +11125,12 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
   const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
   const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
-  const statusPromise = updatedCase.current_salesforce_status === 'Open - Trader Review'
-    ? Promise.resolve(updatedCase)
-    : writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Open - Trader Review');
+  const statusPromise = recordDisputeWorkflowSalesforceWriteback(
+    client,
+    updatedCase,
+    profile,
+    'Open - Trader Review',
+  );
   const [{ partyRows, actions }, documents, statusCase] = await Promise.all([
     workflowPromise,
     documentsPromise,
@@ -11067,6 +11151,7 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  assertSalesforceDisputeIsOpen(currentStem);
   const { partyRows, actionRows, actions: serializedActions } = await loadDisputeWorkflowActions(client, caseRow.id);
   const registry = assertValidDisputeParties(currentStem, partyRows);
   const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
@@ -11075,6 +11160,7 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
     throw appError('Only draft, rejected, or revision-requested cases can be submitted.', 400);
   }
   await assertRequiredDisputeDocuments(client, actions);
+  await patchDisputeWorkflowStatusInSalesforce(caseRow, 'Pending Approval');
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -11092,7 +11178,7 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, 'submitted', profile, { note: body.note || 'Submitted for dispute administrator approval.' });
-  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Pending Approval');
+  const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Pending Approval');
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
   return {
     case: serializeDisputeBetaCase(statusCase),
@@ -11109,6 +11195,7 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be approved.', 400);
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  assertSalesforceDisputeIsOpen(currentStem);
   const { partyRows, actionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
   const registry = assertValidDisputeParties(currentStem, partyRows);
   const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
@@ -11171,10 +11258,14 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
+  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  assertSalesforceDisputeIsOpen(currentStem);
   if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be rejected or returned for revision.', 400);
   const revisionRequested = Boolean(body.revisionRequested);
   const reason = String(body.reason || '').trim();
   if (!reason) throw appError(revisionRequested ? 'Revision reason is required.' : 'Rejection reason is required.', 400);
+  const salesforceStatus = revisionRequested ? 'Revision Requested' : 'Rejected';
+  await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
   const nowIso = new Date().toISOString();
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
@@ -11194,8 +11285,7 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
   await writeDisputeBetaEvent(client, updatedCase, revisionRequested ? 'revision_requested' : 'rejected', profile, {
     note: reason,
   });
-  const salesforceStatus = revisionRequested ? 'Revision Requested' : 'Rejected';
-  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, salesforceStatus);
+  const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, salesforceStatus);
   return { case: serializeDisputeBetaCase(statusCase) };
 }
 
@@ -11213,6 +11303,7 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  assertSalesforceDisputeIsOpen(currentStem);
   const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
   const registry = assertValidDisputeParties(currentStem, partyRows);
   const canEdit = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
@@ -11374,6 +11465,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  assertSalesforceDisputeIsOpen(currentStem);
   const registry = assertValidDisputeParties(currentStem, partyRows);
   validateStoredDisputeActions([action], partyRows, registry);
   if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
@@ -11405,6 +11497,24 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   if (accountingStatus === 'Not Required' && !accountingNote) {
     throw appError('Explain why accounting is not required.', 400);
   }
+
+  const { data: currentActionRows, error: currentActionsError } = await client
+    .from('dispute_beta_actions')
+    .select(DISPUTE_BETA_ACTION_SELECT)
+    .eq('case_id', caseRow.id)
+    .order('created_at', { ascending: true });
+  if (currentActionsError) throw currentActionsError;
+  const projectedActions = (currentActionRows || []).map((row) => (
+    row.id === actionId ? { ...row, execution_status: accountingStatus } : row
+  ));
+  const allSettled = projectedActions.length > 0 && projectedActions.every((row) => row.execution_status === 'Settled' || row.execution_status === 'Not Required');
+  const hasAccountingProgress = projectedActions.some((row) => row.execution_status !== 'Pending Accounting');
+  const workflowStatus = allSettled
+    ? 'Settled - Ready to Close'
+    : hasAccountingProgress
+      ? 'Accounting In Progress'
+      : 'Approved - Pending Accounting';
+  await patchDisputeWorkflowStatusInSalesforce(caseRow, workflowStatus);
 
   const nowIso = new Date().toISOString();
   const { data: updatedAction, error } = await client
@@ -11445,13 +11555,6 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     .order('created_at', { ascending: true });
   if (actionsError) throw actionsError;
   const actions = actionRows || [];
-  const allSettled = (actions || []).length > 0 && (actions || []).every((row) => row.execution_status === 'Settled' || row.execution_status === 'Not Required');
-  const hasAccountingProgress = (actions || []).some((row) => row.execution_status !== 'Pending Accounting');
-  const workflowStatus = allSettled
-    ? 'Settled - Ready to Close'
-    : hasAccountingProgress
-      ? 'Accounting In Progress'
-      : 'Approved - Pending Accounting';
   const { data: statusCase, error: caseError } = await client
     .from('dispute_beta_cases')
     .update({ workflow_status: workflowStatus, updated_at: nowIso })
@@ -11459,7 +11562,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     .select(DISPUTE_BETA_CASE_SELECT)
     .single();
   if (caseError) throw caseError;
-  const salesforceCase = await writeDisputeWorkflowStatusToSalesforce(client, statusCase, profile, workflowStatus);
+  const salesforceCase = await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
   const partyMap = disputePartyRowMap(partyRows);
   return {
     case: serializeDisputeBetaCase(salesforceCase),
@@ -11486,6 +11589,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
+  if (!hasRecordedFcosClosureWriteback(caseRow)) assertSalesforceDisputeIsOpen(currentStem);
   const { partyRows, actionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
   const registry = assertValidDisputeParties(currentStem, partyRows);
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
