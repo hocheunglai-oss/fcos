@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.35';
+export const APP_VERSION = '2.0.36';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.36',
+    releasedAt: '2026-07-24',
+    title: 'Buyer dispute UOC closure',
+    changes: [
+      'Added UOC opened as a Close dispute with buyer reason.',
+      'Applied the shared buyer close-reason list to the user interface and server validation.',
+      'Clarified that the balance payment instruction remains specific to supplier closure.',
+    ],
+  },
   {
     version: '2.0.35',
     releasedAt: '2026-07-24',
