@@ -69,12 +69,25 @@ test('new supplier financial outcomes count the commercial amount once', () => {
   assert.doesNotMatch(settlementBranch, /totalDoNotPay|totalGetBackPaid/);
 });
 
-test('workflow UI offers one new supplier resolution and invoice-level Finance controls', () => {
+test('workflow UI separates commercial outcomes from Finance settlement controls', () => {
   assert.match(workflowPageSource, /value: 'resolve_supplier_dispute'.*partyType: 'supplier'/);
+  assert.match(workflowPageSource, /value: 'close_supplier_dispute'.*partyType: 'supplier'/);
   assert.match(workflowPageSource, /const NEW_ACTION_TYPES = ACTION_TYPES\.filter\(\(action\) => !action\.legacy\)/);
+  assert.match(workflowPageSource, /Trader records the commercial agreement here/);
+  assert.match(workflowPageSource, /Supplier invoice currency/);
+  assert.match(workflowPageSource, /Read automatically from the supplier invoice/);
+  assert.doesNotMatch(workflowPageSource, /Selected for dispute/);
+  assert.doesNotMatch(workflowPageSource, /Settlement credit notes/);
   assert.match(workflowPageSource, /Invoice allocation preview/);
   assert.match(workflowPageSource, /Acknowledge urgent hold/);
   assert.match(workflowPageSource, /Cash refund from supplier/);
   assert.match(workflowPageSource, /Offset against another supplier invoice/);
   assert.match(workflowPageSource, /supplierInstructionId: supplierInstruction\?\.id/);
+});
+
+test('supplier no-recovery closure bypasses financial allocation requirements', () => {
+  assert.match(apiSource, /close_supplier_dispute: 'Close dispute with supplier \(no recovery\)'/);
+  assert.match(apiSource, /DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS/);
+  assert.match(apiSource, /actionType === 'close_supplier_dispute' && !balancePaymentInstruction/);
+  assert.match(apiSource, /choose Close dispute with supplier \(no recovery\)/);
 });

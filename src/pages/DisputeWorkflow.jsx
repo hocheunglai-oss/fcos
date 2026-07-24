@@ -22,15 +22,16 @@ import { cn } from '@/lib/utils';
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
 const ACTION_TYPES = [
-  { value: 'resolve_supplier_dispute', label: 'Resolve supplier dispute', partyType: 'supplier' },
+  { value: 'resolve_supplier_dispute', label: 'Recover agreed amount from supplier', partyType: 'supplier' },
   { value: 'hold_supplier_payment', label: 'Hold supplier payment', partyType: 'supplier', legacy: true },
   { value: 'pay_full_supplier_invoice', label: 'Pay full supplier invoice amount', partyType: 'supplier', legacy: true },
   { value: 'deduct_specific_amount', label: 'Deduct specific amount', partyType: 'supplier', legacy: true },
   { value: 'issue_buyer_credit_note', label: 'Issue credit note to buyer', partyType: 'buyer' },
-  { value: 'close_supplier_dispute', label: 'Close dispute with supplier', partyType: 'supplier', legacy: true },
-  { value: 'close_buyer_dispute', label: 'Close dispute with buyer', partyType: 'buyer' },
+  { value: 'close_supplier_dispute', label: 'Close dispute with supplier (no recovery)', partyType: 'supplier' },
+  { value: 'close_buyer_dispute', label: 'Close dispute with buyer (no credit note)', partyType: 'buyer' },
 ];
 const NEW_ACTION_TYPES = ACTION_TYPES.filter((action) => !action.legacy);
+const LEGACY_SUPPLIER_FINANCIAL_ACTIONS = new Set(['hold_supplier_payment', 'pay_full_supplier_invoice', 'deduct_specific_amount']);
 const BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
 const ACCOUNTING_STATUSES = ['Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required'];
 const DOCUMENT_TYPES = [
@@ -70,6 +71,12 @@ const fmtMoney = (value) => {
   const number = numericValue(value);
   if (number == null) return '—';
   return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const fmtAmount = (value) => {
+  const number = numericValue(value);
+  if (number == null) return '—';
+  return number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const fmtDate = (value) => {
@@ -115,6 +122,18 @@ const supplierInvoiceExposureRows = (stem, supplierAccountId = null) => {
     .sort((left, right) => String(left.dueDate || '9999-12-31').localeCompare(String(right.dueDate || '9999-12-31'))
       || String(left.invoiceDate || left.createdDate || '9999-12-31').localeCompare(String(right.invoiceDate || right.createdDate || '9999-12-31'))
       || String(left.supplierInvoiceId || '').localeCompare(String(right.supplierInvoiceId || '')));
+};
+
+const supplierCurrencyOptions = (stem, supplierAccountId) => [...new Set(
+  supplierInvoiceExposureRows(stem, supplierAccountId)
+    .map((row) => String(row.currencyIsoCode || '').trim().toUpperCase())
+    .filter((value) => /^[A-Z]{3}$/.test(value))
+)].sort();
+
+const preferredSupplierCurrency = (stem, supplierAccountId, current = '') => {
+  const currencies = supplierCurrencyOptions(stem, supplierAccountId);
+  const normalizedCurrent = String(current || '').trim().toUpperCase();
+  return currencies.includes(normalizedCurrent) ? normalizedCurrent : currencies[0] || normalizedCurrent || 'USD';
 };
 
 function supplierAllocationPreview(stem, action = {}) {
@@ -412,38 +431,45 @@ function SupplierAllocationPreview({ stem, action, setAction, disabled }) {
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice allocation preview</div>
-          <div className="text-[11px] text-muted-foreground">Oldest due invoice first. Finance values are recalculated and confirmed by the server.</div>
+          <div className="text-[11px] text-muted-foreground">Oldest due invoice first. You may edit the allocation before adding the outcome.</div>
         </div>
-        <div className="text-xs font-semibold tabular-nums text-foreground">{action.currencyIsoCode || 'USD'} {fmtMoney(preview.disputeAmount)}</div>
+        <div className="text-xs font-semibold tabular-nums text-foreground">{action.currencyIsoCode || 'USD'} {fmtAmount(preview.disputeAmount)}</div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-xs">
           <thead><tr className="border-b border-border bg-muted/30"><th className="px-3 py-2 text-left font-semibold text-muted-foreground">Supplier invoice</th><th className="px-3 py-2 text-left font-semibold text-muted-foreground">Due</th><th className="px-3 py-2 text-right font-semibold text-muted-foreground">Invoice</th><th className="px-3 py-2 text-right font-semibold text-muted-foreground">Payable</th><th className="px-3 py-2 text-right font-semibold text-muted-foreground">Allocate</th><th className="px-3 py-2 text-right font-semibold text-muted-foreground">Do not pay</th><th className="px-3 py-2 text-right font-semibold text-muted-foreground">Get back</th></tr></thead>
           <tbody>
-            {preview.allocations.map((invoice) => <tr key={invoice.supplierInvoiceId} className="border-b border-border/40"><td className="px-3 py-2"><div className="font-medium text-foreground">{invoice.invoiceName || invoice.supplierInvoiceId}</div><div className="text-[11px] text-muted-foreground">{invoice.paymentState || '—'}</div></td><td className="px-3 py-2 text-muted-foreground">{fmtDate(invoice.dueDate)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtMoney(invoice.invoiceAmount)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtMoney(invoice.payableBalance)}</td><td className="px-3 py-1.5 text-right"><Input aria-label={`Allocation for ${invoice.invoiceName || invoice.supplierInvoiceId}`} type="number" min="0" max={Math.max(0, numberOrNull(invoice.invoiceAmount) || 0)} step="0.01" value={invoice.allocatedAmount} onChange={(event) => updateAllocation(invoice.supplierInvoiceId, event.target.value)} disabled={disabled} className="ml-auto h-8 w-28 text-right text-xs tabular-nums" /></td><td className="px-3 py-2 text-right tabular-nums">{fmtMoney(invoice.doNotPayAmount)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtMoney(invoice.getBackPaidAmount)}</td></tr>)}
+            {preview.allocations.map((invoice) => <tr key={invoice.supplierInvoiceId} className="border-b border-border/40"><td className="px-3 py-2"><div className="font-medium text-foreground">{invoice.invoiceName || invoice.supplierInvoiceId}</div><div className="text-[11px] text-muted-foreground">{invoice.paymentState || '—'}</div></td><td className="px-3 py-2 text-muted-foreground">{fmtDate(invoice.dueDate)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtAmount(invoice.invoiceAmount)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtAmount(invoice.payableBalance)}</td><td className="px-3 py-1.5 text-right"><Input aria-label={`Allocation for ${invoice.invoiceName || invoice.supplierInvoiceId}`} type="number" min="0" max={Math.max(0, numberOrNull(invoice.invoiceAmount) || 0)} step="0.01" value={invoice.allocatedAmount} onChange={(event) => updateAllocation(invoice.supplierInvoiceId, event.target.value)} disabled={disabled} className="ml-auto h-8 w-28 text-right text-xs tabular-nums" /></td><td className="px-3 py-2 text-right tabular-nums">{fmtAmount(invoice.doNotPayAmount)}</td><td className="px-3 py-2 text-right tabular-nums">{fmtAmount(invoice.getBackPaidAmount)}</td></tr>)}
             {!preview.allocations.length && <tr><td colSpan={7} className="px-3 py-5 text-center text-muted-foreground">No matching supplier invoices are available for this Account and currency.</td></tr>}
           </tbody>
         </table>
       </div>
-      <div className="grid gap-2 border-t border-border bg-muted/20 px-3 py-2 text-xs sm:grid-cols-3"><div>Approved total <span className="float-right font-semibold tabular-nums">{fmtMoney(preview.disputeAmount)}</span></div><div>Do not pay <span className="float-right font-semibold tabular-nums">{fmtMoney(preview.totalDoNotPay)}</span></div><div>Get back paid amount <span className="float-right font-semibold tabular-nums">{fmtMoney(preview.totalGetBackPaid)}</span></div></div>
-      {Math.abs(preview.remaining) > 0.01 && <div className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{preview.remaining > 0 ? `${fmtMoney(preview.remaining)} cannot be allocated to the displayed supplier invoices. Reduce the dispute amount or correct the invoice data.` : `Invoice allocations exceed the dispute amount by ${fmtMoney(Math.abs(preview.remaining))}. Reduce the edited allocations.`}</div>}
+      <div className="grid gap-2 border-t border-border bg-muted/20 px-3 py-2 text-xs sm:grid-cols-3"><div>Agreed recovery <span className="float-right font-semibold tabular-nums">{fmtAmount(preview.disputeAmount)}</span></div><div>Do not pay <span className="float-right font-semibold tabular-nums">{fmtAmount(preview.totalDoNotPay)}</span></div><div>Get back paid amount <span className="float-right font-semibold tabular-nums">{fmtAmount(preview.totalGetBackPaid)}</span></div></div>
+      {Math.abs(preview.remaining) > 0.01 && <div className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{preview.remaining > 0 ? `${fmtAmount(preview.remaining)} cannot be allocated to the displayed supplier invoices. Reduce the agreed amount or correct the invoice data.` : `Invoice allocations exceed the agreed amount by ${fmtAmount(Math.abs(preview.remaining))}. Reduce the edited allocations.`}</div>}
     </div>
   );
 }
 
-function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onAdd, disabled }) {
+function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onAdd, onClearError, disabled }) {
   const parties = partyOptions(stem, draftAction.partyType, selectedAccountIds);
   const selectedPartyKey = parties.find((party) => party.partyKey === draftAction.partyKey)?.key || parties[0]?.key || '';
   const showAmount = draftAction.actionType === 'resolve_supplier_dispute' || draftAction.actionType === 'deduct_specific_amount' || draftAction.actionType === 'issue_buyer_credit_note';
   const showSupplierResolution = draftAction.actionType === 'resolve_supplier_dispute';
   const showSupplierClose = draftAction.actionType === 'close_supplier_dispute';
   const showBuyerClose = draftAction.actionType === 'close_buyer_dispute';
+  const agreedAmount = numberOrNull(draftAction.amount);
+  const currencyOptions = showSupplierResolution ? supplierCurrencyOptions(stem, draftAction.partyAccountId) : [];
+  const activeCurrency = preferredSupplierCurrency(stem, draftAction.partyAccountId, draftAction.currencyIsoCode);
+  const setAction = (updater) => {
+    setDraftAction(updater);
+    onClearError?.();
+  };
 
   const updateActionType = (value) => {
     const nextPartyType = actionPartyType(value);
     const nextParties = partyOptions(stem, nextPartyType, selectedAccountIds);
     const firstParty = nextParties[0];
-    setDraftAction({
+    setAction({
       ...DEFAULT_ACTION,
       actionType: value,
       partyType: nextPartyType,
@@ -452,13 +478,14 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
       partyName: firstParty?.name || '',
       partyAccountId: firstParty?.accountId || '',
       partyKey: firstParty?.partyKey || '',
+      currencyIsoCode: nextPartyType === 'supplier' ? preferredSupplierCurrency(stem, firstParty?.accountId) : 'USD',
     });
   };
 
   const updateParty = (key) => {
     const selected = parties.find((party) => party.key === key);
     if (!selected) return;
-    setDraftAction((prev) => ({
+    setAction((prev) => ({
       ...prev,
       partyType: selected.type,
       partySide: selected.type,
@@ -466,15 +493,20 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
       partyName: selected.name,
       partyAccountId: selected.accountId,
       partyKey: selected.partyKey,
+      currencyIsoCode: selected.type === 'supplier' ? preferredSupplierCurrency(stem, selected.accountId, prev.currencyIsoCode) : prev.currencyIsoCode,
       invoiceAllocations: [],
     }));
   };
 
   return (
     <div className="rounded-xl border border-border bg-muted/10 p-3">
-      <div className="grid gap-3 lg:grid-cols-4">
+      <div className="mb-3 flex gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+        <CircleDollarSign className="mt-0.5 h-4 w-4 shrink-0" />
+        <div><span className="font-semibold">Trader records the commercial agreement here.</span> Finance records the actual credit note, refund, offset, or accounting reference after approval. Do not enter the settlement a second time.</div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Action</Label>
+          <Label className="text-xs text-muted-foreground">Commercial outcome</Label>
           <Select value={draftAction.actionType} onValueChange={updateActionType} disabled={disabled}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -494,15 +526,29 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
         </div>
         {showAmount && (
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">{showSupplierResolution ? 'Agreed dispute amount' : 'Amount'}</Label>
-            <Input type="number" min="0" step="0.01" value={draftAction.amount} onChange={(event) => setDraftAction((prev) => ({ ...prev, amount: event.target.value, disputeAmount: event.target.value, invoiceAllocations: [] }))} disabled={disabled} />
+            <Label className="text-xs text-muted-foreground">{showSupplierResolution ? 'Agreed amount to recover from supplier' : 'Agreed buyer credit note amount'}</Label>
+            <Input type="number" min="0.01" step="0.01" value={draftAction.amount} onChange={(event) => setAction((prev) => ({ ...prev, amount: event.target.value, disputeAmount: event.target.value, invoiceAllocations: [] }))} disabled={disabled} placeholder="Enter after commercial agreement" />
+            <p className="text-[11px] text-muted-foreground">{showSupplierResolution ? 'Enter the total agreed with this supplier. FCOS splits it between unpaid and already-paid invoices.' : 'This is the commercial amount for approval. Finance records the issued credit note later.'}</p>
           </div>
         )}
-        {showSupplierResolution && <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Currency</Label><Input value={draftAction.currencyIsoCode || 'USD'} maxLength={3} onChange={(event) => setDraftAction((prev) => ({ ...prev, currencyIsoCode: event.target.value.toUpperCase(), invoiceAllocations: [] }))} disabled={disabled} className="uppercase" /></div>}
+        {showSupplierResolution && (
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Supplier invoice currency</Label>
+            {currencyOptions.length > 1 ? (
+              <Select value={activeCurrency} onValueChange={(value) => setAction((prev) => ({ ...prev, currencyIsoCode: value, invoiceAllocations: [] }))} disabled={disabled}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{currencyOptions.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}</SelectContent>
+              </Select>
+            ) : (
+              <div className="flex h-10 items-center rounded-md border border-input bg-muted/30 px-3 text-sm font-semibold">{activeCurrency}</div>
+            )}
+            <p className="text-[11px] text-muted-foreground">{currencyOptions.length > 1 ? 'Choose the currency of the invoices covered by this agreement.' : 'Read automatically from the supplier invoice.'}</p>
+          </div>
+        )}
         {showSupplierClose && (
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Close reason</Label>
-            <Select value={draftAction.closeReason} onValueChange={(value) => setDraftAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
+            <Select value={draftAction.closeReason} onValueChange={(value) => setAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
               <SelectTrigger><SelectValue placeholder="Select reason" /></SelectTrigger>
               <SelectContent>
                 {DISPUTE_SUPPLIER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
@@ -513,7 +559,7 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
         {showBuyerClose && (
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Close reason</Label>
-            <Select value={draftAction.closeReason} onValueChange={(value) => setDraftAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
+            <Select value={draftAction.closeReason} onValueChange={(value) => setAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
               <SelectTrigger><SelectValue placeholder="Select reason" /></SelectTrigger>
               <SelectContent>
                 {DISPUTE_BUYER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
@@ -524,7 +570,7 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
         {showSupplierClose && (
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Balance payment</Label>
-            <Select value={draftAction.balancePaymentInstruction} onValueChange={(value) => setDraftAction((prev) => ({ ...prev, balancePaymentInstruction: value }))} disabled={disabled}>
+            <Select value={draftAction.balancePaymentInstruction} onValueChange={(value) => setAction((prev) => ({ ...prev, balancePaymentInstruction: value }))} disabled={disabled}>
               <SelectTrigger><SelectValue placeholder="Select instruction" /></SelectTrigger>
               <SelectContent>
                 {BALANCE_PAYMENT_INSTRUCTIONS.map((instruction) => <SelectItem key={instruction} value={instruction}>{instruction}</SelectItem>)}
@@ -534,39 +580,21 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
         )}
       </div>
 
-      {showSupplierResolution && <SupplierAllocationPreview stem={stem} action={draftAction} setAction={setDraftAction} disabled={disabled} />}
-
-      <div className="mt-3 rounded-lg border border-border bg-card/70 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Settlement credit notes</div>
-            <div className="text-[11px] text-muted-foreground">Lump-sum agreed credit notes only. Quantity is not used for settlement P&L.</div>
-          </div>
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Buyer credit note amount</Label>
-            <Input type="number" min="0" step="0.01" value={draftAction.specialSellPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialSellPrice: event.target.value }))} disabled={disabled} />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Supplier credit note amount</Label>
-            <Input type="number" min="0" step="0.01" value={draftAction.specialBuyPrice} onChange={(event) => setDraftAction((prev) => ({ ...prev, specialBuyPrice: event.target.value }))} disabled={disabled} />
-          </div>
-        </div>
-      </div>
+      {showSupplierResolution && agreedAmount > 0 && <SupplierAllocationPreview stem={stem} action={{ ...draftAction, currencyIsoCode: activeCurrency }} setAction={setDraftAction} disabled={disabled} />}
+      {showSupplierResolution && agreedAmount === 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">For a no-recovery outcome, choose <span className="font-semibold">Close dispute with supplier (no recovery)</span> instead of entering zero.</div>}
 
       <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Instruction note</Label>
-          <Textarea value={draftAction.description} onChange={(event) => setDraftAction((prev) => ({ ...prev, description: event.target.value }))} disabled={disabled} rows={2} />
+          <Label className="text-xs text-muted-foreground">Commercial agreement note</Label>
+          <Textarea value={draftAction.description} onChange={(event) => setAction((prev) => ({ ...prev, description: event.target.value }))} disabled={disabled} rows={2} placeholder="Terms agreed, reason for closure, or context for the approver" />
         </div>
         <div className="flex flex-col justify-end gap-2">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox checked={draftAction.requiresAttachment} onCheckedChange={(checked) => setDraftAction((prev) => ({ ...prev, requiresAttachment: checked === true }))} disabled={disabled} />
-            Agreement/document required
+            <Checkbox checked={draftAction.requiresAttachment} onCheckedChange={(checked) => setAction((prev) => ({ ...prev, requiresAttachment: checked === true }))} disabled={disabled} />
+            Evidence required before approval
           </label>
           <Button type="button" onClick={onAdd} disabled={disabled} className="gap-2">
-            <Send className="h-4 w-4" /> Add Action
+            <Send className="h-4 w-4" /> Add Commercial Outcome
           </Button>
         </div>
       </div>
@@ -607,27 +635,25 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
       <StepHeading
         step="2"
         title="Financial Exposure"
-        description="Receivable from buyer and payable to every supplier invoice are shown even when that party is not currently under dispute."
+        description="Buyer receivable and supplier invoice payment positions. Disputed parties are identified by the blue badge."
       />
-      <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+      <div className="space-y-4">
         <div className="rounded-lg border border-border bg-card p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer receivable</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer receivable</div>
+            {selectedKeys.has(String(stem?.Account__c || '').slice(0, 15)) && <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800">Disputed buyer</span>}
+          </div>
           <div className="mt-2 text-sm font-semibold text-foreground">{buyerExposure.buyerName || stem?._Buyer_Name || 'Buyer'}</div>
-          <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 text-sm">
-            <div className="text-muted-foreground">Buyer invoice amount</div>
-            <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.buyerInvoiceAmount)}</div>
-            <div className="text-muted-foreground">Buyer payment due date</div>
-            <div className="font-semibold tabular-nums">{fmtDate(buyerExposure.paymentDueDate || stem?._Buyer_Invoice_Due_Date || stem?.Buyer_Pay_Term_Date__c)}</div>
-            <div className="text-muted-foreground">Receivable balance</div>
-            <div className="font-semibold tabular-nums">{fmtMoney(buyerExposure.receivableBalance)}</div>
-            <div className="text-muted-foreground">Buyer dispute status</div>
-            <div className="max-w-[220px] whitespace-pre-line text-right text-xs text-muted-foreground">{selectedKeys.has(String(stem?.Account__c || '').slice(0, 15)) ? 'Selected for dispute' : 'Not selected'}</div>
+          <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+            <div><div className="text-xs text-muted-foreground">Buyer invoice amount</div><div className="mt-0.5 font-semibold tabular-nums">{fmtMoney(buyerExposure.buyerInvoiceAmount)}</div></div>
+            <div><div className="text-xs text-muted-foreground">Payment due date</div><div className="mt-0.5 font-semibold tabular-nums">{fmtDate(buyerExposure.paymentDueDate || stem?._Buyer_Invoice_Due_Date || stem?.Buyer_Pay_Term_Date__c)}</div></div>
+            <div><div className="text-xs text-muted-foreground">Receivable balance</div><div className="mt-0.5 font-semibold tabular-nums">{fmtMoney(buyerExposure.receivableBalance)}</div></div>
           </div>
           {buyerExposure.description && <div className="mt-3 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">{buyerExposure.description}</div>}
         </div>
 
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
-          <table className="w-full min-w-[940px] text-xs">
+        <div className="overflow-x-auto rounded-lg border border-border bg-card">
+          <table className="w-full min-w-[820px] text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/40">
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier</th>
@@ -637,24 +663,25 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Paid</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable</th>
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment State</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Dispute</th>
               </tr>
             </thead>
             <tbody>
               {(supplierInvoiceRows.length ? supplierInvoiceRows : supplierRows).map((row, index) => (
                 <tr key={row.supplierInvoiceId || `${row.supplierName || 'supplier'}-${index}`} className="border-b border-border/40">
-                  <td className="px-3 py-2 font-medium text-foreground">{row.supplierName || 'Supplier'}</td>
+                  <td className="px-3 py-2 font-medium text-foreground">
+                    <div>{row.supplierName || 'Supplier'}</div>
+                    {selectedKeys.has(String(row.supplierAccountId || row.accountId || '').slice(0, 15)) && <span className="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800">Disputed supplier</span>}
+                  </td>
                   <td className="px-3 py-2"><div className="font-medium text-foreground">{row.invoiceName || '—'}</div><div className="text-[11px] text-muted-foreground">{row.currencyIsoCode || '—'}</div></td>
                   <td className="px-3 py-2 tabular-nums text-muted-foreground">{fmtDate(row.dueDate || row.paymentDueDate)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.invoiceAmount ?? row.supplierInvoiceAmount)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.paidAmount)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.payableBalance)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.invoiceAmount ?? row.supplierInvoiceAmount)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.paidAmount)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.payableBalance)}</td>
                   <td className="px-3 py-2 text-muted-foreground">{row.paymentState || '—'}</td>
-                  <td className="px-3 py-2 text-muted-foreground"><div>{selectedKeys.has(String(row.supplierAccountId || row.accountId || '').slice(0, 15)) ? 'Selected for dispute' : 'Not selected'}</div>{row.description && <div className="mt-0.5 text-[11px]">{row.description}</div>}</td>
                 </tr>
               ))}
               {!supplierInvoiceRows.length && !supplierRows.length && (
-                <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">No supplier invoice or payable rows found for this STEM.</td></tr>
+                <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">No supplier invoice or payable rows found for this STEM.</td></tr>
               )}
             </tbody>
           </table>
@@ -666,7 +693,7 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
 
 function WorkflowRulesModal({ open, onClose, capabilities }) {
   const lifecycle = [
-    ['Draft', 'Trader records one supplier dispute amount. FCOS creates urgent Do not pay instructions for unpaid balances while the draft is prepared.'],
+    ['Draft', 'Trader selects disputed parties and records one commercial outcome per party. Agreed supplier recovery creates urgent Do not pay instructions for unpaid balances.'],
     ['Pending Approval', 'Approver reviews commercial terms, evidence, and dispute P&L.'],
     ['Approved - Pending Accounting', 'Approved supplier amounts are split into Do not pay and Get back paid amount invoice instructions for Finance.'],
     ['Accounting In Progress', 'Finance acknowledges holds, then records a cash refund or future-invoice offset with the required evidence.'],
@@ -674,7 +701,7 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
     ['Closed', 'Salesforce is updated and the audit record is final.'],
   ];
   const roles = [
-    ['Trader', 'Records one commercial supplier amount, reviews invoice allocation, uploads evidence, and submits for approval.', 'Draft, Rejected, Revision Requested'],
+    ['Trader', 'Records the agreed commercial outcome. A positive supplier recovery is allocated to invoices; a no-recovery outcome uses Close dispute with supplier.', 'Draft, Rejected, Revision Requested'],
     ['Approver', 'Approve, reject, or request revision after checking required documents.', 'Pending Approval'],
     ['Finance / Accounting', 'Acknowledges urgent unpaid holds before approval; after approval confirms refund/offset, evidence, and settlement for each invoice line.', 'Draft holds; Approved through Ready to Close'],
     ['Administrator', 'All workflow actions plus exceptional correction and support.', 'All stages'],
@@ -727,9 +754,9 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
             </TabsContent>
             <TabsContent value="controls" className="mt-4 space-y-5 text-sm">
               <section><h3 className="font-semibold text-foreground">Party identity rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Traders select at least one Account from the STEM buyer, line-item suppliers, or extra-cost suppliers.</p><p>Cancelled line and extra-cost items remain eligible. Repeated supplier IDs with different payment terms count once, while different Account IDs remain separate.</p><p>Party identity and workflow instructions are stored in Supabase and revalidated against Salesforce Account lookups.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Payment-state and hold rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Each supplier invoice is shown as Unpaid, Partly paid, or Paid. FCOS allocates the approved supplier amount oldest invoice first, subject to trader edits and server revalidation.</p><p>The unpaid portion becomes an urgent Do not pay instruction as soon as the draft is saved. Finance may acknowledge that hold before approval, but cannot settle or release it until approval.</p><p>Later supplier payments automatically move value from Do not pay to Get back paid amount without changing the approved commercial total. Finance must review the revised instruction before closure.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Commercial outcome and payment-state rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>The trader enters an amount only after a buyer credit note or supplier recovery is commercially agreed. The invoice currency is read from Salesforce; it is selectable only when the same supplier has invoices in more than one currency.</p><p>Each supplier invoice is shown as Unpaid, Partly paid, or Paid. FCOS allocates the approved supplier recovery oldest invoice first, subject to trader edits and server revalidation.</p><p>The unpaid portion becomes an urgent Do not pay instruction as soon as the draft is saved. Finance may acknowledge that hold before approval, but cannot settle or release it until approval. Later supplier payments automatically move value from Do not pay to Get back paid amount without changing the approved commercial total.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Refund, offset, and evidence</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>After approval, Finance selects cash refund from the supplier or an offset against an eligible open invoice for the same supplier Account and currency. FCOS only creates instructions and suggestions; it never creates Salesforce payments, refunds, credit notes, or offsets.</p><p>Settled requires the settlement date and either a supplier credit note/supporting document linked to the instruction or a Finance reference. Documents remain stored in Salesforce Files and can optionally link to an invoice instruction.</p><p>The editable default name is the Hong Kong date plus From/To Buyer/Supplier. Duplicate names on the same STEM receive -1, -2, and so on.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Actions are optional for individual disputed parties, but every action that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing supplier actions with no commercial amount are blocked until the trader records one amount. A zero amount requires a no-recovery explanation and can return an approved case to Revision Requested.</p><p>Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Use Close dispute with supplier when no supplier recovery is required; select a close reason and balance-payment instruction instead of entering zero. Use Close dispute with buyer when no buyer credit note is required.</p><p>Every commercial outcome that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing legacy supplier actions with no commercial amount remain blocked until corrected. Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
             </TabsContent>
           </Tabs>
@@ -872,7 +899,7 @@ function DocumentUploadModal({ caseRow, party, partySide, action, supplierInstru
           <DialogDescription className="sr-only">Attach a named document to the selected disputed Account and optional supplier invoice instruction.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"><div className="font-semibold">{party?.name || party?.accountName}</div><div className="text-muted-foreground">{partySide === 'buyer' ? 'Buyer' : 'Supplier'}{action ? ` · ${action.actionLabel || actionLabel(action.actionType)}` : ''}{supplierInstruction ? ` · ${supplierInstruction.instructionLabel || 'Supplier instruction'}: ${supplierInstruction.sourceSupplierInvoiceName || 'Invoice'}` : ''}</div></div>
+          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"><div className="font-semibold">{party?.name || party?.accountName}</div><div className="text-muted-foreground">{partySide === 'buyer' ? 'Buyer' : 'Supplier'}{action ? ` · ${actionLabel(action.actionType)}` : ''}{supplierInstruction ? ` · ${supplierInstruction.instructionLabel || 'Supplier instruction'}: ${supplierInstruction.sourceSupplierInvoiceName || 'Invoice'}` : ''}</div></div>
           <div className="space-y-1.5"><Label>Direction</Label><Select value={direction} onValueChange={updateDirection}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={`from_${partySide}`}>From {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem><SelectItem value={`to_${partySide}`}>To {partySide === 'buyer' ? 'Buyer' : 'Supplier'}</SelectItem></SelectContent></Select></div>
           <div className="space-y-1.5"><Label>Document type</Label><Select value={documentType} onValueChange={setDocumentType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{DOCUMENT_TYPES.map((type) => <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-1.5">
@@ -1047,10 +1074,10 @@ function SupplierInstructionModal({ instruction, stem, approvalStatus, open, onC
       <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle>{beforeApproval ? 'Acknowledge urgent hold' : 'Supplier invoice instruction'}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm sm:grid-cols-2"><div><div className="text-xs text-muted-foreground">{instruction.instructionLabel}</div><div className="font-semibold">{instruction.sourceSupplierInvoiceName || instruction.sourceSupplierInvoiceId}</div></div><div className="text-right"><div className="text-xs text-muted-foreground">Planned amount</div><div className="font-semibold tabular-nums">{instruction.currencyIsoCode} {fmtMoney(instruction.plannedAmount)}</div></div></div>
+          <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm sm:grid-cols-2"><div><div className="text-xs text-muted-foreground">{instruction.instructionLabel}</div><div className="font-semibold">{instruction.sourceSupplierInvoiceName || instruction.sourceSupplierInvoiceId}</div></div><div className="text-right"><div className="text-xs text-muted-foreground">Planned amount</div><div className="font-semibold tabular-nums">{instruction.currencyIsoCode} {fmtAmount(instruction.plannedAmount)}</div></div></div>
           {beforeApproval && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">This is an immediate Finance hold. It can be acknowledged now, but it cannot be settled or released until commercial approval.</div>}
           <div className="space-y-1.5"><Label>Status</Label><Select value={status} onValueChange={setStatus}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{statusOptions.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
-          {!beforeApproval && instruction.instructionType === 'get_back_paid' && <><div className="space-y-1.5"><Label>Get back method</Label><Select value={recoveryMethod} onValueChange={setRecoveryMethod}><SelectTrigger><SelectValue placeholder="Choose refund or offset" /></SelectTrigger><SelectContent><SelectItem value="cash_refund">Cash refund from supplier</SelectItem><SelectItem value="future_invoice_offset">Offset against another supplier invoice</SelectItem></SelectContent></Select></div>{recoveryMethod === 'future_invoice_offset' && <div className="space-y-1.5"><Label>Offset invoice</Label><Select value={targetSupplierInvoiceId} onValueChange={setTargetSupplierInvoiceId} disabled={loadingOptions}><SelectTrigger><SelectValue placeholder={loadingOptions ? 'Loading eligible invoices...' : 'Select an eligible invoice'} /></SelectTrigger><SelectContent>{offsetOptions.map((option) => <SelectItem key={option.supplierInvoiceId} value={option.supplierInvoiceId}>{option.invoiceName || option.supplierInvoiceId} · {fmtMoney(option.unreservedPayableBalance ?? option.payableBalance)} available{option.reservedAmount > 0 ? ` (${fmtMoney(option.reservedAmount)} reserved)` : ''}</SelectItem>)}</SelectContent></Select></div>}{recoveryMethod === 'cash_refund' && <div className="space-y-1.5"><Label>Matching Salesforce refund (optional evidence)</Label><Select value={matchedSalesforcePaymentId} onValueChange={setMatchedSalesforcePaymentId}><SelectTrigger><SelectValue placeholder="No matching refund selected" /></SelectTrigger><SelectContent><SelectItem value="none">No matching refund selected</SelectItem>{matchingRefunds.map((payment) => <SelectItem key={payment.id} value={payment.id}>{payment.name || payment.id} · {fmtMoney(payment.amount)} · {fmtDate(payment.paymentDate || payment.date)}</SelectItem>)}</SelectContent></Select></div>}</>}
+          {!beforeApproval && instruction.instructionType === 'get_back_paid' && <><div className="space-y-1.5"><Label>Get back method</Label><Select value={recoveryMethod} onValueChange={setRecoveryMethod}><SelectTrigger><SelectValue placeholder="Choose refund or offset" /></SelectTrigger><SelectContent><SelectItem value="cash_refund">Cash refund from supplier</SelectItem><SelectItem value="future_invoice_offset">Offset against another supplier invoice</SelectItem></SelectContent></Select></div>{recoveryMethod === 'future_invoice_offset' && <div className="space-y-1.5"><Label>Offset invoice</Label><Select value={targetSupplierInvoiceId} onValueChange={setTargetSupplierInvoiceId} disabled={loadingOptions}><SelectTrigger><SelectValue placeholder={loadingOptions ? 'Loading eligible invoices...' : 'Select an eligible invoice'} /></SelectTrigger><SelectContent>{offsetOptions.map((option) => <SelectItem key={option.supplierInvoiceId} value={option.supplierInvoiceId}>{option.invoiceName || option.supplierInvoiceId} · {instruction.currencyIsoCode} {fmtAmount(option.unreservedPayableBalance ?? option.payableBalance)} available{option.reservedAmount > 0 ? ` (${fmtAmount(option.reservedAmount)} reserved)` : ''}</SelectItem>)}</SelectContent></Select></div>}{recoveryMethod === 'cash_refund' && <div className="space-y-1.5"><Label>Matching Salesforce refund (optional evidence)</Label><Select value={matchedSalesforcePaymentId} onValueChange={setMatchedSalesforcePaymentId}><SelectTrigger><SelectValue placeholder="No matching refund selected" /></SelectTrigger><SelectContent><SelectItem value="none">No matching refund selected</SelectItem>{matchingRefunds.map((payment) => <SelectItem key={payment.id} value={payment.id}>{payment.name || payment.id} · {instruction.currencyIsoCode} {fmtAmount(payment.amount)} · {fmtDate(payment.paymentDate || payment.date)}</SelectItem>)}</SelectContent></Select></div>}</>}
           {!beforeApproval && (status === 'Instruction Issued' || status === 'Settled') && <div className="grid gap-3 sm:grid-cols-3"><div className="space-y-1.5"><Label>Instruction date</Label><Input type="date" value={instructionDate} onChange={(event) => setInstructionDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction reference</Label><Input value={instructionReference} onChange={(event) => setInstructionReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction amount</Label><Input type="number" min="0" step="0.01" value={instructionAmount} onChange={(event) => setInstructionAmount(event.target.value)} /></div></div>}
           {!beforeApproval && status === 'Settled' && <div className="grid gap-3 sm:grid-cols-3"><div className="space-y-1.5"><Label>Settlement date</Label><Input type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Finance reference</Label><Input value={settlementReference} onChange={(event) => setSettlementReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Settlement amount</Label><Input type="number" min="0" step="0.01" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></div></div>}
           <div className="space-y-1.5"><Label>Accounting note</Label><Textarea rows={3} value={accountingNote} onChange={(event) => setAccountingNote(event.target.value)} placeholder={status === 'Not Required' ? 'Explain why this instruction is not required' : 'Reference, recovery detail, or finance note'} /></div>
@@ -1151,6 +1178,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       partyName: supplierParty?.name || '',
       partyAccountId: supplierParty?.accountId || '',
       partyKey: supplierParty?.partyKey || '',
+      currencyIsoCode: preferredSupplierCurrency(stem, supplierParty?.accountId),
     });
     setDocumentPartyKey('');
     setError(null);
@@ -1180,6 +1208,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       partyName: firstParty.name,
       partyAccountId: firstParty.accountId,
       partyKey: firstParty.partyKey,
+      currencyIsoCode: nextSide === 'supplier' ? preferredSupplierCurrency(stem, firstParty.accountId) : 'USD',
     });
   }, [draftAction.actionType, draftAction.partyAccountId, selectedAccountIds, stem]);
 
@@ -1258,6 +1287,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   };
 
   const addAction = () => {
+    let resolvedCurrency = draftAction.currencyIsoCode;
     if (!draftAction.partyName || !draftAction.partyAccountId || !draftAction.partyKey) {
       setError('Select a buyer or supplier party before adding the action.');
       return;
@@ -1266,29 +1296,33 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       setError(`Only one ${draftAction.partyType} action may be added for ${draftAction.partyName}.`);
       return;
     }
-    if ((draftAction.actionType === 'resolve_supplier_dispute' || draftAction.actionType === 'deduct_specific_amount' || draftAction.actionType === 'issue_buyer_credit_note') && numberOrNull(draftAction.amount) == null) {
-      setError('Amount is required for this action.');
+    if ((draftAction.actionType === 'resolve_supplier_dispute' || draftAction.actionType === 'deduct_specific_amount' || draftAction.actionType === 'issue_buyer_credit_note') && (numberOrNull(draftAction.amount) == null || numberOrNull(draftAction.amount) <= 0)) {
+      setError(draftAction.actionType === 'resolve_supplier_dispute'
+        ? 'Enter the agreed supplier recovery amount above zero, or choose Close dispute with supplier (no recovery).'
+        : 'Enter the agreed buyer credit note amount above zero, or choose Close dispute with buyer (no credit note).');
       return;
     }
     if (draftAction.actionType === 'resolve_supplier_dispute') {
-      if (!/^[A-Z]{3}$/.test(draftAction.currencyIsoCode || '')) {
-        setError('Currency must be a three-letter code such as USD.');
+      const invoiceCurrency = preferredSupplierCurrency(stem, draftAction.partyAccountId, draftAction.currencyIsoCode);
+      if (!/^[A-Z]{3}$/.test(invoiceCurrency)) {
+        setError('The supplier invoice currency could not be determined.');
         return;
       }
-      if (numberOrNull(draftAction.amount) === 0 && !draftAction.description?.trim()) {
-        setError('Explain why no supplier recovery is required for a zero dispute amount.');
+      if (Math.abs(supplierAllocationPreview(stem, { ...draftAction, currencyIsoCode: invoiceCurrency }).remaining) > 0.01) {
+        setError('Invoice allocations must equal the agreed supplier recovery amount.');
         return;
       }
-      if (Math.abs(supplierAllocationPreview(stem, draftAction).remaining) > 0.01) {
-        setError('Invoice allocations must equal the supplier dispute amount.');
-        return;
-      }
+      resolvedCurrency = invoiceCurrency;
+    }
+    if (draftAction.actionType === 'close_supplier_dispute' && (!draftAction.closeReason || !draftAction.balancePaymentInstruction)) {
+      setError('Choose both the supplier close reason and the balance payment instruction.');
+      return;
     }
     if (draftAction.actionType === 'close_buyer_dispute' && !draftAction.closeReason) {
       setError('Buyer close reason is required.');
       return;
     }
-    setActions((prev) => [...prev, { ...draftAction, clientId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, actionLabel: actionLabel(draftAction.actionType), accountingStatus: 'Pending Accounting' }]);
+    setActions((prev) => [...prev, { ...draftAction, currencyIsoCode: resolvedCurrency, clientId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, actionLabel: actionLabel(draftAction.actionType), accountingStatus: 'Pending Accounting' }]);
     setDraftAction((prev) => ({
       ...DEFAULT_ACTION,
       partyType: prev.partyType,
@@ -1484,12 +1518,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <StepHeading
                 step="3"
-                title="Trader Actions"
-                description="Add one action per supplier or buyer side. Many suppliers can be linked to one buyer case, and buyer-side action is optional."
+                title="Commercial Outcomes"
+                description="Add one agreed outcome per disputed party. Finance settlement details are recorded only after approval."
               />
               {!canEdit && <span className="text-xs text-muted-foreground">Actions are locked after submission.</span>}
             </div>
-            <ActionForm stem={stem} selectedAccountIds={selectedAccountIds} draftAction={draftAction} setDraftAction={setDraftAction} onAdd={addAction} disabled={!canEdit || !selectionValid || busy} />
+            <ActionForm stem={stem} selectedAccountIds={selectedAccountIds} draftAction={draftAction} setDraftAction={setDraftAction} onAdd={addAction} onClearError={() => setError(null)} disabled={!canEdit || !selectionValid || busy} />
             <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[980px] text-xs">
                 <thead>
@@ -1508,7 +1542,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                     return <Fragment key={action.id || action.clientId || index}>
                     <tr className="border-b border-border/40">
                       <td className="px-3 py-2">
-                        <div className="font-medium text-foreground">{action.actionLabel || actionLabel(action.actionType)}</div>
+                        <div className="font-medium text-foreground">{actionLabel(action.actionType)}</div>
                         {action.description && <div className="mt-0.5 text-muted-foreground">{action.description}</div>}
                         {(action.specialSellPrice || action.specialBuyPrice) && (
                           <div className="mt-0.5 text-[11px] text-muted-foreground">
@@ -1521,7 +1555,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       <td className="px-3 py-2 text-muted-foreground">
                         <div>{action.partyName || '—'}</div>
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums"><div>{fmtMoney(action.disputeAmount ?? action.amount)}</div>{action.actionType === 'resolve_supplier_dispute' && <div className="text-[11px] text-muted-foreground">{action.currencyIsoCode || 'USD'}</div>}</td>
+                      <td className="px-3 py-2 text-right tabular-nums"><div>{action.actionType === 'resolve_supplier_dispute' ? fmtAmount(action.disputeAmount ?? action.amount) : fmtMoney(action.disputeAmount ?? action.amount)}</div>{action.actionType === 'resolve_supplier_dispute' && <div className="text-[11px] text-muted-foreground">{action.currencyIsoCode || 'USD'}</div>}</td>
                       <td className="px-3 py-2 text-muted-foreground">
                         <div>{action.closeReason || '—'}</div>
                         {action.balancePaymentInstruction && <div>{action.balancePaymentInstruction}</div>}
@@ -1540,14 +1574,14 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
                           {partiesValid && canManageDocuments && (canEdit || action.id) && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: action.partySide || action.partyType, action })} disabled={busy} className="gap-1.5" title={action.id ? 'Upload document' : 'Save draft and upload document'}><Upload className="h-3.5 w-3.5" /> Upload</Button>}
-                          {!legacyReadOnly && caseRow?.workflowStatus !== 'Closed' && action.partyType === 'supplier' && action.actionType !== 'resolve_supplier_dispute' && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAmendAction(action)} disabled={busy}>{action.supplierDisputeAmountRequired ? 'Record supplier dispute amount' : 'Convert to invoice instructions'}</Button>}
+                          {!legacyReadOnly && caseRow?.workflowStatus !== 'Closed' && action.partyType === 'supplier' && LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.actionType) && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAmendAction(action)} disabled={busy}>{action.supplierDisputeAmountRequired ? 'Record supplier dispute amount' : 'Convert to invoice instructions'}</Button>}
                           {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
                           {canAccount && action.id && action.actionType !== 'resolve_supplier_dispute' && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
                           {!canEdit && !canAccount && !canManageDocuments && '—'}
                         </div>
                       </td>
                     </tr>
-                    {action.actionType === 'resolve_supplier_dispute' && <tr className="border-b border-border/40 bg-muted/10"><td colSpan={6} className="px-3 py-3"><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div className="text-xs font-semibold text-foreground">Supplier invoice instructions</div><div className="text-xs text-muted-foreground">Do not pay {fmtMoney(action.totalDoNotPay)} · Get back paid amount {fmtMoney(action.totalGetBackPaid)}</div></div><div className="space-y-2">{actionInstructions.map((instruction) => <div key={instruction.id} className="grid gap-2 rounded-md border border-border bg-card p-2 text-xs md:grid-cols-[1.25fr_auto_auto_auto]"><div><div className="font-medium text-foreground">{instruction.instructionLabel} · {instruction.sourceSupplierInvoiceName || instruction.sourceSupplierInvoiceId}</div><div className="mt-0.5 text-muted-foreground">{instruction.currencyIsoCode} {fmtMoney(instruction.plannedAmount)} · {instruction.recoveryMethod === 'future_invoice_offset' ? `Offset: ${instruction.targetSupplierInvoiceName || 'Invoice selected'}` : instruction.recoveryMethod === 'cash_refund' ? 'Cash refund' : 'Awaiting finance method'}</div></div><span className={cn('h-fit rounded-full border px-2 py-0.5 text-xs', accountingStatusTone(instruction.status))}>{instruction.status}</span><div className="flex flex-wrap justify-end gap-1.5">{canManageDocuments && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: 'supplier', action, supplierInstruction: instruction })} disabled={busy}><Upload className="h-3.5 w-3.5" /></Button>}{(canAccount || (canAcknowledgeUrgentHold && instruction.instructionType === 'withhold_unpaid' && caseRow?.approvalStatus !== 'Approved')) && <Button type="button" variant="outline" size="sm" onClick={() => setSupplierInstruction(instruction)} disabled={busy}>{caseRow?.approvalStatus === 'Approved' ? 'Manage' : 'Acknowledge Hold'}</Button>}</div></div>)}{!actionInstructions.length && <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">Save this draft to generate the invoice-level instructions and urgent holds.</div>}</div></td></tr>}
+                    {action.actionType === 'resolve_supplier_dispute' && <tr className="border-b border-border/40 bg-muted/10"><td colSpan={6} className="px-3 py-3"><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div className="text-xs font-semibold text-foreground">Supplier invoice instructions</div><div className="text-xs text-muted-foreground">{action.currencyIsoCode || 'USD'} · Do not pay {fmtAmount(action.totalDoNotPay)} · Get back paid amount {fmtAmount(action.totalGetBackPaid)}</div></div><div className="space-y-2">{actionInstructions.map((instruction) => <div key={instruction.id} className="grid gap-2 rounded-md border border-border bg-card p-2 text-xs md:grid-cols-[1.25fr_auto_auto_auto]"><div><div className="font-medium text-foreground">{instruction.instructionLabel} · {instruction.sourceSupplierInvoiceName || instruction.sourceSupplierInvoiceId}</div><div className="mt-0.5 text-muted-foreground">{instruction.currencyIsoCode} {fmtAmount(instruction.plannedAmount)} · {instruction.recoveryMethod === 'future_invoice_offset' ? `Offset: ${instruction.targetSupplierInvoiceName || 'Invoice selected'}` : instruction.recoveryMethod === 'cash_refund' ? 'Cash refund' : 'Awaiting finance method'}</div></div><span className={cn('h-fit rounded-full border px-2 py-0.5 text-xs', accountingStatusTone(instruction.status))}>{instruction.status}</span><div className="flex flex-wrap justify-end gap-1.5">{canManageDocuments && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: 'supplier', action, supplierInstruction: instruction })} disabled={busy}><Upload className="h-3.5 w-3.5" /></Button>}{(canAccount || (canAcknowledgeUrgentHold && instruction.instructionType === 'withhold_unpaid' && caseRow?.approvalStatus !== 'Approved')) && <Button type="button" variant="outline" size="sm" onClick={() => setSupplierInstruction(instruction)} disabled={busy}>{caseRow?.approvalStatus === 'Approved' ? 'Manage' : 'Acknowledge Hold'}</Button>}</div></div>)}{!actionInstructions.length && <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">Save this draft to generate the invoice-level instructions and urgent holds.</div>}</div></td></tr>}
                     </Fragment>;
                   })}
                   {!actions.length && (
@@ -1582,7 +1616,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                 <tbody>
                   {documents.map((document) => {
                     const linkedAction = actions.find((action) => action.id === document.actionId);
-                    return <tr key={document.id} className="border-b border-border/40"><td className="max-w-[360px] px-3 py-2"><div className="truncate font-medium text-foreground" title={document.fileName}>{document.fileName}</div><div className="truncate text-[11px] text-muted-foreground" title={document.originalFileName}>{document.originalFileName}</div></td><td className="px-3 py-2 text-muted-foreground"><div className="font-medium text-foreground">{document.partyName}</div><div>{linkedAction?.actionLabel || documentDirectionLabel(document.documentDirection) || 'Account document'}</div></td><td className="px-3 py-2 text-muted-foreground">{documentTypeLabel(document.documentType)}</td><td className="px-3 py-2 text-muted-foreground"><div>{fmtDateTime(document.createdAt)}</div><div>{document.uploadedByEmail || '—'}</div></td><td className="px-3 py-2 text-right"><div className="flex justify-end gap-1.5">{documentPreviewKind(document) && <Button type="button" variant="outline" size="sm" onClick={() => setPreviewDocument(document)}><Eye className="h-3.5 w-3.5" /></Button>}{document.salesforceUrl && <Button asChild variant="outline" size="sm"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button>}</div></td></tr>;
+                    return <tr key={document.id} className="border-b border-border/40"><td className="max-w-[360px] px-3 py-2"><div className="truncate font-medium text-foreground" title={document.fileName}>{document.fileName}</div><div className="truncate text-[11px] text-muted-foreground" title={document.originalFileName}>{document.originalFileName}</div></td><td className="px-3 py-2 text-muted-foreground"><div className="font-medium text-foreground">{document.partyName}</div><div>{linkedAction ? actionLabel(linkedAction.actionType) : documentDirectionLabel(document.documentDirection) || 'Account document'}</div></td><td className="px-3 py-2 text-muted-foreground">{documentTypeLabel(document.documentType)}</td><td className="px-3 py-2 text-muted-foreground"><div>{fmtDateTime(document.createdAt)}</div><div>{document.uploadedByEmail || '—'}</div></td><td className="px-3 py-2 text-right"><div className="flex justify-end gap-1.5">{documentPreviewKind(document) && <Button type="button" variant="outline" size="sm" onClick={() => setPreviewDocument(document)}><Eye className="h-3.5 w-3.5" /></Button>}{document.salesforceUrl && <Button asChild variant="outline" size="sm"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button>}</div></td></tr>;
                   })}
                   {!documents.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No dispute documents uploaded yet.</td></tr>}
                 </tbody>
@@ -1594,14 +1628,14 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <div className="rounded-xl border border-border bg-muted/10 p-4">
               <StepHeading
                 step="5"
-        title="Settlement Credit Notes & Dispute P&L"
-        description="Buyer credit notes reduce P&L. Supplier credit notes and supplier deductions increase P&L."
-      />
+                title="Commercial Impact & Dispute P&L"
+                description="Each agreed commercial amount is counted once. Finance settlement references do not change the approved P&L."
+              />
               <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 text-sm">
-                <div className="text-muted-foreground">Buyer instruction impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerImpact)}</div>
-                <div className="text-muted-foreground">Supplier deduction impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierImpact)}</div>
-                <div className="text-muted-foreground">Buyer credit note impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerCreditNoteImpact)}</div>
-                <div className="text-muted-foreground">Supplier credit note impact</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierCreditNoteImpact)}</div>
+                <div className="text-muted-foreground">Agreed buyer credit notes</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerImpact)}</div>
+                <div className="text-muted-foreground">Agreed supplier recoveries</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierImpact)}</div>
+                {financials.buyerCreditNoteImpact !== 0 && <><div className="text-muted-foreground">Legacy buyer adjustment</div><div className="font-semibold tabular-nums">{fmtMoney(financials.buyerCreditNoteImpact)}</div></>}
+                {financials.supplierCreditNoteImpact !== 0 && <><div className="text-muted-foreground">Legacy supplier adjustment</div><div className="font-semibold tabular-nums">{fmtMoney(financials.supplierCreditNoteImpact)}</div></>}
                 <div className="border-t border-border pt-2 font-semibold">Dispute P&L</div><div className="border-t border-border pt-2 font-semibold tabular-nums">{fmtMoney(financials.settlementPnl)}</div>
               </div>
             </div>

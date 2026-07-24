@@ -3113,11 +3113,16 @@ const DISPUTE_BETA_ACTION_LABELS = {
   hold_supplier_payment: 'Hold supplier payment',
   pay_full_supplier_invoice: 'Pay full supplier invoice amount',
   deduct_specific_amount: 'Deduct specific amount',
-  resolve_supplier_dispute: 'Resolve supplier dispute',
+  resolve_supplier_dispute: 'Recover agreed amount from supplier',
   issue_buyer_credit_note: 'Issue credit note to buyer',
-  close_supplier_dispute: 'Close dispute with supplier',
-  close_buyer_dispute: 'Close dispute with buyer',
+  close_supplier_dispute: 'Close dispute with supplier (no recovery)',
+  close_buyer_dispute: 'Close dispute with buyer (no credit note)',
 };
+const DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS = new Set([
+  'hold_supplier_payment',
+  'pay_full_supplier_invoice',
+  'deduct_specific_amount',
+]);
 const DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
 const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set([
   'settlement_agreement',
@@ -10678,7 +10683,7 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
     partyKey: party?.account_id ? `account:${party.account_id}` : party?.accountId ? `account:${party.accountId}` : null,
     partyRoles: party?.roles || [],
     actionType,
-    actionLabel: row.action_label || DISPUTE_BETA_ACTION_LABELS[actionType] || actionType,
+    actionLabel: DISPUTE_BETA_ACTION_LABELS[actionType] || row.action_label || actionType,
     amount: row.amount == null ? null : Number(row.amount),
     disputeAmount: row.amount == null ? null : Number(row.amount),
     currencyIsoCode: supplierInstructions[0]?.currencyIsoCode || 'USD',
@@ -10690,10 +10695,12 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
     totalGetBackPaid: supplierInstructions
       .filter((instruction) => instruction.instructionType === 'get_back_paid')
       .reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
-    supplierDisputeAmountRequired: row.party_side === 'supplier' && row.amount == null,
+    supplierDisputeAmountRequired: row.party_side === 'supplier'
+      && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type)
+      && row.amount == null,
     supplierInstructionConversionRequired: row.party_side === 'supplier'
       && row.amount != null
-      && row.action_type !== 'resolve_supplier_dispute',
+      && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type),
     specialSellPrice: row.special_sell_price == null ? null : Number(row.special_sell_price),
     specialBuyPrice: row.special_buy_price == null ? null : Number(row.special_buy_price),
     quantity: row.quantity == null ? null : Number(row.quantity),
@@ -10793,11 +10800,12 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
   const party = canonicalDisputeActionTarget(input, partySide, registry);
   const amount = decimalOrNull(input.amount);
   if (actionType === 'deduct_specific_amount' && amount == null) throw appError('Deduction amount is required.', 400);
-  if (actionType === 'resolve_supplier_dispute' && (amount == null || amount < 0)) throw appError('Supplier dispute amount is required.', 400);
-  if (actionType === 'resolve_supplier_dispute' && amount === 0 && !String(input.description || '').trim()) {
-    throw appError('Explain why no supplier recovery is required when the dispute amount is zero.', 400);
+  if (actionType === 'resolve_supplier_dispute' && (amount == null || amount <= 0)) {
+    throw appError('Enter an agreed supplier recovery amount above zero, or choose Close dispute with supplier (no recovery).', 400);
   }
-  if (actionType === 'issue_buyer_credit_note' && amount == null) throw appError('Credit note amount is required.', 400);
+  if (actionType === 'issue_buyer_credit_note' && (amount == null || amount <= 0)) {
+    throw appError('Enter an agreed buyer credit note amount above zero, or choose Close dispute with buyer (no credit note).', 400);
+  }
   const closeReasonInput = String(input.closeReason || input.close_reason || '').trim();
   const closeReason = actionType === 'close_supplier_dispute'
     ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS)
@@ -10813,6 +10821,9 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
   const balancePaymentInstruction = String(input.balancePaymentInstruction || input.balance_payment_instruction || '').trim() || null;
   if (balancePaymentInstruction && !DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS.includes(balancePaymentInstruction)) {
     throw appError('Valid balance payment instruction is required.', 400);
+  }
+  if (actionType === 'close_supplier_dispute' && !balancePaymentInstruction) {
+    throw appError('Balance payment instruction is required when closing a supplier dispute without recovery.', 400);
   }
   const currencyIsoCode = String(input.currencyIsoCode || input.currency_iso_code || 'USD').trim().toUpperCase() || 'USD';
   if (actionType === 'resolve_supplier_dispute' && !/^[A-Z]{3}$/.test(currencyIsoCode)) {
@@ -11398,15 +11409,19 @@ function validateStoredDisputeActions(actions, partyRows, registry) {
 }
 
 function supplierActionsMissingDisputeAmount(actions = []) {
-  return actions.filter((action) => action.party_side === 'supplier' && action.amount == null);
+  return actions.filter((action) => (
+    action.party_side === 'supplier'
+    && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type)
+    && action.amount == null
+  ));
 }
 
 function assertSupplierDisputeAmounts(actions = []) {
   const missing = supplierActionsMissingDisputeAmount(actions);
   if (missing.length) {
-    throw appError('Supplier dispute amount required. Record an amount, or explicitly enter zero with a no-recovery explanation, before this workflow can progress.', 409);
+    throw appError('Supplier dispute amount required. Record the agreed amount before this legacy workflow can progress.', 409);
   }
-  const legacy = actions.filter((action) => action.party_side === 'supplier' && action.action_type !== 'resolve_supplier_dispute');
+  const legacy = actions.filter((action) => action.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type));
   if (legacy.length) {
     throw appError('Convert each legacy supplier action into invoice-level Finance instructions before this workflow can progress.', 409);
   }

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.38';
+export const APP_VERSION = '2.0.39';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.39',
+    releasedAt: '2026-07-24',
+    title: 'Dispute commercial outcome clarity',
+    changes: [
+      'Restored supplier no-recovery closure and replaced internal party-selection wording with clear disputed-party badges.',
+      'Separated trader commercial outcomes from Finance settlement evidence so credit-note and recovery amounts are entered only once.',
+      'Made supplier currency invoice-derived and rebuilt Financial Exposure so every supplier invoice column remains accessible.',
+    ],
+  },
   {
     version: '2.0.38',
     releasedAt: '2026-07-24',
