@@ -51,6 +51,7 @@ import {
   DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS,
   DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS,
 } from '../../src/lib/disputeWorkflowOptions.js';
+import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
 import {
   hasRecordedFcosClosureWriteback,
   isSalesforceDisputeClosed,
@@ -10259,7 +10260,11 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             || null;
           const invoiceAmountField = supplierInvoiceAmountFields.find((field) => invoice[field] != null);
           const invoiceAmount = invoiceAmountField ? Number(invoice[invoiceAmountField] || 0) : 0;
-          const supplierPayableBalance = supplierInvoicePayableField ? Number(invoice[supplierInvoicePayableField] || 0) : 0;
+          const supplierPayableBalanceValue = supplierInvoicePayableField ? invoice[supplierInvoicePayableField] : null;
+          const supplierPayableBalanceAvailable = supplierPayableBalanceValue != null
+            && supplierPayableBalanceValue !== ''
+            && Number.isFinite(Number(supplierPayableBalanceValue));
+          const supplierPayableBalance = supplierPayableBalanceAvailable ? Number(supplierPayableBalanceValue) : 0;
           addSupplierFinanceByAccount(supplierAccountId, supplierName, invoiceAmount, supplierPayableBalance);
           const dueDateField = supplierInvoiceDueDateFields.find((field) => invoice[field]);
           const dueDate = dueDateField ? invoice[dueDateField] : null;
@@ -10283,6 +10288,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             createdDate: invoice.CreatedDate || null,
             invoiceAmount,
             payableBalance: supplierPayableBalance,
+            payableBalanceAvailable: supplierPayableBalanceAvailable,
             status: invoiceStatus,
             payments: paymentRows,
           });
@@ -12472,7 +12478,17 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   if (accountingStatus === 'Settled' && (!settlementDate || (!settlementReference && !hasSettlementDocument))) {
     throw appError('Settled requires a settlement date and either a reference or settlement document.', 400);
   }
-  if (accountingStatus === 'Not Required' && !accountingNote) {
+  const notRequiredEligibility = disputeNotRequiredEligibility(action, partyRows, currentStem);
+  const notRequiredReasonWaived = accountingStatus === 'Not Required'
+    && !accountingNote
+    && notRequiredEligibility.eligible;
+  if (accountingStatus === 'Not Required' && !accountingNote && !notRequiredReasonWaived) {
+    if (notRequiredEligibility.balanceType && notRequiredEligibility.balance == null) {
+      throw appError(`The current ${notRequiredEligibility.balanceLabel} balance is unavailable. Enter an accounting reason before selecting Not Required.`, 400);
+    }
+    if (notRequiredEligibility.balanceType) {
+      throw appError(`The current ${notRequiredEligibility.balanceLabel} balance is ${notRequiredEligibility.balance.toFixed(2)}, not 0.00. Refresh the dispute or enter an accounting reason.`, 409);
+    }
     throw appError('Explain why accounting is not required.', 400);
   }
 
@@ -12524,7 +12540,17 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   await writeDisputeBetaEvent(client, caseRow, 'accounting_updated', profile, {
     actionId,
     note: `${updatedAction.action_label} updated to ${accountingStatus}.`,
-    metadata: { accountingStatus, instructionReference, instructionDate, settlementReference, settlementDate },
+    metadata: {
+      accountingStatus,
+      instructionReference,
+      instructionDate,
+      settlementReference,
+      settlementDate,
+      notRequiredReasonWaived,
+      verifiedBalance: notRequiredReasonWaived ? notRequiredEligibility.balance : null,
+      verifiedBalanceType: notRequiredReasonWaived ? notRequiredEligibility.balanceType : null,
+      partyAccountId: notRequiredReasonWaived ? notRequiredEligibility.partyAccountId : null,
+    },
   });
   const { data: actionRows, error: actionsError } = await client
     .from('dispute_beta_actions')

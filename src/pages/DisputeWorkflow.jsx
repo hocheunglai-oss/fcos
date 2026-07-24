@@ -16,7 +16,10 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { numericValue, textValue } from '@/lib/displayValue';
-import { disputeClosureDefaults } from '@/lib/disputeWorkflowDefaults';
+import {
+  disputeClosureDefaults,
+  zeroBalanceNotRequiredEligibility,
+} from '@/lib/disputeWorkflowDefaults';
 import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
 import { cn } from '@/lib/utils';
 
@@ -153,6 +156,19 @@ const supplierPayableBalance = (stem, supplierAccountId) => {
     .map((row) => numberOrNull(row.payableBalance))
     .filter((value) => value != null);
   return financeBalances.length ? financeBalances.reduce((sum, value) => sum + value, 0) : null;
+};
+
+const verifiedSupplierPayableBalance = (stem, supplierAccountId) => {
+  const accountKey = String(supplierAccountId || '').slice(0, 15);
+  const invoices = supplierInvoiceExposureRows(stem, supplierAccountId);
+  if (!accountKey || !invoices.length || invoices.some((row) => (
+    row.payableBalanceAvailable !== true
+    || numberOrNull(row.rawPayableBalance) == null
+    || Number(row.rawPayableBalance) < -0.005
+  ))) {
+    return null;
+  }
+  return invoices.reduce((sum, row) => sum + Number(row.rawPayableBalance), 0);
 };
 
 const closureDefaultsForParty = (stem, actionType, supplierAccountId) => disputeClosureDefaults({
@@ -787,7 +803,7 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
               <section><h3 className="font-semibold text-foreground">Party identity rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Traders select at least one Account from the STEM buyer, line-item suppliers, or extra-cost suppliers.</p><p>Cancelled line and extra-cost items remain eligible. Repeated supplier IDs with different payment terms count once, while different Account IDs remain separate.</p><p>Party identity and workflow instructions are stored in Supabase and revalidated against Salesforce Account lookups.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Commercial outcome and payment-state rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>The trader enters an amount only after a buyer credit note or supplier recovery is commercially agreed. The invoice currency is read from Salesforce; it is selectable only when the same supplier has invoices in more than one currency.</p><p>Each supplier invoice is shown as Unpaid, Partly paid, or Paid. FCOS allocates the approved supplier recovery oldest invoice first, subject to trader edits and server revalidation.</p><p>The unpaid portion becomes an urgent Do not pay instruction as soon as the draft is saved. Finance may acknowledge that hold before approval, but cannot settle or release it until approval. Later supplier payments automatically move value from Do not pay to Get back paid amount without changing the approved commercial total.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Refund, offset, and evidence</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>After approval, Finance selects cash refund from the supplier or an offset against an eligible open invoice for the same supplier Account and currency. FCOS only creates instructions and suggestions; it never creates Salesforce payments, refunds, credit notes, or offsets.</p><p>Settled requires the settlement date and either a supplier credit note/supporting document linked to the instruction or a Finance reference. Documents remain stored in Salesforce Files and can optionally link to an invoice instruction.</p><p>The editable default name is the Hong Kong date plus From/To Buyer/Supplier. Duplicate names on the same STEM receive -1, -2, and so on.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Use Close dispute with supplier when no supplier recovery is required; select a close reason and balance-payment instruction instead of entering zero. FCOS prefills No Balance Payment when that supplier's payable balance is zero. Use Close dispute with buyer when no buyer credit note is required.</p><p>When the buyer receivable balance is zero, FCOS prefills Full payment received from buyer for either closure outcome. These are editable defaults; the trader remains responsible for confirming the actual closure terms.</p><p>Every commercial outcome that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing legacy supplier actions with no commercial amount remain blocked until corrected. Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Use Close dispute with supplier when no supplier recovery is required; select a close reason and balance-payment instruction instead of entering zero. FCOS prefills No Balance Payment when that supplier's payable balance is zero. Use Close dispute with buyer when no buyer credit note is required.</p><p>When the buyer receivable balance is zero, FCOS prefills Full payment received from buyer for either closure outcome. These are editable defaults; the trader remains responsible for confirming the actual closure terms.</p><p>Finance may mark a no-credit-note buyer closure or no-recovery supplier closure Not Required without a reason when that exact dispute leg's latest Salesforce balance is 0.00. FCOS rechecks the buyer receivable or exact supplier Account payable balance when saving; all other Not Required updates still need an explanation.</p><p>Every commercial outcome that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing legacy supplier actions with no commercial amount remain blocked until corrected. Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
             </TabsContent>
           </Tabs>
@@ -962,7 +978,7 @@ function DocumentUploadModal({ caseRow, party, partySide, action, supplierInstru
   );
 }
 
-function AccountingUpdateModal({ action, open, onClose, onSaved }) {
+function AccountingUpdateModal({ action, stem, open, onClose, onSaved }) {
   const [status, setStatus] = useState('Pending Accounting');
   const [instructionReference, setInstructionReference] = useState('');
   const [instructionDate, setInstructionDate] = useState('');
@@ -985,6 +1001,16 @@ function AccountingUpdateModal({ action, open, onClose, onSaved }) {
     setAccountingNote(action.accountingNote || '');
     setError('');
   }, [open, action]);
+  const notRequiredEligibility = zeroBalanceNotRequiredEligibility({
+    actionType: action?.actionType,
+    buyerReceivableBalance: buyerReceivableBalance(stem),
+    supplierPayableBalance: verifiedSupplierPayableBalance(stem, action?.partyAccountId),
+    partyAccountId: action?.partyAccountId,
+  });
+  const notRequiredReasonOptional = status === 'Not Required' && notRequiredEligibility.eligible;
+  const notRequiredReasonMissing = status === 'Not Required'
+    && !notRequiredReasonOptional
+    && !accountingNote.trim();
 
   const save = async () => {
     setBusy(true);
@@ -1014,10 +1040,32 @@ function AccountingUpdateModal({ action, open, onClose, onSaved }) {
           <div className="space-y-1.5 md:col-span-2"><Label>Status</Label><Select value={status} onValueChange={setStatus}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ACCOUNTING_STATUSES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
           {(status === 'Instruction Issued' || status === 'Settled') && <><div className="space-y-1.5"><Label>Instruction date</Label><Input type="date" value={instructionDate} onChange={(event) => setInstructionDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction reference</Label><Input value={instructionReference} onChange={(event) => setInstructionReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Instruction amount</Label><Input type="number" min="0" step="0.01" value={instructionAmount} onChange={(event) => setInstructionAmount(event.target.value)} /></div></>}
           {status === 'Settled' && <><div className="space-y-1.5"><Label>Settlement date</Label><Input type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></div><div className="space-y-1.5"><Label>Settlement reference</Label><Input value={settlementReference} onChange={(event) => setSettlementReference(event.target.value)} /></div><div className="space-y-1.5"><Label>Settlement amount</Label><Input type="number" min="0" step="0.01" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></div></>}
-          <div className="space-y-1.5 md:col-span-2"><Label>Accounting note</Label><Textarea rows={3} value={accountingNote} onChange={(event) => setAccountingNote(event.target.value)} placeholder={status === 'Not Required' ? 'Reason accounting is not required' : 'Payment or settlement details'} /></div>
+          <div className="space-y-1.5 md:col-span-2">
+            <Label>
+              Accounting note
+              {status === 'Not Required' ? notRequiredReasonOptional ? ' (optional)' : ' (required)' : ''}
+            </Label>
+            <Textarea
+              rows={3}
+              value={accountingNote}
+              onChange={(event) => setAccountingNote(event.target.value)}
+              placeholder={status === 'Not Required'
+                ? notRequiredReasonOptional
+                  ? `No reason required while the ${notRequiredEligibility.balanceLabel} balance is 0.00`
+                  : 'Reason accounting is not required'
+                : 'Payment or settlement details'}
+            />
+            {status === 'Not Required' && (
+              <p className="text-xs text-muted-foreground">
+                {notRequiredReasonOptional
+                  ? `The current ${notRequiredEligibility.balanceLabel} balance is 0.00. FCOS will recheck Salesforce when you save.`
+                  : 'A reason is required unless this no-recovery dispute leg has a current Salesforce balance of 0.00.'}
+              </p>
+            )}
+          </div>
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive md:col-span-2">{error}</div>}
         </div>
-        <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={save} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Accounting Update</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={save} disabled={busy || notRequiredReasonMissing}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Accounting Update</Button></div>
       </DialogContent>
     </Dialog>
   );
@@ -1713,7 +1761,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
       </DialogContent>
     </Dialog>
     <DocumentUploadModal caseRow={uploadTarget?.caseRow} party={uploadTarget?.party} partySide={uploadTarget?.partySide} action={uploadTarget?.action} supplierInstruction={uploadTarget?.supplierInstruction} existingDocuments={documents} open={Boolean(uploadTarget)} onClose={() => setUploadTarget(null)} onUploaded={documentUploaded} />
-    <AccountingUpdateModal action={accountingAction} open={Boolean(accountingAction)} onClose={() => setAccountingAction(null)} onSaved={refreshAfter} />
+    <AccountingUpdateModal action={accountingAction} stem={stem} open={Boolean(accountingAction)} onClose={() => setAccountingAction(null)} onSaved={refreshAfter} />
     <SupplierInstructionModal instruction={supplierInstruction} stem={stem} approvalStatus={caseRow?.approvalStatus} open={Boolean(supplierInstruction)} onClose={() => setSupplierInstruction(null)} onSaved={refreshAfter} />
     <SupplierAmountAmendModal action={amendAction} stem={stem} open={Boolean(amendAction)} onClose={() => setAmendAction(null)} onSaved={refreshAfter} />
     <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />

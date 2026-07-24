@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.40';
+export const APP_VERSION = '2.0.41';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.41',
+    releasedAt: '2026-07-24',
+    title: 'Zero-balance accounting closure',
+    changes: [
+      'Allowed Finance to mark a zero-balance no-credit-note or no-recovery closure Not Required without entering a reason.',
+      'Revalidated the latest Salesforce buyer receivable or exact supplier Account payable balance before applying the exception.',
+      'Kept explanations mandatory for credit notes, supplier recoveries, legacy financial actions, and supplier invoice instructions.',
+    ],
+  },
   {
     version: '2.0.40',
     releasedAt: '2026-07-24',
