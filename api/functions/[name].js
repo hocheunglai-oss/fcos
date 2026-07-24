@@ -47,6 +47,10 @@ import {
   exceptionScheduleSchemaIssues,
   normalizeExceptionSchedule,
 } from '../../src/lib/exceptionReviewSchedule.js';
+import {
+  DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS,
+  DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS,
+} from '../../src/lib/disputeWorkflowOptions.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -3097,14 +3101,6 @@ const DISPUTE_BETA_ACTION_LABELS = {
   close_supplier_dispute: 'Close dispute with supplier',
   close_buyer_dispute: 'Close dispute with buyer',
 };
-const DISPUTE_BETA_SUPPLIER_CLOSE_REASONS = [
-  'Full payment received from buyer',
-  'Settlement agreement concluded with credit note / written agreement enclosed',
-];
-const DISPUTE_BETA_BUYER_CLOSE_REASONS = [
-  'Full payment received from buyer',
-  'Settlement agreement concluded with written agreement enclosed',
-];
 const DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
 const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set([
   'settlement_agreement',

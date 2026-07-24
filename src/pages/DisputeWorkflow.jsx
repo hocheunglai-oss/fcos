@@ -16,6 +16,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
 import { cn } from '@/lib/utils';
 
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
@@ -27,14 +28,6 @@ const ACTION_TYPES = [
   { value: 'issue_buyer_credit_note', label: 'Issue credit note to buyer', partyType: 'buyer' },
   { value: 'close_supplier_dispute', label: 'Close dispute with supplier', partyType: 'supplier' },
   { value: 'close_buyer_dispute', label: 'Close dispute with buyer', partyType: 'buyer' },
-];
-const SUPPLIER_CLOSE_REASONS = [
-  'Full payment received from buyer',
-  'Settlement agreement concluded with credit note / written agreement enclosed',
-];
-const BUYER_CLOSE_REASONS = [
-  'Full payment received from buyer',
-  'Settlement agreement concluded with written agreement enclosed',
 ];
 const BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
 const ACCOUNTING_STATUSES = ['Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required'];
@@ -405,7 +398,7 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
             <Select value={draftAction.closeReason} onValueChange={(value) => setDraftAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
               <SelectTrigger><SelectValue placeholder="Select reason" /></SelectTrigger>
               <SelectContent>
-                {SUPPLIER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
+                {DISPUTE_SUPPLIER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -416,7 +409,7 @@ function ActionForm({ stem, selectedAccountIds, draftAction, setDraftAction, onA
             <Select value={draftAction.closeReason} onValueChange={(value) => setDraftAction((prev) => ({ ...prev, closeReason: value }))} disabled={disabled}>
               <SelectTrigger><SelectValue placeholder="Select reason" /></SelectTrigger>
               <SelectContent>
-                {BUYER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
+                {DISPUTE_BUYER_CLOSE_REASONS.map((reason) => <SelectItem key={reason} value={reason}>{reason}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -623,7 +616,7 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
               <section><h3 className="font-semibold text-foreground">Party identity rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Traders select at least one Account from the STEM buyer, line-item suppliers, or extra-cost suppliers.</p><p>Cancelled line and extra-cost items remain eligible. Repeated supplier IDs with different payment terms count once, while different Account IDs remain separate.</p><p>Party identity and workflow instructions are stored in Supabase and revalidated against Salesforce Account lookups.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Document rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Documents are stored once in Salesforce Files and linked to the STEM. They may be linked directly to a selected Account or optionally to an action.</p><p>Every action marked “Agreement/document required” must have an action-linked document before submission and approval.</p><p>The editable default name is the Hong Kong date plus From/To Buyer/Supplier. Duplicate names on the same STEM receive -1, -2, and so on.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Accounting rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Instruction Issued requires an instruction date and either a reference or accounting note.</p><p>Settled requires a settlement date and either a settlement reference or action-linked settlement document.</p><p>Not Required requires an explanation.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Actions are optional for individual disputed parties, but every action that was added must be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Actions are optional for individual disputed parties, but every action that was added must be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Close dispute with supplier also supports UOC opened as a close reason; a balance payment instruction remains required.</p><p>Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
             </TabsContent>
           </Tabs>
