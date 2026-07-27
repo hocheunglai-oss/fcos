@@ -23,6 +23,10 @@ const PRODUCT_VOLUME_COLORS = {
   VLSFO: '#2563eb',
   LSMGO: '#f59e0b',
 };
+const productFamilyRank = (family) => {
+  const index = PRODUCT_FAMILY_KPI_ORDER.indexOf(String(family || '').toUpperCase());
+  return index === -1 ? PRODUCT_FAMILY_KPI_ORDER.length : index;
+};
 const COUNTERPARTY_MODES = [
   { value: 'buyer', label: 'Buyer', plural: 'Buyers' },
   { value: 'supplier', label: 'Supplier', plural: 'Suppliers' },
@@ -215,23 +219,41 @@ export default function DashboardSettings() {
   }, [data, dashboardTurnover]);
 
   const productFamilyKpis = useMemo(() => {
-    const quantityByFamily = new Map(
-      (data?.productFamilyQuantities || []).map((item) => [
-        String(item.family || '').toUpperCase(),
-        { quantity: item.quantity || 0, unitOfMeasure: item.unitOfMeasure || 'MT' },
-      ])
-    );
-    return PRODUCT_FAMILY_KPI_ORDER.map((family) => ({
-      family,
-      quantity: quantityByFamily.get(family)?.quantity || 0,
-      unitOfMeasure: quantityByFamily.get(family)?.unitOfMeasure || 'MT',
+    const quantities = (data?.productFamilyQuantities || []).map((item) => ({
+      family: String(item.family || 'Unspecified').toUpperCase(),
+      quantity: Number(item.quantity || 0),
+      unitOfMeasure: item.unitOfMeasure || 'MT',
     }));
+    if (!quantities.length) {
+      return PRODUCT_FAMILY_KPI_ORDER.map((family) => ({
+        family,
+        quantity: 0,
+        unitOfMeasure: 'MT',
+      }));
+    }
+    return quantities.sort((a, b) => (
+      productFamilyRank(a.family) - productFamilyRank(b.family)
+      || a.family.localeCompare(b.family)
+      || a.unitOfMeasure.localeCompare(b.unitOfMeasure)
+    ));
   }, [data?.productFamilyQuantities]);
-  const productVolumeKpi = useMemo(() => ({
-    totalQuantity: productFamilyKpis.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
-    unitOfMeasure: productFamilyKpis.find((item) => item.unitOfMeasure)?.unitOfMeasure || 'MT',
-    breakdown: productFamilyKpis,
-  }), [productFamilyKpis]);
+  const productVolumeKpi = useMemo(() => {
+    const totalsByUnit = new Map();
+    for (const item of productFamilyKpis) {
+      totalsByUnit.set(
+        item.unitOfMeasure,
+        (totalsByUnit.get(item.unitOfMeasure) || 0) + Number(item.quantity || 0),
+      );
+    }
+    const hasMixedUnits = totalsByUnit.size > 1;
+    const [unitOfMeasure = 'MT', totalQuantity = 0] = totalsByUnit.entries().next().value || [];
+    return {
+      totalQuantity: hasMixedUnits ? null : totalQuantity,
+      unitOfMeasure,
+      hasMixedUnits,
+      breakdown: productFamilyKpis,
+    };
+  }, [productFamilyKpis]);
 
   const companySuggestions = useMemo(() => {
     const q = companyKeyword.trim().toLowerCase();
@@ -272,16 +294,48 @@ export default function DashboardSettings() {
   const topCounterpartiesByNetPnl = counterpartyMode === 'supplier'
     ? (data?.topSuppliersByNetPnl || [])
     : (data?.topBuyersByNetPnl || []);
+  const monthlyProductVolumeSeries = useMemo(() => {
+    const suppliedSeries = data?.monthlyProductVolumeSeries || [];
+    const baseSeries = suppliedSeries.length
+      ? suppliedSeries
+      : PRODUCT_FAMILY_KPI_ORDER.map((family) => ({
+        key: family,
+        family,
+        unitOfMeasure: 'MT',
+      }));
+    const familyCounts = baseSeries.reduce((counts, series) => {
+      counts.set(series.family, (counts.get(series.family) || 0) + 1);
+      return counts;
+    }, new Map());
+    return baseSeries.map((series, index) => ({
+      ...series,
+      displayName: familyCounts.get(series.family) > 1
+        ? `${series.family} · ${series.unitOfMeasure}`
+        : series.family,
+      color: familyCounts.get(series.family) > 1
+        ? COLORS[index % COLORS.length]
+        : (PRODUCT_VOLUME_COLORS[series.family] || COLORS[index % COLORS.length]),
+    }));
+  }, [data?.monthlyProductVolumeSeries]);
   const monthlyProductVolumes = data?.monthlyProductVolumes?.length
     ? data.monthlyProductVolumes
-    : (data?.monthlyNetPnl || []).map((item) => ({
-      month: item.month,
-      label: item.label,
-      HSFO: 0,
-      VLSFO: 0,
-      LSMGO: 0,
-      grossMarginPct: item.grossMarginPct ?? null,
-    }));
+    : (data?.monthlyNetPnl || []).map((item) => {
+      const row = {
+        month: item.month,
+        label: item.label,
+        grossMarginPct: item.grossMarginPct ?? null,
+      };
+      for (const series of monthlyProductVolumeSeries) row[series.key] = 0;
+      return row;
+    });
+  const monthlyVolumeUnits = new Set(monthlyProductVolumeSeries.map((series) => series.unitOfMeasure));
+  const monthlyVolumeHasMixedUnits = monthlyVolumeUnits.size > 1;
+  const monthlyVolumeAxisUnit = monthlyVolumeHasMixedUnits
+    ? ''
+    : (monthlyProductVolumeSeries[0]?.unitOfMeasure || 'MT');
+  const monthlyVolumeUnitByName = new Map(
+    monthlyProductVolumeSeries.map((series) => [series.displayName, series.unitOfMeasure]),
+  );
   const monthlyTrendIsVolume = monthlyTrendMode === 'volume';
   const monthlyTrendData = monthlyTrendIsVolume ? monthlyProductVolumes : (data?.monthlyNetPnl || []);
 
@@ -585,14 +639,16 @@ export default function DashboardSettings() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-foreground font-dm tracking-tight">
-                  {formatQuantity(productVolumeKpi.totalQuantity)} {productVolumeKpi.unitOfMeasure}
+                  {productVolumeKpi.hasMixedUnits
+                    ? 'Mixed units'
+                    : `${formatQuantity(productVolumeKpi.totalQuantity)} ${productVolumeKpi.unitOfMeasure}`}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">BDN Quantity or fallback mid-range</p>
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                {productVolumeKpi.breakdown.map((item) => (
-                  <span key={item.family} className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: PRODUCT_VOLUME_COLORS[item.family] }} />
+                {productVolumeKpi.breakdown.map((item, index) => (
+                  <span key={`${item.family}-${item.unitOfMeasure}`} className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: PRODUCT_VOLUME_COLORS[item.family] || COLORS[index % COLORS.length] }} />
                     <span>{item.family}</span>
                     <span className="font-semibold text-foreground">{formatQuantity(item.quantity)} {item.unitOfMeasure || 'MT'}</span>
                   </span>
@@ -611,7 +667,7 @@ export default function DashboardSettings() {
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     {monthlyTrendIsVolume
-                      ? `Combined monthly volume by product family with Gross Margin % for ${data.monthlyNetPnlYear || THIS_YEAR}`
+                      ? `${monthlyVolumeHasMixedUnits ? 'Monthly volume by product family and UOM' : 'Combined monthly volume by product family'} with Gross Margin % for ${data.monthlyNetPnlYear || THIS_YEAR}`
                       : `Total Gross Profit and Gross Margin % by month for ${data.monthlyNetPnlYear || THIS_YEAR}`}
                   </p>
                 </div>
@@ -642,7 +698,9 @@ export default function DashboardSettings() {
                   <YAxis
                     yAxisId="value"
                     tick={{ fontSize: 11 }}
-                    tickFormatter={(v) => monthlyTrendIsVolume ? `${Math.round(v).toLocaleString()} MT` : `$${Math.round(v / 1000)}k`}
+                    tickFormatter={(v) => monthlyTrendIsVolume
+                      ? `${Math.round(v).toLocaleString()}${monthlyVolumeAxisUnit ? ` ${monthlyVolumeAxisUnit}` : ''}`
+                      : `$${Math.round(v / 1000)}k`}
                   />
                   <YAxis
                     yAxisId="margin"
@@ -655,20 +713,26 @@ export default function DashboardSettings() {
                   <Tooltip
                     formatter={(value, name) => {
                       if (name === 'Gross Margin %') return [`${Number(value).toFixed(1)}%`, name];
-                      if (monthlyTrendIsVolume) return [`${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} MT`, name];
+                      if (monthlyTrendIsVolume) {
+                        const unit = monthlyVolumeUnitByName.get(name) || monthlyVolumeAxisUnit;
+                        return [`${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`, name];
+                      }
                       return [`$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 'Gross Profit'];
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
                   {monthlyTrendIsVolume ? (
-                    PRODUCT_FAMILY_KPI_ORDER.map((family, index) => (
+                    monthlyProductVolumeSeries.map((series, index) => (
                       <Bar
-                        key={family}
+                        key={series.key}
                         yAxisId="value"
-                        dataKey={family}
-                        stackId="monthly-volume"
-                        fill={PRODUCT_VOLUME_COLORS[family]}
-                        radius={index === PRODUCT_FAMILY_KPI_ORDER.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                        dataKey={series.key}
+                        name={series.displayName}
+                        stackId={monthlyVolumeHasMixedUnits ? undefined : 'monthly-volume'}
+                        fill={series.color}
+                        radius={monthlyVolumeHasMixedUnits || index === monthlyProductVolumeSeries.length - 1
+                          ? [4, 4, 0, 0]
+                          : [0, 0, 0, 0]}
                       />
                     ))
                   ) : (

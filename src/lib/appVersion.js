@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.41';
+export const APP_VERSION = '2.0.42';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.42',
+    releasedAt: '2026-07-27',
+    title: 'Dashboard litre volume normalization',
+    changes: [
+      'Read dashboard volume UOM from the Salesforce STEM line item or its Product record.',
+      'Converted litres to kilolitres at 1 L = 0.001 KL before dashboard aggregation and display.',
+      'Kept MT and KL totals separate in Product Volume and Monthly Volume instead of adding unlike units.',
+    ],
+  },
   {
     version: '2.0.41',
     releasedAt: '2026-07-24',

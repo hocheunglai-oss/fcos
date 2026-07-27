@@ -15,6 +15,11 @@ import {
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
+import {
+  dashboardLineItemVolume,
+  dashboardVolumeLabel,
+  findDashboardUomField,
+} from '../_dashboardVolume.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import {
   applyBuyerReminderRules,
@@ -4692,8 +4697,14 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     dateWindows,
   } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
-  const describe = await salesforceObjectFields({ objectName: 'stem__c' });
+  const [describe, lineItemDescribe, productDescribe] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c' }),
+    salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({ fields: [] })),
+  ]);
   const fieldNames = describe.fields.map((f) => f.name);
+  const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
+  const productUomField = findDashboardUomField(productDescribe.fields, 'product');
   if (dateBasis && dateBasis !== EXCEPTION_REVIEW_DATE_BASIS) {
     throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
   }
@@ -4832,10 +4843,41 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   let buyerBrokers = [];
   let extraCosts = [];
   if (allStemIds.length > 0) {
+    const lineItemFields = [
+      'STEM__c',
+      'Total_Price__c',
+      'Total_Cost__c',
+      'Supplier_Invoice__c',
+      'Cancelled__c',
+      'Supplier_Name__c',
+      'Buyers_Brokers_Commission_Per_Unit__c',
+      'Quantity__c',
+      'Quantity_Delivered_Per_BDN__c',
+      'Quantity_Max__c',
+      'Quantity_in_MT__c',
+      'Is_Quantity_Range__c',
+      'Product__r.Name',
+      'Product__r.Family',
+      'Price_Per_Unit__c',
+      'Cost_Per_Unit__c',
+      'Unit_Sell_At__c',
+      'Unit_Buy_At__c',
+      'Unit_Cost__c',
+      'Subtotal_Sell_At__c',
+      'Subtotal_Buy_At__c',
+      'Commission_Cost__c',
+      'Suppliers_Brokers_Commission_Per_Unit__c',
+      'Supplier_Broker__r.Name',
+      'Buyers_Broker__r.Name',
+      'Offer_Line_Item__r.UnitPrice',
+      'Offer_Line_Item__r.Supplier_Unit_Price__c',
+    ];
+    if (lineItemUomField) lineItemFields.push(lineItemUomField);
+    if (productUomField) lineItemFields.push(`Product__r.${productUomField}`);
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c, Supplier_Name__c, Buyers_Brokers_Commission_Per_Unit__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Product__r.Name, Product__r.Family, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Commission_Cost__c, Suppliers_Brokers_Commission_Per_Unit__c, Supplier_Broker__r.Name, Buyers_Broker__r.Name, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return queryRows(`SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
       })),
       Promise.all(chunkIds(allStemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
@@ -4872,12 +4914,8 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   const hasSupplierInvoiceByStem = {};
   const brokerByStem = {};
   const filteredStemIds = new Set((allStemsRes.records || []).map((stem) => stem.Id));
-  const productFamilyQuantityByName = {};
-  const monthlyProductVolumeByFamily = {
-    HSFO: Array(12).fill(0),
-    VLSFO: Array(12).fill(0),
-    LSMGO: Array(12).fill(0),
-  };
+  const productFamilyQuantityByUnit = new Map();
+  const monthlyProductVolumeByUnit = new Map();
   const supplierNamesByStem = {};
   const supplierNamesInFilteredStems = new Set();
   const supplierWeightByStem = {};
@@ -4900,6 +4938,11 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
     const lineSell = lineSellAmount(li, stemHasDelivery);
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
+    const dashboardVolume = dashboardLineItemVolume(li, stemHasDelivery, {
+      lineItemUomField,
+      productUomField,
+      fallbackQuantity: financialQuantity(li, stemHasDelivery),
+    });
     const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
     const supplierName = String(li.Supplier_Name__c || '').trim();
     addSupplierInvoiceAmount(id, supplierName, lineBuy);
@@ -4908,8 +4951,8 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
       productQuantitiesByStem[id].push({
         productName,
-        quantityLabel: lineItemQuantityLabel(li, stemHasDelivery),
-        unitOfMeasure: 'MT',
+        quantityLabel: dashboardVolumeLabel(dashboardVolume),
+        unitOfMeasure: dashboardVolume.unitOfMeasure,
       });
     }
     if (supplierName) {
@@ -4924,12 +4967,26 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     }
     if (filteredStemIds.has(id) && supplierMatchesCompanyFilter) {
       const family = dashboardProductFamily(li);
-      productFamilyQuantityByName[family] = (productFamilyQuantityByName[family] || 0) + financialQuantity(li, stemHasDelivery);
+      const volumeKey = `${family}\u001f${dashboardVolume.unitOfMeasure}`;
+      const current = productFamilyQuantityByUnit.get(volumeKey) || {
+        family,
+        unitOfMeasure: dashboardVolume.unitOfMeasure,
+        quantity: 0,
+      };
+      current.quantity += Number(dashboardVolume.quantity || 0);
+      productFamilyQuantityByUnit.set(volumeKey, current);
     }
     const monthlyFamily = dashboardProductFamily(li);
     const monthlyMonth = monthlyMonthByStem[id];
-    if (monthlyMonth && monthlyProductVolumeByFamily[monthlyFamily] && supplierMatchesCompanyFilter) {
-      monthlyProductVolumeByFamily[monthlyFamily][monthlyMonth - 1] += financialQuantity(li, stemHasDelivery);
+    if (monthlyMonth && supplierMatchesCompanyFilter) {
+      const volumeKey = `${monthlyFamily}\u001f${dashboardVolume.unitOfMeasure}`;
+      const current = monthlyProductVolumeByUnit.get(volumeKey) || {
+        family: monthlyFamily,
+        unitOfMeasure: dashboardVolume.unitOfMeasure,
+        months: Array(12).fill(0),
+      };
+      current.months[monthlyMonth - 1] += Number(dashboardVolume.quantity || 0);
+      monthlyProductVolumeByUnit.set(volumeKey, current);
     }
     lineItemSellByStem[id] = (lineItemSellByStem[id] || 0) + lineSell;
     supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + lineBuy;
@@ -5156,17 +5213,33 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     for (const supplierName of monthlySupplierNames) row[supplierName] = supplierMonthTotals[supplierName]?.[idx] || 0;
     return row;
   });
-  const productFamilyQuantities = Object.entries(productFamilyQuantityByName)
-    .map(([family, quantity]) => ({ family, quantity, unitOfMeasure: 'MT' }))
+  const productFamilyQuantities = [...productFamilyQuantityByUnit.values()]
     .sort((a, b) => b.quantity - a.quantity);
-  const monthlyProductVolumes = monthlyNetPnl.map((item, idx) => ({
-    month: item.month,
-    label: item.label,
-    HSFO: monthlyProductVolumeByFamily.HSFO[idx] || 0,
-    VLSFO: monthlyProductVolumeByFamily.VLSFO[idx] || 0,
-    LSMGO: monthlyProductVolumeByFamily.LSMGO[idx] || 0,
-    grossMarginPct: item.grossMarginPct,
-  }));
+  const productFamilyOrder = new Map([['HSFO', 0], ['VLSFO', 1], ['LSMGO', 2]]);
+  const monthlyProductVolumeSeries = [...monthlyProductVolumeByUnit.values()]
+    .sort((a, b) => {
+      const familyDifference = (productFamilyOrder.get(a.family) ?? 99) - (productFamilyOrder.get(b.family) ?? 99);
+      if (familyDifference) return familyDifference;
+      const nameDifference = a.family.localeCompare(b.family);
+      return nameDifference || a.unitOfMeasure.localeCompare(b.unitOfMeasure);
+    })
+    .map((series, index) => ({
+      key: `volume_${index}`,
+      family: series.family,
+      unitOfMeasure: series.unitOfMeasure,
+      months: series.months,
+    }));
+  const monthlyProductVolumes = monthlyNetPnl.map((item, idx) => {
+    const row = {
+      month: item.month,
+      label: item.label,
+      grossMarginPct: item.grossMarginPct,
+    };
+    for (const series of monthlyProductVolumeSeries) {
+      row[series.key] = series.months[idx] || 0;
+    }
+    return row;
+  });
 
   return {
     stemTotal: totalRes.records?.[0]?.total ?? 0,
@@ -5197,6 +5270,11 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     monthlyNetPnlYear: currentYear,
     productFamilyQuantities,
     monthlyProductVolumes,
+    monthlyProductVolumeSeries: monthlyProductVolumeSeries.map((series) => ({
+      key: series.key,
+      family: series.family,
+      unitOfMeasure: series.unitOfMeasure,
+    })),
     dateBasis: exceptionScheduleMode ? EXCEPTION_REVIEW_DATE_BASIS : null,
   };
 }
