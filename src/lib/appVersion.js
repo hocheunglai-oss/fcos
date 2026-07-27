@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.43';
+export const APP_VERSION = '2.0.44';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.44',
+    releasedAt: '2026-07-27',
+    title: 'Product volume KPI in metric tonnes',
+    changes: [
+      'Normalized Product Volume KPI and Monthly Volume statistics to one MT unit before aggregation.',
+      'Applied 0.98 MT per KL to HSFO and VLSFO, including CBM and litre source quantities.',
+      'Applied 0.85 MT per KL to LSMGO and other products without changing any financial calculation.',
+    ],
+  },
   {
     version: '2.0.43',
     releasedAt: '2026-07-27',

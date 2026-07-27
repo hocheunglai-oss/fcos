@@ -21,6 +21,7 @@ const UOM_FIELD_LABELS = new Set([
 ]);
 
 export const LSMGO_MT_PER_KL = 0.85;
+export const HSFO_VLSFO_MT_PER_KL = 0.98;
 
 function finiteNumber(value) {
   if (value == null || value === '') return null;
@@ -43,6 +44,13 @@ function normalizedUomToken(value) {
     .replace(/\s+/g, ' ');
 }
 
+export function dashboardMtPerKl(productFamily) {
+  const family = normalizedUomToken(productFamily);
+  return family === 'HSFO' || family === 'VLSFO'
+    ? HSFO_VLSFO_MT_PER_KL
+    : LSMGO_MT_PER_KL;
+}
+
 export function findDashboardUomField(fields, scope = 'lineItem') {
   const availableFields = Array.isArray(fields) ? fields : [];
   const preferredNames = scope === 'product' ? PRODUCT_UOM_FIELD_NAMES : LINE_ITEM_UOM_FIELD_NAMES;
@@ -62,32 +70,30 @@ export function normalizeDashboardVolume(quantity, uom, {
 } = {}) {
   const numericQuantity = finiteNumber(quantity);
   const token = normalizedUomToken(uom) || normalizedUomToken(fallbackUnit);
-  const isLsmgo = normalizedUomToken(productFamily) === 'LSMGO';
+  const mtPerKl = dashboardMtPerKl(productFamily);
 
   if (['L', 'LTR', 'LITRE', 'LITRES', 'LITER', 'LITERS'].includes(token)) {
     return {
-      quantity: numericQuantity == null ? null : numericQuantity / 1000,
-      unitOfMeasure: 'KL',
+      quantity: numericQuantity == null ? null : (numericQuantity / 1000) * mtPerKl,
+      unitOfMeasure: 'MT',
     };
   }
   if (['KL', 'KILOLITRE', 'KILOLITRES', 'KILOLITER', 'KILOLITERS'].includes(token)) {
     return {
-      quantity: numericQuantity,
-      unitOfMeasure: 'KL',
+      quantity: numericQuantity == null ? null : numericQuantity * mtPerKl,
+      unitOfMeasure: 'MT',
     };
   }
-  if (isLsmgo && ['CBM', 'M3', 'M³', 'CUBIC METER', 'CUBIC METERS', 'CUBIC METRE', 'CUBIC METRES'].includes(token)) {
+  if (['CBM', 'M3', 'M³', 'CUBIC METER', 'CUBIC METERS', 'CUBIC METRE', 'CUBIC METRES'].includes(token)) {
     return {
-      quantity: numericQuantity,
-      unitOfMeasure: 'KL',
+      quantity: numericQuantity == null ? null : numericQuantity * mtPerKl,
+      unitOfMeasure: 'MT',
     };
   }
-  if (['MT', 'M/T', 'METRIC TON', 'METRIC TONS', 'METRIC TONNE', 'METRIC TONNES'].includes(token)) {
+  if (['MT', 'M/T', 'T', 'TON', 'TONS', 'TONNE', 'TONNES', 'METRIC TON', 'METRIC TONS', 'METRIC TONNE', 'METRIC TONNES'].includes(token)) {
     return {
-      quantity: isLsmgo && numericQuantity != null
-        ? numericQuantity / LSMGO_MT_PER_KL
-        : numericQuantity,
-      unitOfMeasure: isLsmgo ? 'KL' : 'MT',
+      quantity: numericQuantity,
+      unitOfMeasure: 'MT',
     };
   }
   return {
@@ -147,6 +153,16 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   const maximum = maximumSource == null
     ? null
     : normalizeDashboardVolume(maximumSource, explicitUom, { productFamily });
+  if (minimum.unitOfMeasure !== 'MT' || (maximum && maximum.unitOfMeasure !== 'MT')) {
+    const metricTonQuantity = finiteNumber(item?.Quantity_in_MT__c) ?? finiteNumber(fallbackQuantity) ?? 0;
+    const normalized = normalizeDashboardVolume(metricTonQuantity, 'MT', { productFamily });
+    return {
+      ...normalized,
+      minimum: normalized.quantity,
+      maximum: normalized.quantity,
+      isRange: false,
+    };
+  }
   const isRange = maximum?.quantity != null && minimum.quantity != null;
 
   return {
