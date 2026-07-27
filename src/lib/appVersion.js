@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.42';
+export const APP_VERSION = '2.0.43';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.43',
+    releasedAt: '2026-07-27',
+    title: 'LSMGO volume statistics normalization',
+    changes: [
+      'Normalized LSMGO CBM and KL quantities to kilolitres in dashboard volume statistics.',
+      'Converted LSMGO metric tonnes to approximate kilolitres using 1 KL = 0.85 MT.',
+      'Kept the approximate density conversion out of pricing, cost, commission, and financial calculations.',
+    ],
+  },
   {
     version: '2.0.42',
     releasedAt: '2026-07-27',

@@ -20,6 +20,8 @@ const UOM_FIELD_LABELS = new Set([
   'quantity unit of measure',
 ]);
 
+export const LSMGO_MT_PER_KL = 0.85;
+
 function finiteNumber(value) {
   if (value == null || value === '') return null;
   const number = Number(value);
@@ -54,19 +56,17 @@ export function findDashboardUomField(fields, scope = 'lineItem') {
   return labelMatch?.name || null;
 }
 
-export function normalizeDashboardVolume(quantity, uom, fallbackUnit = 'MT') {
+export function normalizeDashboardVolume(quantity, uom, {
+  fallbackUnit = 'MT',
+  productFamily = '',
+} = {}) {
   const numericQuantity = finiteNumber(quantity);
-  const token = normalizedUomToken(uom);
-  if (numericQuantity == null) {
-    return {
-      quantity: null,
-      unitOfMeasure: token || fallbackUnit,
-    };
-  }
+  const token = normalizedUomToken(uom) || normalizedUomToken(fallbackUnit);
+  const isLsmgo = normalizedUomToken(productFamily) === 'LSMGO';
 
   if (['L', 'LTR', 'LITRE', 'LITRES', 'LITER', 'LITERS'].includes(token)) {
     return {
-      quantity: numericQuantity / 1000,
+      quantity: numericQuantity == null ? null : numericQuantity / 1000,
       unitOfMeasure: 'KL',
     };
   }
@@ -76,10 +76,18 @@ export function normalizeDashboardVolume(quantity, uom, fallbackUnit = 'MT') {
       unitOfMeasure: 'KL',
     };
   }
-  if (['MT', 'M/T', 'METRIC TON', 'METRIC TONS', 'METRIC TONNE', 'METRIC TONNES'].includes(token)) {
+  if (isLsmgo && ['CBM', 'M3', 'M³', 'CUBIC METER', 'CUBIC METERS', 'CUBIC METRE', 'CUBIC METRES'].includes(token)) {
     return {
       quantity: numericQuantity,
-      unitOfMeasure: 'MT',
+      unitOfMeasure: 'KL',
+    };
+  }
+  if (['MT', 'M/T', 'METRIC TON', 'METRIC TONS', 'METRIC TONNE', 'METRIC TONNES'].includes(token)) {
+    return {
+      quantity: isLsmgo && numericQuantity != null
+        ? numericQuantity / LSMGO_MT_PER_KL
+        : numericQuantity,
+      unitOfMeasure: isLsmgo ? 'KL' : 'MT',
     };
   }
   return {
@@ -104,10 +112,11 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   lineItemUomField = null,
   productUomField = null,
   fallbackQuantity = 0,
+  productFamily = '',
 } = {}) {
   const explicitUom = resolveDashboardItemUom(item, { lineItemUomField, productUomField });
   if (!explicitUom) {
-    const normalized = normalizeDashboardVolume(fallbackQuantity, null);
+    const normalized = normalizeDashboardVolume(fallbackQuantity, 'MT', { productFamily });
     return {
       ...normalized,
       minimum: normalized.quantity,
@@ -123,7 +132,7 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   const minimumSource = orderedNativeQuantities.find((value) => value != null);
   if (minimumSource == null) {
     const metricTonQuantity = finiteNumber(item?.Quantity_in_MT__c) ?? finiteNumber(fallbackQuantity) ?? 0;
-    const normalized = normalizeDashboardVolume(metricTonQuantity, 'MT');
+    const normalized = normalizeDashboardVolume(metricTonQuantity, 'MT', { productFamily });
     return {
       ...normalized,
       minimum: normalized.quantity,
@@ -134,10 +143,10 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   const maximumSource = !stemHasDelivery && item?.Is_Quantity_Range__c
     ? finiteNumber(item?.Quantity_Max__c)
     : null;
-  const minimum = normalizeDashboardVolume(minimumSource, explicitUom);
+  const minimum = normalizeDashboardVolume(minimumSource, explicitUom, { productFamily });
   const maximum = maximumSource == null
     ? null
-    : normalizeDashboardVolume(maximumSource, explicitUom);
+    : normalizeDashboardVolume(maximumSource, explicitUom, { productFamily });
   const isRange = maximum?.quantity != null && minimum.quantity != null;
 
   return {

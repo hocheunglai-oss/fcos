@@ -4938,10 +4938,12 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
     const lineSell = lineSellAmount(li, stemHasDelivery);
     const lineBuy = lineBuyAmount(li, stemHasDelivery);
+    const dashboardFamily = dashboardProductFamily(li);
     const dashboardVolume = dashboardLineItemVolume(li, stemHasDelivery, {
       lineItemUomField,
       productUomField,
       fallbackQuantity: financialQuantity(li, stemHasDelivery),
+      productFamily: dashboardFamily,
     });
     const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
     const supplierName = String(li.Supplier_Name__c || '').trim();
@@ -4966,7 +4968,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       }
     }
     if (filteredStemIds.has(id) && supplierMatchesCompanyFilter) {
-      const family = dashboardProductFamily(li);
+      const family = dashboardFamily;
       const volumeKey = `${family}\u001f${dashboardVolume.unitOfMeasure}`;
       const current = productFamilyQuantityByUnit.get(volumeKey) || {
         family,
@@ -4976,7 +4978,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
       current.quantity += Number(dashboardVolume.quantity || 0);
       productFamilyQuantityByUnit.set(volumeKey, current);
     }
-    const monthlyFamily = dashboardProductFamily(li);
+    const monthlyFamily = dashboardFamily;
     const monthlyMonth = monthlyMonthByStem[id];
     if (monthlyMonth && supplierMatchesCompanyFilter) {
       const volumeKey = `${monthlyFamily}\u001f${dashboardVolume.unitOfMeasure}`;

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  LSMGO_MT_PER_KL,
   dashboardLineItemVolume,
   dashboardVolumeLabel,
   findDashboardUomField,
@@ -31,6 +32,33 @@ test('keeps kilolitres and metric tonnes unchanged', () => {
   assert.deepEqual(normalizeDashboardVolume(12.5, 'MT'), {
     quantity: 12.5,
     unitOfMeasure: 'MT',
+  });
+});
+
+test('normalizes LSMGO CBM and approximate MT quantities to kilolitres', () => {
+  assert.equal(LSMGO_MT_PER_KL, 0.85);
+  assert.deepEqual(normalizeDashboardVolume(1, 'CBM', { productFamily: 'LSMGO' }), {
+    quantity: 1,
+    unitOfMeasure: 'KL',
+  });
+  assert.deepEqual(normalizeDashboardVolume(0.85, 'MT', { productFamily: 'LSMGO' }), {
+    quantity: 1,
+    unitOfMeasure: 'KL',
+  });
+  assert.deepEqual(normalizeDashboardVolume(8.5, 'MT', { productFamily: 'LSMGO' }), {
+    quantity: 10,
+    unitOfMeasure: 'KL',
+  });
+});
+
+test('does not apply the approximate LSMGO density to other product families', () => {
+  assert.deepEqual(normalizeDashboardVolume(8.5, 'MT', { productFamily: 'VLSFO' }), {
+    quantity: 8.5,
+    unitOfMeasure: 'MT',
+  });
+  assert.deepEqual(normalizeDashboardVolume(1, 'CBM', { productFamily: 'VLSFO' }), {
+    quantity: 1,
+    unitOfMeasure: 'CBM',
   });
 });
 
@@ -110,9 +138,24 @@ test('does not reinterpret the explicit Quantity_in_MT field as litres', () => {
   assert.equal(volume.unitOfMeasure, 'MT');
 });
 
+test('uses the approximate density for an LSMGO Quantity_in_MT dashboard fallback', () => {
+  const volume = dashboardLineItemVolume({
+    Quantity_in_MT__c: 8.5,
+    Product__r: { QuantityUnitOfMeasure: 'L' },
+  }, true, {
+    productUomField: 'QuantityUnitOfMeasure',
+    fallbackQuantity: 8.5,
+    productFamily: 'LSMGO',
+  });
+  assert.equal(volume.quantity, 10);
+  assert.equal(volume.unitOfMeasure, 'KL');
+});
+
 test('dashboard integration reads Salesforce UOM and keeps mixed units separate', () => {
   assert.match(apiSource, /findDashboardUomField/);
   assert.match(apiSource, /dashboardLineItemVolume/);
+  assert.match(apiSource, /productFamily: dashboardFamily/);
+  assert.equal(apiSource.match(/dashboardLineItemVolume\(/g)?.length, 1);
   assert.match(apiSource, /monthlyProductVolumeSeries/);
   assert.doesNotMatch(apiSource, /productFamilyQuantityByName\\[family\\].*financialQuantity/);
   assert.match(dashboardSource, /Mixed units/);
