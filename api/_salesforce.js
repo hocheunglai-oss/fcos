@@ -1,5 +1,14 @@
 import { createSign } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
+import {
+  markRuntimeCacheUnsafe,
+  parseSforceLimitInfo,
+  recordSalesforceCall,
+  recordSalesforceLimit,
+  salesforceLimitFromBody,
+  telemetryResponseHeaders,
+} from './_requestTelemetry.js';
+import { expireRuntimeCacheTags } from './_runtimeCache.js';
 
 const DEFAULT_INSTANCE_URL = 'https://fratellicosulich.my.salesforce.com';
 const DEFAULT_API_VERSION = 'v59.0';
@@ -12,6 +21,9 @@ export function sendJson(res, data, status = 200) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
   res.setHeader('cache-control', 'no-store');
+  for (const [name, value] of Object.entries(telemetryResponseHeaders())) {
+    res.setHeader(name, value);
+  }
   res.end(JSON.stringify(data));
 }
 
@@ -191,23 +203,66 @@ export function cleanRecord(obj) {
   return Object.fromEntries(Object.entries(rest).map(([key, value]) => [key, cleanRecord(value)]));
 }
 
-export async function sfRequest(path, { method = 'GET', body, headers = {}, retryOnExpiredSession = true } = {}) {
+async function expireSalesforceWriteCaches() {
+  await expireRuntimeCacheTags([
+    'salesforce:stem',
+    'salesforce:account',
+    'salesforce:dashboard',
+    'salesforce:buyer-invoices',
+    'salesforce:disputes',
+    'salesforce:documents',
+    'salesforce:reference',
+  ]);
+}
+
+export async function sfRequest(path, {
+  method = 'GET',
+  body,
+  headers = {},
+  retryOnExpiredSession = true,
+  readOnly = false,
+  telemetry = {},
+} = {}) {
   const normalizedMethod = String(method || 'GET').toUpperCase();
-  if (!['GET', 'HEAD'].includes(normalizedMethod)) requireExternalActionGate('salesforce_write');
+  if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
+  const startedAt = Date.now();
   const accessToken = await getAccessToken();
   const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
-  const res = await fetch(url, {
-    method: normalizedMethod,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      ...(body ? { 'content-type': 'application/json' } : {}),
-      ...headers,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  let data = {};
+  let limit = null;
+  try {
+    res = await fetch(url, {
+      method: normalizedMethod,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+        ...headers,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
+    if (res.status !== 204) data = await res.json().catch(() => ({}));
+  } finally {
+    const responseRows = telemetry.composite === true
+      ? (data?.compositeResponse || []).reduce(
+          (sum, response) => sum + (Array.isArray(response?.body?.records) ? response.body.records.length : 0),
+          0,
+        )
+      : (Array.isArray(data?.records) ? data.records.length : 0);
+    recordSalesforceCall({
+      durationMs: Date.now() - startedAt,
+      rows: responseRows,
+      logicalQueries: telemetry.logicalQueries ?? (/^\/query\/\?q=/i.test(path) ? 1 : 0),
+      composite: telemetry.composite === true,
+      limit,
+    });
+  }
 
-  if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
+  if (res.status === 204) {
+    if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
+    return null;
+  }
   const errorCode = data.errorCode || data[0]?.errorCode;
   if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
     cachedToken = null;
@@ -217,6 +272,8 @@ export async function sfRequest(path, { method = 'GET', body, headers = {}, retr
       body,
       headers,
       retryOnExpiredSession: false,
+      readOnly,
+      telemetry,
     });
   }
   if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
@@ -225,31 +282,43 @@ export async function sfRequest(path, { method = 'GET', body, headers = {}, retr
     error.code = errorCode || null;
     throw error;
   }
+  if (path === '/limits') recordSalesforceLimit(salesforceLimitFromBody(data));
+  if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
   return data;
 }
 
 export async function sfDownload(path, { retryOnExpiredSession = true } = {}) {
+  const startedAt = Date.now();
   const accessToken = await getAccessToken();
   const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  let limit = null;
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
 
-  if (retryOnExpiredSession && res.status === 401) {
-    cachedToken = null;
-    cachedTokenExpiresAt = 0;
-    return sfDownload(path, { retryOnExpiredSession: false });
+    if (retryOnExpiredSession && res.status === 401) {
+      cachedToken = null;
+      cachedTokenExpiresAt = 0;
+      return sfDownload(path, { retryOnExpiredSession: false });
+    }
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data[0]?.message || `GET ${path} failed`);
+    }
+
+    return {
+      contentType: res.headers.get('content-type') || 'application/octet-stream',
+      buffer: Buffer.from(await res.arrayBuffer()),
+    };
+  } finally {
+    recordSalesforceCall({
+      durationMs: Date.now() - startedAt,
+      limit,
+    });
   }
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.message || data[0]?.message || `GET ${path} failed`);
-  }
-
-  return {
-    contentType: res.headers.get('content-type') || 'application/octet-stream',
-    buffer: Buffer.from(await res.arrayBuffer()),
-  };
 }
 
 export async function sfQuery(soql, { clean = false, limit = 2000, softFail = false } = {}) {
@@ -268,6 +337,140 @@ export async function sfQuery(soql, { clean = false, limit = 2000, softFail = fa
     if (softFail) return { records: [], totalSize: 0, error: error.message };
     throw error;
   }
+}
+
+function compositeQueryUrl(soql) {
+  return `/services/data/${getApiVersion()}/query/?q=${encodeURIComponent(soql)}`;
+}
+
+function compositeNextUrl(path) {
+  if (!path) return null;
+  return String(path).startsWith('/services/data/')
+    ? String(path)
+    : `/services/data/${getApiVersion()}${String(path).startsWith('/') ? '' : '/'}${path}`;
+}
+
+function compositeQueryError(response, fallback = 'Salesforce Composite query failed') {
+  const body = response?.body;
+  const message = body?.message || body?.[0]?.message || fallback;
+  const error = new Error(message);
+  error.status = response?.httpStatusCode || 502;
+  error.code = body?.errorCode || body?.[0]?.errorCode || null;
+  return error;
+}
+
+async function compositeRead(subrequests) {
+  const data = await sfRequest('/composite', {
+    method: 'POST',
+    readOnly: true,
+    body: {
+      allOrNone: false,
+      compositeRequest: subrequests,
+    },
+    telemetry: {
+      composite: true,
+      logicalQueries: subrequests.filter((request) => /\/query\/\?q=/i.test(request.url)).length,
+    },
+  });
+  return data?.compositeResponse || [];
+}
+
+export async function sfCompositeQueries(queries = []) {
+  const normalized = queries.map((query, index) => ({
+    soql: typeof query === 'string' ? query : query.soql,
+    clean: typeof query === 'object' && query.clean === true,
+    limit: Math.max(0, Number(typeof query === 'object' ? query.limit : 2000) || 2000),
+    softFail: typeof query === 'object' && query.softFail === true,
+    referenceId: `query${index}`,
+  }));
+  const results = normalized.map(() => ({ records: [], totalSize: 0 }));
+
+  for (let start = 0; start < normalized.length; start += 5) {
+    const group = normalized.slice(start, start + 5);
+    let responses;
+    try {
+      responses = await compositeRead(group.map((query) => ({
+        method: 'GET',
+        url: compositeQueryUrl(query.soql),
+        referenceId: query.referenceId,
+      })));
+    } catch (error) {
+      const strict = group.find((query) => !query.softFail);
+      if (strict) throw error;
+      markRuntimeCacheUnsafe('salesforce_composite_partial_failure');
+      for (let offset = 0; offset < group.length; offset += 1) {
+        results[start + offset] = { records: [], totalSize: 0, error: error.message };
+      }
+      continue;
+    }
+
+    const pending = [];
+    for (let offset = 0; offset < group.length; offset += 1) {
+      const query = group[offset];
+      const response = responses.find((item) => item.referenceId === query.referenceId) || responses[offset];
+      if (!response || response.httpStatusCode < 200 || response.httpStatusCode >= 300) {
+        const error = compositeQueryError(response);
+        if (!query.softFail) throw error;
+        markRuntimeCacheUnsafe('salesforce_composite_partial_failure');
+        results[start + offset] = { records: [], totalSize: 0, error: error.message };
+        continue;
+      }
+      const body = response.body || {};
+      const records = Array.isArray(body.records) ? body.records.slice(0, query.limit) : [];
+      results[start + offset] = {
+        records,
+        totalSize: body.totalSize ?? records.length,
+      };
+      if (body.nextRecordsUrl && records.length < query.limit) {
+        pending.push({
+          resultIndex: start + offset,
+          query,
+          nextRecordsUrl: body.nextRecordsUrl,
+        });
+      }
+    }
+
+    while (pending.length) {
+      const pageGroup = pending.splice(0, 5);
+      let pageResponses;
+      try {
+        pageResponses = await compositeRead(pageGroup.map((page, offset) => ({
+          method: 'GET',
+          url: compositeNextUrl(page.nextRecordsUrl),
+          referenceId: `page${page.resultIndex}_${offset}`,
+        })));
+      } catch (error) {
+        const strict = pageGroup.find((page) => !page.query.softFail);
+        if (strict) throw error;
+        markRuntimeCacheUnsafe('salesforce_composite_partial_failure');
+        for (const page of pageGroup) results[page.resultIndex].error = error.message;
+        continue;
+      }
+      for (let offset = 0; offset < pageGroup.length; offset += 1) {
+        const page = pageGroup[offset];
+        const response = pageResponses[offset];
+        if (!response || response.httpStatusCode < 200 || response.httpStatusCode >= 300) {
+          const error = compositeQueryError(response);
+          if (!page.query.softFail) throw error;
+          markRuntimeCacheUnsafe('salesforce_composite_partial_failure');
+          results[page.resultIndex].error = error.message;
+          continue;
+        }
+        const body = response.body || {};
+        const result = results[page.resultIndex];
+        const remaining = Math.max(0, page.query.limit - result.records.length);
+        result.records.push(...(Array.isArray(body.records) ? body.records.slice(0, remaining) : []));
+        if (body.nextRecordsUrl && result.records.length < page.query.limit) {
+          pending.push({ ...page, nextRecordsUrl: body.nextRecordsUrl });
+        }
+      }
+    }
+  }
+
+  return results.map((result, index) => ({
+    ...result,
+    records: normalized[index].clean ? result.records.map(cleanRecord) : result.records,
+  }));
 }
 
 export function chunkIds(ids, size = 200) {

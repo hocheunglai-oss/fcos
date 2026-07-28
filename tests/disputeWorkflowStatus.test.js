@@ -92,7 +92,8 @@ test('queue projection, read-only controls, and conditional Salesforce writeback
   assert.match(apiSource, /await patchDisputeWorkflowStatusInSalesforce\(caseRow, 'Pending Approval'\)/);
   assert.match(apiSource, /await patchDisputeWorkflowStatusInSalesforce\(caseRow, workflowStatus\)/);
   assert.match(apiSource, /if \(!hasRecordedFcosClosureWriteback\(caseRow\)\) assertSalesforceDisputeIsOpen\(currentStem\)/);
-  assert.match(salesforceSource, /sfRequest\(path, \{ method = 'GET', body, headers = \{\}/);
+  assert.match(salesforceSource, /sfRequest\(path, \{\s*method = 'GET',\s*body,\s*headers = \{\}/);
+  assert.match(salesforceSource, /if \(!\['GET', 'HEAD'\]\.includes\(normalizedMethod\) && !readOnly\) requireExternalActionGate\('salesforce_write'\)/);
   assert.match(salesforceSource, /\.\.\.headers/);
   assert.match(pageSource, /const canReview = !legacyReadOnly/);
   assert.match(pageSource, /const canManageDocuments = !legacyReadOnly/);

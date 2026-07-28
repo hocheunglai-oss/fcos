@@ -50,7 +50,7 @@ test('Exception Review search matches the normalized Schedule type and date rang
 test('live dashboard route selects and normalizes Salesforce port identity', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const liveFunction = source.slice(
-    source.indexOf('async function salesforceDashboardFilteredFull'),
+    source.indexOf('async function salesforceDashboardFilteredUncached'),
     source.indexOf('async function stemPnlFull'),
   );
 

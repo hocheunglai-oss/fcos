@@ -159,7 +159,7 @@ test('reports every required Salesforce Schedule schema field', () => {
 test('live dashboard route and Exception Review UI use the Schedule interface', async () => {
   const apiSource = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const liveFunction = apiSource.slice(
-    apiSource.indexOf('async function salesforceDashboardFilteredFull'),
+    apiSource.indexOf('async function salesforceDashboardFilteredUncached'),
     apiSource.indexOf('async function stemPnlFull'),
   );
   const pageSource = await readFile(new URL('../src/pages/ReviewQueue.jsx', import.meta.url), 'utf8');

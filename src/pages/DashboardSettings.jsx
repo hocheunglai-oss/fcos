@@ -148,6 +148,7 @@ export default function DashboardSettings() {
     const normalizedCompany = String(company || '').trim();
     const where = buildWhereClause(yrs, mos, normalizedCountry);
     const res = await appClient.functions.invoke('salesforceDashboardFiltered', {
+      mode: 'dashboard',
       where,
       trendYear: THIS_YEAR,
       disputeOnly: onlyDisputes,

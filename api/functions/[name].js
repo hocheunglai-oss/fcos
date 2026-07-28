@@ -1,4 +1,15 @@
-import { chunkIds, cleanRecord, getInstanceUrl, salesforceAuthMode, sendJson, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import {
+  chunkIds,
+  cleanRecord,
+  getApiVersion,
+  getInstanceUrl,
+  salesforceAuthMode,
+  sendJson,
+  sfCompositeQueries,
+  sfDownload,
+  sfQuery,
+  sfRequest,
+} from '../_salesforce.js';
 import {
   disputeWorkflowDirectionLabel,
   disputeWorkflowEditableFilename,
@@ -70,6 +81,21 @@ import {
   supplierInstructionRows,
   validSupplierSettlementPayment,
 } from '../_disputeSupplierSettlement.js';
+import {
+  currentRequestTelemetry,
+  logRequestTelemetry,
+  recordRequestFailure,
+  recordSupabaseRequest,
+  requestIdFrom,
+  runWithRequestTelemetry,
+  salesforceLimitFromBody,
+  telemetryResponseHeaders,
+} from '../_requestTelemetry.js';
+import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
+import {
+  expireRuntimeCacheTags,
+  getOrLoadRuntimeCache,
+} from '../_runtimeCache.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -176,18 +202,6 @@ function appError(message, status = 500) {
   return error;
 }
 
-function redactedRequestUrl(req) {
-  try {
-    const url = new URL(req?.url || '', 'http://localhost');
-    url.searchParams.delete('access_token');
-    url.searchParams.delete('token');
-    const query = url.searchParams.toString();
-    return `${url.pathname}${query ? `?${query}` : ''}`;
-  } catch {
-    return String(req?.url || '').replace(/([?&](?:access_token|token)=)[^&]+/gi, '$1[redacted]');
-  }
-}
-
 function supabaseUrl() {
   return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 }
@@ -201,10 +215,24 @@ function supabaseAdminClient() {
     throw appError('Missing Supabase server configuration. Set SUPABASE_URL or VITE_SUPABASE_URL, plus SUPABASE_SERVICE_ROLE_KEY in Vercel.', 500);
   }
   if (!cachedSupabaseAdmin) {
+    const trackedFetch = async (...args) => {
+      const startedAt = Date.now();
+      try {
+        const response = await fetch(...args);
+        recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
+        return response;
+      } catch (error) {
+        recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: false });
+        throw error;
+      }
+    };
     cachedSupabaseAdmin = createClient(url, serviceRoleKey, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
+      },
+      global: {
+        fetch: trackedFetch,
       },
     });
   }
@@ -590,6 +618,50 @@ function isInterofficeAccess(accessContext) {
   return accessContext?.profile?.user_type === INTEROFFICE_USER_TYPE_ID;
 }
 
+function salesforceCacheAccessScope(accessContext) {
+  return isInterofficeAccess(accessContext) ? 'interoffice' : 'standard';
+}
+
+function salesforceCacheApiIdentity() {
+  let host = 'unknown-instance';
+  try {
+    host = new URL(getInstanceUrl()).hostname.toLowerCase();
+  } catch {
+    host = String(getInstanceUrl() || 'unknown-instance').toLowerCase();
+  }
+  return `${getApiVersion()}@${host}`;
+}
+
+function requestForcesRefresh(body = {}, req = null) {
+  const header = req?.headers?.['x-fcos-cache-bypass'] || req?.headers?.['X-FCOS-Cache-Bypass'];
+  return body?.force === true || body?.forceRefresh === true || body?.refresh === true || String(header || '') === '1';
+}
+
+async function cachedSalesforceValue({
+  namespace,
+  ttlSeconds,
+  payload,
+  tags,
+  body,
+  req,
+  accessContext,
+  loader,
+}) {
+  const force = requestForcesRefresh(body, req);
+  if (force) await expireRuntimeCacheTags([...(tags || []), 'salesforce:schema']);
+  return getOrLoadRuntimeCache({
+    namespace,
+    version: '1',
+    accessScope: salesforceCacheAccessScope(accessContext),
+    apiVersion: salesforceCacheApiIdentity(),
+    payload,
+    ttlSeconds,
+    tags,
+    force,
+    loader,
+  });
+}
+
 function fieldNameSetFrom(input) {
   if (!input) return new Set();
   if (input instanceof Set) return input;
@@ -600,13 +672,9 @@ function combineWhereConditions(conditions = []) {
   return conditions.filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
 }
 
-let cachedAccountFieldNameSet = null;
-
 async function accountFieldNameSet() {
-  if (cachedAccountFieldNameSet) return cachedAccountFieldNameSet;
   const describe = await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }));
-  cachedAccountFieldNameSet = fieldNameSetFrom(describe.fields || []);
-  return cachedAccountFieldNameSet;
+  return fieldNameSetFrom(describe.fields || []);
 }
 
 async function interofficeStemAccessCondition(accessContext, stemFields = null, accountFields = null) {
@@ -1403,11 +1471,8 @@ const ACCOUNT_MANAGER_ACCOUNT_FIELDS = [
   'Account_Manager__c',
 ];
 
-let cachedAccountManagerSchema = null;
-
 async function accountManagerSchema() {
-  if (cachedAccountManagerSchema) return cachedAccountManagerSchema;
-  const describe = await sfRequest('/sobjects/Account/describe/');
+  const describe = await salesforceObjectFields({ objectName: 'Account' });
   const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
   const requiredFields = [
     ['ParentId', 'reference'],
@@ -1439,8 +1504,7 @@ async function accountManagerSchema() {
     throw appError(`Salesforce Account.Account_Manager__c supports only ${Number(managerField.length || 0)} characters. Increase it to 255 before using Account Managers.`, 503);
   }
 
-  cachedAccountManagerSchema = { managerFieldLength: Number(managerField.length || 0) };
-  return cachedAccountManagerSchema;
+  return { managerFieldLength: Number(managerField.length || 0) };
 }
 
 function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] }) {
@@ -1600,13 +1664,22 @@ async function accountManagersList(body = {}, req = null, accessContext = null) 
   const client = accessContext?.client || supabaseAdminClient();
   await accountManagerSchema();
   const [salesforceAccountResult, groupsResult, assignmentsResult, profilesResult, notesResult] = await Promise.all([
-    queryResult(`
-      SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
-      FROM Account
-      WHERE Inactive_Suspended__c = false
-        AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
-      ORDER BY Name ASC
-    `, { limit: 10000 }),
+    cachedSalesforceValue({
+      namespace: 'account-manager-directory',
+      payload: null,
+      ttlSeconds: 10 * 60,
+      tags: ['salesforce:account', 'salesforce:reference'],
+      body,
+      req,
+      accessContext,
+      loader: () => queryResult(`
+        SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
+        FROM Account
+        WHERE Inactive_Suspended__c = false
+          AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
+        ORDER BY Name ASC
+      `, { limit: 10000 }),
+    }).then((cached) => cached.value),
     client
       .from('account_manager_groups')
       .select('account_name_key,account_name,salesforce_account_ids,account_roles,salesforce_manager_text,propagate_to_children,salesforce_sync_status,salesforce_sync_error,salesforce_synced_at,revision,updated_at,updated_by_email'),
@@ -1867,11 +1940,8 @@ async function loadBuyerInvoiceReminderRules({ required = false, client = null }
   return { available: true, rules: data || [], error: null };
 }
 
-let cachedBuyerReminderAccountSchema = null;
-
 async function buyerReminderAccountSchema() {
-  if (cachedBuyerReminderAccountSchema) return cachedBuyerReminderAccountSchema;
-  const describe = await sfRequest('/sobjects/Account/describe/');
+  const describe = await salesforceObjectFields({ objectName: 'Account' });
   const fieldsByName = new Map((describe.fields || []).map((field) => [field.name, field]));
   const requiredFields = [
     ['RecordTypeId', 'reference'],
@@ -1891,7 +1961,6 @@ async function buyerReminderAccountSchema() {
   if (!fieldsByName.get('ParentId')?.referenceTo?.includes('Account')) {
     throw appError('Salesforce Account.ParentId is not an Account lookup. Reminder Rules is unavailable until the schema is corrected.', 503);
   }
-  cachedBuyerReminderAccountSchema = true;
   return true;
 }
 
@@ -1922,17 +1991,26 @@ function isActiveBuyerReminderAccount(account = {}) {
     && Boolean(String(account.Company_Code__c || '').trim());
 }
 
-async function loadBuyerReminderAccountDirectory() {
+async function loadBuyerReminderAccountDirectory(body = {}, req = null, accessContext = null) {
   await buyerReminderAccountSchema();
-  const result = await queryResult(`
-    SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
-    FROM Account
-    WHERE Inactive_Suspended__c = false
-      AND Is_Broker__c = false
-      AND Company_Code__c != null
-      AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
-    ORDER BY Name ASC, Id ASC
-  `, { limit: 10000 });
+  const { value: result } = await cachedSalesforceValue({
+    namespace: 'buyer-reminder-account-directory',
+    payload: null,
+    ttlSeconds: 10 * 60,
+    tags: ['salesforce:account', 'salesforce:reference', 'salesforce:buyer-invoices'],
+    body,
+    req,
+    accessContext,
+    loader: () => queryResult(`
+      SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE Inactive_Suspended__c = false
+        AND Is_Broker__c = false
+        AND Company_Code__c != null
+        AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
+      ORDER BY Name ASC, Id ASC
+    `, { limit: 10000 }),
+  });
   const records = (result.records || []).filter(isActiveBuyerReminderAccount);
   if (Number(result.totalSize || 0) > records.length) {
     throw appError('The active Buyer Account directory exceeds 10,000 records. Narrow the Salesforce directory before managing reminder rules.', 503);
@@ -1995,7 +2073,7 @@ function serializeBuyerReminderRule(rule = null) {
 async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
   const [salesforceAccounts, stored] = await Promise.all([
-    loadBuyerReminderAccountDirectory(),
+    loadBuyerReminderAccountDirectory(body, req, accessContext),
     loadBuyerInvoiceReminderRules({ required: true, client }),
   ]);
   const ruleMap = buyerReminderRuleMap(stored.rules);
@@ -2612,27 +2690,41 @@ async function salesforceSchema() {
 async function salesforceObjectFields(body) {
   const { objectName } = body;
   if (!objectName) throw new Error('objectName required');
-  const data = await sfRequest(`/sobjects/${encodeURIComponent(objectName)}/describe/`);
-  const fields = (data.fields || []).map((f) => ({
-    name: f.name,
-    label: f.label,
-    type: f.type,
-    filterable: f.filterable,
-    sortable: f.sortable,
-    groupable: f.groupable,
-    aggregatable: f.aggregatable,
-    custom: f.custom,
-    length: f.length || 0,
-    updateable: f.updateable === true,
-    createable: f.createable === true,
-    nillable: f.nillable === true,
-    relationshipName: f.relationshipName || null,
-    referenceTo: f.referenceTo || [],
-  }));
-  const childRelationships = (data.childRelationships || [])
-    .filter((r) => r.relationshipName && r.childSObject)
-    .map((r) => ({ relationshipName: r.relationshipName, childSObject: r.childSObject, field: r.field }));
-  return { objectName, label: data.label, fields, childRelationships };
+  const normalizedObjectName = String(objectName).trim();
+  const cached = await getOrLoadRuntimeCache({
+    namespace: 'salesforce-describe',
+    version: '1',
+    accessScope: 'schema',
+    apiVersion: salesforceCacheApiIdentity(),
+    payload: { objectName: normalizedObjectName.toLowerCase() },
+    ttlSeconds: 6 * 60 * 60,
+    tags: ['salesforce:schema', `salesforce:schema:${normalizedObjectName.toLowerCase()}`],
+    force: body.forceRefresh === true,
+    loader: async () => {
+      const data = await sfRequest(`/sobjects/${encodeURIComponent(normalizedObjectName)}/describe/`);
+      const fields = (data.fields || []).map((f) => ({
+        name: f.name,
+        label: f.label,
+        type: f.type,
+        filterable: f.filterable,
+        sortable: f.sortable,
+        groupable: f.groupable,
+        aggregatable: f.aggregatable,
+        custom: f.custom,
+        length: f.length || 0,
+        updateable: f.updateable === true,
+        createable: f.createable === true,
+        nillable: f.nillable === true,
+        relationshipName: f.relationshipName || null,
+        referenceTo: f.referenceTo || [],
+      }));
+      const childRelationships = (data.childRelationships || [])
+        .filter((r) => r.relationshipName && r.childSObject)
+        .map((r) => ({ relationshipName: r.relationshipName, childSObject: r.childSObject, field: r.field }));
+      return { objectName: normalizedObjectName, label: data.label, fields, childRelationships };
+    },
+  });
+  return cached.value;
 }
 
 async function salesforceQuery(body, req = null, accessContext = null) {
@@ -2913,6 +3005,32 @@ async function queryRows(soql, { limit = 5000, softFail = false } = {}) {
 
 async function queryResult(soql, { limit = 5000, softFail = false } = {}) {
   return sfQuery(soql, { clean: true, limit, softFail });
+}
+
+async function compositeQueryBatch(specs = []) {
+  const active = [];
+  const activeIndexes = [];
+  specs.forEach((spec, index) => {
+    if (!spec?.soql) return;
+    active.push({
+      soql: spec.soql,
+      clean: spec.clean !== false,
+      limit: spec.limit ?? 5000,
+      softFail: spec.softFail === true,
+    });
+    activeIndexes.push(index);
+  });
+  const activeResults = active.length ? await sfCompositeQueries(active) : [];
+  const results = specs.map((spec) => spec?.fallback || { records: [], totalSize: 0 });
+  activeIndexes.forEach((index, resultIndex) => {
+    results[index] = activeResults[resultIndex];
+  });
+  return results;
+}
+
+async function compositeQueryRows(specs = []) {
+  const results = await compositeQueryBatch(specs);
+  return results.map((result) => result.records || []);
 }
 
 function brokerAmount(value, qty) {
@@ -3312,7 +3430,9 @@ function healthRow(base, result = null) {
   }
   return {
     ...base,
-    status: result.ok ? (base.warning ? 'warning' : 'online') : 'error',
+    status: result.ok
+      ? (result.status || result.details?.healthStatus || (base.warning ? 'warning' : 'online'))
+      : (result.status || 'unavailable'),
     checkedAt,
     latencyMs: result.latencyMs,
     error: result.error || null,
@@ -3320,7 +3440,7 @@ function healthRow(base, result = null) {
   };
 }
 
-async function salesforceHealthRow() {
+async function salesforceHealthRow({ force = false } = {}) {
   const authMode = salesforceAuthMode();
   const usesJwt = authMode === 'jwt';
   const usesRefreshToken = authMode === 'refresh_token';
@@ -3339,11 +3459,32 @@ async function salesforceHealthRow() {
     latencyMs: null,
     error: 'Salesforce OAuth env vars are missing or blank.',
   } : configured ? await timedCheck(async () => {
-    const limits = await sfRequest('/limits');
+    const limitsResult = await getOrLoadRuntimeCache({
+      namespace: 'salesforce-api-limits',
+      version: '1',
+      accessScope: 'health',
+      apiVersion: salesforceCacheApiIdentity(),
+      payload: null,
+      ttlSeconds: 60,
+      tags: ['salesforce:health'],
+      force,
+      loader: () => sfRequest('/limits'),
+    });
+    const limits = limitsResult.value;
+    const dailyApi = salesforceLimitFromBody(limits);
+    const healthStatus = dailyApi == null
+      ? 'monitoring_unavailable'
+      : dailyApi.usedPct >= 85
+        ? 'critical'
+        : dailyApi.usedPct >= 70
+          ? 'warning'
+          : 'online';
     return {
       apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
       instanceUrl: getInstanceUrl(),
       limitsChecked: Boolean(limits),
+      dailyApi,
+      healthStatus,
     };
   }) : null;
   return healthRow({
@@ -3387,20 +3528,74 @@ async function salesforceHealthRow() {
   }, result);
 }
 
-async function supabaseHealthRow() {
+async function supabaseMetricsHealth({ force = false } = {}) {
+  const url = supabaseUrl();
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Supabase Metrics credentials are not configured.');
+  const cached = await getOrLoadRuntimeCache({
+    namespace: 'supabase-prometheus-metrics',
+    version: '1',
+    accessScope: 'health',
+    apiVersion: 'metrics-v1',
+    payload: null,
+    ttlSeconds: 60,
+    tags: ['supabase:health'],
+    force,
+    loader: async () => {
+      const startedAt = Date.now();
+      let ok = false;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const response = await fetch(`${url.replace(/\/+$/, '')}/customer/v1/privileged/metrics`, {
+          headers: {
+            authorization: `Basic ${Buffer.from(`service_role:${key}`).toString('base64')}`,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Supabase Metrics request failed: ${response.status}`);
+        const metrics = parseSupabasePrometheusMetrics(await response.text());
+        ok = metrics.monitoringAvailable === true;
+        return metrics;
+      } finally {
+        clearTimeout(timeout);
+        recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok });
+      }
+    },
+  });
+  return cached.value;
+}
+
+async function supabaseHealthRow({ force = false } = {}) {
   const required = ['SUPABASE_SERVICE_ROLE_KEY'];
   const hasUrl = Boolean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
   const configured = hasUrl && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
   const result = configured ? await timedCheck(async () => {
     const client = supabaseAdminClient();
-    const { error: authError } = await client.auth.admin.listUsers({ page: 1, perPage: 1 });
+    const [authResult, profileResult, metricsResult] = await Promise.all([
+      client.auth.admin.listUsers({ page: 1, perPage: 1 }),
+      client
+        .from('user_profiles')
+        .select('id', { count: 'exact', head: true }),
+      supabaseMetricsHealth({ force })
+        .then((metrics) => ({ metrics, error: null }))
+        .catch((error) => ({ metrics: null, error: error.message })),
+    ]);
+    const { error: authError } = authResult;
     if (authError) throw authError;
-    const { count, error: profileError } = await client
-      .from('user_profiles')
-      .select('id', { count: 'exact', head: true });
+    const { count, error: profileError } = profileResult;
     if (profileError) throw profileError;
+    const metrics = metricsResult.metrics;
     return {
       userProfilesCount: count ?? null,
+      monitoringAvailable: metrics?.monitoringAvailable === true,
+      monitoringError: metricsResult.error || null,
+      healthStatus: metrics?.monitoringAvailable
+        ? metrics.severity
+        : 'monitoring_unavailable',
+      metrics: metrics?.kpis || null,
+      metricSeverities: metrics?.severities || null,
+      thresholds: metrics?.thresholds || null,
     };
   }) : null;
   return healthRow({
@@ -3663,6 +3858,8 @@ function cronHealthRow() {
 
 function vercelRuntimeHealthRow() {
   const configured = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.VERCEL_URL);
+  const telemetry = currentRequestTelemetry();
+  const runtimeDurationMs = telemetry ? Date.now() - telemetry.startedAtMs : 0;
   return healthRow({
     id: 'vercel-runtime',
     name: 'Vercel Runtime',
@@ -3676,9 +3873,18 @@ function vercelRuntimeHealthRow() {
     details: {
       environment: process.env.VERCEL_ENV || null,
       region: process.env.VERCEL_REGION || process.env.AWS_REGION || null,
+      deploymentId: maskValue(process.env.VERCEL_DEPLOYMENT_ID, 8, 6),
+      commit: String(process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 8) || null,
+      nodeVersion: process.version,
+      functionCheckDurationMs: runtimeDurationMs,
     },
     tokenExpiry: 'Not applicable.',
-  });
+  }, configured ? {
+    ok: true,
+    latencyMs: runtimeDurationMs,
+    status: 'online',
+    details: {},
+  } : null);
 }
 
 function googleFontsHealthRow() {
@@ -3697,12 +3903,57 @@ function googleFontsHealthRow() {
   });
 }
 
-async function systemHealth(_body, _req, accessContext) {
+function providerDashboardLinks() {
+  const supabaseHost = (() => {
+    try {
+      return new URL(supabaseUrl()).hostname;
+    } catch {
+      return '';
+    }
+  })();
+  const supabaseProjectRef = supabaseHost.endsWith('.supabase.co')
+    ? supabaseHost.split('.')[0]
+    : '';
+  const vercelDashboard = process.env.VERCEL_DASHBOARD_URL || 'https://vercel.com/dashboard';
+  return {
+    supabaseReports: process.env.SUPABASE_DASHBOARD_URL
+      || (supabaseProjectRef
+        ? `https://supabase.com/dashboard/project/${supabaseProjectRef}/reports/database`
+        : 'https://supabase.com/dashboard/projects'),
+    vercelObservability: process.env.VERCEL_OBSERVABILITY_URL || vercelDashboard,
+    vercelRuntimeCache: process.env.VERCEL_RUNTIME_CACHE_URL || vercelDashboard,
+    vercelSpeedInsights: process.env.VERCEL_SPEED_INSIGHTS_URL || vercelDashboard,
+  };
+}
+
+async function cachedHealthCheck(namespace, ttlSeconds, force, loader, payload = null) {
+  const cached = await getOrLoadRuntimeCache({
+    namespace: `system-health-${namespace}`,
+    version: '1',
+    accessScope: 'health',
+    apiVersion: '1',
+    payload,
+    ttlSeconds,
+    tags: [`system-health:${namespace}`],
+    force,
+    loader,
+  });
+  return cached.value;
+}
+
+async function systemHealth(body = {}, req = null, accessContext) {
   const profile = accessContext?.profile;
+  const force = requestForcesRefresh(body, req);
   const rows = await Promise.all([
-    salesforceHealthRow(),
-    supabaseHealthRow(),
-    profile ? backboneBridgeHealthRow(accessContext) : Promise.resolve(healthRow({
+    salesforceHealthRow({ force }),
+    supabaseHealthRow({ force }),
+    profile ? cachedHealthCheck(
+      'backbone',
+      60,
+      force,
+      () => backboneBridgeHealthRow(accessContext),
+      { profileId: profile.id },
+    ) : Promise.resolve(healthRow({
       id: 'fcos-backbone-bridge',
       name: 'FCOS Backbone Shared Boundary',
       category: 'Shared Platform',
@@ -3714,10 +3965,10 @@ async function systemHealth(_body, _req, accessContext) {
       configured: false,
       missingEnv: ['Active FCOS profile'],
     })),
-    googleDriveHealthRow(),
-    frankfurterHealthRow(),
-    nagerHealthRow(),
-    smtpHealthRow(),
+    cachedHealthCheck('google-drive', 5 * 60, force, googleDriveHealthRow),
+    cachedHealthCheck('frankfurter', 30 * 60, force, frankfurterHealthRow),
+    cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
+    cachedHealthCheck('smtp', 5 * 60, force, smtpHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
   const summary = rows.reduce((acc, row) => {
@@ -3725,9 +3976,49 @@ async function systemHealth(_body, _req, accessContext) {
     acc[row.status] = (acc[row.status] || 0) + 1;
     return acc;
   }, { total: 0 });
+  const rowById = Object.fromEntries(rows.map((row) => [row.id, row]));
+  const telemetry = currentRequestTelemetry();
+  const providerLinks = providerDashboardLinks();
   return {
     generatedAt: new Date().toISOString(),
     summary,
+    thresholds: {
+      errorRateWarningPct: 1,
+      errorRateCriticalPct: 3,
+      connectionWarningPct: 70,
+      connectionCriticalPct: 85,
+      memoryWarningPct: 80,
+      memoryCriticalPct: 90,
+      diskWarningPct: 70,
+      diskCriticalPct: 85,
+    },
+    providerLinks,
+    kpis: {
+      salesforce: {
+        ...(rowById.salesforce?.details?.dailyApi || {}),
+        probeLatencyMs: rowById.salesforce?.latencyMs ?? null,
+      },
+      supabase: {
+        ...(rowById.supabase?.details?.metrics || {}),
+        probeLatencyMs: rowById.supabase?.latencyMs ?? null,
+        monitoringAvailable: rowById.supabase?.details?.monitoringAvailable === true,
+        monitoringError: rowById.supabase?.details?.monitoringError || null,
+      },
+      vercel: {
+        environment: rowById['vercel-runtime']?.details?.environment || null,
+        region: rowById['vercel-runtime']?.details?.region || null,
+        nodeVersion: rowById['vercel-runtime']?.details?.nodeVersion || null,
+        functionCheckDurationMs: rowById['vercel-runtime']?.details?.functionCheckDurationMs ?? null,
+      },
+      request: telemetry ? {
+        salesforceCalls: telemetry.salesforce.quotaCalls,
+        salesforceLogicalQueries: telemetry.salesforce.logicalQueries,
+        salesforceCompositeCalls: telemetry.salesforce.compositeCalls,
+        cacheHits: telemetry.cache.hits,
+        cacheMisses: telemetry.cache.misses,
+        supabaseRequests: telemetry.supabase.requests,
+      } : null,
+    },
     externalActionGates: externalActionGates(),
     rows,
   };
@@ -4466,7 +4757,7 @@ function buildContentVersionFilename(document, version) {
   return cleanDownloadFilename(`${title}.${extension}`);
 }
 
-async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
+async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
   const actualStemId = await resolveStemId(body.stemId, accessContext);
   const record = await sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord);
   const relatedRecords = [];
@@ -4667,6 +4958,21 @@ async function salesforceStemDocuments(body = {}, req = null, accessContext = nu
   };
 }
 
+async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
+  const stemId = String(body.stemId || '').trim();
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-stem-documents',
+    ttlSeconds: 15,
+    payload: { stemId },
+    tags: ['salesforce:documents', 'salesforce:stem', `salesforce:documents:${stemId}`],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceStemDocumentsUncached({ stemId }, req, accessContext),
+  });
+  return cached.value;
+}
+
 async function salesforceDocumentDownload(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const kind = url.searchParams.get('kind');
@@ -4680,12 +4986,15 @@ async function salesforceDocumentDownload(req, res) {
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
   res.setHeader('cache-control', 'no-store');
+  for (const [name, value] of Object.entries(telemetryResponseHeaders())) {
+    res.setHeader(name, value);
+  }
   res.setHeader('content-type', documentContentType(filename, file.contentType));
   res.setHeader('content-disposition', `inline; filename="${asciiFilename.replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.end(file.buffer);
 }
 
-async function salesforceDashboardFilteredFull(body, req = null, accessContext = null) {
+async function salesforceDashboardFilteredUncached(body, req = null, accessContext = null) {
   const {
     where,
     trendYear,
@@ -4709,6 +5018,10 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
   }
   const exceptionScheduleMode = dateBasis === EXCEPTION_REVIEW_DATE_BASIS;
+  const requestMode = body.mode === 'exception_review' || exceptionScheduleMode
+    ? 'exception_review'
+    : 'dashboard';
+  const exceptionReviewMode = requestMode === 'exception_review';
   const missingScheduleFields = exceptionScheduleMode ? exceptionScheduleSchemaIssues(fieldNames) : [];
   if (missingScheduleFields.length) {
     throw new Error(`Exception Review Schedule schema error: missing Salesforce STEM fields ${missingScheduleFields.join(', ')}.`);
@@ -4798,33 +5111,36 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   }
 
   const queries = [
-    queryResult(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
-    hasStatus ? queryResult(`SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, { softFail: true }) : Promise.resolve({ records: [] }),
-    hasType ? queryResult(`SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, { softFail: true }) : Promise.resolve({ records: [] }),
-    queryResult(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, { limit: 3000, softFail: true }),
-    hasDisputeStatus
-      ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`, { softFail: true })
-      : hasDispute
-        ? queryResult(`SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`, { softFail: true })
-        : Promise.resolve({ records: [] }),
-    accountField ? queryResult(`SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    buyerAmountField ? queryResult(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    supplierAmountField ? queryResult(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    totalCostsField ? queryResult(`SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, { softFail: true }) : Promise.resolve({ records: [] }),
-    queryResult(`SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
-    queryResult(`SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`, { limit: 3000, softFail: true }),
+    { soql: `SELECT COUNT(Id) total FROM stem__c ${whereClause}`, softFail: true },
+    !exceptionReviewMode && hasStatus ? { soql: `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, softFail: true } : null,
+    !exceptionReviewMode && hasType ? { soql: `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, softFail: true } : null,
+    { soql: `SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, limit: 3000, softFail: true },
+    !exceptionReviewMode && hasDisputeStatus
+      ? { soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`, softFail: true }
+      : !exceptionReviewMode && hasDispute
+        ? { soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`, softFail: true }
+        : null,
+    !exceptionReviewMode && accountField ? { soql: `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`, softFail: true } : null,
+    !exceptionReviewMode && buyerAmountField ? { soql: `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
+    !exceptionReviewMode && supplierAmountField ? { soql: `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
+    !exceptionReviewMode && totalCostsField ? { soql: `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
+    !exceptionReviewMode
+      ? { soql: `SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, limit: 3000, softFail: true }
+      : null,
+    !exceptionReviewMode
+      ? { soql: `SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`, limit: 3000, softFail: true }
+      : null,
   ];
 
-  const results = await Promise.allSettled(queries);
-  const getValue = (result) => result.status === 'fulfilled' ? result.value : { records: [], totalSize: 0 };
-  const totalRes = getValue(results[0]);
-  const statusRes = getValue(results[1]);
-  const typeRes = getValue(results[2]);
-  const recentRes = getValue(results[3]);
-  const disputedRes = getValue(results[4]);
-  const accountsRes = getValue(results[5]);
-  const allStemsRes = getValue(results[9]);
-  const monthlyStemsRes = getValue(results[10]);
+  const results = await compositeQueryBatch(queries);
+  const totalRes = results[0];
+  const statusRes = results[1];
+  const typeRes = results[2];
+  const recentRes = results[3];
+  const disputedRes = results[4];
+  const accountsRes = results[5];
+  const allStemsRes = exceptionReviewMode ? recentRes : results[9];
+  const monthlyStemsRes = results[10];
 
   const allStemIds = [...new Set([
     ...(allStemsRes.records || []).map((s) => s.Id),
@@ -4874,18 +5190,19 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     ];
     if (lineItemUomField) lineItemFields.push(lineItemUomField);
     if (productUomField) lineItemFields.push(`Product__r.${productUomField}`);
+    const stemChunks = chunkIds(allStemIds);
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      Promise.all(chunkIds(allStemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return { soql: `SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
       })),
-      Promise.all(chunkIds(allStemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return { soql: `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
       })),
-      Promise.all(chunkIds(allStemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(`SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
+        return { soql: `SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
       })),
     ]);
     lineItems = lineItemChunks.flat();
@@ -5244,6 +5561,7 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
   });
 
   return {
+    mode: requestMode,
     stemTotal: totalRes.records?.[0]?.total ?? 0,
     accountCount: accountsRes.records ? accountsRes.records.filter((r) => r.acct != null).length : null,
     buyerAccountCount: accountsRes.records ? accountsRes.records.filter((r) => r.acct != null).length : null,
@@ -5279,6 +5597,27 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
     })),
     dateBasis: exceptionScheduleMode ? EXCEPTION_REVIEW_DATE_BASIS : null,
   };
+}
+
+async function salesforceDashboardFilteredFull(body, req = null, accessContext = null) {
+  const mode = body.mode === 'exception_review' || body.dateBasis === EXCEPTION_REVIEW_DATE_BASIS
+    ? 'exception_review'
+    : 'dashboard';
+  const cachePayload = { ...body, mode };
+  delete cachePayload.force;
+  delete cachePayload.forceRefresh;
+  delete cachePayload.refresh;
+  const cached = await cachedSalesforceValue({
+    namespace: `salesforce-dashboard-${mode}`,
+    ttlSeconds: 60,
+    payload: cachePayload,
+    tags: ['salesforce:dashboard', `salesforce:dashboard:${mode}`, 'salesforce:stem'],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceDashboardFilteredUncached({ ...body, mode }, req, accessContext),
+  });
+  return cached.value;
 }
 
 async function stemPnlFull(body, req = null, accessContext = null) {
@@ -5437,7 +5776,7 @@ async function stemPnlFull(body, req = null, accessContext = null) {
   };
 }
 
-async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
+async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext = null) {
   const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
   const receivableThreshold = Math.max(0, Number(body.receivableThreshold ?? body.receivable_threshold ?? 50) || 0);
   const rowLimit = 10000;
@@ -5454,7 +5793,18 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
   const brokerEmailFields = accountBrokerEmailFields(accountDescribe.fields || []);
 
   const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
-  if (!dueFields.length) return { rows: [], today, dueThrough, daysAhead };
+  if (!dueFields.length) {
+    return {
+      allRows: [],
+      today,
+      dueThrough,
+      daysAhead,
+      receivableThreshold,
+      traderEmailByName: {},
+      hasBuyerTraderFilter: false,
+      selectedBuyerTradersInput: [],
+    };
+  }
 
   const fields = ['Id', 'Name'];
   for (const field of dueFields) fields.push(field);
@@ -5510,43 +5860,44 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
   const prpspUploadDateByStem = {};
   const buyerBrokerDetailsByStem = {};
   if (stemIds.length) {
+    const stemChunks = chunkIds(stemIds);
     const [nominationArrays, supplierInvoiceArrays, brokerLineItemArrays, buyerBrokerArrays] = await Promise.all([
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c
           FROM Nomination__c
           WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
           ORDER BY CreatedDate ASC
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, PSPRS_Upload_Date__c
           FROM Supplier_Invoice__c
           WHERE STEM__c IN (${inList}) AND PSPRS_Upload_Date__c != null
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Buyers_Broker__c, Buyer_Broker__c, Cancelled__c
           FROM STEM_Line_Item__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Buyer_Broker__c
           FROM STEM_Buyer_Broker__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
     ]);
 
@@ -5613,14 +5964,14 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
       brokerAccountFields.push(...brokerInvoiceFormatFields, ...brokerEmailFields);
       if (accountFieldNames.includes('Hidden_Broker__c')) brokerAccountFields.push('Hidden_Broker__c');
       if (accountFieldNames.includes('Hidden_Broker_Company__c')) brokerAccountFields.push('Hidden_Broker_Company__c');
-      const brokerAccountChunks = await Promise.all(chunkIds(brokerIds).map((chunk) => {
+      const brokerAccountChunks = await compositeQueryRows(chunkIds(brokerIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT ${[...new Set(brokerAccountFields)].join(', ')}
           FROM Account
           WHERE Id IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       }));
       for (const account of brokerAccountChunks.flat()) {
         if (account.Hidden_Broker__c === true || account.Hidden_Broker_Company__c === true) continue;
@@ -5698,6 +6049,49 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
       return String(a.stemName || '').localeCompare(String(b.stemName || ''));
     });
 
+  return {
+    allRows,
+    today,
+    dueThrough,
+    daysAhead,
+    receivableThreshold,
+    traderEmailByName,
+    hasBuyerTraderFilter,
+    selectedBuyerTradersInput,
+  };
+}
+
+async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
+  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const receivableThreshold = Math.max(0, Number(body.receivableThreshold ?? body.receivable_threshold ?? 50) || 0);
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-buyer-invoices',
+    ttlSeconds: 60,
+    payload: { daysAhead, receivableThreshold },
+    tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceBuyerInvoicesSnapshot(
+      { daysAhead, receivableThreshold },
+      req,
+      accessContext,
+    ),
+  });
+  const {
+    allRows,
+    today,
+    dueThrough,
+    traderEmailByName,
+    hasBuyerTraderFilter,
+    selectedBuyerTradersInput,
+  } = {
+    ...cached.value,
+    hasBuyerTraderFilter: Object.prototype.hasOwnProperty.call(body, 'buyerTraders'),
+    selectedBuyerTradersInput: Array.isArray(body.buyerTraders)
+      ? body.buyerTraders
+      : splitBuyerTraderNames(body.buyerTraders),
+  };
   const [collectionMap, reminderRulesState] = await Promise.all([
     loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId)),
     loadBuyerInvoiceReminderRules(),
@@ -6206,17 +6600,17 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
     if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
   }
   const stemMap = {};
-  for (const chunk of chunkIds(stemIds)) {
+  const stemRows = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
     const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
     const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-    const rows = await queryRows(`
+    return { soql: `
       SELECT ${[...new Set(stemSelectFields)].join(', ')}
       FROM stem__c
       WHERE ${stemWhere}
       LIMIT 5000
-    `, { limit: 5000, softFail: true });
-    for (const stem of rows) stemMap[stem.Id] = stem;
-  }
+    `, limit: 5000, softFail: true };
+  }));
+  for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
 
   const textFields = [...referenceFields, ...directionFields, ...typeFields, ...statusFields];
   const samples = [];
@@ -6373,17 +6767,17 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
     ];
     if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
     if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
-    for (const chunk of chunkIds(stemIds)) {
+    const stemRows = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
       const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-      const stems = await queryRows(`
+      return { soql: `
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
         WHERE ${stemWhere}
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
-      for (const stem of stems) stemMap[stem.Id] = stem;
-    }
+      `, limit: 5000, softFail: true };
+    }));
+    for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
   }
   const rows = [];
   for (const invoice of invoices) {
@@ -6508,13 +6902,37 @@ async function cashflowForecast(body, req = null, accessContext = null) {
   const holidayData = await loadCashflowHolidayData(yearsBetween(dateFrom, addDays(dateTo, 14)), warnings);
   const incomingSettings = await loadIncomingPaymentSettings();
   const receivableThreshold = Number(incomingSettings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
-  const buyerSamplesData = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
+  const blockedDates = [...holidayData.blockedMap.keys()].sort();
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-cashflow',
+    ttlSeconds: 60,
+    payload: {
+      dateTo,
+      settings,
+      receivableThreshold,
+      blockedDates,
+    },
+    tags: ['salesforce:cashflow', 'salesforce:stem', 'salesforce:buyer-invoices'],
+    body,
+    req,
+    accessContext,
+    loader: async () => {
+      const buyerSamplesData = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
+      const models = cashflowBuildDelayModels(buyerSamplesData.samples || [], settings);
+      const [buyerRows, supplierData] = await Promise.all([
+        cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap: holidayData.blockedMap, receivableThreshold, accessContext }),
+        cashflowSupplierInvoiceRows({ dateTo, blockedMap: holidayData.blockedMap, accessContext }),
+      ]);
+      return { buyerSamplesData, models, buyerRows, supplierData };
+    },
+  });
+  const {
+    buyerSamplesData,
+    models,
+    buyerRows,
+    supplierData,
+  } = cached.value;
   warnings.push(...(buyerSamplesData.warnings || []));
-  const models = cashflowBuildDelayModels(buyerSamplesData.samples || [], settings);
-  const [buyerRows, supplierData] = await Promise.all([
-    cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap: holidayData.blockedMap, receivableThreshold, accessContext }),
-    cashflowSupplierInvoiceRows({ dateTo, blockedMap: holidayData.blockedMap, accessContext }),
-  ]);
   warnings.push(...(supplierData.warnings || []));
   const rows = [...buyerRows, ...(supplierData.rows || [])]
     .filter((row) => row.forecastDate >= dateFrom && row.forecastDate <= dateTo)
@@ -7282,36 +7700,36 @@ async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null }
 
   const traderByStem = {};
   const [nominationArrays, lineItemArrays, extraCostArrays] = await Promise.all([
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c
         FROM Nomination__c
         WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
         ORDER BY CreatedDate ASC
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
+      `, limit: 5000, softFail: true };
     })),
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT STEM__c, Total_Price__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                Price_Per_Unit__c, Unit_Sell_At__c, Offer_Line_Item__r.UnitPrice
         FROM STEM_Line_Item__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
+      `, limit: 5000, softFail: true };
     })),
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT STEM__c, Line_Total__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c
         FROM STEM_Extra_Cost__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
+      `, limit: 5000, softFail: true };
     })),
   ]);
 
@@ -7360,8 +7778,8 @@ async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null }
   });
 }
 
-async function incomingPaymentsList(body, req = null, accessContext = null) {
-  const settings = await loadIncomingPaymentSettings();
+async function incomingPaymentsListSnapshot(body, req = null, accessContext = null) {
+  const settings = body._settingsOverride || await loadIncomingPaymentSettings();
   const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
   const today = dateOnly(new Date());
   const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
@@ -7451,14 +7869,14 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
       ...supplierInvoiceSupplierFields,
       ...supplierInvoiceSupplierRelationships.map((relationship) => `${relationship}.Name`),
     ].filter(Boolean);
-    const invoiceChunks = await Promise.all(chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
+    const invoiceChunks = await compositeQueryRows(chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
         FROM Supplier_Invoice__c
         WHERE Id IN (${inList})
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
+      `, limit: 5000, softFail: true };
     }));
     for (const invoice of invoiceChunks.flat()) supplierInvoiceMap[invoice.Id] = invoice;
   }
@@ -7511,15 +7929,15 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
   }
   const stemMap = {};
   if (stemIds.length && stemFieldNames.size) {
-    const stemChunks = await Promise.all(chunkIds(stemIds).map((chunk) => {
+    const stemChunks = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
       const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
       const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-      return queryRows(`
+      return { soql: `
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
         WHERE ${stemWhere}
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
+      `, limit: 5000, softFail: true };
     }));
     for (const stem of stemChunks.flat()) stemMap[stem.Id] = stem;
   }
@@ -7528,9 +7946,9 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
   let extraCostsByStem = {};
   if (stemIds.length) {
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                  Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                  Cost_Per_Unit__c, Unit_Buy_At__c, Unit_Cost__c, Total_Cost__c,
@@ -7541,27 +7959,27 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
           FROM STEM_Line_Item__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Buyer_Broker__c
           FROM STEM_Buyer_Broker__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                  Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c,
                  Unit_Cost__c, Line_Total_Buy__c, Supplier_Invoice__c
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
     ]);
     const brokerLineItems = lineItemChunks.flat();
@@ -7762,7 +8180,9 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
   const displayRows = rows.filter((row) => !implicitBankChargeIds.has(row.id || row.paymentId));
   displayRows.push(...ungroupedBankCharges);
 
-  const interestNotificationMap = await loadIncomingPaymentInterestNotificationMap(displayRows.map((row) => row.paymentId || row.id));
+  const interestNotificationMap = body._omitIncomingLiveState
+    ? {}
+    : await loadIncomingPaymentInterestNotificationMap(displayRows.map((row) => row.paymentId || row.id));
   const rowsWithInterestNotifications = displayRows.map((row) => {
     const notification = interestNotificationMap[row.paymentId || row.id] || null;
     return {
@@ -7816,6 +8236,54 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
       availableBalanceTotal: availableBalances.reduce((sum, group) => sum + Number(group.totalAvailableBalance || 0), 0),
       availableBalanceCount: availableBalances.reduce((sum, group) => sum + (group.stems?.length || 0), 0),
     },
+  };
+}
+
+async function incomingPaymentsList(body, req = null, accessContext = null) {
+  const settings = await loadIncomingPaymentSettings();
+  const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
+  const today = dateOnly(new Date());
+  const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
+  const dateTo = dateOnly(body.dateTo || body.date_to || today);
+  const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
+  const { value: snapshot } = await cachedSalesforceValue({
+    namespace: 'incoming-payments',
+    payload: { dateFrom, dateTo, limit, threshold },
+    ttlSeconds: 60,
+    tags: [
+      'salesforce:incoming-payments',
+      'salesforce:stem',
+      'salesforce:account',
+      'salesforce:object:Payment__c',
+      'salesforce:object:Supplier_Invoice__c',
+    ],
+    body,
+    req,
+    accessContext,
+    loader: () => incomingPaymentsListSnapshot({
+      ...body,
+      dateFrom,
+      dateTo,
+      limit,
+      _settingsOverride: settings,
+      _omitIncomingLiveState: true,
+    }, req, accessContext),
+  });
+  const notificationMap = await loadIncomingPaymentInterestNotificationMap(
+    (snapshot.rows || []).map((row) => row.paymentId || row.id),
+  );
+  return {
+    ...snapshot,
+    settings,
+    rows: (snapshot.rows || []).map((row) => {
+      const notification = notificationMap[row.paymentId || row.id] || null;
+      return {
+        ...row,
+        interestInvoiceNotification: notification,
+        interestInvoiceNotificationSent: notification?.deliveryStatus === 'sent',
+        interestInvoiceNotificationPending: ['sending', 'uncertain'].includes(notification?.deliveryStatus),
+      };
+    }),
   };
 }
 
@@ -9491,6 +9959,7 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
   };
   const report = await salesforceBuyerInvoicesDue({
     daysAhead: body.daysAhead ?? settings.daysAhead,
+    force: body.forceLive === true,
   }, null, accessContext);
   if (report.paymentReminderRulesAvailable !== true) {
     throw appError('Buyer Invoice reminder rules are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
@@ -9563,7 +10032,10 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
 
 async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) {
   if (!accessContext) await requireActiveUser(req);
-  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, accessContext);
+  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext({
+    ...body,
+    forceLive: true,
+  }, accessContext);
   const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean));
@@ -9830,6 +10302,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
   }
   const reportPayload = { daysAhead: settings.daysAhead };
   if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
+  if (!body.preview && !body.dryRun) reportPayload.force = true;
   const report = await salesforceBuyerInvoicesDue(reportPayload, null, accessContext);
   const email = buildBuyerInvoiceReportEmail(report, settings);
   if (body.preview || body.dryRun) {
@@ -10027,9 +10500,9 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
 
   if (stemIds.length) {
     const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return queryRows(`
+        return { soql: `
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
                  ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
@@ -10041,9 +10514,9 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           WHERE STEM__c IN (${inList})
           ORDER BY STEM__c, CreatedDate ASC
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
-      Promise.all(chunkIds(stemIds).map((chunk) => {
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
         const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
         const extraCostSelectFields = [
           'Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c',
@@ -10055,15 +10528,15 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           extraCostSupplierLookup.valid ? extraCostSupplierField : null,
           extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null,
         ].filter(Boolean);
-        return queryRows(`
+        return { soql: `
           SELECT ${[...new Set(extraCostSelectFields)].join(', ')}
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, { limit: 5000, softFail: true });
+        `, limit: 5000, softFail: true };
       })),
       supplierInvoiceFieldNames.includes('STEM__c')
-        ? Promise.all(chunkIds(stemIds).map((chunk) => {
+        ? compositeQueryRows(chunkIds(stemIds).map((chunk) => {
             const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
             const supplierInvoiceSelectFields = [
               'STEM__c',
@@ -10081,12 +10554,12 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
               ...supplierInvoiceSupplierFields,
               ...supplierInvoiceSupplierNameRelationships.map((relationship) => `${relationship}.Name`),
             ].filter(Boolean);
-            return queryRows(`
+            return { soql: `
               SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
               FROM Supplier_Invoice__c
               WHERE STEM__c IN (${inList})
               LIMIT 5000
-            `, { limit: 5000, softFail: true });
+            `, limit: 5000, softFail: true };
           }))
         : Promise.resolve([]),
     ]);
@@ -10122,15 +10595,15 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         ...supplierSettlementSchema.paymentStatusFields,
       ].filter(Boolean);
       await Promise.all(supplierSettlementSchema.paymentSupplierInvoiceFields.map(async (lookupField) => {
-        const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
+        const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
           const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return queryRows(`
+          return { soql: `
             SELECT ${[...new Set(paymentSelectFields)].join(', ')}
             FROM Payment__c
             WHERE ${lookupField} IN (${inList})
             ORDER BY ${supplierSettlementSchema.paymentDateField || 'CreatedDate'} DESC NULLS LAST
             LIMIT 5000
-          `, { limit: 5000, softFail: true });
+          `, limit: 5000, softFail: true };
         }));
         for (const payment of paymentChunks.flat()) {
           if (!validSupplierSettlementPayment(payment, supplierSettlementSchema.paymentStatusFields)) continue;
@@ -11515,7 +11988,22 @@ function assertSupplierDisputeAmounts(actions = []) {
 
 async function disputeBetaList(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || await requireActiveUser(req);
-  const salesforceData = await salesforceDisputeStems({ limit: body.limit || 10000 }, null, accessContext || { client, profile });
+  const limit = body.limit || 10000;
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-dispute-queue',
+    ttlSeconds: 30,
+    payload: { limit },
+    tags: ['salesforce:disputes', 'salesforce:stem', 'salesforce:account'],
+    body,
+    req,
+    accessContext: accessContext || { client, profile },
+    loader: () => salesforceDisputeStems(
+      { limit },
+      null,
+      accessContext || { client, profile },
+    ),
+  });
+  const salesforceData = cached.value;
   const rows = salesforceData.rows || [];
   let [workflowMap, capabilities] = await Promise.all([
     loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id)),
@@ -12735,7 +13223,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   };
 }
 
-async function salesforceStemDetailFull(body, req = null, accessContext = null) {
+async function salesforceStemDetailUncached(body, req = null, accessContext = null) {
   const { stemId, updates, childObject, childId, childUpdates } = body;
   if (!stemId) throw new Error('stemId required');
 
@@ -12875,15 +13363,15 @@ async function salesforceStemDetailFull(body, req = null, accessContext = null) 
 
     if (supplierInvoiceIds.length && supplierInvoiceLookupFields.length) {
       await Promise.all(supplierInvoiceLookupFields.map(async (field) => {
-        const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
+        const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
           const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return queryRows(`
+          return { soql: `
             SELECT ${selectedPaymentFields.join(', ')}
             FROM Payment__c
             WHERE ${field} IN (${inList})
             ORDER BY ${paymentOrder}
             LIMIT 2000
-          `, { limit: 2000, softFail: true });
+          `, limit: 2000, softFail: true };
         }));
         for (const payment of paymentChunks.flat()) addSupplierPayment(payment, payment[field]);
       }));
@@ -13035,6 +13523,26 @@ async function salesforceStemDetailFull(body, req = null, accessContext = null) 
   };
 }
 
+async function salesforceStemDetailFull(body, req = null, accessContext = null) {
+  const hasWrite = Boolean(
+    body?.updates && Object.keys(body.updates).length
+    || body?.childUpdates && Object.keys(body.childUpdates).length,
+  );
+  if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
+  const stemId = String(body?.stemId || '').trim();
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-stem-detail',
+    ttlSeconds: 15,
+    payload: { stemId },
+    tags: ['salesforce:stem', `salesforce:stem:${stemId}`],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceStemDetailUncached({ stemId }, req, accessContext),
+  });
+  return cached.value;
+}
+
 function uniquePresentValues(values) {
   return [...new Set(values.filter((value) => value != null && value !== ''))];
 }
@@ -13143,7 +13651,7 @@ function combineBrokerCommissionRows(rows) {
   });
 }
 
-async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
+async function salesforceBrokerRegisterUncached(body, req = null, accessContext = null) {
   const limit = Math.min(Number(body.limit) || 2000, 3000);
   const interofficeCondition = await interofficeStemAccessCondition(accessContext);
   const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
@@ -13158,10 +13666,11 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
   const stemIds = stems.map((stem) => stem.Id);
   if (!stemIds.length) return { rows: [] };
 
+  const stemChunks = chunkIds(stemIds);
   const [lineItemChunks, buyerBrokerChunks, buyerPaymentChunks, buyerInvoiceChunks] = await Promise.all([
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(stemChunks.map((chunk) => {
       const ids = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT Id, Name, STEM__c, Product__r.Name, Product__r.Family, Supplier_Invoice__c,
                Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
                Quantity_Delivered_Per_BDN__c, Quantity__c, Quantity_in_MT__c, Commission_Cost__c, Cancelled__c,
@@ -13170,36 +13679,36 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
         FROM STEM_Line_Item__c
         WHERE STEM__c IN (${ids})
         LIMIT 5000
-      `, { limit: 5000 });
+      `, limit: 5000 };
     })),
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(stemChunks.map((chunk) => {
       const ids = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT Id, Name, STEM__c, Buyer_Broker__c
         FROM STEM_Buyer_Broker__c
         WHERE STEM__c IN (${ids})
         LIMIT 5000
-      `, { limit: 5000 });
+      `, limit: 5000 };
     })),
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(stemChunks.map((chunk) => {
       const ids = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT STEM__c, Date__c
         FROM Payment__c
         WHERE STEM__c IN (${ids}) AND Supplier_Invoice__c = null
         ORDER BY Date__c DESC
         LIMIT 5000
-      `, { limit: 5000 });
+      `, limit: 5000 };
     })),
-    Promise.all(chunkIds(stemIds).map((chunk) => {
+    compositeQueryRows(stemChunks.map((chunk) => {
       const ids = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+      return { soql: `
         SELECT STEM__c, Invoice_Due_Date__c
         FROM Invoice__c
         WHERE STEM__c IN (${ids})
         ORDER BY Invoice_Due_Date__c DESC
         LIMIT 5000
-      `, { limit: 5000 });
+      `, limit: 5000 };
     })),
   ]);
 
@@ -13213,9 +13722,11 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
     ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean),
   ])];
 
-  const accountChunks = await Promise.all(chunkIds(accountIds).map((chunk) => {
+  const accountChunks = await compositeQueryRows(chunkIds(accountIds).map((chunk) => {
     const ids = chunk.map((id) => `'${id}'`).join(',');
-    return ids ? queryRows(`SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids})`, { softFail: true }) : Promise.resolve([]);
+    return ids
+      ? { soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids})`, softFail: true }
+      : null;
   }));
   const accountMap = {};
   const accountFlagMap = {};
@@ -13232,9 +13743,11 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
 
   const supplierInvoiceIds = [...new Set(lineItems.map((item) => item.Supplier_Invoice__c).filter(Boolean))];
   const paymentDateByInvoice = {};
-  const paymentChunks = await Promise.all(chunkIds(supplierInvoiceIds).map((chunk) => {
+  const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
     const ids = chunk.map((id) => `'${id}'`).join(',');
-    return ids ? queryRows(`SELECT Supplier_Invoice__c, Date__c FROM Payment__c WHERE Supplier_Invoice__c IN (${ids}) ORDER BY Date__c DESC`, { softFail: true }) : Promise.resolve([]);
+    return ids
+      ? { soql: `SELECT Supplier_Invoice__c, Date__c FROM Payment__c WHERE Supplier_Invoice__c IN (${ids}) ORDER BY Date__c DESC`, softFail: true }
+      : null;
   }));
   for (const payment of paymentChunks.flat()) {
     if (payment.Supplier_Invoice__c && !paymentDateByInvoice[payment.Supplier_Invoice__c]) paymentDateByInvoice[payment.Supplier_Invoice__c] = payment.Date__c;
@@ -13349,6 +13862,21 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
   return { rows };
 }
 
+async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
+  const limit = Math.min(Number(body.limit) || 2000, 3000);
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-broker-register',
+    ttlSeconds: 60,
+    payload: { limit },
+    tags: ['salesforce:broker-register', 'salesforce:stem', 'salesforce:account'],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceBrokerRegisterUncached({ limit }, req, accessContext),
+  });
+  return cached.value;
+}
+
 const handlers = {
   authContext,
   salesforceSchema,
@@ -13438,27 +13966,29 @@ const handlers = {
 };
 
 export default async function handler(req, res) {
-  try {
-    const url = new URL(req.url, 'http://localhost');
-    const name = url.pathname.split('/').pop();
-    if (name === 'salesforceDocumentDownload') {
-      await requireHandlerAccess(name, req);
-      return salesforceDocumentDownload(req, res);
+  const url = new URL(req.url, 'http://localhost');
+  const name = url.pathname.split('/').pop();
+  return runWithRequestTelemetry({
+    handler: name,
+    requestId: requestIdFrom(req),
+  }, async () => {
+    try {
+      if (name === 'salesforceDocumentDownload') {
+        await requireHandlerAccess(name, req);
+        return await salesforceDocumentDownload(req, res);
+      }
+      const fn = handlers[name];
+      if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
+      const accessContext = await requireHandlerAccess(name, req);
+      const body = await readBody(req);
+      const data = await fn(body, req, accessContext);
+      return sendJson(res, data);
+    } catch (error) {
+      const status = error.status || error.statusCode || 500;
+      recordRequestFailure(error, status);
+      return sendJson(res, { error: error.message }, status);
+    } finally {
+      logRequestTelemetry(res.statusCode || 500);
     }
-    const fn = handlers[name];
-    if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-    const accessContext = await requireHandlerAccess(name, req);
-    const body = await readBody(req);
-    const data = await fn(body, req, accessContext);
-    return sendJson(res, data);
-  } catch (error) {
-    const status = error.status || error.statusCode || 500;
-    const logPayload = {
-      message: error.message,
-      status,
-    };
-    if (status >= 500) logPayload.stack = error.stack;
-    console.error(`[api/functions] ${redactedRequestUrl(req)} failed`, logPayload);
-    return sendJson(res, { error: error.message }, status);
-  }
+  });
 }

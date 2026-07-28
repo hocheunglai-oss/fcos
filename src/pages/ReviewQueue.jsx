@@ -156,6 +156,7 @@ export default function ReviewQueue() {
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
     const [res, handoffsRes] = await Promise.all([
       appClient.functions.invoke('salesforceDashboardFiltered', {
+        mode: 'exception_review',
         where,
         trendYear: THIS_YEAR,
         dateBasis: EXCEPTION_REVIEW_DATE_BASIS,

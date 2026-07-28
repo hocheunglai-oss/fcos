@@ -96,13 +96,20 @@ async function invoke(name, payload = {}, options = {}) {
     if (Date.now() - cached.cachedAtMs <= ttlMs) {
       return {
         data: cloneJson(cached.data),
-        meta: { cached: true, cachedAt: cached.updatedAt },
+        meta: {
+          ...(cached.meta || {}),
+          cached: true,
+          cacheLayer: 'browser',
+          cacheStatus: 'HIT',
+          cachedAt: cached.updatedAt,
+        },
       };
     }
     functionResponseCache.delete(cacheKey);
   }
 
   const headers = { 'content-type': 'application/json' };
+  if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (isSupabaseConfigured) {
     const { data } = await supabase.auth.getSession();
     if (data?.session?.access_token) headers.authorization = `Bearer ${data.session.access_token}`;
@@ -115,20 +122,62 @@ async function invoke(name, payload = {}, options = {}) {
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    return { data: { error: error?.message || 'Network request failed. Check your connection and try again.' } };
+    return {
+      data: { error: error?.message || 'Network request failed. Check your connection and try again.' },
+      meta: {
+        cached: false,
+        cacheLayer: 'network',
+        cacheStatus: 'UNAVAILABLE',
+        cachedAt: null,
+        requestId: null,
+        salesforceCalls: null,
+      },
+    };
   }
   const data = await res.json().catch(() => ({}));
+  const responseHeader = (name) => res.headers?.get?.(name) || null;
+  const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
+  const serverFetchedAt = responseHeader('x-fcos-data-fetched-at') || now();
+  const requestId = responseHeader('x-fcos-request-id');
+  const salesforceCallsHeader = responseHeader('x-fcos-salesforce-calls');
+  const salesforceCalls = salesforceCallsHeader == null ? null : Number(salesforceCallsHeader);
 
   if (!res.ok) {
-    return { data: { error: data.error || `Request failed: ${res.status}` } };
+    return {
+      data: { error: data.error || `Request failed: ${res.status}` },
+      meta: {
+        cached: false,
+        cacheLayer: 'server',
+        cacheStatus: serverCacheStatus,
+        cachedAt: serverFetchedAt,
+        requestId,
+        salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+      },
+    };
   }
 
-  const fetchedAt = now();
+  const fetchedAt = serverFetchedAt;
+  const responseMeta = {
+    cached: serverCacheStatus === 'HIT',
+    cacheLayer: 'server',
+    cacheStatus: serverCacheStatus,
+    cachedAt: fetchedAt,
+    requestId,
+    salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+  };
   if (cacheKey) {
-    functionResponseCache.set(cacheKey, { data: cloneJson(data), updatedAt: fetchedAt, cachedAtMs: Date.now() });
+    functionResponseCache.set(cacheKey, {
+      data: cloneJson(data),
+      meta: responseMeta,
+      updatedAt: fetchedAt,
+      cachedAtMs: Date.now(),
+    });
   }
 
-  return { data, meta: cacheKey ? { cached: false, cachedAt: fetchedAt } : undefined };
+  return {
+    data,
+    meta: responseMeta,
+  };
 }
 
 function clearFunctionCache() {
