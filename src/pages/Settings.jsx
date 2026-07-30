@@ -17,6 +17,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  Sparkles,
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,7 @@ import { appClient } from '@/api/appClient';
 import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettings } from '@/lib/exchangeRateSettings';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+import { useAuth } from '@/lib/AuthContext';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SETTINGS_TAB_KEY = 'settings:active-tab';
@@ -42,6 +44,7 @@ const SETTINGS_TABS = [
   { id: 'email', label: 'Email Senders', icon: Mail },
   { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
   { id: 'documents', label: 'STEM Documents', icon: FileText },
+  { id: 'ai', label: 'AI Search', icon: Sparkles },
   { id: 'health', label: 'System Health', icon: Activity },
 ];
 
@@ -521,6 +524,7 @@ function SystemHealthPanel() {
 }
 
 export default function SettingsPage() {
+  const { isAdministrator } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
@@ -528,6 +532,11 @@ export default function SettingsPage() {
   const [baseSettings, setBaseSettings] = useState(settingsSnapshot);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
   const [activeTab, setActiveTab] = useState(() => validSettingsTab(localStorage.getItem(SETTINGS_TAB_KEY)));
+  const [aiSettings, setAiSettings] = useState(null);
+  const [aiModels, setAiModels] = useState([]);
+  const [baseAiModelId, setBaseAiModelId] = useState(null);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
+  const [aiSettingsError, setAiSettingsError] = useState(null);
 
   useEffect(() => {
     const base = settingsSnapshot();
@@ -540,6 +549,24 @@ export default function SettingsPage() {
     setBaseSettings(base);
     setDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
   }, []);
+
+  const loadAiSettings = useCallback(async () => {
+    setAiSettingsLoading(true);
+    setAiSettingsError(null);
+    const response = await appClient.functions.invoke('dashboardAiSettingsGet', {}, { force: true });
+    if (response.data?.error) {
+      setAiSettingsError(response.data.error);
+    } else {
+      setAiSettings(response.data.settings || null);
+      setAiModels(response.data.models || []);
+      setBaseAiModelId(response.data.settings?.modelId || null);
+    }
+    setAiSettingsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadAiSettings();
+  }, [loadAiSettings]);
 
   const settingsDraftValue = useMemo(() => ({
     exchangeRateSettings,
@@ -560,18 +587,35 @@ export default function SettingsPage() {
 
   const saveAll = async () => {
     setSaving(true);
-    saveExchangeRateSettings(exchangeRateSettings);
-    saveDocumentSettings(documentSettings);
-    const savedValue = {
-      exchangeRateSettings,
-      documentSettings,
-    };
-    setBaseSettings(savedValue);
-    clearDraft(SETTINGS_DRAFT_KEY);
-    setDraftRestoredAt(null);
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setAiSettingsError(null);
+    try {
+      if (aiSettings?.modelId && aiSettings.modelId !== baseAiModelId) {
+        if (!isAdministrator) throw new Error('Only Administrators can change the Dashboard AI model.');
+        const response = await appClient.functions.invoke('dashboardAiSettingsSave', {
+          modelId: aiSettings.modelId,
+          expectedRevision: aiSettings.revision,
+        });
+        if (response.data?.error) throw new Error(response.data.error);
+        setAiSettings(response.data.settings);
+        setAiModels(response.data.models || aiModels);
+        setBaseAiModelId(response.data.settings?.modelId || aiSettings.modelId);
+      }
+      saveExchangeRateSettings(exchangeRateSettings);
+      saveDocumentSettings(documentSettings);
+      const savedValue = {
+        exchangeRateSettings,
+        documentSettings,
+      };
+      setBaseSettings(savedValue);
+      clearDraft(SETTINGS_DRAFT_KEY);
+      setDraftRestoredAt(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (saveError) {
+      setAiSettingsError(saveError.message || 'Settings could not be saved.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const discardSettingsDraft = () => {
@@ -598,7 +642,7 @@ export default function SettingsPage() {
         icon={Settings}
         eyebrow="Admin"
         title="Settings"
-        description="Configure email senders, exchange rates, and STEM document behavior."
+        description="Configure email senders, exchange rates, STEM documents, and Dashboard AI Search."
         actions={(
           <Button onClick={saveAll} disabled={saving} className="gap-2">
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
@@ -608,6 +652,13 @@ export default function SettingsPage() {
       />
 
       <DraftNotice restoredAt={draftRestoredAt} label="Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />
+
+      {aiSettingsError && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{aiSettingsError}</span>
+        </div>
+      )}
 
       <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
         <div className="rounded-2xl border border-border bg-card/70 p-2">
@@ -707,6 +758,84 @@ export default function SettingsPage() {
                 );
               })}
             </div>
+          </SettingsPanel>
+        </TabsContent>
+
+        <TabsContent value="ai" className="mt-0">
+          <SettingsPanel
+            icon={Sparkles}
+            title="Dashboard AI Search"
+            description="Choose the model that interprets natural-language Dashboard searches. Salesforce records are never sent to the model."
+            meta={aiSettings?.updatedAt ? `Updated ${formatHealthDate(aiSettings.updatedAt)}` : null}
+          >
+            {aiSettingsLoading ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading AI settings…
+              </div>
+            ) : aiSettings ? (
+              <div className="space-y-5">
+                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interpretation Model</Label>
+                    <Select
+                      value={aiSettings.modelId}
+                      onValueChange={(modelId) => setAiSettings((current) => ({ ...current, modelId }))}
+                      disabled={!isAdministrator || !aiSettings.storageAvailable}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {aiModels.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.label}{model.recommended ? ' · Recommended' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {aiModels.find((model) => model.id === aiSettings.modelId)?.description || aiSettings.model?.description}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-border bg-background/50 p-3">
+                      <p className="text-[11px] font-semibold uppercase text-muted-foreground">OpenAI API</p>
+                      <div className="mt-2">
+                        <StatusBadge status={aiSettings.apiConfigured ? 'configured' : 'not_configured'} />
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-background/50 p-3">
+                      <p className="text-[11px] font-semibold uppercase text-muted-foreground">Global Setting</p>
+                      <div className="mt-2">
+                        <StatusBadge status={aiSettings.storageAvailable ? 'configured' : 'unavailable'} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  <p><span className="font-semibold text-foreground">Privacy:</span> only the user’s search sentence is sent for interpretation.</p>
+                  <p className="mt-1"><span className="font-semibold text-foreground">Enforcement:</span> FCOS validates the structured interpretation and builds Salesforce filters server-side.</p>
+                  {aiSettings.updatedByEmail && (
+                    <p className="mt-1"><span className="font-semibold text-foreground">Last changed by:</span> {aiSettings.updatedByEmail}</p>
+                  )}
+                </div>
+
+                {!isAdministrator && (
+                  <p className="text-xs text-muted-foreground">Only Administrators can change this global setting.</p>
+                )}
+                {!aiSettings.storageAvailable && (
+                  <p className="text-xs text-destructive">Apply the Dashboard AI settings database migration before changing the model.</p>
+                )}
+              </div>
+            ) : (
+              <StateBlock
+                icon={AlertTriangle}
+                title="AI settings unavailable"
+                description="The global Dashboard AI setting could not be loaded."
+                action={<Button variant="outline" size="sm" onClick={loadAiSettings}>Retry</Button>}
+              />
+            )}
           </SettingsPanel>
         </TabsContent>
 

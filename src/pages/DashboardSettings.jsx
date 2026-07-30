@@ -10,7 +10,7 @@ import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
 import TableShell from '@/components/common/TableShell';
-import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff } from 'lucide-react';
+import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff, Sparkles, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 
@@ -33,6 +33,7 @@ const COUNTERPARTY_MODES = [
 ];
 const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const formatQuantity = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+const AI_TABLE_PAGE_SIZE = 100;
 
 export default function DashboardSettings() {
   const location = useLocation();
@@ -61,6 +62,11 @@ export default function DashboardSettings() {
   const debounceRef = useRef(null);
   const filteredStemsSectionRef = useRef(null);
   const [filteredTableHeight, setFilteredTableHeight] = useState(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiQuery, setAiQuery] = useState(null);
+  const [aiSearch, setAiSearch] = useState(null);
+  const [aiError, setAiError] = useState(null);
+  const [aiVisibleCount, setAiVisibleCount] = useState(AI_TABLE_PAGE_SIZE);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
     prev.includes(yr) ? (prev.length > 1 ? prev.filter(y => y !== yr) : prev) : [...prev, yr]
@@ -165,15 +171,90 @@ export default function DashboardSettings() {
     setLoading(false);
   };
 
+  const aiPeriodKey = `${selectedYears.slice().sort((a, b) => a - b).join(',')}|${selectedMonths.slice().sort((a, b) => a - b).join(',')}`;
+  const runAiSearch = async (
+    promptInput = aiPrompt,
+    clarification = '',
+    options = {},
+  ) => {
+    const prompt = String(promptInput || '').trim();
+    if (prompt.length < 3) {
+      setAiError('Enter a search request with at least 3 characters.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setAiError(null);
+    setAiSearch(null);
+    setAiQuery({ prompt, clarification, periodKey: aiPeriodKey });
+    setAiPrompt(prompt);
+    try {
+      const response = await appClient.functions.invoke('dashboardAiSearch', {
+        prompt,
+        clarification: clarification || null,
+        selectedYears,
+        selectedMonths,
+      }, { cache: true, force: options.force });
+      if (response.data?.error) {
+        setAiError(response.data.error);
+        setAiQuery(null);
+        await load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
+      } else {
+        const nextAiSearch = response.data.aiSearch || null;
+        setAiSearch(nextAiSearch);
+        if (nextAiSearch?.status === 'ready') {
+          setData(response.data);
+          setTableSearch('');
+          setAiVisibleCount(AI_TABLE_PAGE_SIZE);
+          setLastRefresh(new Date(response.meta?.cachedAt || Date.now()));
+        }
+      }
+    } catch (searchError) {
+      setAiError(searchError?.message || 'AI Search is temporarily unavailable.');
+      setAiQuery(null);
+      await load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearAiSearch = () => {
+    setAiPrompt('');
+    setAiQuery(null);
+    setAiSearch(null);
+    setAiError(null);
+    setAiVisibleCount(AI_TABLE_PAGE_SIZE);
+    load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
+  };
+
+  const refreshDashboard = () => {
+    if (aiQuery?.prompt) {
+      runAiSearch(aiQuery.prompt, aiQuery.clarification, { force: true });
+      return;
+    }
+    load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true });
+  };
+
   useEffect(() => {
     const stored = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored, selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword }));
     clearTimeout(debounceRef.current);
+    if (aiQuery) return undefined;
     debounceRef.current = setTimeout(() => {
       load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword);
     }, 400);
     return () => clearTimeout(debounceRef.current);
-  }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword]);
+  }, [selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, aiQuery]);
+
+  useEffect(() => {
+    if (!aiQuery?.prompt || aiSearch?.status !== 'ready' || aiSearch.dateScope?.mode !== 'selected_period') return;
+    if (aiQuery.periodKey === aiPeriodKey) return;
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      runAiSearch(aiQuery.prompt, aiQuery.clarification);
+    }, 400);
+    return () => clearTimeout(debounceRef.current);
+  }, [aiPeriodKey, aiQuery, aiSearch?.dateScope?.mode, aiSearch?.status]);
 
   useEffect(() => {
     const stored = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
@@ -191,6 +272,7 @@ export default function DashboardSettings() {
   // Filtered table rows: enforce selected years/months client-side as a strict safety net, then search
   const filteredStems = useMemo(() => {
     if (!data?.recentStems?.length) return data?.recentStems || [];
+    if (aiSearch?.status === 'ready') return data.recentStems;
     const yearsSet = new Set(selectedYears);
     const monthsSet = new Set(selectedMonths);
     // Parse date string directly (e.g. "2026-04-30") to avoid any timezone issues.
@@ -206,12 +288,18 @@ export default function DashboardSettings() {
     if (!tableSearch.trim()) return stems;
     const q = tableSearch.toLowerCase();
     const SEARCH_FIELDS = counterpartyMode === 'supplier'
-      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Supplier_Names', '_Product_Quantities']
-      : ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Buyer_Group', '_Product_Quantities'];
+      ? ['Name', 'KeyStem__c', 'Vessel__c', '_Supplier_Names', '_Product_Quantities', '_Extra_Cost_Names']
+      : ['Name', 'KeyStem__c', 'Vessel__c', 'Buyer_Name__c', 'Buyer__c', '_Buyer_Group', '_Product_Quantities', '_Extra_Cost_Names'];
     return stems.filter(row =>
       SEARCH_FIELDS.some(f => row[f] != null && String(row[f]).toLowerCase().includes(q))
     );
-  }, [data?.recentStems, tableSearch, selectedYears, selectedMonths, counterpartyMode]);
+  }, [data?.recentStems, tableSearch, selectedYears, selectedMonths, counterpartyMode, aiSearch?.status]);
+  const aiSearchReady = aiSearch?.status === 'ready';
+  const aiDateOverridesSelection = aiSearchReady && aiSearch.dateScope?.mode !== 'selected_period';
+  const tableRecords = aiSearchReady
+    ? filteredStems.slice(0, aiVisibleCount)
+    : filteredStems;
+  const aiCanShowMore = aiSearchReady && tableRecords.length < filteredStems.length;
 
   const dashboardTurnover = data?.turnoverTotal ?? data?.totalBuyer ?? null;
   const kpiMetrics = useMemo(() => {
@@ -382,7 +470,7 @@ export default function DashboardSettings() {
               {showAnalytics ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               {showAnalytics ? 'Hide analytics' : 'Show analytics'}
             </Button>
-            <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })} disabled={loading} className="gap-2">
+            <Button variant="outline" onClick={refreshDashboard} disabled={loading} className="gap-2">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
               Refresh
             </Button>
@@ -392,6 +480,106 @@ export default function DashboardSettings() {
 
       {/* Filter panel */}
       <div className="relative z-40 overflow-visible bg-card rounded-xl border border-border p-4 mb-6 space-y-3">
+        <form
+          className="border-b border-border/70 pb-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            runAiSearch();
+          }}
+        >
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div className="relative min-w-0 flex-1">
+                <Input
+                  value={aiPrompt}
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                  placeholder='Search records, for example: stems with extra cost "SWAPS"'
+                  maxLength={500}
+                  className="h-10 pr-10"
+                />
+                {aiPrompt && (
+                  <button
+                    type="button"
+                    onClick={() => setAiPrompt('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear AI search text"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="submit" disabled={loading || aiPrompt.trim().length < 3} className="gap-2">
+                {loading && aiQuery ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                Search
+              </Button>
+              {aiQuery && (
+                <Button type="button" variant="outline" onClick={clearAiSearch} disabled={loading}>
+                  Clear AI
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {aiSearch && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800">
+                <Sparkles className="h-3 w-3" />
+                {aiSearch.status === 'ready' ? 'AI scope active' : 'Clarification required'}
+              </span>
+              {aiSearch.chips?.map((chip) => (
+                <span key={chip} className="rounded-md border border-border bg-muted/30 px-2 py-1 text-xs text-foreground">
+                  {chip}
+                </span>
+              ))}
+              {aiSearch.dateScope?.label && (
+                <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+                  {aiSearch.dateScope.label}
+                </span>
+              )}
+              {aiSearch.model?.label && (
+                <span className="text-[11px] text-muted-foreground">{aiSearch.model.label}</span>
+              )}
+            </div>
+          )}
+
+          {aiSearch?.interpretation && (
+            <p className="mt-2 text-xs text-muted-foreground">{aiSearch.interpretation}</p>
+          )}
+
+          {aiSearch?.status === 'needs_clarification' && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-semibold text-amber-900">{aiSearch.clarification?.question}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {aiSearch.clarification?.options?.map((option) => (
+                  <Button
+                    key={option}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-300 bg-white text-amber-900 hover:bg-amber-100"
+                    onClick={() => runAiSearch(aiQuery?.prompt || aiPrompt, option)}
+                    disabled={loading}
+                  >
+                    {option}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {aiError && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{aiError}</span>
+            </div>
+          )}
+        </form>
+
         <div className="flex flex-wrap items-center gap-3">
           <Label className="w-16 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Year</Label>
           <div className="flex flex-wrap gap-2">
@@ -399,11 +587,12 @@ export default function DashboardSettings() {
               <button
                 key={yr}
                 onClick={() => toggleYear(yr)}
+                disabled={aiDateOverridesSelection}
                 className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
                   selectedYears.includes(yr)
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 {yr}
               </button>
@@ -412,21 +601,23 @@ export default function DashboardSettings() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setDisputeOnly(false)}
+              disabled={Boolean(aiQuery)}
               className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
                 !disputeOnly
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-40`}
             >
               All STEMs
             </button>
             <button
               onClick={() => setDisputeOnly(true)}
+              disabled={Boolean(aiQuery)}
               className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
                 disputeOnly
                   ? 'bg-destructive text-destructive-foreground border-destructive'
                   : 'bg-muted/40 text-muted-foreground border-border hover:border-destructive/50 hover:text-destructive'
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-40`}
             >
               Disputed only
             </button>
@@ -472,6 +663,7 @@ export default function DashboardSettings() {
                   placeholder={`All ${activeCounterparty.plural.toLowerCase()}`}
                   className="h-8 w-56 text-xs"
                   autoComplete="off"
+                  disabled={Boolean(aiQuery)}
                 />
                 {companySuggestionsOpen && companySuggestions.length > 0 && (
                   <div className="absolute left-0 top-full z-[100] mt-1 max-h-64 w-80 overflow-auto rounded-lg border border-border bg-background py-1 text-foreground shadow-2xl">
@@ -491,7 +683,7 @@ export default function DashboardSettings() {
                   </div>
                 )}
               </div>
-              {companyKeyword && (
+              {companyKeyword && !aiQuery && (
                 <button onClick={() => setCompanyKeyword('')} className="text-xs text-primary hover:underline">
                   Clear
                 </button>
@@ -521,6 +713,7 @@ export default function DashboardSettings() {
                   placeholder="All ports/countries"
                   className="h-8 w-44 text-xs"
                   autoComplete="off"
+                  disabled={Boolean(aiQuery)}
                 />
                 {portCountrySuggestionsOpen && portCountrySuggestions.length > 0 && (
                   <div className="absolute left-0 top-full z-[100] mt-1 max-h-64 w-80 overflow-auto rounded-lg border border-border bg-background py-1 text-foreground shadow-2xl">
@@ -540,7 +733,7 @@ export default function DashboardSettings() {
                   </div>
                 )}
               </div>
-              {portCountry && (
+              {portCountry && !aiQuery && (
                 <button onClick={() => setPortCountry('')} className="text-xs text-primary hover:underline">
                   Clear
                 </button>
@@ -554,19 +747,20 @@ export default function DashboardSettings() {
           <div className="flex flex-wrap gap-1.5">
             {MONTHS.map(m => (
               <button
-                key={m.value}
-                onClick={() => toggleMonth(m.value)}
+              key={m.value}
+              onClick={() => toggleMonth(m.value)}
+              disabled={aiDateOverridesSelection}
                 className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
                   selectedMonths.includes(m.value)
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/50'
-                }`}
+              } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 {m.label}
               </button>
             ))}
           </div>
-          <button onClick={toggleAllMonths} className="text-xs text-primary hover:underline">
+          <button onClick={toggleAllMonths} disabled={aiDateOverridesSelection} className="text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40">
             {selectedMonths.length === 12 ? 'Clear all' : 'Select all'}
           </button>
           <span className="text-xs text-muted-foreground">Fallback: Expected Delivery when Delivery Date is blank</span>
@@ -579,7 +773,14 @@ export default function DashboardSettings() {
         </div>
       )}
 
-
+      {aiSearchReady && aiSearch.truncated && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {aiSearch.matchedCount?.toLocaleString()} STEMs match. Dashboard calculations and detailed rows currently include the newest {aiSearch.loadedCount?.toLocaleString()} records; refine the search for complete financial totals.
+          </span>
+        </div>
+      )}
 
       {loading && showAnalytics && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -859,8 +1060,10 @@ export default function DashboardSettings() {
             style={!showAnalytics && filteredTableHeight ? { height: `${filteredTableHeight}px` } : undefined}
           >
             <TableShell
-              title="Filtered STEMs"
-              meta={`${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
+              title={aiSearchReady ? 'AI Search Results' : 'Filtered STEMs'}
+              meta={aiSearchReady
+                ? `${tableRecords.length.toLocaleString()} shown · ${Number(aiSearch.matchedCount || 0).toLocaleString()} matched`
+                : `${filteredStems.length}${filteredStems.length !== data.recentStems?.length ? ` of ${data.recentStems?.length}` : ''} shown`}
               className={`flex flex-col ${showAnalytics ? 'h-[calc(100vh-7rem)] min-h-[360px]' : 'h-full min-h-0'}`}
               bodyClassName="min-h-0 flex-1 p-2"
               actions={(
@@ -882,6 +1085,7 @@ export default function DashboardSettings() {
                       value={tableSearch}
                       onChange={e => setTableSearch(e.target.value)}
                       className="pl-8 h-8 text-xs"
+                      disabled={aiSearchReady}
                     />
                     {tableSearch && (
                       <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -889,11 +1093,23 @@ export default function DashboardSettings() {
                       </button>
                     )}
                   </div>
+                  {aiCanShowMore && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() => setAiVisibleCount((current) => current + AI_TABLE_PAGE_SIZE)}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                      Show more
+                    </Button>
+                  )}
                 </>
               )}
             >
               <PnlTable
-                records={filteredStems}
+                records={tableRecords}
                 counterpartyMode={counterpartyMode}
                 scrollClassName="h-full min-h-0"
                 onRowClick={(row) => setSelectedStemId(row.Id)}
@@ -906,7 +1122,7 @@ export default function DashboardSettings() {
         stemId={selectedStemId}
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
-        onUpdated={() => load(selectedYears, selectedMonths, disputeOnly, portCountry, counterpartyMode, companyKeyword, { force: true })}
+        onUpdated={refreshDashboard}
       />
     </div>
   );

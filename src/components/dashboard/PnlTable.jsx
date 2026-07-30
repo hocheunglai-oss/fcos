@@ -17,6 +17,7 @@ const FIELD_LABELS = {
   '_Buyer_Group': 'Buyer Group',
   '_Supplier_Names': 'Supplier Names',
   '_Product_Quantities': 'Products / Quantity',
+  '_Extra_Cost_Names': 'Extra Costs',
   'ETA_Start_Date__c': 'ETA',
   [DELIVERY_FIELD]: 'Delivery Date',
   '__extraCostBuyCalc': 'EXTRA COSTS',
@@ -52,6 +53,7 @@ const BASE_HIDDEN_COLS = new Set([
   '_Supplier_Name_List',
   '_Supplier_Invoice_Amount_List',
   '_Product_Quantity_List',
+  '_Extra_Cost_Name_List',
 ]);
 
 // Columns that are right-aligned (money)
@@ -119,6 +121,7 @@ const COL_ORDER = [
   '_Buyer_Group',
   '_Supplier_Names',
   '_Product_Quantities',
+  '_Extra_Cost_Names',
   'CreatedDate',
   DELIVERY_FIELD,
   BUYER_FIELD,
@@ -290,6 +293,24 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                               <span key={`${item.productName}-${item.quantityLabel}-${index}`} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
                                 <span className="font-medium">{item.productName}</span>
                                 {item.quantityLabel && <span className="ml-1 text-muted-foreground">{item.quantityLabel}</span>}
+                              </span>
+                            ))}
+                          </div>
+                        ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === '_Extra_Cost_Names') {
+                    const extraCostNames = Array.isArray(row._Extra_Cost_Name_List)
+                      ? row._Extra_Cost_Name_List
+                      : String(row._Extra_Cost_Names || '').split(',').map((value) => value.trim()).filter(Boolean);
+                    return (
+                      <td key={col} className="min-w-64 px-3 py-2.5 text-foreground">
+                        {extraCostNames.length ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {extraCostNames.map((name) => (
+                              <span key={name} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] leading-5 text-amber-900">
+                                {name}
                               </span>
                             ))}
                           </div>

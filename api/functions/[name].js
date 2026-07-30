@@ -126,6 +126,15 @@ import {
   collaborationNotificationsRead as collaborationNotificationsReadService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
+import {
+  DASHBOARD_AI_MODELS,
+  DEFAULT_DASHBOARD_AI_MODEL,
+  compileDashboardAiWhere,
+  dashboardAiModel,
+  interpretDashboardAiSearch,
+  isAllowedDashboardAiModel,
+  normalizeDashboardAiPrompt,
+} from '../_dashboardAi.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -684,6 +693,9 @@ const HANDLER_MODULE_ACCESS = {
   accountManagersSaveNote: ['buyers_administrator'],
   accountManagersRetrySync: ['buyers_administrator'],
   systemHealth: ['settings'],
+  dashboardAiSettingsGet: ['settings'],
+  dashboardAiSettingsSave: ['settings'],
+  dashboardAiSearch: ['dashboard'],
   backboneBridgeIdentity: ['settings'],
   backboneTradeProjection: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
   backboneFinanceHandoffs: ['review'],
@@ -3071,6 +3083,230 @@ async function salesforceObjectFields(body) {
   return cached.value;
 }
 
+const DASHBOARD_AI_SETTINGS_ID = 'default';
+
+function serializeDashboardAiSettings(row = null, storageAvailable = true) {
+  const configuredModel = isAllowedDashboardAiModel(row?.model_id)
+    ? row.model_id
+    : DEFAULT_DASHBOARD_AI_MODEL;
+  return {
+    modelId: configuredModel,
+    model: dashboardAiModel(configuredModel),
+    revision: Math.max(1, Number(row?.revision || 1)),
+    updatedAt: row?.updated_at || null,
+    updatedByEmail: row?.updated_by_email || null,
+    storageAvailable,
+    apiConfigured: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
+  };
+}
+
+async function loadDashboardAiSettings(client = safeSupabaseAdminClient()) {
+  if (!client) return serializeDashboardAiSettings(null, false);
+  const { data, error } = await client
+    .from('dashboard_ai_settings')
+    .select('id,model_id,revision,updated_at,updated_by_email')
+    .eq('id', DASHBOARD_AI_SETTINGS_ID)
+    .maybeSingle();
+  if (error) return serializeDashboardAiSettings(null, false);
+  return serializeDashboardAiSettings(data, true);
+}
+
+async function dashboardAiSettingsGet(body, req, accessContext = null) {
+  const { profile } = accessContext || await requireActiveUser(req);
+  return {
+    settings: await loadDashboardAiSettings(),
+    models: DASHBOARD_AI_MODELS,
+    capabilities: {
+      canManageSettings: profile.user_type === 'administrator',
+    },
+  };
+}
+
+async function dashboardAiSettingsSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  const modelId = String(body.modelId || body.model_id || '').trim();
+  if (!isAllowedDashboardAiModel(modelId)) {
+    throw appError('Select an allowed Dashboard AI model.', 400);
+  }
+  const expectedRevision = Number(body.expectedRevision ?? body.expected_revision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw appError('The current Dashboard AI settings revision is required.', 400);
+  }
+  const { data: current, error: currentError } = await client
+    .from('dashboard_ai_settings')
+    .select('id,model_id,revision,updated_at,updated_by_email')
+    .eq('id', DASHBOARD_AI_SETTINGS_ID)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw appError('Dashboard AI settings storage is unavailable. Apply the database migration first.', 503);
+  if (Number(current.revision) !== expectedRevision) {
+    const error = appError('Dashboard AI settings changed in another session. Refresh before saving.', 409);
+    error.details = { settings: serializeDashboardAiSettings(current, true) };
+    throw error;
+  }
+  const updatedAt = new Date().toISOString();
+  const { data, error } = await client
+    .from('dashboard_ai_settings')
+    .update({
+      model_id: modelId,
+      revision: expectedRevision + 1,
+      updated_by: profile.id,
+      updated_by_email: profile.email,
+      updated_at: updatedAt,
+    })
+    .eq('id', DASHBOARD_AI_SETTINGS_ID)
+    .eq('revision', expectedRevision)
+    .select('id,model_id,revision,updated_at,updated_by_email')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    const conflict = appError('Dashboard AI settings changed in another session. Refresh before saving.', 409);
+    conflict.details = { settings: await loadDashboardAiSettings(client) };
+    throw conflict;
+  }
+  await writeAdminAudit(
+    client,
+    profile,
+    'dashboard_ai_model_changed',
+    null,
+    null,
+    {
+      previousModelId: current.model_id,
+      modelId,
+      revision: expectedRevision + 1,
+    },
+  );
+  await expireRuntimeCacheTags(['dashboard:ai-interpretation']);
+  return {
+    settings: serializeDashboardAiSettings(data, true),
+    models: DASHBOARD_AI_MODELS,
+    capabilities: { canManageSettings: true },
+  };
+}
+
+function dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths) {
+  const years = [...new Set((Array.isArray(selectedYears) ? selectedYears : []).map(Number).filter(Number.isInteger))]
+    .sort((a, b) => a - b);
+  const months = [...new Set((Array.isArray(selectedMonths) ? selectedMonths : []).map(Number)
+    .filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))]
+    .sort((a, b) => a - b);
+  const monthFormatter = new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'Asia/Hong_Kong' });
+  const monthLabels = months.map((month) => monthFormatter.format(new Date(Date.UTC(2026, month - 1, 1))));
+  return `${years.join(', ') || 'Current year'} · ${monthLabels.join(', ') || 'Current month'}`;
+}
+
+function dashboardAiTrendYear(interpretation, selectedYears) {
+  if (interpretation?.dateScope?.mode === 'range') {
+    const startYear = Number(String(interpretation.dateScope.start || '').slice(0, 4));
+    const endYear = Number(String(interpretation.dateScope.end || '').slice(0, 4));
+    if (startYear && startYear === endYear) return startYear;
+  }
+  const years = [...new Set((Array.isArray(selectedYears) ? selectedYears : []).map(Number).filter(Number.isInteger))];
+  return years.length === 1 ? years[0] : new Date().getFullYear();
+}
+
+async function dashboardAiSearch(body, req, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const prompt = normalizeDashboardAiPrompt(body.prompt);
+  const clarification = String(body.clarification || '').trim().slice(0, 200);
+  const currentYear = new Date().getFullYear();
+  const selectedYears = Array.isArray(body.selectedYears) && body.selectedYears.length
+    ? body.selectedYears
+    : [currentYear];
+  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length
+    ? body.selectedMonths
+    : [new Date().getMonth() + 1];
+  const selectedPeriodLabel = dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths);
+  const settings = await loadDashboardAiSettings(context.client);
+  if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
+  const force = requestForcesRefresh(body, req);
+  const safetyIdentifier = `fcos-dashboard-${createHash('sha256').update(String(context.profile.id)).digest('hex').slice(0, 32)}`;
+  const interpretationResult = await getOrLoadRuntimeCache({
+    namespace: 'dashboard-ai-interpretation',
+    version: '1',
+    accessScope: salesforceCacheAccessScope(context),
+    apiVersion: settings.modelId,
+    payload: {
+      modelId: settings.modelId,
+      prompt,
+      clarification,
+    },
+    ttlSeconds: 5 * 60,
+    tags: ['dashboard:ai-interpretation'],
+    force,
+    loader: () => interpretDashboardAiSearch({
+      prompt,
+      clarification,
+      modelId: settings.modelId,
+      selectedPeriodLabel,
+      today: dateOnly(new Date()),
+      safetyIdentifier,
+      signal: AbortSignal.timeout(15_000),
+    }),
+  });
+  const interpretation = interpretationResult.value;
+  const baseAiSearch = {
+    status: interpretation.status,
+    interpretation: interpretation.interpretation,
+    chips: interpretation.chips,
+    includeCancelled: interpretation.includeCancelled,
+    dateScope: {
+      ...interpretation.dateScope,
+      label: interpretation.dateScope.mode === 'selected_period'
+        ? selectedPeriodLabel
+        : interpretation.dateScope.label,
+    },
+    clarification: interpretation.clarification,
+    model: settings.model,
+    modelId: settings.modelId,
+    interpretationCache: interpretationResult.cache.status,
+  };
+  if (interpretation.status === 'needs_clarification') {
+    return { aiSearch: baseAiSearch };
+  }
+  if (interpretation.status === 'unsupported') {
+    throw appError(interpretation.interpretation, 400);
+  }
+
+  const [stem, account, lineItem, extraCost, product, port] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
+    salesforceObjectFields({ objectName: 'Account', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Port__c', forceRefresh: force }).catch(() => ({ fields: [] })),
+  ]);
+  const where = compileDashboardAiWhere(
+    interpretation,
+    { stem, account, lineItem, extraCost, product, port },
+    { selectedYears, selectedMonths },
+  );
+  const dashboard = await salesforceDashboardFilteredFull({
+    mode: 'dashboard',
+    where,
+    trendYear: dashboardAiTrendYear(interpretation, selectedYears),
+    disputeOnly: false,
+    portCountry: null,
+    companyFilterMode: 'buyer',
+    companyKeyword: null,
+    force,
+  }, req, context);
+  const matchedCount = Number(dashboard.stemTotal || 0);
+  const loadedCount = dashboard.recentStems?.length || 0;
+  return {
+    ...dashboard,
+    aiSearch: {
+      ...baseAiSearch,
+      status: 'ready',
+      matchedCount,
+      loadedCount,
+      resultLimit: 3000,
+      truncated: matchedCount > loadedCount,
+      nextCursor: null,
+    },
+  };
+}
+
 async function salesforceQuery(body, req = null, accessContext = null) {
   if (isInterofficeAccess(accessContext)) throw appError('Raw Salesforce query is not available for Interoffice users.', 403);
   if (!body.soql) throw new Error('soql query required');
@@ -5350,14 +5586,18 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     dateWindows,
   } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
-  const [describe, lineItemDescribe, productDescribe] = await Promise.all([
+  const [describe, lineItemDescribe, productDescribe, extraCostDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c' }),
     salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] })),
     salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }).catch(() => ({ fields: [] })),
   ]);
   const fieldNames = describe.fields.map((f) => f.name);
   const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields, 'product');
+  const extraCostFieldNames = new Set((extraCostDescribe.fields || []).map((field) => field.name));
+  const extraCostProductLookup = (extraCostDescribe.fields || [])
+    .find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
   if (dateBasis && dateBasis !== EXCEPTION_REVIEW_DATE_BASIS) {
     throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
   }
@@ -5546,7 +5786,12 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
       })),
       compositeQueryRows(stemChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
-        return { soql: `SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
+        const identityFields = [
+          extraCostFieldNames.has('Name') ? 'Name' : '',
+          extraCostFieldNames.has('Description__c') ? 'Description__c' : '',
+          extraCostProductLookup ? `${extraCostProductLookup.relationshipName}.Name` : '',
+        ].filter(Boolean);
+        return { soql: `SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c${identityFields.length ? `, ${identityFields.join(', ')}` : ''} FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
       })),
     ]);
     lineItems = lineItemChunks.flat();
@@ -5559,8 +5804,18 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   const extraCostBuyByStem = {};
   const invoicedExtraCostBuyByStem = {};
   const sellOnlyExtraSellByStem = {};
+  const extraCostNamesByStem = {};
   for (const ec of extraCosts) {
     if (!ec.STEM__c || ec.Cancelled__c) continue;
+    const extraCostIdentity = [
+      extraCostProductLookup ? ec[extraCostProductLookup.relationshipName]?.Name : null,
+      ec.Description__c,
+      ec.Name,
+    ].map((value) => String(value || '').trim()).filter(Boolean);
+    if (extraCostIdentity.length) {
+      if (!extraCostNamesByStem[ec.STEM__c]) extraCostNamesByStem[ec.STEM__c] = new Set();
+      for (const value of extraCostIdentity) extraCostNamesByStem[ec.STEM__c].add(value);
+    }
     const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
     const buy = extraBuyAmount(ec, stemHasDelivery);
     const sell = extraSellAmount(ec, stemHasDelivery);
@@ -5735,6 +5990,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     const calc = calculateStem(stem);
     const supplierNames = [...(supplierNamesByStem[stem.Id] || [])].sort();
     const productQuantities = productQuantitiesByStem[stem.Id] || [];
+    const extraCostNames = [...(extraCostNamesByStem[stem.Id] || [])].sort();
     const buyerAccount = stem['Account__r'] || {};
     const buyerGroup = buyerAccount.Group_Name__c || buyerAccount.Parent?.Name || null;
     const port = stem['Port__r'] || {};
@@ -5775,6 +6031,8 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
       _Has_Uncancelled_Line_Product_Item: stemsWithUncancelledLineProductItems.has(stem.Id),
       _Product_Quantity_List: productQuantities,
       _Product_Quantities: productQuantities.map((item) => `${item.productName} ${item.quantityLabel}`).join(', ') || null,
+      _Extra_Cost_Name_List: extraCostNames,
+      _Extra_Cost_Names: extraCostNames.join(', ') || null,
       _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,
       _buyerBrokerComm: calc.buyerComm || null,
       _suppBrokerName: brokerByStem[stem.Id]?.suppBrokerName || null,
@@ -14247,6 +14505,9 @@ const handlers = {
   salesforceFullSchema,
   salesforceDashboard,
   salesforceDashboardFiltered: salesforceDashboardFilteredFull,
+  dashboardAiSearch,
+  dashboardAiSettingsGet,
+  dashboardAiSettingsSave,
   salesforceStemDetail: salesforceStemDetailFull,
   salesforceStemDocuments,
   exceptionReviewWorkflowList,

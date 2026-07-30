@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.46';
+export const APP_VERSION = '2.0.47';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.47',
+    releasedAt: '2026-07-31',
+    title: 'AI-powered Dashboard record search',
+    changes: [
+      'Added natural-language Dashboard search with clarification, visible interpretations, selected-period defaults, and explicit date overrides.',
+      'Added server-validated Salesforce filters for parties, products, extra costs, operational fields, and financial comparisons without sending records to the AI model.',
+      'Added an Administrator-controlled OpenAI model setting with GPT-5 mini as the recommended default.',
+    ],
+  },
   {
     version: '2.0.46',
     releasedAt: '2026-07-30',
