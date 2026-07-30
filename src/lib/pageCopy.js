@@ -1,4 +1,9 @@
 const PAGE_COPY = {
+  'Projects & Tasks': {
+    eyebrow: 'Collaboration',
+    title: 'Projects & Tasks',
+    description: 'Plan shared work, assign accountability, and keep progress, discussion, and files together.',
+  },
   Dashboard: {
     eyebrow: 'Review',
     title: 'Dashboard',

@@ -26,6 +26,7 @@ const AdminControl = lazy(() => import('@/pages/AdminControl'));
 const UniversalAuditTrail = lazy(() => import('@/pages/UniversalAuditTrail'));
 const AccountManagers = lazy(() => import('@/pages/AccountManagers'));
 const AppPortal = lazy(() => import('@/pages/AppPortal'));
+const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -88,6 +89,7 @@ const AuthenticatedApp = () => {
           <Route path="/apps" element={<AppPortal />} />
           <Route path="/v2/*" element={<RedirectLegacyWorkspace />} />
           <Route element={<Layout />}>
+            <Route path="/projects-tasks" element={<ProjectsTasks />} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
             <Route path="/settings" element={<ModuleGate moduleId="settings"><SettingsPage /></ModuleGate>} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />

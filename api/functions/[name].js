@@ -110,6 +110,22 @@ import {
   savePortalExplicitAccess,
   syncPortalEntitlement,
 } from '../_portal.js';
+import {
+  collaborationArchive as collaborationArchiveService,
+  collaborationAttachmentComplete as collaborationAttachmentCompleteService,
+  collaborationAttachmentDelete as collaborationAttachmentDeleteService,
+  collaborationAttachmentPrepare as collaborationAttachmentPrepareService,
+  collaborationAttachmentUrl as collaborationAttachmentUrlService,
+  collaborationCommentDelete as collaborationCommentDeleteService,
+  collaborationCommentSave as collaborationCommentSaveService,
+  collaborationCreate as collaborationCreateService,
+  collaborationDailyMaintenance,
+  collaborationDetail as collaborationDetailService,
+  collaborationList as collaborationListService,
+  collaborationNotificationsList as collaborationNotificationsListService,
+  collaborationNotificationsRead as collaborationNotificationsReadService,
+  collaborationUpdate as collaborationUpdateService,
+} from '../_collaborationService.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -430,6 +446,63 @@ async function portalEntitlementSyncCron(body = {}, req = null) {
   };
 }
 
+async function collaborationDailyCron(body = {}, req = null) {
+  requireCronAuthorization(req);
+  return collaborationDailyMaintenance(supabaseAdminClient());
+}
+
+async function collaborationList(body = {}, req = null, accessContext = null) {
+  return collaborationListService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationDetail(body = {}, req = null, accessContext = null) {
+  return collaborationDetailService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationCreate(body = {}, req = null, accessContext = null) {
+  return collaborationCreateService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationUpdate(body = {}, req = null, accessContext = null) {
+  return collaborationUpdateService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationArchive(body = {}, req = null, accessContext = null) {
+  return collaborationArchiveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationCommentSave(body = {}, req = null, accessContext = null) {
+  return collaborationCommentSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationCommentDelete(body = {}, req = null, accessContext = null) {
+  return collaborationCommentDeleteService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationAttachmentPrepare(body = {}, req = null, accessContext = null) {
+  return collaborationAttachmentPrepareService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationAttachmentComplete(body = {}, req = null, accessContext = null) {
+  return collaborationAttachmentCompleteService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationAttachmentUrl(body = {}, req = null, accessContext = null) {
+  return collaborationAttachmentUrlService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationAttachmentDelete(body = {}, req = null, accessContext = null) {
+  return collaborationAttachmentDeleteService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationNotificationsList(body = {}, req = null, accessContext = null) {
+  return collaborationNotificationsListService(body, accessContext || await requireActiveUser(req));
+}
+
+async function collaborationNotificationsRead(body = {}, req = null, accessContext = null) {
+  return collaborationNotificationsReadService(body, accessContext || await requireActiveUser(req));
+}
+
 function normalizePermissions(userType, permissions = {}) {
   if (userType === 'administrator') return ADMIN_FULL_ACCESS;
   const normalized = {};
@@ -523,6 +596,7 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   'adminBootstrap',
   'outstandingBuyerInvoicesEmailCron',
   'portalEntitlementSyncCron',
+  'collaborationDailyCron',
 ]);
 
 const HANDLER_MODULE_ACCESS = {
@@ -530,6 +604,19 @@ const HANDLER_MODULE_ACCESS = {
   portalApplicationsList: [],
   portalApplicationLaunch: [],
   portalSignOut: [],
+  collaborationList: [],
+  collaborationDetail: [],
+  collaborationCreate: [],
+  collaborationUpdate: [],
+  collaborationArchive: [],
+  collaborationCommentSave: [],
+  collaborationCommentDelete: [],
+  collaborationAttachmentPrepare: [],
+  collaborationAttachmentComplete: [],
+  collaborationAttachmentUrl: [],
+  collaborationAttachmentDelete: [],
+  collaborationNotificationsList: [],
+  collaborationNotificationsRead: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
   salesforceTopBuyers: ['dashboard'],
@@ -1279,7 +1366,7 @@ async function universalAuditTrail(body, req) {
   const keyword = String(body.keyword || '').trim().toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
+  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
     safeAuditRows(
       client
         .from('admin_audit_logs')
@@ -1295,6 +1382,27 @@ async function universalAuditTrail(body, req) {
         actor: row.actor_email || 'System',
         target: row.target_email || row.target_user_id || '—',
         summary: compactAuditSummary([row.target_email || row.target_user_id, row.metadata?.user_type, row.metadata?.type_id]),
+        metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('collaboration_events')
+        .select('id,item_id,event_type,summary,metadata,actor_email,created_at,collaboration_items(item_key,title)')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `collaboration:${row.id}`,
+        source: 'Projects & Tasks',
+        module: 'Projects & Tasks',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.collaboration_items?.item_key || row.item_id || '—',
+        summary: compactAuditSummary([
+          row.collaboration_items?.title,
+          row.summary,
+          row.metadata?.status,
+        ]),
         metadata: row.metadata || {},
       })),
     safeAuditRows(
@@ -1419,6 +1527,7 @@ async function universalAuditTrail(body, req) {
   let rows = [
     ...adminRows,
     ...portalRows,
+    ...collaborationRows,
     ...collectionRows,
     ...reportRows,
     ...interestRows,
@@ -14118,6 +14227,20 @@ const handlers = {
   portalApplicationLaunch,
   portalSignOut,
   portalEntitlementSyncCron,
+  collaborationList,
+  collaborationDetail,
+  collaborationCreate,
+  collaborationUpdate,
+  collaborationArchive,
+  collaborationCommentSave,
+  collaborationCommentDelete,
+  collaborationAttachmentPrepare,
+  collaborationAttachmentComplete,
+  collaborationAttachmentUrl,
+  collaborationAttachmentDelete,
+  collaborationNotificationsList,
+  collaborationNotificationsRead,
+  collaborationDailyCron,
   salesforceSchema,
   salesforceObjectFields,
   salesforceQuery,
@@ -14228,7 +14351,10 @@ export default async function handler(req, res) {
     } catch (error) {
       const status = error.status || error.statusCode || 500;
       recordRequestFailure(error, status);
-      return sendJson(res, { error: error.message }, status);
+      return sendJson(res, {
+        error: error.message,
+        ...(error.details !== undefined ? { details: error.details } : {}),
+      }, status);
     } finally {
       logRequestTelemetry(res.statusCode || 500);
     }

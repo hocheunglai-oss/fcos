@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.45';
+export const APP_VERSION = '2.0.46';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.46',
+    releasedAt: '2026-07-30',
+    title: 'Projects and tasks collaboration',
+    changes: [
+      'Added shared Projects, Tasks, and one-level Subtasks with list and Kanban views, accountable assignment, priorities, due dates, and automatic progress.',
+      'Added globally visible descriptions, comments, mentions, activity history, private related files, and in-app work notifications.',
+      'Restricted assignment, movement, and archive actions to each item owner or General Manager while keeping collaboration visible to every active FCOS user.',
+    ],
+  },
   {
     version: '2.0.45',
     releasedAt: '2026-07-30',

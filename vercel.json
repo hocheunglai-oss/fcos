@@ -11,6 +11,10 @@
     {
       "path": "/api/functions/portalEntitlementSyncCron",
       "schedule": "30 18 * * *"
+    },
+    {
+      "path": "/api/functions/collaborationDailyCron",
+      "schedule": "0 1 * * *"
     }
   ],
   "rewrites": [
