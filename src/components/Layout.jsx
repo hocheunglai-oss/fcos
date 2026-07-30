@@ -23,6 +23,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import AppSelector from '@/components/AppSelector';
 
 const navGroups = [
   {
@@ -198,6 +199,7 @@ export default function Layout() {
         </div>
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-auto px-3 py-4">
+          <AppSelector confirmPortalNavigation={confirmLeaveWithUnsavedChanges} />
           {accessibleGroups.map((group) => (
             <section key={group.label}>
               <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">

@@ -30,6 +30,28 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
+### Universal application portal
+
+FCOS is the login and entitlement authority for registered applications. The
+portal signs short-lived ES256 assertions; it never shares FCOS browser tokens
+or the Supabase service role with a target application.
+
+Configure these server-only values in FCOS:
+
+```bash
+FCOS_PORTAL_ISSUER=https://fcos.fcuno.com
+FCOS_PORTAL_SIGNING_KEY_ID=fcos-portal-2026-01
+FCOS_PORTAL_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+FCOS_PORTAL_EMAILROUTER_URL=https://emailrouter.vercel.app
+```
+
+Configure the matching public key, issuer, and key ID in EmailRouter. Stage its
+optional next public key before rotating the FCOS private key and `kid`.
+Application entitlements, synchronization failures, and logout retries are
+stored only in service-role tables. FCOS retries small outbox batches during
+normal portal traffic and runs a daily safety retry compatible with the Vercel
+Hobby cron limit.
+
 The optional FCOS Backbone shadow bridge is server-only and does not replace a live FCOS read. Configure the same high-entropy secret in both Vercel projects only when the bridge is ready for identity and projection UAT:
 
 ```bash

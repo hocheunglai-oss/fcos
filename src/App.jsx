@@ -25,6 +25,7 @@ const Login = lazy(() => import('@/pages/Login'));
 const AdminControl = lazy(() => import('@/pages/AdminControl'));
 const UniversalAuditTrail = lazy(() => import('@/pages/UniversalAuditTrail'));
 const AccountManagers = lazy(() => import('@/pages/AccountManagers'));
+const AppPortal = lazy(() => import('@/pages/AppPortal'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -55,6 +56,7 @@ function AuthErrorScreen({ authError }) {
 const AuthenticatedApp = () => {
   const location = useLocation();
   const { isLoadingAuth, isLoadingPublicSettings, authError, isAuthenticated } = useAuth();
+  const loginRedirectState = location.pathname === '/' ? undefined : { from: location };
 
   useEffect(() => {
     clearLegacyPaymentReminderSmtpSettings();
@@ -73,16 +75,17 @@ const AuthenticatedApp = () => {
     <Routes>
       <Route path="/login" element={<Login />} />
       {authError?.type === 'auth_required' && (
-        <Route path="*" element={<Navigate to="/login" replace state={{ from: location }} />} />
+        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
       )}
       {authError && authError.type !== 'auth_required' && (
         <Route path="*" element={<AuthErrorScreen authError={authError} />} />
       )}
       {!authError && !isAuthenticated && (
-        <Route path="*" element={<Navigate to="/login" replace state={{ from: location }} />} />
+        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
       )}
       {!authError && isAuthenticated && (
         <>
+          <Route path="/apps" element={<AppPortal />} />
           <Route path="/v2/*" element={<RedirectLegacyWorkspace />} />
           <Route element={<Layout />}>
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />

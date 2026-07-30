@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.44';
+export const APP_VERSION = '2.0.45';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.45',
+    releasedAt: '2026-07-30',
+    title: 'Universal application portal',
+    changes: [
+      'Added an entitled application hub after FCOS sign-in and an application switcher above Daily Work.',
+      'Added audited EmailRouter Owner and Operator access management with automatic Administrator ownership.',
+      'Added signed single-use launch, target-owned sessions, global logout, synchronization status, and retry handling.',
+    ],
+  },
   {
     version: '2.0.44',
     releasedAt: '2026-07-27',

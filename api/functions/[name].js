@@ -47,6 +47,7 @@ import {
   normalizeAccountManagerUserIds,
 } from '../_accountManagers.js';
 import { createClient } from '@supabase/supabase-js';
+import { waitUntil } from '@vercel/functions';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
 import {
@@ -96,6 +97,19 @@ import {
   expireRuntimeCacheTags,
   getOrLoadRuntimeCache,
 } from '../_runtimeCache.js';
+import {
+  checkPortalApplicationsHealth,
+  launchPortalApplication,
+  listPortalApplicationsForUser,
+  portalAdminModel,
+  preparePortalUserDeletion,
+  processPortalOutbox,
+  reconcilePortalEntitlementsForProfile,
+  retryPortalAccessSync,
+  revokePortalSessions,
+  savePortalExplicitAccess,
+  syncPortalEntitlement,
+} from '../_portal.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -123,6 +137,25 @@ const ADMIN_APP_MODULES = [
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];
+
+let portalOutboxScheduledAt = 0;
+
+function schedulePortalOutboxRetry(client) {
+  const now = Date.now();
+  if (now - portalOutboxScheduledAt < 60_000) return;
+  portalOutboxScheduledAt = now;
+  waitUntil(
+    processPortalOutbox({
+      client,
+      limit: 3,
+      requestId: activePortalRequestId(),
+    }).catch((error) => {
+      console.warn('[portal] Background retry deferred.', {
+        code: error.code || 'PORTAL_RETRY_FAILED',
+      });
+    }),
+  );
+}
 
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));
@@ -325,6 +358,12 @@ async function authContext(body, req, accessContext) {
     module.id,
     permissionCanView(module.id, permissionValues[module.id]),
   ]));
+  const applications = await listPortalApplicationsForUser({
+    client,
+    profile,
+    moduleAccess,
+  });
+  schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -340,6 +379,54 @@ async function authContext(body, req, accessContext) {
     moduleAccessLevels: {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
     },
+    applications,
+  };
+}
+
+function activePortalRequestId() {
+  return currentRequestTelemetry()?.requestId || null;
+}
+
+async function portalApplicationsList(body = {}, req = null, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const auth = await authContext(body, req, context);
+  return { applications: auth.applications || [] };
+}
+
+async function portalApplicationLaunch(body = {}, req = null, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const applicationId = String(body.applicationId || '').trim();
+  if (!applicationId) throw appError('Application is required.', 400);
+  return launchPortalApplication({
+    client: context.client,
+    profile: context.profile,
+    applicationId,
+    requestId: activePortalRequestId(),
+  });
+}
+
+async function portalSignOut(body = {}, req = null, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  return revokePortalSessions({
+    client: context.client,
+    profile: context.profile,
+    requestId: activePortalRequestId(),
+  });
+}
+
+async function portalEntitlementSyncCron(body = {}, req = null) {
+  requireCronAuthorization(req);
+  const client = supabaseAdminClient();
+  const results = await processPortalOutbox({
+    client,
+    limit: body.limit,
+    requestId: activePortalRequestId(),
+  });
+  return {
+    processed: results.length,
+    succeeded: results.filter((row) => row.status === 'succeeded').length,
+    failed: results.filter((row) => row.status !== 'succeeded').length,
+    results,
   };
 }
 
@@ -435,10 +522,14 @@ async function listAccessModel(client) {
 const AUTH_EXEMPT_HANDLERS = new Set([
   'adminBootstrap',
   'outstandingBuyerInvoicesEmailCron',
+  'portalEntitlementSyncCron',
 ]);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
+  portalApplicationsList: [],
+  portalApplicationLaunch: [],
+  portalSignOut: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
   salesforceTopBuyers: ['dashboard'],
@@ -518,6 +609,9 @@ const HANDLER_MODULE_ACCESS = {
   adminUsersList: ['admin'],
   adminAuditLogs: ['admin'],
   adminUserSave: ['admin'],
+  adminPortalAccessSave: ['admin'],
+  adminPortalAccessRetry: ['admin'],
+  adminPortalApplicationsHealth: ['admin'],
   adminUserDelete: ['admin'],
   adminUserTypeSave: ['admin'],
   adminUserTypeDelete: ['admin'],
@@ -907,6 +1001,34 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
   if (error) console.error('Failed to write admin audit log', error.message);
 }
 
+async function assertAdministratorContinuity(client, {
+  userId,
+  nextActive = false,
+  nextUserType = null,
+  deleting = false,
+}) {
+  if (!userId) return;
+  const { data: current, error: currentError } = await client
+    .from('user_profiles')
+    .select('id,user_type,active')
+    .eq('id', userId)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current?.active || current.user_type !== 'administrator') return;
+  if (!deleting && nextActive && nextUserType === 'administrator') return;
+
+  const { count, error: countError } = await client
+    .from('user_profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('active', true)
+    .eq('user_type', 'administrator')
+    .neq('id', userId);
+  if (countError) throw countError;
+  if (!count) {
+    throw appError('At least one active FCOS Administrator is required.', 409);
+  }
+}
+
 async function ensureReportArchiveManageModule(client) {
   const { error } = await client
     .from('app_modules')
@@ -926,6 +1048,11 @@ async function persistManagedUser(client, body, actor = null) {
   const isUpdate = Boolean(payload.id);
 
   if (isUpdate) {
+    await assertAdministratorContinuity(client, {
+      userId: payload.id,
+      nextActive: payload.active,
+      nextUserType: payload.user_type,
+    });
     const updatePayload = {
       email: payload.email,
       user_metadata: { full_name: payload.full_name },
@@ -938,6 +1065,11 @@ async function persistManagedUser(client, body, actor = null) {
   } else {
     const existing = await findAuthUserByEmail(client, payload.email);
     if (existing) {
+      await assertAdministratorContinuity(client, {
+        userId: existing.id,
+        nextActive: payload.active,
+        nextUserType: payload.user_type,
+      });
       authUser = existing;
       const updatePayload = {
         user_metadata: { full_name: payload.full_name },
@@ -1092,7 +1224,19 @@ async function adminUsersList(body, req) {
         ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {})
         : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
   }));
-  return { users, modules: ADMIN_APP_MODULES, capabilities: ADMIN_CAPABILITIES, userTypes, typePermissions, typeCapabilities };
+  const portal = await portalAdminModel({ client, profiles: profiles || [] });
+  for (const user of users) {
+    user.applicationAccess = portal.accessByUser[user.id] || {};
+  }
+  return {
+    users,
+    modules: ADMIN_APP_MODULES,
+    capabilities: ADMIN_CAPABILITIES,
+    userTypes,
+    typePermissions,
+    typeCapabilities,
+    portalApplications: portal.applications,
+  };
 }
 
 async function adminAuditLogs(body, req) {
@@ -1135,7 +1279,7 @@ async function universalAuditTrail(body, req) {
   const keyword = String(body.keyword || '').trim().toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
+  const [adminRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
     safeAuditRows(
       client
         .from('admin_audit_logs')
@@ -1152,6 +1296,28 @@ async function universalAuditTrail(body, req) {
         target: row.target_email || row.target_user_id || '—',
         summary: compactAuditSummary([row.target_email || row.target_user_id, row.metadata?.user_type, row.metadata?.type_id]),
         metadata: row.metadata || {},
+      })),
+    safeAuditRows(
+      client
+        .from('portal_access_events')
+        .select('id,application_id,target_user_id,actor_email,action,outcome,request_id,metadata,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `portal:${row.id}`,
+        source: 'Application Portal',
+        module: 'Admin',
+        action: normalizedAuditAction(row.action),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.application_id || row.target_user_id || '—',
+        summary: compactAuditSummary([row.application_id, row.outcome, row.metadata?.reason, row.metadata?.role]),
+        metadata: {
+          ...(row.metadata || {}),
+          outcome: row.outcome,
+          requestId: row.request_id,
+          targetUserId: row.target_user_id,
+        },
       })),
     safeAuditRows(
       client
@@ -1252,6 +1418,7 @@ async function universalAuditTrail(body, req) {
 
   let rows = [
     ...adminRows,
+    ...portalRows,
     ...collectionRows,
     ...reportRows,
     ...interestRows,
@@ -1280,7 +1447,28 @@ async function universalAuditTrail(body, req) {
 async function adminUserSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const user = await persistManagedUser(client, body, profile);
-  return { user };
+  const entitlements = await reconcilePortalEntitlementsForProfile(
+    client,
+    user,
+    profile,
+    { forceRevision: true },
+  );
+  const portalSyncErrors = [];
+  for (const entitlement of entitlements.filter((row) => row.sync_status === 'pending' || row.sync_status === 'error')) {
+    try {
+      await syncPortalEntitlement({
+        client,
+        entitlementId: entitlement.id,
+        requestId: activePortalRequestId(),
+      });
+    } catch (error) {
+      portalSyncErrors.push({
+        applicationId: entitlement.application_id,
+        message: error.message,
+      });
+    }
+  }
+  return { user, portalSyncErrors };
 }
 
 async function adminUserDelete(body, req) {
@@ -1291,11 +1479,22 @@ async function adminUserDelete(body, req) {
 
   const { data: target, error: targetError } = await client
     .from('user_profiles')
-    .select('id,email,user_type')
+    .select('id,email,full_name,user_type,active')
     .eq('id', userId)
     .maybeSingle();
   if (targetError) throw targetError;
   if (!target) throw appError('User not found.', 404);
+  await assertAdministratorContinuity(client, {
+    userId: target.id,
+    deleting: true,
+  });
+
+  await preparePortalUserDeletion({
+    client,
+    profile: target,
+    actor: profile,
+    requestId: activePortalRequestId(),
+  });
 
   const { error: deleteError } = await client.auth.admin.deleteUser(userId);
   if (deleteError) throw deleteError;
@@ -1304,6 +1503,42 @@ async function adminUserDelete(body, req) {
     user_type: target.user_type,
   });
   return { deleted: true, id: userId };
+}
+
+async function adminPortalAccessSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return savePortalExplicitAccess({
+    client,
+    actor: profile,
+    userId: String(body.userId || '').trim(),
+    applicationId: String(body.applicationId || '').trim(),
+    enabled: body.enabled === true,
+    roleId: String(body.roleId || '').trim() || null,
+    expectedRevision: Number(body.expectedRevision || 0),
+    reason: body.reason,
+    requestId: activePortalRequestId(),
+  });
+}
+
+async function adminPortalAccessRetry(body, req) {
+  const { client } = await requireAdministrator(req);
+  const entitlementId = String(body.entitlementId || '').trim();
+  if (!entitlementId) throw appError('Application entitlement is required.', 400);
+  const entitlement = await retryPortalAccessSync({
+    client,
+    entitlementId,
+    requestId: activePortalRequestId(),
+  });
+  return { entitlement };
+}
+
+async function adminPortalApplicationsHealth(body, req) {
+  const { client } = await requireAdministrator(req);
+  const applications = await checkPortalApplicationsHealth({
+    client,
+    requestId: activePortalRequestId(),
+  });
+  return { applications };
 }
 
 async function adminUserTypeSave(body, req) {
@@ -13879,6 +14114,10 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
 
 const handlers = {
   authContext,
+  portalApplicationsList,
+  portalApplicationLaunch,
+  portalSignOut,
+  portalEntitlementSyncCron,
   salesforceSchema,
   salesforceObjectFields,
   salesforceQuery,
@@ -13959,6 +14198,9 @@ const handlers = {
   adminAuditLogs,
   adminUserSave,
   adminUserDelete,
+  adminPortalAccessSave,
+  adminPortalAccessRetry,
+  adminPortalApplicationsHealth,
   adminUserTypeSave,
   adminUserTypeDelete,
   universalAuditTrail,
