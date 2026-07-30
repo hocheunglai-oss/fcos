@@ -682,6 +682,8 @@ function interpreterInstructions({ today, selectedPeriodLabel }) {
     'Use product only for STEM line-item products. Use supplier for supplier names.',
     'Use selected_period when the request has no date instruction.',
     'Use all_time only for explicit phrases such as all history, ever, or regardless of date.',
+    'The phrase all history controls only dateScope.mode=all_time and must never create a record condition.',
+    'Generic words such as stem, stems, record, and records identify the dataset; do not create stem, stem_type, or stem_status conditions unless the user supplies a specific identifier, type, or status value.',
     'Use range with exact inclusive dates for explicit years, months, date ranges, or relative periods.',
     `Today in Hong Kong is ${today}. The selected Dashboard period is ${selectedPeriodLabel}.`,
     'Cancelled child records are excluded unless the user explicitly asks to include cancelled records.',

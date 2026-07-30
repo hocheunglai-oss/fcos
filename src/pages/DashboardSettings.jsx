@@ -1056,8 +1056,14 @@ export default function DashboardSettings() {
           <div
             id="filtered-stems"
             ref={filteredStemsSectionRef}
-            className="scroll-mt-6"
-            style={!showAnalytics && filteredTableHeight ? { height: `${filteredTableHeight}px` } : undefined}
+            className={`scroll-mt-6 ${
+              !showAnalytics ? 'h-[70vh] min-h-[420px] lg:min-h-0' : ''
+            } ${
+              !showAnalytics && filteredTableHeight ? 'lg:h-[var(--filtered-table-height)]' : ''
+            }`}
+            style={!showAnalytics && filteredTableHeight
+              ? { '--filtered-table-height': `${filteredTableHeight}px` }
+              : undefined}
           >
             <TableShell
               title={aiSearchReady ? 'AI Search Results' : 'Filtered STEMs'}

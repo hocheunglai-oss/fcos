@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.47';
+export const APP_VERSION = '2.0.48';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.48',
+    releasedAt: '2026-07-31',
+    title: 'Dashboard AI mobile verification fixes',
+    changes: [
+      'Prevented the mobile Dashboard results table from collapsing when analytics are hidden.',
+      'Hardened all-history interpretation so generic STEM wording is not treated as an extra record condition.',
+    ],
+  },
   {
     version: '2.0.47',
     releasedAt: '2026-07-31',

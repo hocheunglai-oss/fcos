@@ -283,6 +283,8 @@ test('calls Responses API with structured output and sends no Salesforce record 
   assert.equal(requestBody.text.format.strict, true);
   assert.equal(requestBody.safety_identifier, 'safe-user-hash');
   assert.match(JSON.stringify(requestBody.input), /extra cost namely SWAPS/);
+  assert.match(requestBody.input[0].content[0].text, /all history controls only dateScope\.mode=all_time/i);
+  assert.match(requestBody.input[0].content[0].text, /Generic words such as stem, stems, record, and records identify the dataset/);
   assert.doesNotMatch(JSON.stringify(requestBody), /0012x|Salesforce record payload|Total_Invoice_Amount__c/);
 });
 
