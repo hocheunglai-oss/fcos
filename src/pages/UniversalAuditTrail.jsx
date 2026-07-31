@@ -44,6 +44,7 @@ function sourceTone(source) {
   if (source === 'Dispute Workflow') return 'border-amber-200 bg-amber-50 text-amber-800';
   if (source === 'Projects & Tasks') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
   if (source === 'Internal Daily Report') return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (source === 'FCOS Updates') return 'border-cyan-200 bg-cyan-50 text-cyan-800';
   return 'border-violet-200 bg-violet-50 text-violet-700';
 }
 
@@ -96,7 +97,7 @@ export default function UniversalAuditTrail() {
         icon={ShieldCheck}
         eyebrow="Administrator audit"
         title="Universal Audit Trail"
-        description="Review app-level audit events from administration, collaboration, collections, reports, disputes, internal report runs, and late-payment interest requests."
+        description="Review app-level audit events from administration, collaboration, FCOS updates, collections, reports, disputes, internal report runs, and late-payment interest requests."
         meta={`${rows.length.toLocaleString()} events shown · Hong Kong time`}
         actions={(
           <Button onClick={() => loadRows({ force: true })} disabled={loading}>

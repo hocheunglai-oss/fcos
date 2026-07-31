@@ -5,6 +5,7 @@ import {
   KeyRound,
   Loader2,
   Mail,
+  Megaphone,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -31,6 +32,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+import FcosUpdatesPanel from '@/components/admin/FcosUpdatesPanel';
 
 const emptyUserForm = {
   id: null,
@@ -759,7 +761,11 @@ export default function AdminControl() {
   };
 
   const canDeleteSelectedType = typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount === 0;
-  const activeListTitle = activeSection === 'users' ? 'Users' : 'User Types';
+  const activeListTitle = activeSection === 'users'
+    ? 'Users'
+    : activeSection === 'types'
+      ? 'User Types'
+      : 'FCOS Updates';
   const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
   const discardUserDraft = () => {
     clearDraft(activeUserDraftKey);
@@ -778,8 +784,8 @@ export default function AdminControl() {
         icon={ShieldCheck}
         eyebrow="Administration"
         title="Admin Control"
-        description="Manage users, user types, and page-level access rights."
-        actions={
+        description="Manage users, access rights, and controlled FCOS update communications."
+        actions={activeSection === 'updates' ? null : (
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -800,7 +806,7 @@ export default function AdminControl() {
               Refresh
             </button>
           </div>
-        }
+        )}
       />
 
       {!isSupabaseConfigured && (
@@ -827,9 +833,16 @@ export default function AdminControl() {
             <SegmentButton active={activeSection === 'types'} icon={UserCog} onClick={() => setActiveSection('types')}>
               User Types <span className="font-normal opacity-80">({userTypes.length})</span>
             </SegmentButton>
+            <SegmentButton active={activeSection === 'updates'} icon={Megaphone} onClick={() => setActiveSection('updates')}>
+              FCOS Updates
+            </SegmentButton>
           </div>
           <div className="text-xs font-medium text-muted-foreground">
-            {activeSection === 'users' ? 'Sorted by name.' : 'Sorted alphabetically.'}
+            {activeSection === 'users'
+              ? 'Sorted by name.'
+              : activeSection === 'types'
+                ? 'Sorted alphabetically.'
+                : 'Administrator-prepared, General Manager-controlled.'}
           </div>
         </div>
 
@@ -838,11 +851,19 @@ export default function AdminControl() {
             <div className="flex h-12 items-center justify-between border-b border-border px-4">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
-                <p className="text-xs text-muted-foreground">{activeSection === 'users' ? `${users.length} accounts` : `${userTypes.length} types`}</p>
+                <p className="text-xs text-muted-foreground">
+                  {activeSection === 'users'
+                    ? `${users.length} accounts`
+                    : activeSection === 'types'
+                      ? `${userTypes.length} types`
+                      : 'Release email review and delivery'}
+                </p>
               </div>
             </div>
 
-            {activeSection === 'users' ? (
+            {activeSection === 'updates' ? (
+              <FcosUpdatesPanel />
+            ) : activeSection === 'users' ? (
               loading ? (
                 <StateBlock icon={Loader2} title="Loading users..." description="Fetching access-control users." />
               ) : sortedUsers.length ? (

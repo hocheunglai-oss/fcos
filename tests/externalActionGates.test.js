@@ -38,8 +38,10 @@ test('an emergency Salesforce pause rejects mutations before authentication or n
 
 test('retained live paths include emergency controls at their server boundary', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const smtpSource = await readFile(new URL('../api/_smtp.js', import.meta.url), 'utf8');
   assert.match(source, /async function googleDriveAccessToken\(\) \{\s*requireExternalActionGate\('google_drive'\)/);
-  assert.match(source, /async function sendWithSmtp\([^)]*\) \{\s*requireExternalActionGate\('email_delivery'\)/);
+  assert.match(source, /from '\.\.\/_smtp\.js'/);
+  assert.match(smtpSource, /export async function sendWithSmtp\([^)]*\) \{\s*requireExternalActionGate\('email_delivery'\)/);
   assert.match(source, /async function outstandingBuyerInvoicesEmailCron[\s\S]*isExternalActionEnabled\('email_delivery'\)/);
   assert.match(source, /async function disputeWorkflowUploadDocument[\s\S]*requireExternalActionGate\('salesforce_write'\)/);
 });

@@ -139,6 +139,25 @@ import {
   isAllowedDashboardAiModel,
   normalizeDashboardAiPrompt,
 } from '../_dashboardAi.js';
+import {
+  sendWithSmtp,
+  sendWithSmtpSendAsFallback,
+  smtpAuthenticatedFromAddress,
+} from '../_smtp.js';
+import {
+  approveFcosUpdateBatch as approveFcosUpdateBatchService,
+  cancelFcosUpdateBatch as cancelFcosUpdateBatchService,
+  listFcosUpdates as listFcosUpdatesService,
+  restoreFcosUpdateItem as restoreFcosUpdateItemService,
+  retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService,
+  returnFcosUpdateBatch as returnFcosUpdateBatchService,
+  saveFcosUpdateBatch as saveFcosUpdateBatchService,
+  saveFcosUpdateItem as saveFcosUpdateItemService,
+  sendFcosUpdateBatch as sendFcosUpdateBatchService,
+  skipFcosUpdateItem as skipFcosUpdateItemService,
+  submitFcosUpdateBatch as submitFcosUpdateBatchService,
+  syncFcosUpdateItems as syncFcosUpdateItemsService,
+} from '../_fcosUpdates.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -718,6 +737,18 @@ const HANDLER_MODULE_ACCESS = {
   adminUserDelete: ['admin'],
   adminUserTypeSave: ['admin'],
   adminUserTypeDelete: ['admin'],
+  adminFcosUpdatesList: ['admin'],
+  adminFcosUpdatesSync: ['admin'],
+  adminFcosUpdateItemSave: ['admin'],
+  adminFcosUpdateBatchSave: ['admin'],
+  adminFcosUpdateBatchSubmit: ['admin'],
+  adminFcosUpdateBatchApprove: ['admin'],
+  adminFcosUpdateBatchReturn: ['admin'],
+  adminFcosUpdateBatchCancel: ['admin'],
+  adminFcosUpdateItemSkip: ['admin'],
+  adminFcosUpdateItemRestore: ['admin'],
+  adminFcosUpdateBatchSend: ['admin'],
+  adminFcosUpdateDeliveryRetry: ['admin'],
   universalAuditTrail: ['admin'],
 };
 
@@ -1354,6 +1385,74 @@ async function adminAuditLogs(body, req) {
   return { logs: data || [] };
 }
 
+async function adminFcosUpdatesList(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return listFcosUpdatesService({
+    client,
+    profile,
+    sync: body.sync !== false,
+  });
+}
+
+async function adminFcosUpdatesSync(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  const sync = await syncFcosUpdateItemsService({ client, profile });
+  return {
+    sync,
+    ...(await listFcosUpdatesService({ client, profile, sync: false })),
+  };
+}
+
+async function adminFcosUpdateItemSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return saveFcosUpdateItemService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return saveFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchSubmit(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return submitFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchApprove(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return approveFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchReturn(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return returnFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchCancel(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return cancelFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateItemSkip(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return skipFcosUpdateItemService({ client, profile, body });
+}
+
+async function adminFcosUpdateItemRestore(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return restoreFcosUpdateItemService({ client, profile, body });
+}
+
+async function adminFcosUpdateBatchSend(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return sendFcosUpdateBatchService({ client, profile, body });
+}
+
+async function adminFcosUpdateDeliveryRetry(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  return retryFcosUpdateDeliveriesService({ client, profile, body });
+}
+
 function auditTableUnavailable(error) {
   return error?.code === '42P01' || /does not exist/i.test(error?.message || '');
 }
@@ -1382,7 +1481,7 @@ async function universalAuditTrail(body, req) {
   const keyword = String(body.keyword || '').trim().toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows] = await Promise.all([
+  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows] = await Promise.all([
     safeAuditRows(
       client
         .from('admin_audit_logs')
@@ -1538,6 +1637,28 @@ async function universalAuditTrail(body, req) {
           providerResult: row.provider_result || {},
         },
       })),
+    safeAuditRows(
+      client
+        .from('fcos_update_events')
+        .select('id,item_id,batch_id,delivery_id,event_type,actor_email,summary,metadata,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `fcos-update:${row.id}`,
+        source: 'FCOS Updates',
+        module: 'Admin Control',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.metadata?.version || row.summary || 'FCOS update',
+        summary: row.summary || 'FCOS update email workflow event.',
+        metadata: {
+          ...(row.metadata || {}),
+          hasItem: Boolean(row.item_id),
+          hasBatch: Boolean(row.batch_id),
+          hasDelivery: Boolean(row.delivery_id),
+        },
+      })),
   ]);
 
   let rows = [
@@ -1549,6 +1670,7 @@ async function universalAuditTrail(body, req) {
     ...interestRows,
     ...disputeRows,
     ...internalEmailRows,
+    ...fcosUpdateRows,
   ].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
@@ -10872,82 +10994,6 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
   };
 }
 
-async function sendWithSmtp({ smtp = {}, from, to, cc, bcc, subject, html, text }) {
-  requireExternalActionGate('email_delivery');
-  const host = smtp.host || process.env.SMTP_HOST;
-  const port = Number(smtp.port || process.env.SMTP_PORT || 587);
-  const user = smtp.user || process.env.SMTP_USER;
-  const pass = smtp.password || smtp.pass || process.env.SMTP_PASSWORD;
-  const secure = smtp.secure != null
-    ? smtp.secure === true || smtp.secure === 'true'
-    : process.env.SMTP_SECURE != null
-      ? process.env.SMTP_SECURE === 'true'
-      : port === 465;
-  if (!host || !user || !pass) {
-    throw new Error('Missing SMTP credentials. Enter SMTP host, username, and password, or configure SMTP_HOST, SMTP_USER, and SMTP_PASSWORD in Vercel.');
-  }
-  const nodemailer = await import('nodemailer');
-  const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
-  if (!createTransport) throw new Error('SMTP email library failed to load.');
-  const transporter = createTransport({
-    host,
-    port,
-    secure: Boolean(secure),
-    auth: { user, pass },
-  });
-  const result = await transporter.sendMail({ from, to, cc, bcc, subject, html, text });
-  return { id: result.messageId, accepted: result.accepted, rejected: result.rejected };
-}
-
-function smtpAddressParts(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return { name: '', email: '' };
-  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
-  const name = email ? raw.replace(email, '').replace(/[<>()"]/g, '').trim() : '';
-  return { name, email };
-}
-
-function smtpAuthenticatedFromAddress(smtp = {}, requestedFrom = '') {
-  const authenticatedEmail = smtpAddressParts(smtp.user).email;
-  if (!authenticatedEmail) return '';
-  const requested = smtpAddressParts(requestedFrom);
-  return requested.name ? `${requested.name} <${authenticatedEmail}>` : authenticatedEmail;
-}
-
-function isSmtpSendAsDenied(error) {
-  return /SendAsDenied|MapiExceptionSendAsDenied|not allowed to send as/i.test(String(error?.message || error || ''));
-}
-
-function smtpSendAsDeniedError(smtp = {}, requestedFrom = '') {
-  const authenticatedEmail = smtpAddressParts(smtp.user).email || 'the authenticated SMTP mailbox';
-  const requestedEmail = smtpAddressParts(requestedFrom).email || 'the configured From address';
-  return appError(`Microsoft 365 rejected ${requestedEmail} as the sender. Use ${authenticatedEmail} as From Email or grant that mailbox Send As permission.`, 400);
-}
-
-async function sendWithSmtpSendAsFallback(options) {
-  try {
-    return { result: await sendWithSmtp(options), from: options.from, sendAsFallback: false };
-  } catch (error) {
-    if (!isSmtpSendAsDenied(error)) throw error;
-    const authenticatedFrom = smtpAuthenticatedFromAddress(options.smtp, options.from);
-    const requestedEmail = smtpAddressParts(options.from).email.toLowerCase();
-    const authenticatedEmail = smtpAddressParts(authenticatedFrom).email.toLowerCase();
-    if (!authenticatedFrom || !authenticatedEmail || requestedEmail === authenticatedEmail) {
-      throw smtpSendAsDeniedError(options.smtp, options.from);
-    }
-    try {
-      return {
-        result: await sendWithSmtp({ ...options, from: authenticatedFrom }),
-        from: authenticatedFrom,
-        sendAsFallback: true,
-      };
-    } catch (retryError) {
-      if (isSmtpSendAsDenied(retryError)) throw smtpSendAsDeniedError(options.smtp, authenticatedFrom);
-      throw retryError;
-    }
-  }
-}
-
 async function startBuyerInvoiceEmailRun(window) {
   const client = safeSupabaseAdminClient();
   if (!client) return { allowed: true, run: null };
@@ -14697,6 +14743,18 @@ const handlers = {
   adminPortalApplicationsHealth,
   adminUserTypeSave,
   adminUserTypeDelete,
+  adminFcosUpdatesList,
+  adminFcosUpdatesSync,
+  adminFcosUpdateItemSave,
+  adminFcosUpdateBatchSave,
+  adminFcosUpdateBatchSubmit,
+  adminFcosUpdateBatchApprove,
+  adminFcosUpdateBatchReturn,
+  adminFcosUpdateBatchCancel,
+  adminFcosUpdateItemSkip,
+  adminFcosUpdateItemRestore,
+  adminFcosUpdateBatchSend,
+  adminFcosUpdateDeliveryRetry,
   universalAuditTrail,
   adminBootstrap,
 };

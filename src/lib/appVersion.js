@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.50';
+export const APP_VERSION = '2.0.51';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.51',
+    releasedAt: '2026-07-31',
+    title: 'Admin-controlled FCOS update emails',
+    changes: [
+      'Added an Administrator release-review queue sourced from the Version Audit Trail, with editable categories and recipient-facing wording.',
+      'Added Vincent-controlled approval, skip, restore, send, and recipient-level retry handling for individual updates and multi-update digests.',
+      'Added service-only delivery tracking, shared authenticated SMTP sending, and FCOS Updates events in the Universal Audit Trail.',
+    ],
+  },
   {
     version: '2.0.50',
     releasedAt: '2026-07-31',
