@@ -14,6 +14,7 @@ import {
   FolderKanban,
   History,
   LayoutList,
+  Link2,
   Loader2,
   MessageSquare,
   Pencil,
@@ -22,9 +23,11 @@ import {
   RotateCcw,
   Save,
   Search,
+  Target,
   Trash2,
   Upload,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
@@ -371,6 +374,9 @@ function EmptyDetailDraft(item) {
     assigneeId: item?.assignee?.id || "unassigned",
     projectId: item?.projectId || "none",
     parentId: item?.parentId || "none",
+    blockedReason: item?.blockedReason || "",
+    projectHealth: item?.projectHealth || "none",
+    healthNote: item?.healthNote || "",
   };
 }
 
@@ -418,6 +424,10 @@ export default function ProjectsTasks() {
     projectId: "none",
     parentId: "none",
     assigneeId: "unassigned",
+    blockedReason: "",
+    projectHealth: "none",
+    healthNote: "",
+    templateId: "none",
   });
   const [archiveTarget, setArchiveTarget] = useState(null);
   const [archiveSaving, setArchiveSaving] = useState(false);
@@ -428,10 +438,34 @@ export default function ProjectsTasks() {
   const [commentSaving, setCommentSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [methodologyOpen, setMethodologyOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkDraft, setBulkDraft] = useState({
+    status: "keep",
+    priority: "keep",
+    assigneeId: "keep",
+    dueDate: "",
+    changeDueDate: false,
+    blockedReason: "",
+  });
+  const [coordinationSaving, setCoordinationSaving] = useState(false);
+  const [dependencyId, setDependencyId] = useState("none");
+  const [milestoneDraft, setMilestoneDraft] = useState({
+    id: null,
+    title: "",
+    description: "",
+    dueDate: "",
+    status: "To Do",
+    revision: 0,
+  });
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState({
+    name: "",
+    description: "",
+  });
 
   const activeStatuses = options.statuses?.length
     ? options.statuses
@@ -449,6 +483,11 @@ export default function ProjectsTasks() {
     detailItem && !sameDraft(detailDraft, baselineDraft),
   );
   const requestedItemId = searchParams.get("item");
+  const currentUserId = detail?.currentUser?.id || null;
+  const isFollowing = Boolean(
+    currentUserId &&
+      detail?.followers?.some((follower) => follower.userId === currentUserId),
+  );
 
   const setItemQuery = useCallback(
     (itemId) => {
@@ -528,28 +567,9 @@ export default function ProjectsTasks() {
     [nextCursor, requestPayload],
   );
 
-  const loadNotifications = useCallback(async () => {
-    const response = await appClient.functions.invoke(
-      "collaborationNotificationsList",
-      {},
-      { force: true },
-    );
-    if (!response.data?.error) {
-      setNotifications(response.data?.notifications || []);
-      setUnreadCount(Number(response.data?.unreadCount || 0));
-    }
-  }, []);
-
   useEffect(() => {
     loadWork();
   }, [loadWork]);
-  useEffect(() => {
-    loadNotifications();
-  }, [loadNotifications]);
-  useEffect(() => {
-    const timer = window.setInterval(loadNotifications, 60_000);
-    return () => window.clearInterval(timer);
-  }, [loadNotifications]);
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent("fcos:dirty-state", {
@@ -572,6 +592,15 @@ export default function ProjectsTasks() {
     if (!nextDetail?.item) return;
     setDetail(nextDetail);
     setDetailDraft(EmptyDetailDraft(nextDetail.item));
+    setDependencyId("none");
+    setMilestoneDraft({
+      id: null,
+      title: "",
+      description: "",
+      dueDate: "",
+      status: "To Do",
+      revision: 0,
+    });
     setItems((previous) =>
       previous.map((item) =>
         item.id === nextDetail.item.id ? nextDetail.item : item,
@@ -648,6 +677,16 @@ export default function ProjectsTasks() {
         priority: detailDraft.priority,
         startDate: detailDraft.startDate || null,
         dueDate: detailDraft.dueDate || null,
+        blockedReason: detailDraft.blockedReason,
+        ...(detailItem.kind === "project"
+          ? {
+              projectHealth:
+                detailDraft.projectHealth === "none"
+                  ? null
+                  : detailDraft.projectHealth,
+              healthNote: detailDraft.healthNote,
+            }
+          : {}),
         ...(detailItem.permissions?.canManage
           ? {
               assigneeId:
@@ -699,6 +738,10 @@ export default function ProjectsTasks() {
       parentId:
         kind === "subtask" && parent?.kind === "task" ? parent.id : "none",
       assigneeId: "unassigned",
+      blockedReason: "",
+      projectHealth: "none",
+      healthNote: "",
+      templateId: "none",
     });
     setCreateOpen(true);
   };
@@ -713,29 +756,64 @@ export default function ProjectsTasks() {
       return;
     }
     setCreateSaving(true);
+    const useTemplate =
+      createDraft.kind === "project" && createDraft.templateId !== "none";
     const response = await appClient.functions.invoke(
-      "collaborationCreate",
-      {
-        kind: createDraft.kind,
-        title: createDraft.title,
-        description: createDraft.description,
-        status: createDraft.status,
-        priority: createDraft.priority,
-        startDate: createDraft.startDate || null,
-        dueDate: createDraft.dueDate || null,
-        projectId:
-          createDraft.kind === "project" || createDraft.projectId === "none"
-            ? null
-            : createDraft.projectId,
-        parentId:
-          createDraft.kind === "subtask" && createDraft.parentId !== "none"
-            ? createDraft.parentId
-            : null,
-        assigneeId:
-          createDraft.assigneeId === "unassigned"
-            ? null
-            : createDraft.assigneeId,
-      },
+      useTemplate ? "collaborationTemplateSave" : "collaborationCreate",
+      useTemplate
+        ? {
+            mode: "use",
+            templateId: createDraft.templateId,
+            project: {
+              title: createDraft.title,
+              description: createDraft.description,
+              status: createDraft.status,
+              priority: createDraft.priority,
+              startDate: createDraft.startDate || null,
+              dueDate: createDraft.dueDate || null,
+              blockedReason: createDraft.blockedReason,
+              projectHealth:
+                createDraft.projectHealth === "none"
+                  ? null
+                  : createDraft.projectHealth,
+              healthNote: createDraft.healthNote,
+              assigneeId:
+                createDraft.assigneeId === "unassigned"
+                  ? null
+                  : createDraft.assigneeId,
+            },
+          }
+        : {
+            kind: createDraft.kind,
+            title: createDraft.title,
+            description: createDraft.description,
+            status: createDraft.status,
+            priority: createDraft.priority,
+            startDate: createDraft.startDate || null,
+            dueDate: createDraft.dueDate || null,
+            projectId:
+              createDraft.kind === "project" || createDraft.projectId === "none"
+                ? null
+                : createDraft.projectId,
+            parentId:
+              createDraft.kind === "subtask" && createDraft.parentId !== "none"
+                ? createDraft.parentId
+                : null,
+            assigneeId:
+              createDraft.assigneeId === "unassigned"
+                ? null
+                : createDraft.assigneeId,
+            blockedReason: createDraft.blockedReason,
+            ...(createDraft.kind === "project"
+              ? {
+                  projectHealth:
+                    createDraft.projectHealth === "none"
+                      ? null
+                      : createDraft.projectHealth,
+                  healthNote: createDraft.healthNote,
+                }
+              : {}),
+          },
       { force: true },
     );
     if (response.data?.error) {
@@ -754,7 +832,6 @@ export default function ProjectsTasks() {
         description: "The item is now visible to every active FCOS user.",
       });
       loadWork({ background: true });
-      loadNotifications();
       signalNotificationsChanged();
     }
     setCreateSaving(false);
@@ -808,6 +885,15 @@ export default function ProjectsTasks() {
       });
       return;
     }
+    if (destination.droppableId === "Blocked" && !item.blockedReason) {
+      toast({
+        title: "Blocked reason required",
+        description:
+          "Open the work item and record what is blocking progress before changing its status.",
+      });
+      openDetail(item);
+      return;
+    }
     const response = await appClient.functions.invoke(
       "collaborationUpdate",
       {
@@ -832,8 +918,223 @@ export default function ProjectsTasks() {
       ),
     );
     if (detailItem?.id === item.id) replaceDetail(response.data);
-    loadNotifications();
     signalNotificationsChanged();
+  };
+
+  const toggleFollow = async () => {
+    if (!detailItem || coordinationSaving) return;
+    setCoordinationSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationFollowerToggle",
+      { itemId: detailItem.id, following: !isFollowing },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to update followers",
+        description: errorText(response),
+      });
+    } else {
+      replaceDetail(response.data);
+      toast({
+        title: isFollowing ? "Notifications stopped" : "Following work item",
+      });
+    }
+    setCoordinationSaving(false);
+  };
+
+  const addDependency = async () => {
+    if (!detailItem || dependencyId === "none" || coordinationSaving) return;
+    setCoordinationSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationDependencySave",
+      {
+        itemId: detailItem.id,
+        dependsOnItemId: dependencyId,
+        expectedRevision: detailItem.revision,
+      },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to add blocker",
+        description: errorText(response),
+      });
+    } else {
+      replaceDetail(response.data);
+      toast({ title: "Blocker linked" });
+      loadWork({ background: true });
+    }
+    setCoordinationSaving(false);
+  };
+
+  const removeDependency = async (dependency) => {
+    if (!detailItem || coordinationSaving) return;
+    setCoordinationSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationDependencyRemove",
+      {
+        itemId: detailItem.id,
+        dependsOnItemId: dependency.dependsOnItemId,
+        expectedRevision: detailItem.revision,
+      },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to remove blocker",
+        description: errorText(response),
+      });
+    } else {
+      replaceDetail(response.data);
+      toast({ title: "Blocker removed" });
+      loadWork({ background: true });
+    }
+    setCoordinationSaving(false);
+  };
+
+  const saveMilestone = async () => {
+    if (
+      !detailItem ||
+      !milestoneDraft.title.trim() ||
+      !milestoneDraft.dueDate ||
+      coordinationSaving
+    )
+      return;
+    setCoordinationSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationMilestoneSave",
+      {
+        projectId: detailItem.id,
+        expectedProjectRevision: detailItem.revision,
+        milestoneId: milestoneDraft.id,
+        expectedRevision: milestoneDraft.revision || undefined,
+        title: milestoneDraft.title,
+        description: milestoneDraft.description,
+        dueDate: milestoneDraft.dueDate,
+        status: milestoneDraft.status,
+      },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to save milestone",
+        description: errorText(response),
+      });
+    } else {
+      replaceDetail(response.data);
+      toast({
+        title: milestoneDraft.id ? "Milestone updated" : "Milestone added",
+      });
+      loadWork({ background: true });
+    }
+    setCoordinationSaving(false);
+  };
+
+  const saveProjectTemplate = async () => {
+    if (!detailItem || !templateDraft.name.trim() || templateSaving) return;
+    setTemplateSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationTemplateSave",
+      {
+        name: templateDraft.name,
+        description: templateDraft.description,
+        items: (detail.children || []).map((child, index) => ({
+          kind: child.kind,
+          order: index,
+          title: child.title,
+          description: child.description,
+          priority: child.priority,
+          relativeDueDays:
+            child.dueDate && detailItem.startDate
+              ? Math.max(
+                  0,
+                  Math.round(
+                    (new Date(`${child.dueDate}T12:00:00`) -
+                      new Date(`${detailItem.startDate}T12:00:00`)) /
+                      86400000,
+                  ),
+                )
+              : null,
+        })),
+      },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to save template",
+        description: errorText(response),
+      });
+    } else {
+      setTemplateOpen(false);
+      setTemplateDraft({ name: "", description: "" });
+      setOptions((current) => ({
+        ...current,
+        templates: response.data.templates || current.templates,
+      }));
+      toast({ title: "Project template saved" });
+    }
+    setTemplateSaving(false);
+  };
+
+  const runBulkUpdate = async () => {
+    const selected = items.filter((item) => selectedIds.includes(item.id));
+    if (!selected.length || bulkSaving) return;
+    const values = {};
+    if (bulkDraft.status !== "keep") values.status = bulkDraft.status;
+    if (bulkDraft.priority !== "keep") values.priority = bulkDraft.priority;
+    if (bulkDraft.assigneeId !== "keep") {
+      values.assigneeId =
+        bulkDraft.assigneeId === "unassigned" ? null : bulkDraft.assigneeId;
+    }
+    if (bulkDraft.changeDueDate) values.dueDate = bulkDraft.dueDate || null;
+    if (bulkDraft.status === "Blocked")
+      values.blockedReason = bulkDraft.blockedReason;
+    if (!Object.keys(values).length) {
+      toast({ title: "Choose at least one change" });
+      return;
+    }
+    if (values.status === "Blocked" && !values.blockedReason?.trim()) {
+      toast({ variant: "destructive", title: "Blocked reason required" });
+      return;
+    }
+    setBulkSaving(true);
+    const response = await appClient.functions.invoke(
+      "collaborationBulkUpdate",
+      {
+        items: selected.map((item) => ({
+          itemId: item.id,
+          expectedRevision: item.revision,
+          values,
+        })),
+      },
+      { force: true },
+    );
+    if (response.data?.error) {
+      toast({
+        variant: "destructive",
+        title: "Bulk update failed",
+        description: errorText(response),
+      });
+    } else {
+      const failed = Number(response.data.failed?.length || 0);
+      toast({
+        title: `${Number(response.data.updated || 0)} work items updated`,
+        description: failed
+          ? `${failed} items were not changed. Refresh and review their latest state.`
+          : undefined,
+      });
+      setSelectedIds([]);
+      setBulkOpen(false);
+      loadWork({ background: true });
+      signalNotificationsChanged();
+    }
+    setBulkSaving(false);
   };
 
   const saveComment = async () => {
@@ -866,7 +1167,6 @@ export default function ProjectsTasks() {
       setCommentMentions([]);
       setMentionSearch("");
       setEditingComment(null);
-      loadNotifications();
       signalNotificationsChanged();
     }
     setCommentSaving(false);
@@ -1009,36 +1309,6 @@ export default function ProjectsTasks() {
     }
   };
 
-  const markNotificationsRead = async () => {
-    const response = await appClient.functions.invoke(
-      "collaborationNotificationsRead",
-      {},
-      { force: true },
-    );
-    if (!response.data?.error) {
-      setNotifications(response.data?.notifications || []);
-      setUnreadCount(Number(response.data?.unreadCount || 0));
-      signalNotificationsChanged();
-    }
-  };
-
-  const openNotification = async (notification) => {
-    if (!notification.readAt) {
-      const response = await appClient.functions.invoke(
-        "collaborationNotificationsRead",
-        { notificationIds: [notification.id] },
-        { force: true },
-      );
-      if (!response.data?.error) {
-        setNotifications(response.data?.notifications || []);
-        setUnreadCount(Number(response.data?.unreadCount || 0));
-        signalNotificationsChanged();
-      }
-    }
-    setNotificationsOpen(false);
-    openDetail(notification.itemId);
-  };
-
   const peopleOptions = useMemo(
     () =>
       users.map((user) => {
@@ -1096,21 +1366,6 @@ export default function ProjectsTasks() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => setNotificationsOpen(true)}
-                    aria-label="Open notifications"
-                  >
-                    <Bell />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Notifications{unreadCount ? ` (${unreadCount})` : ""}
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
                     onClick={() => setMethodologyOpen(true)}
                     aria-label="Open methodology"
                   >
@@ -1136,6 +1391,10 @@ export default function ProjectsTasks() {
               <Button onClick={() => openCreate("task")}>
                 <Plus />
                 New task
+              </Button>
+              <Button variant="outline" onClick={() => openCreate("project")}>
+                <FolderKanban />
+                New project
               </Button>
             </>
           }
@@ -1303,6 +1562,28 @@ export default function ProjectsTasks() {
           </div>
         </TableShell>
 
+        {!loading && !error && view === "list" && selectedIds.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-blue-200 bg-blue-50 px-4 py-3">
+            <div className="text-sm font-medium text-blue-900">
+              {selectedIds.length} work item
+              {selectedIds.length === 1 ? "" : "s"} selected
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedIds([])}
+              >
+                Clear
+              </Button>
+              <Button size="sm" onClick={() => setBulkOpen(true)}>
+                <CheckSquare2 />
+                Update selected
+              </Button>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <StateBlock
             icon={Loader2}
@@ -1331,6 +1612,40 @@ export default function ProjectsTasks() {
                 <Table className="min-w-[1260px]">
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          aria-label="Select all editable work items"
+                          checked={
+                            items.filter(
+                              (item) =>
+                                item.permissions?.canEdit && !item.archivedAt,
+                            ).length > 0 &&
+                            items
+                              .filter(
+                                (item) =>
+                                  item.permissions?.canEdit && !item.archivedAt,
+                              )
+                              .every((item) => selectedIds.includes(item.id))
+                              ? true
+                              : selectedIds.length > 0
+                                ? "indeterminate"
+                                : false
+                          }
+                          onCheckedChange={(checked) =>
+                            setSelectedIds(
+                              checked
+                                ? items
+                                    .filter(
+                                      (item) =>
+                                        item.permissions?.canEdit &&
+                                        !item.archivedAt,
+                                    )
+                                    .map((item) => item.id)
+                                : [],
+                            )
+                          }
+                        />
+                      </TableHead>
                       <TableHead>Key</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead className="min-w-72">Title</TableHead>
@@ -1351,6 +1666,23 @@ export default function ProjectsTasks() {
                         className="cursor-pointer"
                         onClick={() => openDetail(item)}
                       >
+                        <TableCell onClick={(event) => event.stopPropagation()}>
+                          <Checkbox
+                            aria-label={`Select ${item.key}`}
+                            checked={selectedIds.includes(item.id)}
+                            disabled={
+                              !item.permissions?.canEdit ||
+                              Boolean(item.archivedAt)
+                            }
+                            onCheckedChange={(checked) =>
+                              setSelectedIds((current) =>
+                                checked
+                                  ? [...new Set([...current, item.id])]
+                                  : current.filter((id) => id !== item.id),
+                              )
+                            }
+                          />
+                        </TableCell>
                         <TableCell className="font-mono text-xs font-medium text-primary">
                           {item.key}
                         </TableCell>
@@ -1547,6 +1879,8 @@ export default function ProjectsTasks() {
                     kind,
                     projectId: kind === "project" ? "none" : current.projectId,
                     parentId: kind === "subtask" ? current.parentId : "none",
+                    templateId:
+                      kind === "project" ? current.templateId : "none",
                   }))
                 }
                 options={kinds.map((kind) => ({
@@ -1554,6 +1888,23 @@ export default function ProjectsTasks() {
                   label: humanKind(kind),
                 }))}
               />
+              {createDraft.kind === "project" &&
+                options.templates?.length > 0 && (
+                  <SelectField
+                    label="Project template"
+                    value={createDraft.templateId}
+                    onValueChange={(templateId) =>
+                      setCreateDraft((current) => ({ ...current, templateId }))
+                    }
+                    options={[
+                      { value: "none", label: "Blank project" },
+                      ...options.templates.map((template) => ({
+                        value: template.id,
+                        label: template.name,
+                      })),
+                    ]}
+                  />
+                )}
               <div className="space-y-1">
                 <Label>Title</Label>
                 <Input
@@ -1621,19 +1972,17 @@ export default function ProjectsTasks() {
                   ]}
                 />
               )}
-              {createDraft.kind !== "project" && (
-                <SearchableSelectField
-                  label="Assignee"
-                  value={createDraft.assigneeId}
-                  onValueChange={(assigneeId) =>
-                    setCreateDraft((current) => ({ ...current, assigneeId }))
-                  }
-                  options={[
-                    { value: "unassigned", label: "Unassigned" },
-                    ...peopleOptions,
-                  ]}
-                />
-              )}
+              <SearchableSelectField
+                label="Assignee"
+                value={createDraft.assigneeId}
+                onValueChange={(assigneeId) =>
+                  setCreateDraft((current) => ({ ...current, assigneeId }))
+                }
+                options={[
+                  { value: "unassigned", label: "Unassigned" },
+                  ...peopleOptions,
+                ]}
+              />
               <SelectField
                 label="Status"
                 value={createDraft.status}
@@ -1645,6 +1994,65 @@ export default function ProjectsTasks() {
                   label: status,
                 }))}
               />
+              {createDraft.status === "Blocked" && (
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Blocked reason</Label>
+                  <Textarea
+                    value={createDraft.blockedReason}
+                    maxLength={2000}
+                    rows={3}
+                    onChange={(event) =>
+                      setCreateDraft((current) => ({
+                        ...current,
+                        blockedReason: event.target.value,
+                      }))
+                    }
+                    placeholder="What is blocked, by whom, and what is needed next?"
+                  />
+                </div>
+              )}
+              {createDraft.kind === "project" && (
+                <>
+                  <SelectField
+                    label="Project health"
+                    value={createDraft.projectHealth}
+                    onValueChange={(projectHealth) =>
+                      setCreateDraft((current) => ({
+                        ...current,
+                        projectHealth,
+                      }))
+                    }
+                    options={[
+                      { value: "none", label: "Not assessed" },
+                      ...(
+                        options.projectHealth || [
+                          "On track",
+                          "At risk",
+                          "Blocked",
+                        ]
+                      ).map((status) => ({
+                        value: status,
+                        label: status,
+                      })),
+                    ]}
+                  />
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label>Health note</Label>
+                    <Textarea
+                      value={createDraft.healthNote}
+                      maxLength={2000}
+                      rows={3}
+                      onChange={(event) =>
+                        setCreateDraft((current) => ({
+                          ...current,
+                          healthNote: event.target.value,
+                        }))
+                      }
+                      placeholder="Current delivery confidence, risk, and next decision"
+                    />
+                  </div>
+                </>
+              )}
               <SelectField
                 label="Priority"
                 value={createDraft.priority}
@@ -1694,6 +2102,185 @@ export default function ProjectsTasks() {
               <Button onClick={createItem} disabled={createSaving}>
                 {createSaving && <Loader2 className="animate-spin" />}Create{" "}
                 {humanKind(createDraft.kind)}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={bulkOpen}
+          onOpenChange={(open) => !bulkSaving && setBulkOpen(open)}
+        >
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Update selected work</DialogTitle>
+              <DialogDescription>
+                Apply only the fields selected below to {selectedIds.length}{" "}
+                work item
+                {selectedIds.length === 1 ? "" : "s"}. Conflicting records
+                remain unchanged.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SelectField
+                label="Status"
+                value={bulkDraft.status}
+                onValueChange={(status) =>
+                  setBulkDraft((current) => ({ ...current, status }))
+                }
+                options={[
+                  { value: "keep", label: "Keep current status" },
+                  ...activeStatuses.map((status) => ({
+                    value: status,
+                    label: status,
+                  })),
+                ]}
+              />
+              <SelectField
+                label="Priority"
+                value={bulkDraft.priority}
+                onValueChange={(priority) =>
+                  setBulkDraft((current) => ({ ...current, priority }))
+                }
+                options={[
+                  { value: "keep", label: "Keep current priority" },
+                  ...priorities.map((priority) => ({
+                    value: priority,
+                    label: priority,
+                  })),
+                ]}
+              />
+              <SearchableSelectField
+                label="Assignee"
+                value={bulkDraft.assigneeId}
+                onValueChange={(assigneeId) =>
+                  setBulkDraft((current) => ({ ...current, assigneeId }))
+                }
+                options={[
+                  { value: "keep", label: "Keep current assignee" },
+                  { value: "unassigned", label: "Unassigned" },
+                  ...peopleOptions,
+                ]}
+              />
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={bulkDraft.changeDueDate}
+                    onCheckedChange={(checked) =>
+                      setBulkDraft((current) => ({
+                        ...current,
+                        changeDueDate: checked === true,
+                      }))
+                    }
+                  />
+                  Change due date
+                </label>
+                <Input
+                  type="date"
+                  value={bulkDraft.dueDate}
+                  disabled={!bulkDraft.changeDueDate}
+                  onChange={(event) =>
+                    setBulkDraft((current) => ({
+                      ...current,
+                      dueDate: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {bulkDraft.status === "Blocked" && (
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Blocked reason</Label>
+                  <Textarea
+                    value={bulkDraft.blockedReason}
+                    rows={3}
+                    maxLength={2000}
+                    onChange={(event) =>
+                      setBulkDraft((current) => ({
+                        ...current,
+                        blockedReason: event.target.value,
+                      }))
+                    }
+                    placeholder="Shared reason applied to every selected item"
+                  />
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setBulkOpen(false)}
+                disabled={bulkSaving}
+              >
+                Cancel
+              </Button>
+              <Button onClick={runBulkUpdate} disabled={bulkSaving}>
+                {bulkSaving && <Loader2 className="animate-spin" />}
+                Apply changes
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={templateOpen}
+          onOpenChange={(open) => !templateSaving && setTemplateOpen(open)}
+        >
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Save project template</DialogTitle>
+              <DialogDescription>
+                Save this project&apos;s task checklist for repeat work. Dates
+                become offsets from the project start date.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label>Template name</Label>
+                <Input
+                  value={templateDraft.name}
+                  maxLength={255}
+                  onChange={(event) =>
+                    setTemplateDraft((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Description</Label>
+                <Textarea
+                  value={templateDraft.description}
+                  rows={4}
+                  maxLength={5000}
+                  onChange={(event) =>
+                    setTemplateDraft((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {(detail?.children || []).length} direct task
+                {(detail?.children || []).length === 1 ? "" : "s"} will be
+                included.
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setTemplateOpen(false)}
+                disabled={templateSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={saveProjectTemplate}
+                disabled={templateSaving || !templateDraft.name.trim()}
+              >
+                {templateSaving && <Loader2 className="animate-spin" />}
+                Save template
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1749,6 +2336,23 @@ export default function ProjectsTasks() {
                       </span>
                     </div>
                     <div className="flex gap-2">
+                      {!detailItem.archivedAt &&
+                        detail?.enhancementsAvailable?.followers && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={toggleFollow}
+                            disabled={coordinationSaving}
+                            title={
+                              isFollowing
+                                ? "Stop receiving updates"
+                                : "Receive updates about this work item"
+                            }
+                          >
+                            <Bell />
+                            {isFollowing ? "Following" : "Follow"}
+                          </Button>
+                        )}
                       {detailItem.permissions?.canEdit && (
                         <Button
                           size="sm"
@@ -1800,6 +2404,9 @@ export default function ProjectsTasks() {
                         </TabsTrigger>
                         <TabsTrigger value="files">
                           Files ({detail.attachments?.length || 0})
+                        </TabsTrigger>
+                        <TabsTrigger value="coordination">
+                          Coordination
                         </TabsTrigger>
                         <TabsTrigger value="activity">Activity</TabsTrigger>
                       </TabsList>
@@ -1859,6 +2466,27 @@ export default function ProjectsTasks() {
                             label: status,
                           }))}
                         />
+                        {detailDraft.status === "Blocked" && (
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label>Blocked reason</Label>
+                            <Textarea
+                              value={detailDraft.blockedReason}
+                              disabled={
+                                !detailItem.permissions?.canEdit ||
+                                Boolean(detailItem.archivedAt)
+                              }
+                              rows={3}
+                              maxLength={2000}
+                              onChange={(event) =>
+                                setDetailDraft((current) => ({
+                                  ...current,
+                                  blockedReason: event.target.value,
+                                }))
+                              }
+                              placeholder="What is blocked, by whom, and what is needed next?"
+                            />
+                          </div>
+                        )}
                         <SelectField
                           label="Priority"
                           value={detailDraft.priority}
@@ -1975,6 +2603,56 @@ export default function ProjectsTasks() {
                             ]}
                           />
                         )}
+                        {detailItem.kind === "project" && (
+                          <>
+                            <SelectField
+                              label="Project health"
+                              value={detailDraft.projectHealth}
+                              disabled={
+                                !detailItem.permissions?.canManage ||
+                                Boolean(detailItem.archivedAt)
+                              }
+                              onValueChange={(projectHealth) =>
+                                setDetailDraft((current) => ({
+                                  ...current,
+                                  projectHealth,
+                                }))
+                              }
+                              options={[
+                                { value: "none", label: "Not assessed" },
+                                ...(
+                                  options.projectHealth || [
+                                    "On track",
+                                    "At risk",
+                                    "Blocked",
+                                  ]
+                                ).map((status) => ({
+                                  value: status,
+                                  label: status,
+                                })),
+                              ]}
+                            />
+                            <div className="space-y-1 sm:col-span-2">
+                              <Label>Health note</Label>
+                              <Textarea
+                                value={detailDraft.healthNote}
+                                disabled={
+                                  !detailItem.permissions?.canManage ||
+                                  Boolean(detailItem.archivedAt)
+                                }
+                                rows={3}
+                                maxLength={2000}
+                                onChange={(event) =>
+                                  setDetailDraft((current) => ({
+                                    ...current,
+                                    healthNote: event.target.value,
+                                  }))
+                                }
+                                placeholder="Current delivery confidence, risk, and next decision"
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                       {detailItem.permissions?.canEdit && (
                         <div className="mt-6 flex justify-end">
@@ -2080,14 +2758,14 @@ export default function ProjectsTasks() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
-                                        onClick={() => {
-                                          setEditingComment(comment);
-                                          setCommentDraft(comment.body);
-                                          setCommentMentions(
-                                            comment.mentionedUserIds || [],
-                                          );
-                                          setMentionSearch("");
-                                        }}
+                                      onClick={() => {
+                                        setEditingComment(comment);
+                                        setCommentDraft(comment.body);
+                                        setCommentMentions(
+                                          comment.mentionedUserIds || [],
+                                        );
+                                        setMentionSearch("");
+                                      }}
                                       title="Edit comment"
                                     >
                                       <Pencil />
@@ -2341,6 +3019,358 @@ export default function ProjectsTasks() {
                         )}
                       </div>
                     </TabsContent>
+                    <TabsContent
+                      value="coordination"
+                      className="m-0 flex-1 p-6"
+                    >
+                      <div className="space-y-8">
+                        <section>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold">Followers</h3>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                Followers receive relevant status and comment
+                                notifications without changing ownership.
+                              </p>
+                            </div>
+                            {!detailItem.archivedAt && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={toggleFollow}
+                                disabled={coordinationSaving}
+                              >
+                                <Bell />
+                                {isFollowing ? "Stop following" : "Follow"}
+                              </Button>
+                            )}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {detail.followers?.length ? (
+                              detail.followers.map((follower) => (
+                                <Badge key={follower.userId} variant="outline">
+                                  <Users className="mr-1 h-3 w-3" />
+                                  {follower.name ||
+                                    follower.email ||
+                                    "FCOS user"}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span className="text-sm text-muted-foreground">
+                                No followers yet.
+                              </span>
+                            )}
+                          </div>
+                        </section>
+
+                        <section className="border-t border-border pt-6">
+                          <div>
+                            <h3 className="font-semibold">
+                              Dependencies and blockers
+                            </h3>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              Link the work that must finish first. Circular
+                              dependencies are rejected automatically.
+                            </p>
+                          </div>
+                          {detailItem.permissions?.canManage &&
+                            !detailItem.archivedAt && (
+                              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                <SelectField
+                                  className="flex-1"
+                                  label="Blocked by"
+                                  value={dependencyId}
+                                  onValueChange={setDependencyId}
+                                  options={[
+                                    {
+                                      value: "none",
+                                      label: "Select work item",
+                                    },
+                                    ...(detail.dependencyCandidates || [])
+                                      .filter(
+                                        (candidate) =>
+                                          candidate.id !== detailItem.id &&
+                                          !(detail.dependencies || []).some(
+                                            (dependency) =>
+                                              dependency.dependsOnItemId ===
+                                              candidate.id,
+                                          ),
+                                      )
+                                      .map((candidate) => ({
+                                        value: candidate.id,
+                                        label: `${candidate.key} · ${candidate.title}`,
+                                      })),
+                                  ]}
+                                />
+                                <Button
+                                  onClick={addDependency}
+                                  disabled={
+                                    dependencyId === "none" ||
+                                    coordinationSaving
+                                  }
+                                >
+                                  <Link2 />
+                                  Link blocker
+                                </Button>
+                              </div>
+                            )}
+                          <div className="mt-4 divide-y divide-border border border-border">
+                            {(detail.dependencies || []).map((dependency) => (
+                              <div
+                                key={dependency.id}
+                                className="flex items-center gap-3 px-4 py-3"
+                              >
+                                <Link2 className="h-4 w-4 shrink-0 text-red-600" />
+                                <button
+                                  type="button"
+                                  className="min-w-0 flex-1 text-left"
+                                  onClick={() =>
+                                    dependency.item?.id &&
+                                    openDetail(dependency.item.id)
+                                  }
+                                >
+                                  <span className="font-mono text-xs text-primary">
+                                    {dependency.item?.key}
+                                  </span>
+                                  <span className="ml-2 text-sm font-medium">
+                                    {dependency.item?.title ||
+                                      "Unavailable work item"}
+                                  </span>
+                                </button>
+                                {dependency.item?.status && (
+                                  <StatusBadge
+                                    status={dependency.item.status}
+                                  />
+                                )}
+                                {detailItem.permissions?.canManage &&
+                                  !detailItem.archivedAt && (
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      onClick={() =>
+                                        removeDependency(dependency)
+                                      }
+                                      disabled={coordinationSaving}
+                                      title="Remove blocker"
+                                    >
+                                      <X />
+                                    </Button>
+                                  )}
+                              </div>
+                            ))}
+                            {!detail.dependencies?.length && (
+                              <div className="px-4 py-3 text-sm text-muted-foreground">
+                                No blockers linked.
+                              </div>
+                            )}
+                          </div>
+                          {detail.dependents?.length > 0 && (
+                            <div className="mt-4">
+                              <div className="text-xs font-medium uppercase text-muted-foreground">
+                                Blocking this work
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {detail.dependents.map((dependent) => (
+                                  <Button
+                                    key={dependent.id}
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                      dependent.item?.id &&
+                                      openDetail(dependent.item.id)
+                                    }
+                                  >
+                                    {dependent.item?.key} ·{" "}
+                                    {dependent.item?.title}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </section>
+
+                        {detailItem.kind === "project" && (
+                          <section className="border-t border-border pt-6">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <h3 className="font-semibold">
+                                  Project milestones
+                                </h3>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  Milestones expose meaningful delivery dates
+                                  without turning every update into a task.
+                                </p>
+                              </div>
+                              {detailItem.permissions?.canManage && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setTemplateDraft({
+                                      name: `${detailItem.title} template`,
+                                      description: "",
+                                    });
+                                    setTemplateOpen(true);
+                                  }}
+                                >
+                                  <FolderKanban />
+                                  Save as template
+                                </Button>
+                              )}
+                            </div>
+                            <div className="mt-4 divide-y divide-border border border-border">
+                              {(detail.milestones || []).map((milestone) => (
+                                <div
+                                  key={milestone.id}
+                                  className="flex flex-wrap items-center gap-3 px-4 py-3"
+                                >
+                                  <Target className="h-4 w-4 text-primary" />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-medium">
+                                      {milestone.title}
+                                    </div>
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                      {formatDate(milestone.dueDate)}
+                                      {milestone.description
+                                        ? ` · ${milestone.description}`
+                                        : ""}
+                                    </div>
+                                  </div>
+                                  <StatusBadge status={milestone.status} />
+                                  {detailItem.permissions?.canManage &&
+                                    !detailItem.archivedAt && (
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() =>
+                                          setMilestoneDraft({
+                                            id: milestone.id,
+                                            title: milestone.title,
+                                            description: milestone.description,
+                                            dueDate: milestone.dueDate || "",
+                                            status: milestone.status,
+                                            revision: milestone.revision,
+                                          })
+                                        }
+                                        title="Edit milestone"
+                                      >
+                                        <Pencil />
+                                      </Button>
+                                    )}
+                                </div>
+                              ))}
+                              {!detail.milestones?.length && (
+                                <div className="px-4 py-3 text-sm text-muted-foreground">
+                                  No milestones recorded.
+                                </div>
+                              )}
+                            </div>
+                            {detailItem.permissions?.canManage &&
+                              !detailItem.archivedAt && (
+                                <div className="mt-4 grid gap-3 border border-border p-4 sm:grid-cols-2">
+                                  <div className="space-y-1 sm:col-span-2">
+                                    <Label>
+                                      {milestoneDraft.id
+                                        ? "Edit milestone"
+                                        : "New milestone"}
+                                    </Label>
+                                    <Input
+                                      value={milestoneDraft.title}
+                                      maxLength={255}
+                                      onChange={(event) =>
+                                        setMilestoneDraft((current) => ({
+                                          ...current,
+                                          title: event.target.value,
+                                        }))
+                                      }
+                                      placeholder="Milestone title"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label>Due date</Label>
+                                    <Input
+                                      type="date"
+                                      value={milestoneDraft.dueDate}
+                                      onChange={(event) =>
+                                        setMilestoneDraft((current) => ({
+                                          ...current,
+                                          dueDate: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                  <SelectField
+                                    label="Status"
+                                    value={milestoneDraft.status}
+                                    onValueChange={(status) =>
+                                      setMilestoneDraft((current) => ({
+                                        ...current,
+                                        status,
+                                      }))
+                                    }
+                                    options={[
+                                      "To Do",
+                                      "In Progress",
+                                      "At Risk",
+                                      "Done",
+                                      "Cancelled",
+                                    ].map((status) => ({
+                                      value: status,
+                                      label: status,
+                                    }))}
+                                  />
+                                  <div className="space-y-1 sm:col-span-2">
+                                    <Label>Description</Label>
+                                    <Textarea
+                                      value={milestoneDraft.description}
+                                      maxLength={5000}
+                                      rows={3}
+                                      onChange={(event) =>
+                                        setMilestoneDraft((current) => ({
+                                          ...current,
+                                          description: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex justify-end gap-2 sm:col-span-2">
+                                    {milestoneDraft.id && (
+                                      <Button
+                                        variant="outline"
+                                        onClick={() =>
+                                          setMilestoneDraft({
+                                            id: null,
+                                            title: "",
+                                            description: "",
+                                            dueDate: "",
+                                            status: "To Do",
+                                            revision: 0,
+                                          })
+                                        }
+                                      >
+                                        Cancel edit
+                                      </Button>
+                                    )}
+                                    <Button
+                                      onClick={saveMilestone}
+                                      disabled={
+                                        coordinationSaving ||
+                                        !milestoneDraft.title.trim() ||
+                                        !milestoneDraft.dueDate
+                                      }
+                                    >
+                                      {coordinationSaving && (
+                                        <Loader2 className="animate-spin" />
+                                      )}
+                                      Save milestone
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                          </section>
+                        )}
+                      </div>
+                    </TabsContent>
                     <TabsContent value="activity" className="m-0 flex-1 p-6">
                       <div className="space-y-0 border border-border">
                         {detail.events?.length ? (
@@ -2445,8 +3475,19 @@ export default function ProjectsTasks() {
                 <p className="mt-1 text-muted-foreground">
                   Owners, assignees, and the General Manager can update work
                   details. Every active user can comment, mention colleagues,
-                  and upload related files. Comment edits and removals remain
-                  visible in activity.
+                  upload related files, and follow work for updates. Owners and
+                  the General Manager can link blockers; circular dependencies
+                  are rejected. Blocked work must explain what is needed next.
+                </p>
+              </section>
+              <section>
+                <h3 className="font-semibold">Projects and repeat work</h3>
+                <p className="mt-1 text-muted-foreground">
+                  Project health and milestones give departments a concise
+                  delivery view. A project task checklist can be saved as a
+                  reusable template. List selection supports controlled bulk
+                  changes; each record keeps its own revision protection and
+                  reports conflicts separately.
                 </p>
               </section>
               <section>
@@ -2467,59 +3508,6 @@ export default function ProjectsTasks() {
                 </p>
               </section>
             </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={notificationsOpen} onOpenChange={setNotificationsOpen}>
-          <DialogContent className="max-h-[80vh] max-w-xl overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Notifications</DialogTitle>
-              <DialogDescription>
-                Assignments, mentions, due work, and relevant updates.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-1">
-              {notifications.length ? (
-                notifications.map((notification) => (
-                  <button
-                    type="button"
-                    key={notification.id}
-                    className={cn(
-                      "w-full border-b border-border px-3 py-3 text-left last:border-b-0 hover:bg-muted/50",
-                      !notification.readAt && "bg-primary/5",
-                    )}
-                        onClick={() => {
-                          openNotification(notification);
-                        }}
-                  >
-                    <div className="text-sm font-medium">
-                      {notification.title}
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {notification.message}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatDateTime(notification.createdAt)}
-                    </div>
-                  </button>
-                ))
-              ) : (
-                <StateBlock
-                  icon={Bell}
-                  title="No notifications"
-                  description="New collaboration activity will appear here."
-                />
-              )}
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={markNotificationsRead}
-                disabled={!unreadCount}
-              >
-                Mark all read
-              </Button>
-            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

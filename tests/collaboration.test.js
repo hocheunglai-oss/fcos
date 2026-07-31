@@ -19,6 +19,10 @@ import {
   validateCollaborationHierarchy,
   validateCollaborationItemPayload,
 } from "../api/_collaboration.js";
+import {
+  normalizeCollaborationWorkflowFields,
+  validateCollaborationBulkPayload,
+} from "../api/_collaborationService.js";
 
 test("exports the agreed status, priority, and item-kind vocabulary", () => {
   assert.deepEqual(COLLABORATION_STATUSES, [
@@ -258,6 +262,73 @@ test("prevents completion while an active child is incomplete", () => {
       children: [{ status: "To Do" }],
     }).ok,
     true,
+  );
+});
+
+test("requires a concise blocker reason and validates project health metadata", () => {
+  assert.throws(
+    () => normalizeCollaborationWorkflowFields({ status: "Blocked" }),
+    /blocked reason is required/i,
+  );
+  assert.deepEqual(
+    normalizeCollaborationWorkflowFields({
+      status: "Blocked",
+      blockedReason: "Waiting for supplier evidence.",
+      projectHealth: "At risk",
+      healthNote: "The commercial deadline may move.",
+    }),
+    {
+      blocked_reason: "Waiting for supplier evidence.",
+      health_status: "At risk",
+      health_note: "The commercial deadline may move.",
+    },
+  );
+  assert.deepEqual(
+    normalizeCollaborationWorkflowFields({ status: "In Progress" }),
+    {},
+  );
+  assert.deepEqual(
+    normalizeCollaborationWorkflowFields({
+      status: "In Progress",
+      blockedReason: "",
+    }),
+    { blocked_reason: null },
+  );
+  assert.throws(
+    () => normalizeCollaborationWorkflowFields({ projectHealth: "Green" }),
+    /valid project health/i,
+  );
+});
+
+test("validates bounded, revision-safe bulk collaboration updates", () => {
+  const firstId = "11111111-1111-4111-8111-111111111111";
+  const secondId = "22222222-2222-4222-8222-222222222222";
+  assert.deepEqual(
+    validateCollaborationBulkPayload({
+      items: [
+        { itemId: firstId, expectedRevision: 2, values: { status: "In Progress" } },
+        { itemId: secondId, expectedRevision: 3, values: { priority: "High" } },
+      ],
+    }),
+    { ok: true, errors: [] },
+  );
+  assert.equal(
+    validateCollaborationBulkPayload({
+      items: [
+        { itemId: firstId, expectedRevision: 2 },
+        { itemId: firstId, expectedRevision: 2 },
+      ],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validateCollaborationBulkPayload({
+      items: Array.from({ length: 51 }, (_, index) => ({
+        itemId: `${String(index).padStart(8, "0")}-1111-4111-8111-111111111111`,
+        expectedRevision: 1,
+      })),
+    }).ok,
+    false,
   );
 });
 

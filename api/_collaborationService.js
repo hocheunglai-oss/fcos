@@ -11,6 +11,14 @@ import {
 } from "./_collaboration.js";
 
 const COLLABORATION_BUCKET = "collaboration-files";
+const LIST_PAGE_MAX = 200;
+const BOARD_PAGE_MAX = 500;
+const RELATED_PAGE_MAX = 500;
+const PROJECT_OPTIONS_MAX = 500;
+const TEMPLATE_OPTIONS_MAX = 200;
+const BULK_UPDATE_MAX = 50;
+const WORKFLOW_ITEM_FIELDS = ["blocked_reason", "health_status", "health_note"];
+const PROJECT_HEALTH_VALUES = Object.freeze(["On track", "At risk", "Blocked"]);
 const ITEM_SELECT = [
   "id",
   "sequence_no",
@@ -41,6 +49,7 @@ const ITEM_SELECT = [
   "created_at",
   "updated_at",
 ].join(",");
+const ITEM_SELECT_WITH_WORKFLOW = `${ITEM_SELECT},${WORKFLOW_ITEM_FIELDS.join(",")}`;
 
 function appError(message, status = 500, details = undefined) {
   const error = new Error(message);
@@ -57,6 +66,18 @@ function cleanText(value, maxLength = 255) {
 
 function nullableId(value) {
   return cleanText(value, 80) || null;
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || ""),
+  );
+}
+
+function requiredUuid(value, label) {
+  const id = nullableId(value);
+  if (!id || !isUuid(id)) throw appError(`${label} is invalid.`, 400);
+  return id;
 }
 
 function uniqueIds(values, limit = 50) {
@@ -96,7 +117,13 @@ function decodeCursor(value) {
     const parsed = JSON.parse(
       Buffer.from(String(value), "base64url").toString("utf8"),
     );
-    if (!parsed?.updatedAt || !parsed?.id) return null;
+    if (
+      !parsed?.updatedAt ||
+      Number.isNaN(Date.parse(parsed.updatedAt)) ||
+      !isUuid(parsed.id)
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     throw appError(
@@ -104,6 +131,99 @@ function decodeCursor(value) {
       400,
     );
   }
+}
+
+function isMissingSchemaError(error) {
+  const message = String(error?.message || "");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "PGRST202" ||
+    /relation .* does not exist|column .* does not exist|could not find .* function/i.test(
+      message,
+    )
+  );
+}
+
+function isMissingRpcError(error) {
+  return (
+    error?.code === "PGRST202" ||
+    /could not find .* function|does not exist/i.test(
+      String(error?.message || ""),
+    )
+  );
+}
+
+function normalizePostgrestSearch(value) {
+  return cleanText(value, 200)
+    .replace(/[(),]/g, " ")
+    .replace(/[\\%_]/g, "\\$&")
+    .trim();
+}
+
+function normalizeWorkflowValues(body = {}, { partial = true } = {}) {
+  const values = {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+  const status = has("status") ? cleanText(body.status, 40) : null;
+  const blockedReason = has("blockedReason")
+    ? cleanText(body.blockedReason, 2000)
+    : undefined;
+  const projectHealth = has("projectHealth")
+    ? cleanText(body.projectHealth, 40)
+    : undefined;
+  const healthNote = has("healthNote")
+    ? cleanText(body.healthNote, 2000)
+    : undefined;
+
+  if (
+    status === "Blocked" &&
+    ((!partial && !blockedReason) ||
+      (blockedReason !== undefined && !blockedReason))
+  ) {
+    throw appError("A blocked reason is required when status is Blocked.", 400);
+  }
+  if (blockedReason !== undefined)
+    values.blocked_reason = blockedReason || null;
+  if (projectHealth !== undefined) {
+    if (projectHealth && !PROJECT_HEALTH_VALUES.includes(projectHealth)) {
+      throw appError("Select a valid project health.", 400);
+    }
+    values.health_status = projectHealth || null;
+  }
+  if (healthNote !== undefined) values.health_note = healthNote || null;
+  return values;
+}
+
+export function normalizeCollaborationWorkflowFields(body = {}, options = {}) {
+  return normalizeWorkflowValues(body, { partial: false, ...options });
+}
+
+export function validateCollaborationBulkPayload(body = {}) {
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length)
+    return { ok: false, errors: ["Select at least one work item."] };
+  if (items.length > BULK_UPDATE_MAX) {
+    return {
+      ok: false,
+      errors: [`Bulk updates are limited to ${BULK_UPDATE_MAX} work items.`],
+    };
+  }
+  const seen = new Set();
+  const errors = [];
+  for (const item of items) {
+    if (!isUuid(item?.itemId))
+      errors.push("Every bulk item must include a valid work item ID.");
+    if (seen.has(item?.itemId))
+      errors.push("The same work item cannot appear twice in a bulk update.");
+    seen.add(item?.itemId);
+    if (
+      !Number.isInteger(Number(item?.expectedRevision)) ||
+      Number(item.expectedRevision) < 1
+    ) {
+      errors.push("Every bulk item must include its current revision.");
+    }
+  }
+  return { ok: errors.length === 0, errors };
 }
 
 function rpcError(error) {
@@ -206,7 +326,11 @@ function serializeItem(row, allRows, actor) {
     title: row.title,
     description: row.description || "",
     status: row.status,
+    blockedReason: row.blocked_reason || null,
     priority: row.priority,
+    projectHealth:
+      row.item_type === "project" ? row.health_status || null : null,
+    healthNote: row.item_type === "project" ? row.health_note || null : null,
     startDate: row.start_date || null,
     dueDate: row.due_date || null,
     owner: {
@@ -249,67 +373,98 @@ function serializeItem(row, allRows, actor) {
   };
 }
 
-function itemMatches(row, body, today, actorId) {
+function listFilterQuery(query, body, profile, today, { cursor = null } = {}) {
   const scope = cleanText(body.scope || "all", 30).toLowerCase();
-  if (
-    scope === "my" &&
-    row.owner_user_id !== actorId &&
-    row.assignee_user_id !== actorId
-  )
-    return false;
-  if (scope === "projects" && row.item_type !== "project") return false;
-  if (body.includeArchived !== true && row.archived_at) return false;
-  if (body.includeArchived === false && row.archived_at) return false;
-  if (body.kind && row.item_type !== body.kind) return false;
-  if (
-    body.projectId &&
-    row.project_id !== body.projectId &&
-    row.id !== body.projectId
-  )
-    return false;
-  if (body.status && row.status !== body.status) return false;
-  if (body.priority && row.priority !== body.priority) return false;
-  if (body.ownerId && row.owner_user_id !== body.ownerId) return false;
-  if (body.assigneeId === "unassigned" && row.assignee_user_id) return false;
-  if (
-    body.assigneeId &&
-    body.assigneeId !== "unassigned" &&
-    row.assignee_user_id !== body.assigneeId
-  )
-    return false;
-  if (
-    body.dueState === "overdue" &&
-    (!row.due_date ||
-      row.due_date >= today ||
-      ["Done", "Cancelled"].includes(row.status))
-  )
-    return false;
-  if (body.dueState === "due_today" && row.due_date !== today) return false;
-  if (body.dueState === "upcoming" && (!row.due_date || row.due_date <= today))
-    return false;
-  if (body.dueState === "no_due" && row.due_date) return false;
-
-  const keyword = cleanText(body.keyword, 200).toLocaleLowerCase();
-  if (keyword) {
-    const haystack = [
-      row.item_key,
-      row.title,
-      row.description,
-      row.owner_name,
-      row.owner_email,
-      row.assignee_name,
-      row.assignee_email,
-    ]
-      .join(" ")
-      .toLocaleLowerCase();
-    if (!haystack.includes(keyword)) return false;
+  if (scope === "my") {
+    query = query.or(
+      `owner_user_id.eq.${requiredUuid(profile.id, "Authenticated user")},assignee_user_id.eq.${requiredUuid(profile.id, "Authenticated user")}`,
+    );
   }
-  return true;
+  if (scope === "projects") query = query.eq("item_type", "project");
+  if (body.includeArchived !== true) query = query.is("archived_at", null);
+  if (body.kind) query = query.eq("item_type", cleanText(body.kind, 30));
+  if (body.projectId) {
+    const projectId = requiredUuid(body.projectId, "Project");
+    query = query.or(`project_id.eq.${projectId},id.eq.${projectId}`);
+  }
+  if (body.status) query = query.eq("status", cleanText(body.status, 40));
+  if (body.priority) query = query.eq("priority", cleanText(body.priority, 40));
+  if (body.ownerId)
+    query = query.eq("owner_user_id", requiredUuid(body.ownerId, "Owner"));
+  if (body.assigneeId === "unassigned")
+    query = query.is("assignee_user_id", null);
+  else if (body.assigneeId) {
+    query = query.eq(
+      "assignee_user_id",
+      requiredUuid(body.assigneeId, "Assignee"),
+    );
+  }
+  if (body.dueState === "overdue") {
+    query = query
+      .lt("due_date", today)
+      .not("status", "in", '("Done","Cancelled")');
+  }
+  if (body.dueState === "due_today") query = query.eq("due_date", today);
+  if (body.dueState === "upcoming") query = query.gt("due_date", today);
+  if (body.dueState === "no_due") query = query.is("due_date", null);
+
+  const keyword = normalizePostgrestSearch(body.keyword);
+  if (keyword) {
+    const pattern = `*${keyword}*`;
+    query = query.or(
+      [
+        "item_key",
+        "title",
+        "description",
+        "owner_name",
+        "owner_email",
+        "assignee_name",
+        "assignee_email",
+      ]
+        .map((field) => `${field}.ilike.${pattern}`)
+        .join(","),
+    );
+  }
+  if (cursor) {
+    query = query.or(
+      `updated_at.lt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.lt.${cursor.id})`,
+    );
+  }
+  return query;
 }
 
-async function collaborationModel(client, profile) {
-  const [itemsResult, usersResult, isGeneralManager] = await Promise.all([
-    client.from("collaboration_items").select(ITEM_SELECT).limit(5000),
+async function selectItems(
+  client,
+  configure,
+  { count = null, head = false } = {},
+) {
+  const run = async (columns) => {
+    let query = client
+      .from("collaboration_items")
+      .select(columns, count ? { count, head } : undefined);
+    return configure(query);
+  };
+  let result = await run(ITEM_SELECT_WITH_WORKFLOW);
+  if (result.error && isMissingSchemaError(result.error)) {
+    result = await run(ITEM_SELECT);
+    if (!result.error) result.workflowFieldsAvailable = false;
+  } else if (!result.error) {
+    result.workflowFieldsAvailable = true;
+  }
+  return result;
+}
+
+async function selectOptionalRows(client, table, configure, columns = "*") {
+  const result = await configure(client.from(table).select(columns));
+  if (result.error && isMissingSchemaError(result.error)) {
+    return { data: [], error: null, available: false };
+  }
+  if (result.error) throw result.error;
+  return { data: result.data || [], error: null, available: true };
+}
+
+async function activeUsersAndActor(client, profile) {
+  const [usersResult, isGeneralManager] = await Promise.all([
     client
       .from("user_profiles")
       .select("id,email,full_name,user_type,active")
@@ -318,17 +473,90 @@ async function collaborationModel(client, profile) {
       .limit(1000),
     generalManagerAccess(client, profile.id),
   ]);
-  if (itemsResult.error) throw itemsResult.error;
   if (usersResult.error) throw usersResult.error;
-  const activeUsers = usersResult.data || [];
+  const users = usersResult.data || [];
   return {
-    rows: itemsResult.data || [],
-    users: activeUsers,
+    users,
     actor: {
       userId: profile.id,
       isGeneralManager,
-      activeUserIds: new Set(activeUsers.map((user) => user.id)),
+      activeUserIds: new Set(users.map((user) => user.id)),
     },
+  };
+}
+
+async function fetchRowsByIds(client, ids) {
+  const unique = uniqueIds(ids, 1000).filter(isUuid);
+  if (!unique.length) return { rows: [], workflowFieldsAvailable: true };
+  const result = await selectItems(client, (query) => query.in("id", unique));
+  if (result.error) throw result.error;
+  return {
+    rows: result.data || [],
+    workflowFieldsAvailable: result.workflowFieldsAvailable,
+  };
+}
+
+async function loadProgressGraph(client, seedRows) {
+  const seed = seedRows || [];
+  const projectIds = seed
+    .filter((row) => row.item_type === "project")
+    .map((row) => row.id);
+  const taskIds = seed
+    .filter((row) => row.item_type === "task")
+    .map((row) => row.id);
+  const referencedIds = seed.flatMap((row) => [row.project_id, row.parent_id]);
+
+  const [references, directProjectTasks, directTaskSubtasks] =
+    await Promise.all([
+      fetchRowsByIds(client, referencedIds),
+      projectIds.length
+        ? selectItems(client, (query) =>
+            query
+              .eq("item_type", "task")
+              .in("project_id", projectIds)
+              .is("archived_at", null),
+          )
+        : Promise.resolve({ data: [], workflowFieldsAvailable: true }),
+      taskIds.length
+        ? selectItems(client, (query) =>
+            query
+              .eq("item_type", "subtask")
+              .in("parent_id", taskIds)
+              .is("archived_at", null),
+          )
+        : Promise.resolve({ data: [], workflowFieldsAvailable: true }),
+    ]);
+  if (directProjectTasks.error) throw directProjectTasks.error;
+  if (directTaskSubtasks.error) throw directTaskSubtasks.error;
+  const projectTasks = directProjectTasks.data || [];
+  const nestedTaskIds = projectTasks.map((row) => row.id);
+  const nestedSubtasks = nestedTaskIds.length
+    ? await selectItems(client, (query) =>
+        query
+          .eq("item_type", "subtask")
+          .in("parent_id", nestedTaskIds)
+          .is("archived_at", null),
+      )
+    : { data: [], workflowFieldsAvailable: true };
+  if (nestedSubtasks.error) throw nestedSubtasks.error;
+
+  const rows = new Map();
+  for (const row of [
+    ...seed,
+    ...references.rows,
+    ...projectTasks,
+    ...(directTaskSubtasks.data || []),
+    ...(nestedSubtasks.data || []),
+  ]) {
+    rows.set(row.id, row);
+  }
+  return {
+    rows: [...rows.values()],
+    workflowFieldsAvailable:
+      references.workflowFieldsAvailable &&
+      directProjectTasks.workflowFieldsAvailable !== false &&
+      directTaskSubtasks.workflowFieldsAvailable !== false &&
+      nestedSubtasks.workflowFieldsAvailable !== false,
   };
 }
 
@@ -341,52 +569,213 @@ function serializedUser(user) {
   };
 }
 
+function serializeFollower(row) {
+  return {
+    itemId: row.item_id,
+    userId: row.user_id,
+    name: row.user_name || row.follower_name || row.user_email || null,
+    email: row.user_email || row.follower_email || null,
+    createdAt: row.created_at || null,
+  };
+}
+
+function serializeMilestone(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    dueDate: row.due_date || null,
+    status: row.status || "To Do",
+    description: row.description || "",
+    revision: Number(row.revision || 1),
+    completedAt: row.completed_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+function serializeTemplate(row, items = []) {
+  return {
+    id: row.id,
+    name: row.title,
+    description: row.description || "",
+    active: !row.archived_at,
+    revision: Number(row.revision || 1),
+    ownerUserId: row.created_by || null,
+    usageCount: Number(row.usage_count || 0),
+    lastUsedAt: row.last_used_at || null,
+    items: items
+      .filter((item) => item.template_id === row.id)
+      .map((item) => ({
+        id: item.id,
+        parentTemplateItemId: item.parent_template_item_id || null,
+        kind: item.item_type,
+        order: Number(item.item_order || 0),
+        title: item.title,
+        description: item.description || "",
+        priority: item.priority || "Medium",
+        relativeDueDays:
+          item.relative_due_days == null
+            ? null
+            : Number(item.relative_due_days),
+      })),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+async function serializeDependencies(
+  client,
+  rows = [],
+  graphRows = [],
+  targetKey = "blocking_item_id",
+) {
+  const targetIds = uniqueIds(
+    rows.map((row) => row[targetKey]),
+    1000,
+  ).filter(isUuid);
+  const known = new Map(graphRows.map((row) => [row.id, row]));
+  const missingIds = targetIds.filter((id) => !known.has(id));
+  if (missingIds.length) {
+    const loaded = await fetchRowsByIds(client, missingIds);
+    for (const row of loaded.rows) known.set(row.id, row);
+  }
+  return rows.map((row) => {
+    const target = known.get(row[targetKey]) || null;
+    return {
+      id: row.id || null,
+      itemId: row.blocked_item_id,
+      dependsOnItemId: row.blocking_item_id,
+      item: target
+        ? {
+            id: target.id,
+            key: target.item_key,
+            title: target.title,
+            status: target.status,
+          }
+        : null,
+      createdAt: row.created_at || null,
+    };
+  });
+}
+
+async function loadItemForMutation(client, itemId) {
+  const result = await selectItems(client, (query) =>
+    query.eq("id", itemId).maybeSingle(),
+  );
+  if (result.error) throw result.error;
+  if (!result.data)
+    throw appError("The selected work item was not found.", 404);
+  return {
+    item: result.data,
+    workflowFieldsAvailable: result.workflowFieldsAvailable,
+  };
+}
+
+async function mutationActor(client, profile) {
+  const { actor } = await activeUsersAndActor(client, profile);
+  return actor;
+}
+
+function requireItemEditPermission(item, actor) {
+  if (
+    !canEditCollaborationItem({
+      item: itemPermissionShape(item),
+      actorId: actor.userId,
+      isGeneralManager: actor.isGeneralManager,
+    })
+  ) {
+    throw appError(
+      "Only the owner, assignee, or General Manager can edit this work item.",
+      403,
+    );
+  }
+}
+
+function requireItemManagePermission(item, actor) {
+  if (
+    !canManageCollaborationAssignments({
+      item: itemPermissionShape(item),
+      actorId: actor.userId,
+      isGeneralManager: actor.isGeneralManager,
+    })
+  ) {
+    throw appError(
+      "Only the owner or General Manager can manage this work item.",
+      403,
+    );
+  }
+}
+
 export async function collaborationList(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const model = await collaborationModel(client, profile);
   const today = hongKongDate();
   const cursor = decodeCursor(body.cursor);
   const pageSize = Math.max(
     20,
-    Math.min(Number(body.pageSize) || 100, body.view === "board" ? 500 : 200),
+    Math.min(
+      Number(body.pageSize) || 100,
+      body.view === "board" ? BOARD_PAGE_MAX : LIST_PAGE_MAX,
+    ),
   );
 
-  let filtered = model.rows
-    .filter((row) => itemMatches(row, body, today, profile.id))
-    .sort(
-      (left, right) =>
-        String(right.updated_at).localeCompare(String(left.updated_at)) ||
-        String(right.id).localeCompare(String(left.id)),
-    );
-  const total = filtered.length;
-
-  if (cursor) {
-    filtered = filtered.filter(
-      (row) =>
-        String(row.updated_at).localeCompare(cursor.updatedAt) < 0 ||
-        (row.updated_at === cursor.updatedAt &&
-          String(row.id).localeCompare(cursor.id) < 0),
-    );
+  const filters = (query, options = {}) =>
+    listFilterQuery(query, body, profile, today, options);
+  const [pageResult, totalResult, model, projectResult, templatesResult] =
+    await Promise.all([
+      selectItems(client, (query) =>
+        filters(query, { cursor })
+          .order("updated_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(pageSize + 1),
+      ),
+      selectItems(client, (query) => filters(query), {
+        count: "exact",
+        head: true,
+      }),
+      activeUsersAndActor(client, profile),
+      selectItems(client, (query) =>
+        query
+          .eq("item_type", "project")
+          .is("archived_at", null)
+          .order("title", { ascending: true })
+          .limit(PROJECT_OPTIONS_MAX + 1),
+      ),
+      selectOptionalRows(client, "collaboration_templates", (query) =>
+        query
+          .is("archived_at", null)
+          .order("title", { ascending: true })
+          .limit(TEMPLATE_OPTIONS_MAX),
+      ),
+    ]);
+  for (const result of [pageResult, totalResult, projectResult]) {
+    if (result.error) throw result.error;
   }
-
-  const page = filtered.slice(0, pageSize);
-  const projects = model.rows
-    .filter((row) => row.item_type === "project" && !row.archived_at)
-    .sort((left, right) => left.title.localeCompare(right.title));
+  const pageRows = (pageResult.data || []).slice(0, pageSize);
+  const projectRows = (projectResult.data || []).slice(0, PROJECT_OPTIONS_MAX);
+  const graph = await loadProgressGraph(client, [...pageRows, ...projectRows]);
+  const allRows = graph.rows;
 
   return {
-    items: page.map((row) => serializeItem(row, model.rows, model.actor)),
+    items: pageRows.map((row) => serializeItem(row, allRows, model.actor)),
     nextCursor:
-      filtered.length > page.length ? encodeCursor(page.at(-1)) : null,
-    total,
+      (pageResult.data || []).length > pageSize
+        ? encodeCursor(pageRows.at(-1))
+        : null,
+    total: Number(totalResult.count || 0),
     users: model.users.map(serializedUser),
-    projects: projects.map((row) =>
-      serializeItem(row, model.rows, model.actor),
+    projects: projectRows.map((row) =>
+      serializeItem(row, allRows, model.actor),
     ),
     options: {
       statuses: COLLABORATION_STATUSES,
       priorities: COLLABORATION_PRIORITIES,
       kinds: COLLABORATION_KINDS,
+      projectHealth: PROJECT_HEALTH_VALUES,
+      templates: templatesResult.data.map((row) => serializeTemplate(row)),
+      projectOptionsTruncated:
+        (projectResult.data || []).length > PROJECT_OPTIONS_MAX,
+      templatesAvailable: templatesResult.available,
     },
     currentUser: {
       id: profile.id,
@@ -394,27 +783,44 @@ export async function collaborationList(body = {}, accessContext) {
       isGeneralManager: model.actor.isGeneralManager,
     },
     today,
-    capped: model.rows.length >= 5000,
+    capped: false,
+    workflowFieldsAvailable: graph.workflowFieldsAvailable,
   };
 }
 
 export async function collaborationDetail(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const itemId = nullableId(body.itemId);
-  if (!itemId) throw appError("Work item is required.", 400);
-
-  const model = await collaborationModel(client, profile);
-  const itemRow = model.rows.find((row) => row.id === itemId);
+  const itemId = requiredUuid(body.itemId, "Work item");
+  const [itemResult, model] = await Promise.all([
+    selectItems(client, (query) => query.eq("id", itemId).maybeSingle()),
+    activeUsersAndActor(client, profile),
+  ]);
+  if (itemResult.error) throw itemResult.error;
+  const itemRow = itemResult.data;
   if (!itemRow) throw appError("The selected work item was not found.", 404);
 
-  const [commentsResult, attachmentsResult, eventsResult] = await Promise.all([
+  const graph = await loadProgressGraph(client, [itemRow]);
+  const allRows = graph.rows;
+
+  const [
+    commentsResult,
+    attachmentsResult,
+    eventsResult,
+    followersResult,
+    dependenciesResult,
+    dependentsResult,
+    milestonesResult,
+    templatesResult,
+    dependencyCandidatesResult,
+  ] = await Promise.all([
     client
       .from("collaboration_comments")
       .select(
         "id,item_id,body,revision,author_user_id,author_name,author_email,edited_at,deleted_at,deleted_by_email,created_at,updated_at",
       )
       .eq("item_id", itemId)
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .limit(RELATED_PAGE_MAX + 1),
     client
       .from("collaboration_attachments")
       .select(
@@ -422,7 +828,8 @@ export async function collaborationDetail(body = {}, accessContext) {
       )
       .eq("item_id", itemId)
       .in("upload_status", ["pending", "complete"])
-      .order("created_at", { ascending: false }),
+      .order("created_at", { ascending: false })
+      .limit(RELATED_PAGE_MAX + 1),
     client
       .from("collaboration_events")
       .select(
@@ -430,13 +837,57 @@ export async function collaborationDetail(body = {}, accessContext) {
       )
       .eq("item_id", itemId)
       .order("created_at", { ascending: false })
-      .limit(500),
+      .limit(RELATED_PAGE_MAX + 1),
+    selectOptionalRows(client, "collaboration_followers", (query) =>
+      query.eq("item_id", itemId).order("created_at", { ascending: true }),
+    ),
+    selectOptionalRows(client, "collaboration_dependencies", (query) =>
+      query
+        .eq("blocked_item_id", itemId)
+        .order("created_at", { ascending: true }),
+    ),
+    selectOptionalRows(client, "collaboration_dependencies", (query) =>
+      query
+        .eq("blocking_item_id", itemId)
+        .order("created_at", { ascending: true }),
+    ),
+    itemRow.item_type === "project"
+      ? selectOptionalRows(
+          client,
+          "collaboration_project_milestones",
+          (query) =>
+            query
+              .eq("project_id", itemId)
+              .order("due_date", { ascending: true }),
+        )
+      : Promise.resolve({ data: [], available: true }),
+    selectOptionalRows(client, "collaboration_templates", (query) =>
+      query
+        .is("archived_at", null)
+        .order("title", { ascending: true })
+        .limit(TEMPLATE_OPTIONS_MAX),
+    ),
+    selectItems(client, (query) =>
+      query
+        .neq("id", itemId)
+        .is("archived_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(PROJECT_OPTIONS_MAX),
+    ),
   ]);
-  for (const result of [commentsResult, attachmentsResult, eventsResult]) {
+  for (const result of [
+    commentsResult,
+    attachmentsResult,
+    eventsResult,
+    dependencyCandidatesResult,
+  ]) {
     if (result.error) throw result.error;
   }
 
-  const commentIds = (commentsResult.data || []).map((comment) => comment.id);
+  const comments = (commentsResult.data || []).slice(0, RELATED_PAGE_MAX);
+  const attachments = (attachmentsResult.data || []).slice(0, RELATED_PAGE_MAX);
+  const events = (eventsResult.data || []).slice(0, RELATED_PAGE_MAX);
+  const commentIds = comments.map((comment) => comment.id);
   const mentionsResult = commentIds.length
     ? await client
         .from("collaboration_comment_mentions")
@@ -451,12 +902,12 @@ export async function collaborationDetail(body = {}, accessContext) {
       mentionMap.set(mention.comment_id, []);
     mentionMap.get(mention.comment_id).push(mention.mentioned_user_id);
   }
-  const visibleAttachments = (attachmentsResult.data || []).filter(
+  const visibleAttachments = attachments.filter(
     (attachment) =>
       attachment.upload_status === "complete" ||
       attachment.uploaded_by === profile.id,
   );
-  const childRows = model.rows.filter(
+  const childRows = allRows.filter(
     (row) =>
       (itemRow.item_type === "project" &&
         row.item_type === "task" &&
@@ -467,11 +918,14 @@ export async function collaborationDetail(body = {}, accessContext) {
   );
 
   return {
-    item: serializeItem(itemRow, model.rows, model.actor),
-    children: childRows.map((row) =>
-      serializeItem(row, model.rows, model.actor),
-    ),
-    comments: (commentsResult.data || []).map((comment) => ({
+    item: serializeItem(itemRow, allRows, model.actor),
+    currentUser: {
+      id: profile.id,
+      email: profile.email,
+      isGeneralManager: model.actor.isGeneralManager,
+    },
+    children: childRows.map((row) => serializeItem(row, allRows, model.actor)),
+    comments: comments.map((comment) => ({
       id: comment.id,
       itemId: comment.item_id,
       body: comment.deleted_at ? "" : comment.body,
@@ -519,11 +973,54 @@ export async function collaborationDetail(body = {}, accessContext) {
         attachment.content_type.startsWith("text/") ||
         attachment.content_type === "message/rfc822",
     })),
-    events: eventsResult.data || [],
+    events,
     users: model.users.map(serializedUser),
-    projects: model.rows
+    projects: allRows
       .filter((row) => row.item_type === "project" && !row.archived_at)
-      .map((row) => serializeItem(row, model.rows, model.actor)),
+      .map((row) => serializeItem(row, allRows, model.actor)),
+    dependencyCandidates: (dependencyCandidatesResult.data || []).map((row) =>
+      serializeItem(
+        row,
+        [...allRows, ...(dependencyCandidatesResult.data || [])],
+        model.actor,
+      ),
+    ),
+    followers: followersResult.data.map((row) => {
+      const user = model.users.find(
+        (candidate) => candidate.id === row.user_id,
+      );
+      return serializeFollower({
+        ...row,
+        user_name: user?.full_name || row.user_name,
+        user_email: user?.email || row.user_email,
+      });
+    }),
+    dependencies: await serializeDependencies(
+      client,
+      dependenciesResult.data,
+      allRows,
+    ),
+    dependents: await serializeDependencies(
+      client,
+      dependentsResult.data,
+      allRows,
+      "blocked_item_id",
+    ),
+    milestones: milestonesResult.data.map(serializeMilestone),
+    templates: templatesResult.data.map((row) => serializeTemplate(row)),
+    relatedTruncation: {
+      comments: (commentsResult.data || []).length > RELATED_PAGE_MAX,
+      attachments: (attachmentsResult.data || []).length > RELATED_PAGE_MAX,
+      events: (eventsResult.data || []).length > RELATED_PAGE_MAX,
+    },
+    enhancementsAvailable: {
+      followers: followersResult.available,
+      dependencies: dependenciesResult.available && dependentsResult.available,
+      milestones: milestonesResult.available,
+      templates: templatesResult.available,
+    },
+    workflowFieldsAvailable:
+      itemResult.workflowFieldsAvailable && graph.workflowFieldsAvailable,
   };
 }
 
@@ -557,8 +1054,9 @@ function createValues(body, profile) {
 
 export async function collaborationCreate(body = {}, accessContext) {
   const { client, profile } = accessContext;
+  const workflowValues = normalizeWorkflowValues(body, { partial: false });
   const { data, error } = await client.rpc("create_collaboration_item", {
-    p_values: createValues(body, profile),
+    p_values: { ...createValues(body, profile), ...workflowValues },
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
   });
@@ -596,14 +1094,14 @@ function updateValues(body) {
 
 export async function collaborationUpdate(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const itemId = nullableId(body.itemId);
+  const itemId = requiredUuid(body.itemId, "Work item");
   const expectedRevision = Number(body.expectedRevision);
-  if (!itemId) throw appError("Work item is required.", 400);
   if (!Number.isInteger(expectedRevision) || expectedRevision < 1)
     throw appError("Refresh the work item before saving.", 409);
+  const workflowValues = normalizeWorkflowValues(body, { partial: true });
   const { data, error } = await client.rpc("save_collaboration_item", {
     p_item_id: itemId,
-    p_values: updateValues(body),
+    p_values: { ...updateValues(body), ...workflowValues },
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
     p_expected_revision: expectedRevision,
@@ -642,6 +1140,336 @@ export async function collaborationArchive(body = {}, accessContext) {
   return {
     ...(await collaborationDetail({ itemId: data.item.id }, accessContext)),
     affectedItems: Number(data.affectedItems || 0),
+  };
+}
+
+async function tryOptionalRpc(client, name, args) {
+  const { data, error } = await client.rpc(name, args);
+  if (error && isMissingRpcError(error))
+    return { available: false, data: null };
+  if (error) throw rpcError(error);
+  return { available: true, data };
+}
+
+function mutationConflict(
+  message = "This work item changed after it was opened. Refresh and review the latest update.",
+) {
+  return appError(message, 409);
+}
+
+export async function collaborationFollowerToggle(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const itemId = requiredUuid(body.itemId, "Work item");
+  const { item } = await loadItemForMutation(client, itemId);
+  if (item.archived_at)
+    throw appError("Restore this work item before following it.", 400);
+  const rpc = await tryOptionalRpc(client, "save_collaboration_follower", {
+    p_item_id: itemId,
+    p_follow: body.following !== false,
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (!rpc.available) {
+    throw appError(
+      "Collaboration followers are not available. Apply the collaboration workflow migration first.",
+      503,
+    );
+  }
+  return collaborationDetail({ itemId }, accessContext);
+}
+
+export async function collaborationDependencySave(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const itemId = requiredUuid(body.itemId, "Work item");
+  const dependsOnItemId = requiredUuid(body.dependsOnItemId, "Dependency");
+  const expectedRevision = Number(body.expectedRevision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw mutationConflict(
+      "Refresh the work item before changing its dependencies.",
+    );
+  }
+  if (itemId === dependsOnItemId)
+    throw appError("A work item cannot depend on itself.", 400);
+  const [source, target, actor] = await Promise.all([
+    loadItemForMutation(client, itemId),
+    loadItemForMutation(client, dependsOnItemId),
+    mutationActor(client, profile),
+  ]);
+  requireItemManagePermission(source.item, actor);
+  if (source.item.archived_at || target.item.archived_at) {
+    throw appError(
+      "Archived work items cannot be linked as dependencies.",
+      400,
+    );
+  }
+  if (Number(source.item.revision) !== expectedRevision)
+    throw mutationConflict();
+  const rpc = await tryOptionalRpc(client, "save_collaboration_dependency", {
+    p_item_id: itemId,
+    p_blocked_by_item_id: dependsOnItemId,
+    p_remove: false,
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: expectedRevision,
+  });
+  if (!rpc.available) {
+    throw appError(
+      "Collaboration dependencies are not available. Apply the collaboration workflow migration first.",
+      503,
+    );
+  }
+  return collaborationDetail({ itemId }, accessContext);
+}
+
+export async function collaborationDependencyRemove(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const itemId = requiredUuid(body.itemId, "Work item");
+  const dependsOnItemId = requiredUuid(body.dependsOnItemId, "Dependency");
+  const expectedRevision = Number(body.expectedRevision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw mutationConflict(
+      "Refresh the work item before changing its dependencies.",
+    );
+  }
+  const [source, actor] = await Promise.all([
+    loadItemForMutation(client, itemId),
+    mutationActor(client, profile),
+  ]);
+  requireItemManagePermission(source.item, actor);
+  if (Number(source.item.revision) !== expectedRevision)
+    throw mutationConflict();
+  const rpc = await tryOptionalRpc(client, "save_collaboration_dependency", {
+    p_item_id: itemId,
+    p_blocked_by_item_id: dependsOnItemId,
+    p_remove: true,
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: expectedRevision,
+  });
+  if (!rpc.available) {
+    throw appError(
+      "Collaboration dependencies are not available. Apply the collaboration workflow migration first.",
+      503,
+    );
+  }
+  return collaborationDetail({ itemId }, accessContext);
+}
+
+export async function collaborationMilestoneSave(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const projectId = requiredUuid(body.projectId, "Project");
+  const expectedProjectRevision = Number(body.expectedProjectRevision);
+  if (
+    !Number.isInteger(expectedProjectRevision) ||
+    expectedProjectRevision < 1
+  ) {
+    throw mutationConflict("Refresh the project before saving a milestone.");
+  }
+  const [project, actor] = await Promise.all([
+    loadItemForMutation(client, projectId),
+    mutationActor(client, profile),
+  ]);
+  if (project.item.item_type !== "project")
+    throw appError("Milestones can only be saved on a project.", 400);
+  requireItemManagePermission(project.item, actor);
+  if (Number(project.item.revision) !== expectedProjectRevision)
+    throw mutationConflict();
+  const title = cleanText(body.title, 255);
+  const description = cleanText(body.description, 5000);
+  const dueDate = cleanText(body.dueDate, 10) || null;
+  const status = cleanText(body.status || "To Do", 40);
+  if (!title) throw appError("Milestone title is required.", 400);
+  if (!dueDate) throw appError("Milestone due date is required.", 400);
+  if (
+    !["To Do", "In Progress", "At Risk", "Done", "Cancelled"].includes(status)
+  ) {
+    throw appError("Select a valid milestone status.", 400);
+  }
+  const milestoneId = body.milestoneId
+    ? requiredUuid(body.milestoneId, "Milestone")
+    : null;
+  const expectedRevision = milestoneId ? Number(body.expectedRevision) : null;
+  if (
+    milestoneId &&
+    (!Number.isInteger(expectedRevision) || expectedRevision < 1)
+  ) {
+    throw mutationConflict("Refresh the milestone before saving.");
+  }
+  const rpc = await tryOptionalRpc(client, "save_collaboration_milestone", {
+    p_values: {
+      id: milestoneId,
+      project_id: projectId,
+      title,
+      description,
+      due_date: dueDate,
+      status,
+      expected_revision: expectedRevision || 0,
+      expected_project_revision: expectedProjectRevision,
+    },
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (!rpc.available) {
+    throw appError(
+      "Project milestones are not available. Apply the collaboration workflow migration first.",
+      503,
+    );
+  }
+  return collaborationDetail({ itemId: projectId }, accessContext);
+}
+
+export async function collaborationTemplateList(body = {}, accessContext) {
+  const { client } = accessContext;
+  const includeInactive = body.includeInactive === true;
+  const result = await selectOptionalRows(
+    client,
+    "collaboration_templates",
+    (query) => {
+      if (!includeInactive) query = query.is("archived_at", null);
+      return query
+        .order("title", { ascending: true })
+        .limit(TEMPLATE_OPTIONS_MAX);
+    },
+  );
+  const templateIds = result.data.map((row) => row.id);
+  const itemsResult = templateIds.length
+    ? await selectOptionalRows(
+        client,
+        "collaboration_template_items",
+        (query) =>
+          query
+            .in("template_id", templateIds)
+            .order("item_order", { ascending: true }),
+      )
+    : { data: [], available: result.available };
+  return {
+    templates: result.data.map((row) =>
+      serializeTemplate(row, itemsResult.data),
+    ),
+    available: result.available && itemsResult.available,
+  };
+}
+
+export async function collaborationTemplateSave(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const templateId = body.templateId
+    ? requiredUuid(body.templateId, "Template")
+    : null;
+  if (body.mode === "use") {
+    if (!templateId) throw appError("Select a project template.", 400);
+    const projectBody = { ...(body.project || {}), kind: "project" };
+    const project = {
+      ...createValues(projectBody, profile),
+      ...normalizeWorkflowValues(projectBody, { partial: false }),
+    };
+    const rpc = await tryOptionalRpc(client, "save_collaboration_template", {
+      p_values: { mode: "use", id: templateId, project },
+      p_actor_id: profile.id,
+      p_actor_email: profile.email,
+    });
+    if (!rpc.available) {
+      throw appError(
+        "Reusable templates are not available. Apply the collaboration workflow migration first.",
+        503,
+      );
+    }
+    return collaborationDetail({ itemId: rpc.data.project.id }, accessContext);
+  }
+  const expectedRevision = templateId ? Number(body.expectedRevision) : null;
+  if (
+    templateId &&
+    (!Number.isInteger(expectedRevision) || expectedRevision < 1)
+  ) {
+    throw mutationConflict("Refresh the template before saving.");
+  }
+  const name = cleanText(body.name, 255);
+  const description = cleanText(body.description, 5000);
+  if (!name) throw appError("Template name is required.", 400);
+  const templateItems = (Array.isArray(body.items) ? body.items : [])
+    .slice(0, 100)
+    .map((item, index) => {
+      const kind = cleanText(
+        item.kind || item.itemType || "task",
+        30,
+      ).toLowerCase();
+      const title = cleanText(item.title, 255);
+      if (!title) throw appError("Every template task needs a title.", 400);
+      if (!["task", "subtask"].includes(kind))
+        throw appError("Template work must be a task or subtask.", 400);
+      return {
+        id: item.id && isUuid(item.id) ? item.id : undefined,
+        parent_template_item_id: item.parentTemplateItemId || null,
+        item_type: kind,
+        item_order: Number.isInteger(Number(item.order))
+          ? Number(item.order)
+          : index,
+        title,
+        description: cleanText(item.description, 20000),
+        priority: COLLABORATION_PRIORITIES.includes(item.priority)
+          ? item.priority
+          : "Medium",
+        relative_due_days:
+          item.relativeDueDays == null
+            ? null
+            : Math.max(0, Math.min(3650, Number(item.relativeDueDays))),
+      };
+    });
+  const rpc = await tryOptionalRpc(client, "save_collaboration_template", {
+    p_values: {
+      mode: "save",
+      id: templateId,
+      title: name,
+      description,
+      archived: body.active === false,
+      expected_revision: expectedRevision || 0,
+      items: templateItems,
+    },
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (!rpc.available) {
+    throw appError(
+      "Reusable templates are not available. Apply the collaboration workflow migration first.",
+      503,
+    );
+  }
+  return collaborationTemplateList({}, accessContext);
+}
+
+export async function collaborationBulkUpdate(body = {}, accessContext) {
+  const validation = validateCollaborationBulkPayload(body);
+  if (!validation.ok) throw appError(validation.errors.join(" "), 400);
+  const results = [];
+  for (const change of body.items) {
+    try {
+      const detail = await collaborationUpdate(
+        {
+          ...change.values,
+          itemId: change.itemId,
+          expectedRevision: change.expectedRevision,
+        },
+        accessContext,
+      );
+      results.push({
+        itemId: change.itemId,
+        ok: true,
+        revision: detail.item.revision,
+      });
+    } catch (error) {
+      results.push({
+        itemId: change.itemId,
+        ok: false,
+        status: Number(error.status || 500),
+        message: error.message || "Unable to update this work item.",
+        latest: error.status === 409 ? error.details?.item || null : null,
+      });
+    }
+  }
+  return {
+    results,
+    updated: results.filter((result) => result.ok).length,
+    conflicts: results.filter((result) => result.status === 409),
+    failed: results.filter((result) => !result.ok),
   };
 }
 

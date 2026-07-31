@@ -1,119 +1,28 @@
-import {
-  chunkIds,
-  cleanRecord,
-  getApiVersion,
-  getInstanceUrl,
-  salesforceAuthMode,
-  sendJson,
-  sfCompositeQueries,
-  sfDownload,
-  sfQuery,
-  sfRequest,
-} from '../_salesforce.js';
-import {
-  disputeWorkflowDirectionLabel,
-  disputeWorkflowEditableFilename,
-  disputeWorkflowFileExtension,
-  disputeWorkflowHongKongDateToken,
-} from '../_disputeDocuments.js';
-import {
-  buildDisputePartyRegistry,
-  disputeSalesforceIdKey,
-  findDisputeParty,
-  resolveExtraCostSupplierLookup,
-  resolveOriginalSupplierLookup,
-} from '../_disputeParties.js';
+import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
+import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
-import {
-  buyerInvoiceEmailSettingsPatch,
-  canonicalizeBuyerInvoiceEmail,
-} from '../../src/lib/buyerInvoiceEmailSettings.js';
+import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
-import {
-  dashboardLineItemVolume,
-  dashboardVolumeLabel,
-  findDashboardUomField,
-} from '../_dashboardVolume.js';
+import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
-import {
-  applyBuyerReminderRules,
-  buyerReminderAccountType,
-  buyerReminderRuleMap,
-  canonicalSalesforceAccountId,
-  evaluateBuyerReminderSelection,
-} from '../_buyerInvoiceReminderRules.js';
-import {
-  accountNameKey,
-  buildAccountManagerRows,
-  groupEligibleSalesforceAccounts,
-  managerDisplayText,
-  normalizeAccountManagerUserIds,
-} from '../_accountManagers.js';
+import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
+import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
 import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
-import {
-  authenticatedBackboneBridgePayload,
-  backboneBridgeConfig,
-  backboneBridgeRequest,
-  browserSafeBackboneFinanceHandoff,
-  browserSafeBackboneTradeProjection,
-} from '../_backboneBridge.js';
-import {
-  EXCEPTION_REVIEW_DATE_BASIS,
-  EXCEPTION_SCHEDULE_FIELDS,
-  buildExceptionReviewScheduleWhere,
-  exceptionScheduleSchemaIssues,
-  normalizeExceptionSchedule,
-} from '../../src/lib/exceptionReviewSchedule.js';
-import {
-  DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS,
-  DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS,
-} from '../../src/lib/disputeWorkflowOptions.js';
+import { authenticatedBackboneBridgePayload, backboneBridgeConfig, backboneBridgeRequest, browserSafeBackboneFinanceHandoff, browserSafeBackboneTradeProjection } from '../_backboneBridge.js';
+import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionReviewScheduleWhere, exceptionScheduleSchemaIssues, normalizeExceptionSchedule } from '../../src/lib/exceptionReviewSchedule.js';
+import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
 import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
-import {
-  hasRecordedFcosClosureWriteback,
-  isSalesforceDisputeClosed,
-  projectExternalDisputeClosure,
-} from '../_disputeWorkflowStatus.js';
-import {
-  allocateSupplierDispute,
-  normalizeSupplierInvoiceExposure,
-  resolveSupplierSettlementSchema,
-  supplierAllocationFingerprint,
-  supplierInstructionRows,
-  validSupplierSettlementPayment,
-} from '../_disputeSupplierSettlement.js';
-import {
-  currentRequestTelemetry,
-  logRequestTelemetry,
-  recordRequestFailure,
-  recordSupabaseRequest,
-  requestIdFrom,
-  runWithRequestTelemetry,
-  salesforceLimitFromBody,
-  telemetryResponseHeaders,
-} from '../_requestTelemetry.js';
+import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExternalDisputeClosure } from '../_disputeWorkflowStatus.js';
+import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierAllocationFingerprint, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
+import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
-import {
-  expireRuntimeCacheTags,
-  getOrLoadRuntimeCache,
-} from '../_runtimeCache.js';
-import {
-  checkPortalApplicationsHealth,
-  launchPortalApplication,
-  listPortalApplicationsForUser,
-  portalAdminModel,
-  preparePortalUserDeletion,
-  processPortalOutbox,
-  reconcilePortalEntitlementsForProfile,
-  retryPortalAccessSync,
-  revokePortalSessions,
-  savePortalExplicitAccess,
-  syncPortalEntitlement,
-} from '../_portal.js';
+import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
+import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
 import {
   collaborationArchive as collaborationArchiveService,
   collaborationAttachmentComplete as collaborationAttachmentCompleteService,
@@ -123,34 +32,28 @@ import {
   collaborationCommentDelete as collaborationCommentDeleteService,
   collaborationCommentSave as collaborationCommentSaveService,
   collaborationCreate as collaborationCreateService,
+  collaborationBulkUpdate as collaborationBulkUpdateService,
+  collaborationDependencyRemove as collaborationDependencyRemoveService,
+  collaborationDependencySave as collaborationDependencySaveService,
   collaborationDailyMaintenance,
   collaborationDetail as collaborationDetailService,
+  collaborationFollowerToggle as collaborationFollowerToggleService,
   collaborationList as collaborationListService,
+  collaborationMilestoneSave as collaborationMilestoneSaveService,
   collaborationNotificationsList as collaborationNotificationsListService,
   collaborationNotificationsRead as collaborationNotificationsReadService,
+  collaborationTemplateList as collaborationTemplateListService,
+  collaborationTemplateSave as collaborationTemplateSaveService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
-import {
-  DASHBOARD_AI_MODELS,
-  DEFAULT_DASHBOARD_AI_MODEL,
-  compileDashboardAiWhere,
-  dashboardAiModel,
-  interpretDashboardAiSearch,
-  isAllowedDashboardAiModel,
-  normalizeDashboardAiPrompt,
-} from '../_dashboardAi.js';
-import {
-  sendWithSmtp,
-  sendWithSmtpSendAsFallback,
-  smtpAuthenticatedFromAddress,
-} from '../_smtp.js';
+import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
+import { sendWithSmtp, sendWithSmtpSendAsFallback, smtpAuthenticatedFromAddress } from '../_smtp.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
-import {
-  workNotificationsList as workNotificationsListService,
-  workNotificationsRead as workNotificationsReadService,
-} from '../_workNotifications.js';
+import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
+import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   coachingActionPublish as coachingActionPublishService,
+  coachingActionProposalRespond as coachingActionProposalRespondService,
   coachingActionSave as coachingActionSaveService,
   coachingCalendarResolve as coachingCalendarResolveService,
   coachingCalendarRetry as coachingCalendarRetryService,
@@ -168,25 +71,18 @@ import {
   growthCoachingDailyMaintenance,
   growthEmailPreferencesSave as growthEmailPreferencesSaveService,
   growthGoalCompletion as growthGoalCompletionService,
+  growthGoalEvidenceOptions as growthGoalEvidenceOptionsService,
+  growthGoalEvidenceSave as growthGoalEvidenceSaveService,
   growthGoalDecision as growthGoalDecisionService,
   growthGoalProgressSave as growthGoalProgressSaveService,
   growthGoalSave as growthGoalSaveService,
   growthGoalSubmit as growthGoalSubmitService,
   growthPlanSave as growthPlanSaveService,
+  growthPlanCloseout as growthPlanCloseoutService,
   growthReportingLineSave as growthReportingLineSaveService,
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
-import {
-  cancelFcosUpdateBatch as cancelFcosUpdateBatchService,
-  listFcosUpdates as listFcosUpdatesService,
-  restoreFcosUpdateItem as restoreFcosUpdateItemService,
-  retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService,
-  saveFcosUpdateBatch as saveFcosUpdateBatchService,
-  saveFcosUpdateItem as saveFcosUpdateItemService,
-  sendFcosUpdateBatch as sendFcosUpdateBatchService,
-  skipFcosUpdateItem as skipFcosUpdateItemService,
-  syncFcosUpdateItems as syncFcosUpdateItemsService,
-} from '../_fcosUpdates.js';
+import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -203,14 +99,54 @@ async function readBody(req) {
 const ADMIN_APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
-  { id: 'disputes', label: 'Dispute Workflow', path: '/disputes', sortOrder: 30 },
-  { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
-  { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
-  { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
-  { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
-  { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
-  { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
-  { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
+  {
+    id: 'disputes',
+    label: 'Dispute Workflow',
+    path: '/disputes',
+    sortOrder: 30,
+  },
+  {
+    id: 'buyer_invoices',
+    label: 'Outstanding Buyer Invoices',
+    path: '/buyer-invoices',
+    sortOrder: 40,
+  },
+  {
+    id: 'incoming_payments',
+    label: 'Incoming Payment',
+    path: '/incoming-payments',
+    sortOrder: 45,
+  },
+  {
+    id: 'cashflow_forecast',
+    label: 'Cashflow Forecast',
+    path: '/cashflow-forecast',
+    sortOrder: 47,
+  },
+  {
+    id: 'pnl',
+    label: 'Dashboard and Qlik Validator Tool',
+    path: '/pnl',
+    sortOrder: 50,
+  },
+  {
+    id: 'brokers',
+    label: "Broker's Commission",
+    path: '/brokers',
+    sortOrder: 70,
+  },
+  {
+    id: 'report_archive',
+    label: 'Reports Archive',
+    path: '/report-archive',
+    sortOrder: 75,
+  },
+  {
+    id: 'buyers_administrator',
+    label: 'Account Managers',
+    path: '/account-managers',
+    sortOrder: 85,
+  },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
 ];
@@ -237,38 +173,180 @@ function schedulePortalOutboxRetry(client) {
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));
 const ADMIN_CAPABILITIES = [
-  { id: 'disputes_approve', label: 'Approve Dispute Instructions', description: 'Approve, reject, or return trader dispute instructions.' },
-  { id: 'disputes_account', label: 'Settle and Close Disputes', description: 'Record payment instructions, final settlement, and case closure.' },
-  { id: 'buyer_invoices_manage', label: 'Manage Buyer Invoice Settings', description: 'Change the shared internal report schedule and template.' },
-  { id: 'cashflow_forecast_manage', label: 'Manage Cashflow Settings', description: 'Change forecast assumptions and blocked dates.' },
+  {
+    id: 'disputes_approve',
+    label: 'Approve Dispute Instructions',
+    description: 'Approve, reject, or return trader dispute instructions.',
+  },
+  {
+    id: 'disputes_account',
+    label: 'Settle and Close Disputes',
+    description: 'Record payment instructions, final settlement, and case closure.',
+  },
+  {
+    id: 'buyer_invoices_manage',
+    label: 'Manage Buyer Invoice Settings',
+    description: 'Change the shared internal report schedule and template.',
+  },
+  {
+    id: 'cashflow_forecast_manage',
+    label: 'Manage Cashflow Settings',
+    description: 'Change forecast assumptions and blocked dates.',
+  },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
 const DEFAULT_USER_TYPES = [
-  { id: 'administrator', label: 'Administrator', description: 'Full system administration access.', is_system: true, sort_order: 10 },
-  { id: 'manager', label: 'Manager', description: 'Operational management access without user administration.', is_system: true, sort_order: 20 },
-  { id: 'finance', label: 'Finance', description: 'Finance, invoice, report, and commission review access.', is_system: true, sort_order: 30 },
-  { id: 'operations', label: 'Operations', description: 'Operational review and dispute workflow access.', is_system: true, sort_order: 40 },
-  { id: 'interoffice', label: 'Interoffice', description: 'Finance-style access with FRATELLI COSULICH buyer-group STEMs excluded from Salesforce data.', is_system: true, sort_order: 45 },
-  { id: 'viewer', label: 'Viewer', description: 'Read-only dashboard access.', is_system: true, sort_order: 50 },
+  {
+    id: 'administrator',
+    label: 'Administrator',
+    description: 'Full system administration access.',
+    is_system: true,
+    sort_order: 10,
+  },
+  {
+    id: 'manager',
+    label: 'Manager',
+    description: 'Operational management access without user administration.',
+    is_system: true,
+    sort_order: 20,
+  },
+  {
+    id: 'finance',
+    label: 'Finance',
+    description: 'Finance, invoice, report, and commission review access.',
+    is_system: true,
+    sort_order: 30,
+  },
+  {
+    id: 'operations',
+    label: 'Operations',
+    description: 'Operational review and dispute workflow access.',
+    is_system: true,
+    sort_order: 40,
+  },
+  {
+    id: 'interoffice',
+    label: 'Interoffice',
+    description: 'Finance-style access with FRATELLI COSULICH buyer-group STEMs excluded from Salesforce data.',
+    is_system: true,
+    sort_order: 45,
+  },
+  {
+    id: 'viewer',
+    label: 'Viewer',
+    description: 'Read-only dashboard access.',
+    is_system: true,
+    sort_order: 50,
+  },
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
   administrator: ADMIN_FULL_ACCESS,
-  manager: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, buyers_administrator: false, settings: true, admin: false },
-  finance: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: true, buyers_administrator: false, settings: false, admin: false },
-  operations: { dashboard: true, review: true, disputes: true, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: true, brokers: false, report_archive: false, buyers_administrator: false, settings: false, admin: false },
-  interoffice: { dashboard: true, review: true, disputes: true, buyer_invoices: true, incoming_payments: true, cashflow_forecast: true, pnl: true, brokers: true, report_archive: false, buyers_administrator: false, settings: false, admin: false },
-  viewer: { dashboard: true, review: false, disputes: false, buyer_invoices: false, incoming_payments: true, cashflow_forecast: false, pnl: false, brokers: false, report_archive: false, buyers_administrator: false, settings: false, admin: false },
+  manager: {
+    dashboard: true,
+    review: true,
+    disputes: true,
+    buyer_invoices: true,
+    incoming_payments: true,
+    cashflow_forecast: true,
+    pnl: true,
+    brokers: true,
+    report_archive: true,
+    buyers_administrator: false,
+    settings: true,
+    admin: false,
+  },
+  finance: {
+    dashboard: true,
+    review: true,
+    disputes: true,
+    buyer_invoices: true,
+    incoming_payments: true,
+    cashflow_forecast: true,
+    pnl: true,
+    brokers: true,
+    report_archive: true,
+    buyers_administrator: false,
+    settings: false,
+    admin: false,
+  },
+  operations: {
+    dashboard: true,
+    review: true,
+    disputes: true,
+    buyer_invoices: false,
+    incoming_payments: true,
+    cashflow_forecast: false,
+    pnl: true,
+    brokers: false,
+    report_archive: false,
+    buyers_administrator: false,
+    settings: false,
+    admin: false,
+  },
+  interoffice: {
+    dashboard: true,
+    review: true,
+    disputes: true,
+    buyer_invoices: true,
+    incoming_payments: true,
+    cashflow_forecast: true,
+    pnl: true,
+    brokers: true,
+    report_archive: false,
+    buyers_administrator: false,
+    settings: false,
+    admin: false,
+  },
+  viewer: {
+    dashboard: true,
+    review: false,
+    disputes: false,
+    buyer_invoices: false,
+    incoming_payments: true,
+    cashflow_forecast: false,
+    pnl: false,
+    brokers: false,
+    report_archive: false,
+    buyers_administrator: false,
+    settings: false,
+    admin: false,
+  },
 };
 const FALLBACK_TYPE_CAPABILITIES = {
   administrator: ADMIN_FULL_CAPABILITIES,
-  manager: { disputes_approve: true, disputes_account: false, buyer_invoices_manage: true, cashflow_forecast_manage: true },
-  finance: { disputes_approve: false, disputes_account: true, buyer_invoices_manage: true, cashflow_forecast_manage: true },
-  operations: { disputes_approve: false, disputes_account: false, buyer_invoices_manage: false, cashflow_forecast_manage: false },
-  interoffice: { disputes_approve: false, disputes_account: false, buyer_invoices_manage: false, cashflow_forecast_manage: false },
-  viewer: { disputes_approve: false, disputes_account: false, buyer_invoices_manage: false, cashflow_forecast_manage: false },
+  manager: {
+    disputes_approve: true,
+    disputes_account: false,
+    buyer_invoices_manage: true,
+    cashflow_forecast_manage: true,
+  },
+  finance: {
+    disputes_approve: false,
+    disputes_account: true,
+    buyer_invoices_manage: true,
+    cashflow_forecast_manage: true,
+  },
+  operations: {
+    disputes_approve: false,
+    disputes_account: false,
+    buyer_invoices_manage: false,
+    cashflow_forecast_manage: false,
+  },
+  interoffice: {
+    disputes_approve: false,
+    disputes_account: false,
+    buyer_invoices_manage: false,
+    cashflow_forecast_manage: false,
+  },
+  viewer: {
+    disputes_approve: false,
+    disputes_account: false,
+    buyer_invoices_manage: false,
+    cashflow_forecast_manage: false,
+  },
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
 const INTEROFFICE_EXCLUDED_BUYER_GROUP = 'FRATELLI COSULICH';
@@ -290,9 +368,7 @@ function permissionValueFromRow(row) {
 }
 
 function normalizedPermissionForModule(moduleId, permissions = {}, fallback = undefined) {
-  const raw = Object.prototype.hasOwnProperty.call(permissions, moduleId)
-    ? permissions[moduleId]
-    : fallback;
+  const raw = Object.prototype.hasOwnProperty.call(permissions, moduleId) ? permissions[moduleId] : fallback;
   if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccessLevel(raw);
   return raw === true;
 }
@@ -329,10 +405,16 @@ function supabaseAdminClient() {
       const startedAt = Date.now();
       try {
         const response = await fetch(...args);
-        recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
+        recordSupabaseRequest({
+          durationMs: Date.now() - startedAt,
+          ok: response.ok,
+        });
         return response;
       } catch (error) {
-        recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: false });
+        recordSupabaseRequest({
+          durationMs: Date.now() - startedAt,
+          ok: false,
+        });
         throw error;
       }
     };
@@ -386,11 +468,7 @@ async function requireActiveUser(req) {
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
 
-  const { data: profile, error: profileError } = await client
-    .from('user_profiles')
-    .select('id,email,full_name,user_type,active,use_type_defaults')
-    .eq('id', userData.user.id)
-    .maybeSingle();
+  const { data: profile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
   if (profileError) throw profileError;
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
@@ -399,42 +477,26 @@ async function requireActiveUser(req) {
 }
 
 async function authContext(body, req, accessContext) {
-  const { client, authUser, profile } = accessContext || await requireActiveUser(req);
+  const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
   let permissionValues;
 
   if (profile.user_type === 'administrator') {
     permissionValues = ADMIN_FULL_ACCESS;
   } else {
-    const permissionQuery = profile.use_type_defaults === false
-      ? client
-        .from('user_module_permissions')
-        .select('module_id,can_view')
-        .eq('user_id', profile.id)
-      : client
-        .from('user_type_module_permissions')
-        .select('module_id,can_view')
-        .eq('user_type_id', profile.user_type);
+    const permissionQuery = profile.use_type_defaults === false ? client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id) : client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type);
     const { data: rows, error } = await permissionQuery;
     if (error) throw error;
 
-    const fallback = profile.use_type_defaults === false
-      ? {}
-      : (FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {});
+    const fallback = profile.use_type_defaults === false ? {} : FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {};
     const rawPermissions = { ...fallback };
     for (const row of rows || []) {
       if (ADMIN_MODULE_IDS.has(row.module_id)) rawPermissions[row.module_id] = row.can_view === true;
     }
-    rawPermissions[REPORT_ARCHIVE_MODULE_ID] = reportArchiveAccessFromRows(
-      rows || [],
-      fallback[REPORT_ARCHIVE_MODULE_ID],
-    );
+    rawPermissions[REPORT_ARCHIVE_MODULE_ID] = reportArchiveAccessFromRows(rows || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
     permissionValues = normalizePermissions(profile.user_type, rawPermissions);
   }
 
-  const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [
-    module.id,
-    permissionCanView(module.id, permissionValues[module.id]),
-  ]));
+  const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, permissionCanView(module.id, permissionValues[module.id])]));
   const applications = await listPortalApplicationsForUser({
     client,
     profile,
@@ -465,13 +527,13 @@ function activePortalRequestId() {
 }
 
 async function portalApplicationsList(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const auth = await authContext(body, req, context);
   return { applications: auth.applications || [] };
 }
 
 async function portalApplicationLaunch(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const applicationId = String(body.applicationId || '').trim();
   if (!applicationId) throw appError('Application is required.', 400);
   return launchPortalApplication({
@@ -483,7 +545,7 @@ async function portalApplicationLaunch(body = {}, req = null, accessContext = nu
 }
 
 async function portalSignOut(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   return revokePortalSessions({
     client: context.client,
     profile: context.profile,
@@ -513,55 +575,83 @@ async function collaborationDailyCron(body = {}, req = null) {
 }
 
 async function collaborationList(body = {}, req = null, accessContext = null) {
-  return collaborationListService(body, accessContext || await requireActiveUser(req));
+  return collaborationListService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationDetail(body = {}, req = null, accessContext = null) {
-  return collaborationDetailService(body, accessContext || await requireActiveUser(req));
+  return collaborationDetailService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationCreate(body = {}, req = null, accessContext = null) {
-  return collaborationCreateService(body, accessContext || await requireActiveUser(req));
+  return collaborationCreateService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationUpdate(body = {}, req = null, accessContext = null) {
-  return collaborationUpdateService(body, accessContext || await requireActiveUser(req));
+  return collaborationUpdateService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationBulkUpdate(body = {}, req = null, accessContext = null) {
+  return collaborationBulkUpdateService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationFollowerToggle(body = {}, req = null, accessContext = null) {
+  return collaborationFollowerToggleService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationDependencySave(body = {}, req = null, accessContext = null) {
+  return collaborationDependencySaveService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationDependencyRemove(body = {}, req = null, accessContext = null) {
+  return collaborationDependencyRemoveService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationMilestoneSave(body = {}, req = null, accessContext = null) {
+  return collaborationMilestoneSaveService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationTemplateList(body = {}, req = null, accessContext = null) {
+  return collaborationTemplateListService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function collaborationTemplateSave(body = {}, req = null, accessContext = null) {
+  return collaborationTemplateSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationArchive(body = {}, req = null, accessContext = null) {
-  return collaborationArchiveService(body, accessContext || await requireActiveUser(req));
+  return collaborationArchiveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationCommentSave(body = {}, req = null, accessContext = null) {
-  return collaborationCommentSaveService(body, accessContext || await requireActiveUser(req));
+  return collaborationCommentSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationCommentDelete(body = {}, req = null, accessContext = null) {
-  return collaborationCommentDeleteService(body, accessContext || await requireActiveUser(req));
+  return collaborationCommentDeleteService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationAttachmentPrepare(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentPrepareService(body, accessContext || await requireActiveUser(req));
+  return collaborationAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationAttachmentComplete(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentCompleteService(body, accessContext || await requireActiveUser(req));
+  return collaborationAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentUrlService(body, accessContext || await requireActiveUser(req));
+  return collaborationAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationAttachmentDelete(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentDeleteService(body, accessContext || await requireActiveUser(req));
+  return collaborationAttachmentDeleteService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationNotificationsList(body = {}, req = null, accessContext = null) {
-  return collaborationNotificationsListService(body, accessContext || await requireActiveUser(req));
+  return collaborationNotificationsListService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function collaborationNotificationsRead(body = {}, req = null, accessContext = null) {
-  return collaborationNotificationsReadService(body, accessContext || await requireActiveUser(req));
+  return collaborationNotificationsReadService(body, accessContext || (await requireActiveUser(req)));
 }
 
 function requireAdministratorContext(accessContext) {
@@ -572,109 +662,133 @@ function requireAdministratorContext(accessContext) {
 }
 
 async function workNotificationsList(body = {}, req = null, accessContext = null) {
-  return workNotificationsListService(body, accessContext || await requireActiveUser(req));
+  return workNotificationsListService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function workNotificationsRead(body = {}, req = null, accessContext = null) {
-  return workNotificationsReadService(body, accessContext || await requireActiveUser(req));
+  return workNotificationsReadService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function workNotificationsState(body = {}, req = null, accessContext = null) {
+  return workNotificationsStateService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function workCommitmentsList(body = {}, req = null, accessContext = null) {
+  return workCommitmentsListService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthReportingLinesList(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireAdministrator(req);
+  const context = accessContext || (await requireAdministrator(req));
   return growthReportingLinesListService(body, requireAdministratorContext(context));
 }
 
 async function growthReportingLineSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireAdministrator(req);
+  const context = accessContext || (await requireAdministrator(req));
   return growthReportingLineSaveService(body, requireAdministratorContext(context));
 }
 
 async function growthCoachingBootstrap(body = {}, req = null, accessContext = null) {
-  return growthCoachingBootstrapService(body, accessContext || await requireActiveUser(req));
+  return growthCoachingBootstrapService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthPlanSave(body = {}, req = null, accessContext = null) {
-  return growthPlanSaveService(body, accessContext || await requireActiveUser(req));
+  return growthPlanSaveService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function growthPlanCloseout(body = {}, req = null, accessContext = null) {
+  return growthPlanCloseoutService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthGoalSave(body = {}, req = null, accessContext = null) {
-  return growthGoalSaveService(body, accessContext || await requireActiveUser(req));
+  return growthGoalSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthGoalSubmit(body = {}, req = null, accessContext = null) {
-  return growthGoalSubmitService(body, accessContext || await requireActiveUser(req));
+  return growthGoalSubmitService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthGoalDecision(body = {}, req = null, accessContext = null) {
-  return growthGoalDecisionService(body, accessContext || await requireActiveUser(req));
+  return growthGoalDecisionService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthGoalProgressSave(body = {}, req = null, accessContext = null) {
-  return growthGoalProgressSaveService(body, accessContext || await requireActiveUser(req));
+  return growthGoalProgressSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthGoalCompletion(body = {}, req = null, accessContext = null) {
-  return growthGoalCompletionService(body, accessContext || await requireActiveUser(req));
+  return growthGoalCompletionService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function growthGoalEvidenceOptions(body = {}, req = null, accessContext = null) {
+  return growthGoalEvidenceOptionsService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function growthGoalEvidenceSave(body = {}, req = null, accessContext = null) {
+  return growthGoalEvidenceSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingRelationshipInvite(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipInviteService(body, accessContext || await requireActiveUser(req));
+  return coachingRelationshipInviteService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingRelationshipRespond(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipRespondService(body, accessContext || await requireActiveUser(req));
+  return coachingRelationshipRespondService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingRelationshipEnd(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipEndService(body, accessContext || await requireActiveUser(req));
+  return coachingRelationshipEndService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingSessionSave(body = {}, req = null, accessContext = null) {
-  return coachingSessionSaveService(body, accessContext || await requireActiveUser(req));
+  return coachingSessionSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingSessionContentSave(body = {}, req = null, accessContext = null) {
-  return coachingSessionContentSaveService(body, accessContext || await requireActiveUser(req));
+  return coachingSessionContentSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingSessionConfirm(body = {}, req = null, accessContext = null) {
-  return coachingSessionConfirmService(body, accessContext || await requireActiveUser(req));
+  return coachingSessionConfirmService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingSessionCancel(body = {}, req = null, accessContext = null) {
-  return coachingSessionCancelService(body, accessContext || await requireActiveUser(req));
+  return coachingSessionCancelService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingActionSave(body = {}, req = null, accessContext = null) {
-  return coachingActionSaveService(body, accessContext || await requireActiveUser(req));
+  return coachingActionSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingActionPublish(body = {}, req = null, accessContext = null) {
-  return coachingActionPublishService(body, accessContext || await requireActiveUser(req));
+  return coachingActionPublishService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function coachingActionProposalRespond(body = {}, req = null, accessContext = null) {
+  return coachingActionProposalRespondService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthAttachmentPrepare(body = {}, req = null, accessContext = null) {
-  return growthAttachmentPrepareService(body, accessContext || await requireActiveUser(req));
+  return growthAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthAttachmentComplete(body = {}, req = null, accessContext = null) {
-  return growthAttachmentCompleteService(body, accessContext || await requireActiveUser(req));
+  return growthAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return growthAttachmentUrlService(body, accessContext || await requireActiveUser(req));
+  return growthAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthEmailPreferencesSave(body = {}, req = null, accessContext = null) {
-  return growthEmailPreferencesSaveService(body, accessContext || await requireActiveUser(req));
+  return growthEmailPreferencesSaveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingCalendarResolve(body = {}, req = null, accessContext = null) {
-  return coachingCalendarResolveService(body, accessContext || await requireActiveUser(req));
+  return coachingCalendarResolveService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function coachingCalendarRetry(body = {}, req = null, accessContext = null) {
-  return coachingCalendarRetryService(body, accessContext || await requireActiveUser(req));
+  return coachingCalendarRetryService(body, accessContext || (await requireActiveUser(req)));
 }
 
 async function growthCoachingDailyCron(body = {}, req = null) {
@@ -713,25 +827,11 @@ function normalizeUserTypePermissions(userTypeId, permissions = {}) {
 function normalizeCapabilities(userTypeId, capabilities = {}) {
   if (userTypeId === 'administrator') return ADMIN_FULL_CAPABILITIES;
   const fallback = FALLBACK_TYPE_CAPABILITIES[userTypeId] || {};
-  return Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [
-    capability.id,
-    Object.prototype.hasOwnProperty.call(capabilities, capability.id)
-      ? capabilities[capability.id] === true
-      : fallback[capability.id] === true,
-  ]));
+  return Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, Object.prototype.hasOwnProperty.call(capabilities, capability.id) ? capabilities[capability.id] === true : fallback[capability.id] === true]));
 }
 
 async function listAccessModel(client) {
-  const [typesRes, permissionsRes] = await Promise.all([
-    client
-      .from('user_types')
-      .select('id,label,description,is_system,sort_order,created_at,updated_at')
-      .order('sort_order', { ascending: true })
-      .order('label', { ascending: true }),
-    client
-      .from('user_type_module_permissions')
-      .select('user_type_id,module_id,can_view'),
-  ]);
+  const [typesRes, permissionsRes] = await Promise.all([client.from('user_types').select('id,label,description,is_system,sort_order,created_at,updated_at').order('sort_order', { ascending: true }).order('label', { ascending: true }), client.from('user_type_module_permissions').select('user_type_id,module_id,can_view')]);
   if (typesRes.error) throw typesRes.error;
   if (permissionsRes.error) throw permissionsRes.error;
 
@@ -761,9 +861,7 @@ async function listAccessModel(client) {
   }
   for (const type of userTypes) {
     if (typePermissions[type.id]?.[REPORT_ARCHIVE_MODULE_ID] === true) {
-      typePermissions[type.id][REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByType, type.id)
-        ? (manageRowsByType[type.id] ? 'full' : 'read')
-        : 'full';
+      typePermissions[type.id][REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByType, type.id) ? (manageRowsByType[type.id] ? 'full' : 'read') : 'full';
     }
     typePermissions[type.id] = normalizeUserTypePermissions(type.id, typePermissions[type.id]);
     typeCapabilities[type.id] = normalizeCapabilities(type.id, typeCapabilities[type.id]);
@@ -771,13 +869,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set([
-  'adminBootstrap',
-  'outstandingBuyerInvoicesEmailCron',
-  'portalEntitlementSyncCron',
-  'collaborationDailyCron',
-  'growthCoachingDailyCron',
-]);
+const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -788,6 +880,13 @@ const HANDLER_MODULE_ACCESS = {
   collaborationDetail: [],
   collaborationCreate: [],
   collaborationUpdate: [],
+  collaborationBulkUpdate: [],
+  collaborationFollowerToggle: [],
+  collaborationDependencySave: [],
+  collaborationDependencyRemove: [],
+  collaborationMilestoneSave: [],
+  collaborationTemplateList: [],
+  collaborationTemplateSave: [],
   collaborationArchive: [],
   collaborationCommentSave: [],
   collaborationCommentDelete: [],
@@ -799,15 +898,20 @@ const HANDLER_MODULE_ACCESS = {
   collaborationNotificationsRead: [],
   workNotificationsList: [],
   workNotificationsRead: [],
+  workNotificationsState: [],
+  workCommitmentsList: [],
   growthReportingLinesList: [],
   growthReportingLineSave: [],
   growthCoachingBootstrap: [],
   growthPlanSave: [],
+  growthPlanCloseout: [],
   growthGoalSave: [],
   growthGoalSubmit: [],
   growthGoalDecision: [],
   growthGoalProgressSave: [],
   growthGoalCompletion: [],
+  growthGoalEvidenceOptions: [],
+  growthGoalEvidenceSave: [],
   coachingRelationshipInvite: [],
   coachingRelationshipRespond: [],
   coachingRelationshipEnd: [],
@@ -817,6 +921,7 @@ const HANDLER_MODULE_ACCESS = {
   coachingSessionCancel: [],
   coachingActionSave: [],
   coachingActionPublish: [],
+  coachingActionProposalRespond: [],
   growthAttachmentPrepare: [],
   growthAttachmentComplete: [],
   growthAttachmentUrl: [],
@@ -931,20 +1036,12 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!validModuleIds.length) return false;
 
   if (profile?.use_type_defaults === false) {
-    const { data, error } = await client
-      .from('user_module_permissions')
-      .select('module_id,can_view')
-      .eq('user_id', profile.id)
-      .in('module_id', validModuleIds);
+    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', validModuleIds);
     if (error) throw error;
     return (data || []).some((row) => row.can_view === true);
   }
 
-  const { data, error } = await client
-    .from('user_type_module_permissions')
-    .select('module_id,can_view')
-    .eq('user_type_id', profile.user_type)
-    .in('module_id', validModuleIds);
+  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type).in('module_id', validModuleIds);
   if (error) throw error;
   if ((data || []).length) return (data || []).some((row) => row.can_view === true);
 
@@ -956,21 +1053,11 @@ async function userHasCapability(client, profile, capabilityId) {
   if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
   if (profile?.user_type === 'administrator') return true;
 
-  const { data: userPermission, error: userError } = await client
-    .from('user_module_permissions')
-    .select('can_view')
-    .eq('user_id', profile?.id)
-    .eq('module_id', capabilityId)
-    .maybeSingle();
+  const { data: userPermission, error: userError } = await client.from('user_module_permissions').select('can_view').eq('user_id', profile?.id).eq('module_id', capabilityId).maybeSingle();
   if (userError) throw userError;
   if (userPermission) return userPermission.can_view === true;
 
-  const { data: typePermission, error: typeError } = await client
-    .from('user_type_module_permissions')
-    .select('can_view')
-    .eq('user_type_id', profile?.user_type)
-    .eq('module_id', capabilityId)
-    .maybeSingle();
+  const { data: typePermission, error: typeError } = await client.from('user_type_module_permissions').select('can_view').eq('user_type_id', profile?.user_type).eq('module_id', capabilityId).maybeSingle();
   if (typeError) throw typeError;
   if (typePermission) return typePermission.can_view === true;
 
@@ -978,7 +1065,7 @@ async function userHasCapability(client, profile, capabilityId) {
 }
 
 async function requireCapability(client, profile, capabilityId, message) {
-  if (!await userHasCapability(client, profile, capabilityId)) {
+  if (!(await userHasCapability(client, profile, capabilityId))) {
     throw appError(message || 'You do not have permission for this action.', 403);
   }
 }
@@ -986,20 +1073,12 @@ async function requireCapability(client, profile, capabilityId, message) {
 async function reportArchiveAccessForUser(client, profile) {
   if (profile?.user_type === 'administrator') return 'full';
   if (profile?.use_type_defaults === false) {
-    const { data, error } = await client
-      .from('user_module_permissions')
-      .select('module_id,can_view')
-      .eq('user_id', profile.id)
-      .in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
+    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
     if (error) throw error;
     return reportArchiveAccessFromRows(data || []);
   }
 
-  const { data, error } = await client
-    .from('user_type_module_permissions')
-    .select('module_id,can_view')
-    .eq('user_type_id', profile?.user_type)
-    .in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
+  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile?.user_type).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
   if (error) throw error;
 
   const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
@@ -1036,16 +1115,7 @@ function requestForcesRefresh(body = {}, req = null) {
   return body?.force === true || body?.forceRefresh === true || body?.refresh === true || String(header || '') === '1';
 }
 
-async function cachedSalesforceValue({
-  namespace,
-  ttlSeconds,
-  payload,
-  tags,
-  body,
-  req,
-  accessContext,
-  loader,
-}) {
+async function cachedSalesforceValue({ namespace, ttlSeconds, payload, tags, body, req, accessContext, loader }) {
   const force = requestForcesRefresh(body, req);
   if (force) await expireRuntimeCacheTags([...(tags || []), 'salesforce:schema']);
   return getOrLoadRuntimeCache({
@@ -1068,17 +1138,30 @@ function fieldNameSetFrom(input) {
 }
 
 function combineWhereConditions(conditions = []) {
-  return conditions.filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
+  return conditions
+    .filter(Boolean)
+    .map((condition) => `(${condition})`)
+    .join(' AND ');
 }
 
 async function accountFieldNameSet() {
-  const describe = await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }));
+  const describe = await salesforceObjectFields({
+    objectName: 'Account',
+  }).catch(() => ({ fields: [] }));
   return fieldNameSetFrom(describe.fields || []);
 }
 
 async function interofficeStemAccessCondition(accessContext, stemFields = null, accountFields = null) {
   if (!isInterofficeAccess(accessContext)) return '';
-  const stemFieldNames = stemFields ? fieldNameSetFrom(stemFields) : fieldNameSetFrom((await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }))).fields || []);
+  const stemFieldNames = stemFields
+    ? fieldNameSetFrom(stemFields)
+    : fieldNameSetFrom(
+        (
+          await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({
+            fields: [],
+          }))
+        ).fields || [],
+      );
   if (!stemFieldNames.has('Account__c')) return '';
   const accountFieldNames = accountFields ? fieldNameSetFrom(accountFields) : await accountFieldNameSet();
   const escapedGroup = escapeSoql(INTEROFFICE_EXCLUDED_BUYER_GROUP);
@@ -1095,12 +1178,15 @@ async function interofficeStemAccessCondition(accessContext, stemFields = null, 
 async function requireInterofficeStemAccess(stemId, accessContext) {
   const condition = await interofficeStemAccessCondition(accessContext);
   if (!condition || !stemId) return;
-  const rows = await queryRows(`
+  const rows = await queryRows(
+    `
     SELECT Id
     FROM stem__c
     WHERE Id = '${escapeSoql(stemId)}' AND ${condition}
     LIMIT 1
-  `, { limit: 1, softFail: true });
+  `,
+    { limit: 1, softFail: true },
+  );
   if (!rows.length) throw appError('This STEM is not available for Interoffice users.', 403);
 }
 
@@ -1153,22 +1239,12 @@ function serializeExceptionReviewEvent(row) {
 }
 
 async function exceptionReviewWorkflowList(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const { client } = context;
-  const stemIds = [...new Set((Array.isArray(body.stemIds) ? body.stemIds : [])
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))].slice(0, 500);
+  const stemIds = [...new Set((Array.isArray(body.stemIds) ? body.stemIds : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 500);
   await Promise.all(stemIds.map((stemId) => requireInterofficeStemAccess(stemId, context)));
 
-  const [itemsResult, eventsResult, ownersResult] = await Promise.all([
-    stemIds.length
-      ? client.from('exception_review_items').select('*').in('stem_id', stemIds)
-      : Promise.resolve({ data: [], error: null }),
-    stemIds.length
-      ? client.from('exception_review_events').select('*').in('stem_id', stemIds).order('created_at', { ascending: false })
-      : Promise.resolve({ data: [], error: null }),
-    client.from('user_profiles').select('id,email,full_name,user_type').eq('active', true).order('full_name'),
-  ]);
+  const [itemsResult, eventsResult, ownersResult] = await Promise.all([stemIds.length ? client.from('exception_review_items').select('*').in('stem_id', stemIds) : Promise.resolve({ data: [], error: null }), stemIds.length ? client.from('exception_review_events').select('*').in('stem_id', stemIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }), client.from('user_profiles').select('id,email,full_name,user_type').eq('active', true).order('full_name')]);
   if (itemsResult.error) throw itemsResult.error;
   if (eventsResult.error) throw eventsResult.error;
   if (ownersResult.error) throw ownersResult.error;
@@ -1178,10 +1254,15 @@ async function exceptionReviewWorkflowList(body = {}, req = null, accessContext 
     if (!eventsByStem[row.stem_id]) eventsByStem[row.stem_id] = [];
     eventsByStem[row.stem_id].push(serializeExceptionReviewEvent(row));
   }
-  const byStemId = Object.fromEntries((itemsResult.data || []).map((row) => [row.stem_id, {
-    ...serializeExceptionReviewItem(row),
-    events: eventsByStem[row.stem_id] || [],
-  }]));
+  const byStemId = Object.fromEntries(
+    (itemsResult.data || []).map((row) => [
+      row.stem_id,
+      {
+        ...serializeExceptionReviewItem(row),
+        events: eventsByStem[row.stem_id] || [],
+      },
+    ]),
+  );
   return {
     byStemId,
     ownerOptions: (ownersResult.data || []).map((owner) => ({
@@ -1197,7 +1278,7 @@ async function exceptionReviewWorkflowList(body = {}, req = null, accessContext 
 }
 
 async function exceptionReviewWorkflowSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const { client, profile } = context;
   const stemId = String(body.stemId || '').trim();
   if (!stemId) throw appError('STEM is required.', 400);
@@ -1208,12 +1289,7 @@ async function exceptionReviewWorkflowSave(body = {}, req = null, accessContext 
   const ownerUserId = String(body.ownerUserId || '').trim() || null;
   let ownerName = '';
   if (ownerUserId) {
-    const { data: owner, error: ownerError } = await client
-      .from('user_profiles')
-      .select('id,email,full_name,active')
-      .eq('id', ownerUserId)
-      .eq('active', true)
-      .maybeSingle();
+    const { data: owner, error: ownerError } = await client.from('user_profiles').select('id,email,full_name,active').eq('id', ownerUserId).eq('active', true).maybeSingle();
     if (ownerError) throw ownerError;
     if (!owner) throw appError('The selected owner is no longer active.', 400);
     ownerName = owner.full_name || owner.email;
@@ -1250,7 +1326,9 @@ async function exceptionReviewWorkflowSave(body = {}, req = null, accessContext 
 }
 
 async function sanitizeManagedUserPayload(client, body = {}) {
-  const email = String(body.email || '').trim().toLowerCase();
+  const email = String(body.email || '')
+    .trim()
+    .toLowerCase();
   const fullName = String(body.full_name || body.fullName || '').trim();
   const { userTypes, typePermissions, typeCapabilities } = await listAccessModel(client);
   const typeIds = new Set(userTypes.map((type) => type.id));
@@ -1272,19 +1350,18 @@ async function sanitizeManagedUserPayload(client, body = {}) {
     active,
     password,
     use_type_defaults: useTypeDefaults,
-    permissions: useTypeDefaults
-      ? normalizePermissions(userType, typePermissions[userType] || {})
-      : normalizePermissions(userType, body.permissions || {}),
-    capabilities: useTypeDefaults
-      ? normalizeCapabilities(userType, typeCapabilities[userType] || {})
-      : normalizeCapabilities(userType, body.capabilities || {}),
+    permissions: useTypeDefaults ? normalizePermissions(userType, typePermissions[userType] || {}) : normalizePermissions(userType, body.permissions || {}),
+    capabilities: useTypeDefaults ? normalizeCapabilities(userType, typeCapabilities[userType] || {}) : normalizeCapabilities(userType, body.capabilities || {}),
   };
 }
 
 async function findAuthUserByEmail(client, email) {
   const target = String(email || '').toLowerCase();
   for (let page = 1; page <= 20; page += 1) {
-    const { data, error } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+    const { data, error } = await client.auth.admin.listUsers({
+      page,
+      perPage: 1000,
+    });
     if (error) throw error;
     const found = (data?.users || []).find((user) => String(user.email || '').toLowerCase() === target);
     if (found) return found;
@@ -1306,28 +1383,14 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
   if (error) console.error('Failed to write admin audit log', error.message);
 }
 
-async function assertAdministratorContinuity(client, {
-  userId,
-  nextActive = false,
-  nextUserType = null,
-  deleting = false,
-}) {
+async function assertAdministratorContinuity(client, { userId, nextActive = false, nextUserType = null, deleting = false }) {
   if (!userId) return;
-  const { data: current, error: currentError } = await client
-    .from('user_profiles')
-    .select('id,user_type,active')
-    .eq('id', userId)
-    .maybeSingle();
+  const { data: current, error: currentError } = await client.from('user_profiles').select('id,user_type,active').eq('id', userId).maybeSingle();
   if (currentError) throw currentError;
   if (!current?.active || current.user_type !== 'administrator') return;
   if (!deleting && nextActive && nextUserType === 'administrator') return;
 
-  const { count, error: countError } = await client
-    .from('user_profiles')
-    .select('id', { count: 'exact', head: true })
-    .eq('active', true)
-    .eq('user_type', 'administrator')
-    .neq('id', userId);
+  const { count, error: countError } = await client.from('user_profiles').select('id', { count: 'exact', head: true }).eq('active', true).eq('user_type', 'administrator').neq('id', userId);
   if (countError) throw countError;
   if (!count) {
     throw appError('At least one active FCOS Administrator is required.', 409);
@@ -1335,15 +1398,16 @@ async function assertAdministratorContinuity(client, {
 }
 
 async function ensureReportArchiveManageModule(client) {
-  const { error } = await client
-    .from('app_modules')
-    .upsert({
+  const { error } = await client.from('app_modules').upsert(
+    {
       id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
       label: 'Reports Archive Management',
       path: '/report-archive',
       sort_order: 76,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+    },
+    { onConflict: 'id' },
+  );
   if (error) throw error;
 }
 
@@ -1399,9 +1463,8 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
-  const { error: profileError } = await client
-    .from('user_profiles')
-    .upsert({
+  const { error: profileError } = await client.from('user_profiles').upsert(
+    {
       id: authUser.id,
       email: payload.email,
       full_name: payload.full_name,
@@ -1409,13 +1472,12 @@ async function persistManagedUser(client, body, actor = null) {
       active: payload.active,
       use_type_defaults: payload.use_type_defaults,
       updated_at: nowIso,
-    }, { onConflict: 'id' });
+    },
+    { onConflict: 'id' },
+  );
   if (profileError) throw profileError;
 
-  const { error: deletePermissionError } = await client
-    .from('user_module_permissions')
-    .delete()
-    .eq('user_id', authUser.id);
+  const { error: deletePermissionError } = await client.from('user_module_permissions').delete().eq('user_id', authUser.id);
   if (deletePermissionError) throw deletePermissionError;
 
   if (!payload.use_type_defaults) {
@@ -1432,15 +1494,15 @@ async function persistManagedUser(client, body, actor = null) {
       can_view: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
       updated_at: nowIso,
     });
-    permissionRows.push(...ADMIN_CAPABILITIES.map((capability) => ({
-      user_id: authUser.id,
-      module_id: capability.id,
-      can_view: payload.capabilities[capability.id] === true,
-      updated_at: nowIso,
-    })));
-    const { error: insertPermissionError } = await client
-      .from('user_module_permissions')
-      .insert(permissionRows);
+    permissionRows.push(
+      ...ADMIN_CAPABILITIES.map((capability) => ({
+        user_id: authUser.id,
+        module_id: capability.id,
+        can_view: payload.capabilities[capability.id] === true,
+        updated_at: nowIso,
+      })),
+    );
+    const { error: insertPermissionError } = await client.from('user_module_permissions').insert(permissionRows);
     if (insertPermissionError) throw insertPermissionError;
   }
 
@@ -1454,7 +1516,9 @@ async function persistManagedUser(client, body, actor = null) {
     access_levels: {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]),
     },
-    capabilities: Object.entries(payload.capabilities).filter(([, allowed]) => allowed).map(([id]) => id),
+    capabilities: Object.entries(payload.capabilities)
+      .filter(([, allowed]) => allowed)
+      .map(([id]) => id),
   });
 
   return {
@@ -1472,19 +1536,13 @@ async function persistManagedUser(client, body, actor = null) {
 async function adminUsersList(body, req) {
   const { client } = await requireAdministrator(req);
   const { userTypes, typePermissions, typeCapabilities } = await listAccessModel(client);
-  const { data: profiles, error: profileError } = await client
-    .from('user_profiles')
-    .select('id,email,full_name,user_type,active,use_type_defaults,created_at,updated_at')
-    .order('created_at', { ascending: false });
+  const { data: profiles, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults,created_at,updated_at').order('created_at', { ascending: false });
   if (profileError) throw profileError;
 
   const userIds = (profiles || []).map((profile) => profile.id);
   let permissionRows = [];
   if (userIds.length) {
-    const { data, error } = await client
-      .from('user_module_permissions')
-      .select('user_id,module_id,can_view')
-      .in('user_id', userIds);
+    const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
     if (error) throw error;
     permissionRows = data || [];
   }
@@ -1508,9 +1566,7 @@ async function adminUsersList(body, req) {
   }
   for (const [userId, permissions] of Object.entries(permissionsByUser)) {
     if (permissions[REPORT_ARCHIVE_MODULE_ID] === true) {
-      permissions[REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByUser, userId)
-        ? (manageRowsByUser[userId] ? 'full' : 'read')
-        : 'full';
+      permissions[REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByUser, userId) ? (manageRowsByUser[userId] ? 'full' : 'read') : 'full';
     }
   }
 
@@ -1518,16 +1574,8 @@ async function adminUsersList(body, req) {
     ...profile,
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
     use_type_defaults: profile.user_type === 'administrator' ? true : profile.use_type_defaults !== false,
-    permissions: profile.user_type === 'administrator'
-      ? ADMIN_FULL_ACCESS
-      : profile.use_type_defaults !== false
-        ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {})
-        : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
-    capabilities: profile.user_type === 'administrator'
-      ? ADMIN_FULL_CAPABILITIES
-      : profile.use_type_defaults !== false
-        ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {})
-        : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
+    permissions: profile.user_type === 'administrator' ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
+    capabilities: profile.user_type === 'administrator' ? ADMIN_FULL_CAPABILITIES : profile.use_type_defaults !== false ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {}) : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
   }));
   const portal = await portalAdminModel({ client, profiles: profiles || [] });
   for (const user of users) {
@@ -1547,11 +1595,7 @@ async function adminUsersList(body, req) {
 async function adminAuditLogs(body, req) {
   const { client } = await requireAdministrator(req);
   const limit = Math.max(10, Math.min(Number(body.limit) || 100, 500));
-  const { data, error } = await client
-    .from('admin_audit_logs')
-    .select('id,created_at,actor_user_id,actor_email,action,target_user_id,target_email,metadata')
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const { data, error } = await client.from('admin_audit_logs').select('id,created_at,actor_user_id,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(limit);
   if (error) throw error;
   return { logs: data || [] };
 }
@@ -1623,246 +1667,172 @@ async function safeAuditRows(promise, mapper) {
 }
 
 function compactAuditSummary(parts = []) {
-  return parts.map((part) => String(part || '').trim()).filter(Boolean).join(' · ') || '—';
+  return (
+    parts
+      .map((part) => String(part || '').trim())
+      .filter(Boolean)
+      .join(' · ') || '—'
+  );
 }
 
 function normalizedAuditAction(value) {
-  return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  return String(value || '')
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 async function universalAuditTrail(body, req) {
   const { client } = await requireAdministrator(req);
   const limit = Math.max(25, Math.min(Number(body.limit) || 300, 1000));
   const sourceFilter = String(body.source || 'all').trim();
-  const keyword = String(body.keyword || '').trim().toLowerCase();
+  const keyword = String(body.keyword || '')
+    .trim()
+    .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
   const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows] = await Promise.all([
-    safeAuditRows(
-      client
-        .from('admin_audit_logs')
-        .select('id,created_at,actor_email,action,target_user_id,target_email,metadata')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `admin:${row.id}`,
-        source: 'Admin Control',
-        module: 'Admin',
-        action: normalizedAuditAction(row.action),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.target_email || row.target_user_id || '—',
-        summary: compactAuditSummary([row.target_email || row.target_user_id, row.metadata?.user_type, row.metadata?.type_id]),
-        metadata: row.metadata || {},
-      })),
-    safeAuditRows(
-      client
-        .from('collaboration_events')
-        .select('id,item_id,event_type,summary,metadata,actor_email,created_at,collaboration_items(item_key,title)')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `collaboration:${row.id}`,
-        source: 'Projects & Tasks',
-        module: 'Projects & Tasks',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.collaboration_items?.item_key || row.item_id || '—',
-        summary: compactAuditSummary([
-          row.collaboration_items?.title,
-          row.summary,
-          row.metadata?.status,
-        ]),
-        metadata: row.metadata || {},
-      })),
-    safeAuditRows(
-      client
-        .from('portal_access_events')
-        .select('id,application_id,target_user_id,actor_email,action,outcome,request_id,metadata,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `portal:${row.id}`,
-        source: 'Application Portal',
-        module: 'Admin',
-        action: normalizedAuditAction(row.action),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.application_id || row.target_user_id || '—',
-        summary: compactAuditSummary([row.application_id, row.outcome, row.metadata?.reason, row.metadata?.role]),
-        metadata: {
-          ...(row.metadata || {}),
-          outcome: row.outcome,
-          requestId: row.request_id,
-          targetUserId: row.target_user_id,
-        },
-      })),
-    safeAuditRows(
-      client
-        .from('buyer_invoice_collection_events')
-        .select('id,stem_id,event_type,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,actor_email,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `collection:${row.id}`,
-        source: 'Buyer Invoice Collection',
-        module: 'Outstanding Buyer Invoices',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.stem_id || '—',
-        summary: compactAuditSummary([row.status, row.owner_name, row.note, row.next_follow_up_date, row.promised_payment_date]),
-        metadata: {
-          status: row.status,
-          ownerName: row.owner_name,
-          note: row.note,
-          nextFollowUpDate: row.next_follow_up_date,
-          promisedPaymentDate: row.promised_payment_date,
-          promisedAmount: row.promised_amount,
-        },
-      })),
-    safeAuditRows(
-      client
-        .from('report_export_events')
-        .select('id,report_export_id,event_type,actor_email,previous_file_name,new_file_name,metadata,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `report:${row.id}`,
-        source: 'Reports Archive',
-        module: 'Reports Archive',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.new_file_name || row.previous_file_name || row.report_export_id || '—',
-        summary: compactAuditSummary([row.previous_file_name, row.new_file_name, row.metadata?.reportType || row.metadata?.report_type]),
-        metadata: row.metadata || {},
-      })),
-    safeAuditRows(
-      client
-        .from('incoming_payment_interest_notifications')
-        .select('id,payment_id,payment_name,stem_id,stem_name,buyer_name,buyer_group_name,delay_days,amount,currency,recipient_email,email_subject,actor_email,actor_name,metadata,sent_at,created_at')
-        .order('sent_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `interest:${row.id}`,
-        source: 'Late Payment Interest',
-        module: 'Incoming Payment',
-        action: row.metadata?.resent === true ? 'Interest Request Resent' : 'Interest Request Sent',
-        createdAt: row.sent_at || row.created_at,
-        actor: row.actor_email || row.actor_name || 'System',
-        target: row.stem_name || row.stem_id || row.payment_name || row.payment_id || '—',
-        summary: compactAuditSummary([row.buyer_name, row.recipient_email, row.delay_days != null ? `${row.delay_days} delay days` : '', row.email_subject]),
-        metadata: row.metadata || {},
-      })),
-    safeAuditRows(
-      client
-        .from('dispute_beta_events')
-        .select('id,stem_id,event_type,note,metadata,actor_email,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `dispute:${row.id}`,
-        source: 'Dispute Workflow',
-        module: 'Dispute Workflow',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.stem_id || '—',
-        summary: compactAuditSummary([row.note, row.metadata?.workflowStatus, row.metadata?.approvalStatus]),
-        metadata: row.metadata || {},
-      })),
-    safeAuditRows(
-      client
-        .from('buyer_invoice_email_runs')
-        .select('id,run_key,schedule_time,status,rows_count,totals,error,provider_result,created_at,completed_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `internal-email:${row.id}`,
-        source: 'Internal Daily Report',
-        module: 'Outstanding Buyer Invoices',
-        action: normalizedAuditAction(row.status),
-        createdAt: row.completed_at || row.created_at,
-        actor: 'System',
-        target: row.run_key || row.schedule_time || '—',
-        summary: compactAuditSummary([row.schedule_time, row.rows_count != null ? `${row.rows_count} rows` : '', row.error]),
-        metadata: {
-          totals: row.totals || {},
-          providerResult: row.provider_result || {},
-        },
-      })),
-    safeAuditRows(
-      client
-        .from('fcos_update_events')
-        .select('id,item_id,batch_id,delivery_id,event_type,actor_email,summary,metadata,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `fcos-update:${row.id}`,
-        source: 'FCOS Updates',
-        module: 'Admin Control',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.metadata?.version || row.summary || 'FCOS update',
-        summary: row.summary || 'FCOS update email workflow event.',
-        metadata: {
-          ...(row.metadata || {}),
-          hasItem: Boolean(row.item_id),
-          hasBatch: Boolean(row.batch_id),
-          hasDelivery: Boolean(row.delivery_id),
-        },
-      })),
-    safeAuditRows(
-      client
-        .from('growth_events')
-        .select('id,subject_type,subject_id,event_type,actor_email,target_user_id,summary,metadata,created_at')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit),
-      (row) => ({
-        id: `growth:${row.id}`,
-        source: 'Growth & Coaching',
-        module: 'Growth & Coaching',
-        action: normalizedAuditAction(row.event_type),
-        createdAt: row.created_at,
-        actor: row.actor_email || 'System',
-        target: row.subject_type || 'Growth & Coaching',
-        summary: row.summary || 'Growth & Coaching workflow event.',
-        metadata: {
-          ...(row.metadata || {}),
-          subjectType: row.subject_type,
-          hasSubject: Boolean(row.subject_id),
-          hasTargetUser: Boolean(row.target_user_id),
-        },
-      })),
+    safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `admin:${row.id}`,
+      source: 'Admin Control',
+      module: 'Admin',
+      action: normalizedAuditAction(row.action),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.target_email || row.target_user_id || '—',
+      summary: compactAuditSummary([row.target_email || row.target_user_id, row.metadata?.user_type, row.metadata?.type_id]),
+      metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('collaboration_events').select('id,item_id,event_type,summary,metadata,actor_email,created_at,collaboration_items(item_key,title)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `collaboration:${row.id}`,
+      source: 'Projects & Tasks',
+      module: 'Projects & Tasks',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.collaboration_items?.item_key || row.item_id || '—',
+      summary: compactAuditSummary([row.collaboration_items?.title, row.summary, row.metadata?.status]),
+      metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('portal_access_events').select('id,application_id,target_user_id,actor_email,action,outcome,request_id,metadata,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `portal:${row.id}`,
+      source: 'Application Portal',
+      module: 'Admin',
+      action: normalizedAuditAction(row.action),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.application_id || row.target_user_id || '—',
+      summary: compactAuditSummary([row.application_id, row.outcome, row.metadata?.reason, row.metadata?.role]),
+      metadata: {
+        ...(row.metadata || {}),
+        outcome: row.outcome,
+        requestId: row.request_id,
+        targetUserId: row.target_user_id,
+      },
+    })),
+    safeAuditRows(client.from('buyer_invoice_collection_events').select('id,stem_id,event_type,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,actor_email,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `collection:${row.id}`,
+      source: 'Buyer Invoice Collection',
+      module: 'Outstanding Buyer Invoices',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.stem_id || '—',
+      summary: compactAuditSummary([row.status, row.owner_name, row.note, row.next_follow_up_date, row.promised_payment_date]),
+      metadata: {
+        status: row.status,
+        ownerName: row.owner_name,
+        note: row.note,
+        nextFollowUpDate: row.next_follow_up_date,
+        promisedPaymentDate: row.promised_payment_date,
+        promisedAmount: row.promised_amount,
+      },
+    })),
+    safeAuditRows(client.from('report_export_events').select('id,report_export_id,event_type,actor_email,previous_file_name,new_file_name,metadata,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `report:${row.id}`,
+      source: 'Reports Archive',
+      module: 'Reports Archive',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.new_file_name || row.previous_file_name || row.report_export_id || '—',
+      summary: compactAuditSummary([row.previous_file_name, row.new_file_name, row.metadata?.reportType || row.metadata?.report_type]),
+      metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('incoming_payment_interest_notifications').select('id,payment_id,payment_name,stem_id,stem_name,buyer_name,buyer_group_name,delay_days,amount,currency,recipient_email,email_subject,actor_email,actor_name,metadata,sent_at,created_at').order('sent_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `interest:${row.id}`,
+      source: 'Late Payment Interest',
+      module: 'Incoming Payment',
+      action: row.metadata?.resent === true ? 'Interest Request Resent' : 'Interest Request Sent',
+      createdAt: row.sent_at || row.created_at,
+      actor: row.actor_email || row.actor_name || 'System',
+      target: row.stem_name || row.stem_id || row.payment_name || row.payment_id || '—',
+      summary: compactAuditSummary([row.buyer_name, row.recipient_email, row.delay_days != null ? `${row.delay_days} delay days` : '', row.email_subject]),
+      metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('dispute_beta_events').select('id,stem_id,event_type,note,metadata,actor_email,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `dispute:${row.id}`,
+      source: 'Dispute Workflow',
+      module: 'Dispute Workflow',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.stem_id || '—',
+      summary: compactAuditSummary([row.note, row.metadata?.workflowStatus, row.metadata?.approvalStatus]),
+      metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('buyer_invoice_email_runs').select('id,run_key,schedule_time,status,rows_count,totals,error,provider_result,created_at,completed_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `internal-email:${row.id}`,
+      source: 'Internal Daily Report',
+      module: 'Outstanding Buyer Invoices',
+      action: normalizedAuditAction(row.status),
+      createdAt: row.completed_at || row.created_at,
+      actor: 'System',
+      target: row.run_key || row.schedule_time || '—',
+      summary: compactAuditSummary([row.schedule_time, row.rows_count != null ? `${row.rows_count} rows` : '', row.error]),
+      metadata: {
+        totals: row.totals || {},
+        providerResult: row.provider_result || {},
+      },
+    })),
+    safeAuditRows(client.from('fcos_update_events').select('id,item_id,batch_id,delivery_id,event_type,actor_email,summary,metadata,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `fcos-update:${row.id}`,
+      source: 'FCOS Updates',
+      module: 'Admin Control',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.metadata?.version || row.summary || 'FCOS update',
+      summary: row.summary || 'FCOS update email workflow event.',
+      metadata: {
+        ...(row.metadata || {}),
+        hasItem: Boolean(row.item_id),
+        hasBatch: Boolean(row.batch_id),
+        hasDelivery: Boolean(row.delivery_id),
+      },
+    })),
+    safeAuditRows(client.from('growth_events').select('id,subject_type,subject_id,event_type,actor_email,target_user_id,summary,metadata,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `growth:${row.id}`,
+      source: 'Growth & Coaching',
+      module: 'Growth & Coaching',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.subject_type || 'Growth & Coaching',
+      summary: row.summary || 'Growth & Coaching workflow event.',
+      metadata: {
+        ...(row.metadata || {}),
+        subjectType: row.subject_type,
+        hasSubject: Boolean(row.subject_id),
+        hasTargetUser: Boolean(row.target_user_id),
+      },
+    })),
   ]);
 
-  let rows = [
-    ...adminRows,
-    ...portalRows,
-    ...collaborationRows,
-    ...collectionRows,
-    ...reportRows,
-    ...interestRows,
-    ...disputeRows,
-    ...internalEmailRows,
-    ...fcosUpdateRows,
-    ...growthRows,
-  ].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
-    rows = rows.filter((row) => [
-      row.source,
-      row.module,
-      row.action,
-      row.actor,
-      row.target,
-      row.summary,
-      JSON.stringify(row.metadata || {}),
-    ].join(' ').toLowerCase().includes(keyword));
+    rows = rows.filter((row) => [row.source, row.module, row.action, row.actor, row.target, row.summary, JSON.stringify(row.metadata || {})].join(' ').toLowerCase().includes(keyword));
   }
 
   rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -1873,12 +1843,7 @@ async function universalAuditTrail(body, req) {
 async function adminUserSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const user = await persistManagedUser(client, body, profile);
-  const entitlements = await reconcilePortalEntitlementsForProfile(
-    client,
-    user,
-    profile,
-    { forceRevision: true },
-  );
+  const entitlements = await reconcilePortalEntitlementsForProfile(client, user, profile, { forceRevision: true });
   const portalSyncErrors = [];
   for (const entitlement of entitlements.filter((row) => row.sync_status === 'pending' || row.sync_status === 'error')) {
     try {
@@ -1903,11 +1868,7 @@ async function adminUserDelete(body, req) {
   if (!userId) throw appError('User id is required.', 400);
   if (userId === authUser.id) throw appError('You cannot delete your own administrator account.', 400);
 
-  const { data: target, error: targetError } = await client
-    .from('user_profiles')
-    .select('id,email,full_name,user_type,active')
-    .eq('id', userId)
-    .maybeSingle();
+  const { data: target, error: targetError } = await client.from('user_profiles').select('id,email,full_name,user_type,active').eq('id', userId).maybeSingle();
   if (targetError) throw targetError;
   if (!target) throw appError('User not found.', 404);
   await assertAdministratorContinuity(client, {
@@ -1975,14 +1936,10 @@ async function adminUserTypeSave(body, req) {
   if (!id) throw appError('User type name is required.', 400);
   if (!label) throw appError('User type label is required.', 400);
 
-  const { data: existing, error: existingError } = await client
-    .from('user_types')
-    .select('id,is_system,sort_order')
-    .eq('id', id)
-    .maybeSingle();
+  const { data: existing, error: existingError } = await client.from('user_types').select('id,is_system,sort_order').eq('id', id).maybeSingle();
   if (existingError) throw existingError;
 
-  const sortOrder = Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : existing?.sort_order ?? 100;
+  const sortOrder = Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing?.sort_order ?? 100);
   const userType = {
     id,
     label,
@@ -1991,41 +1948,34 @@ async function adminUserTypeSave(body, req) {
     sort_order: sortOrder,
     updated_at: new Date().toISOString(),
   };
-  const { error: typeError } = await client
-    .from('user_types')
-    .upsert(userType, { onConflict: 'id' });
+  const { error: typeError } = await client.from('user_types').upsert(userType, { onConflict: 'id' });
   if (typeError) throw typeError;
 
   const permissions = normalizeUserTypePermissions(id, body.permissions || {});
   const capabilities = normalizeCapabilities(id, body.capabilities || {});
   await ensureReportArchiveManageModule(client);
-  const { error: deletePermissionError } = await client
-    .from('user_type_module_permissions')
-    .delete()
-    .eq('user_type_id', id);
+  const { error: deletePermissionError } = await client.from('user_type_module_permissions').delete().eq('user_type_id', id);
   if (deletePermissionError) throw deletePermissionError;
-  const { error: insertPermissionError } = await client
-    .from('user_type_module_permissions')
-    .insert([
-      ...ADMIN_APP_MODULES.map((module) => ({
-        user_type_id: id,
-        module_id: module.id,
-        can_view: permissionCanView(module.id, permissions[module.id]),
-        updated_at: new Date().toISOString(),
-      })),
-      {
-        user_type_id: id,
-        module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-        can_view: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
-        updated_at: new Date().toISOString(),
-      },
-      ...ADMIN_CAPABILITIES.map((capability) => ({
-        user_type_id: id,
-        module_id: capability.id,
-        can_view: capabilities[capability.id] === true,
-        updated_at: new Date().toISOString(),
-      })),
-    ]);
+  const { error: insertPermissionError } = await client.from('user_type_module_permissions').insert([
+    ...ADMIN_APP_MODULES.map((module) => ({
+      user_type_id: id,
+      module_id: module.id,
+      can_view: permissionCanView(module.id, permissions[module.id]),
+      updated_at: new Date().toISOString(),
+    })),
+    {
+      user_type_id: id,
+      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
+      can_view: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
+      updated_at: new Date().toISOString(),
+    },
+    ...ADMIN_CAPABILITIES.map((capability) => ({
+      user_type_id: id,
+      module_id: capability.id,
+      can_view: capabilities[capability.id] === true,
+      updated_at: new Date().toISOString(),
+    })),
+  ]);
   if (insertPermissionError) throw insertPermissionError;
 
   await writeAdminAudit(client, profile, existing ? 'user_type_updated' : 'user_type_created', null, id, {
@@ -2036,7 +1986,9 @@ async function adminUserTypeSave(body, req) {
     access_levels: {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]),
     },
-    capabilities: Object.entries(capabilities).filter(([, allowed]) => allowed).map(([capabilityId]) => capabilityId),
+    capabilities: Object.entries(capabilities)
+      .filter(([, allowed]) => allowed)
+      .map(([capabilityId]) => capabilityId),
   });
 
   return { userType: { ...userType, permissions, capabilities } };
@@ -2048,25 +2000,15 @@ async function adminUserTypeDelete(body, req) {
   if (!id) throw appError('User type id is required.', 400);
   if (id === 'administrator') throw appError('Administrator user type cannot be deleted.', 400);
 
-  const { data: userType, error: typeError } = await client
-    .from('user_types')
-    .select('id,label,is_system')
-    .eq('id', id)
-    .maybeSingle();
+  const { data: userType, error: typeError } = await client.from('user_types').select('id,label,is_system').eq('id', id).maybeSingle();
   if (typeError) throw typeError;
   if (!userType) throw appError('User type not found.', 404);
 
-  const { count, error: assignedError } = await client
-    .from('user_profiles')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_type', id);
+  const { count, error: assignedError } = await client.from('user_profiles').select('id', { count: 'exact', head: true }).eq('user_type', id);
   if (assignedError) throw assignedError;
   if (count > 0) throw appError('This user type is assigned to users. Reassign those users before deleting it.', 400);
 
-  const { error: deleteError } = await client
-    .from('user_types')
-    .delete()
-    .eq('id', id);
+  const { error: deleteError } = await client.from('user_types').delete().eq('id', id);
   if (deleteError) throw deleteError;
 
   await writeAdminAudit(client, profile, 'user_type_deleted', null, id, {
@@ -2084,16 +2026,28 @@ async function adminBootstrap(body = {}) {
   const email = body.email || process.env.INITIAL_ADMIN_EMAIL;
   const password = body.password || process.env.INITIAL_ADMIN_PASSWORD;
   const fullName = body.full_name || body.fullName || 'Administrator';
-  const user = await persistManagedUser(client, {
-    email,
-    password,
-    full_name: fullName,
-    user_type: 'administrator',
-    active: true,
-    permissions: ADMIN_FULL_ACCESS,
-  }, { id: null, email: 'bootstrap' });
+  const user = await persistManagedUser(
+    client,
+    {
+      email,
+      password,
+      full_name: fullName,
+      user_type: 'administrator',
+      active: true,
+      permissions: ADMIN_FULL_ACCESS,
+    },
+    { id: null, email: 'bootstrap' },
+  );
 
-  return { bootstrapped: true, user: { id: user.id, email: user.email, full_name: user.full_name, user_type: user.user_type } };
+  return {
+    bootstrapped: true,
+    user: {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      user_type: user.user_type,
+    },
+  };
 }
 
 function accountManagerStorageError(error) {
@@ -2101,7 +2055,7 @@ function accountManagerStorageError(error) {
   if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_manager_(?:groups|assignments|notes).*does not exist/i.test(message)) {
     return appError('Account Manager storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
-  if (error?.code === 'PGRST202' || /(?:save|finalize)_account_manager/i.test(message) && /schema cache|could not find/i.test(message)) {
+  if (error?.code === 'PGRST202' || (/(?:save|finalize)_account_manager/i.test(message) && /schema cache|could not find/i.test(message))) {
     return appError('Account Manager storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
   }
   return error;
@@ -2117,20 +2071,7 @@ function accountManagerProfile(profile = {}) {
   };
 }
 
-const ACCOUNT_MANAGER_ACCOUNT_FIELDS = [
-  'Id',
-  'Name',
-  'Company_Code__c',
-  'RecordType.Name',
-  'ParentId',
-  'Parent.Name',
-  'Parent.Company_Code__c',
-  'Buyer_Payment_Term__c',
-  'Supplier_Payment_Term__c',
-  'Is_Broker__c',
-  'Inactive_Suspended__c',
-  'Account_Manager__c',
-];
+const ACCOUNT_MANAGER_ACCOUNT_FIELDS = ['Id', 'Name', 'Company_Code__c', 'RecordType.Name', 'ParentId', 'Parent.Name', 'Parent.Company_Code__c', 'Buyer_Payment_Term__c', 'Supplier_Payment_Term__c', 'Is_Broker__c', 'Inactive_Suspended__c', 'Account_Manager__c'];
 
 async function accountManagerSchema() {
   const describe = await salesforceObjectFields({ objectName: 'Account' });
@@ -2147,7 +2088,7 @@ async function accountManagerSchema() {
 
   for (const [fieldName, expectedType] of requiredFields) {
     const field = fieldsByName.get(fieldName);
-    if (!field || expectedType && field.type !== expectedType) {
+    if (!field || (expectedType && field.type !== expectedType)) {
       throw appError(`Salesforce Account.${fieldName} is missing or has an incompatible type. Account Managers is unavailable until the schema is corrected.`, 503);
     }
   }
@@ -2201,26 +2142,27 @@ function accountManagerResponse({ salesforceGroup, groupRow = {}, managers = [] 
   };
 }
 
-async function currentEligibleAccountGroup(body = {}, {
-  includeGroupChildren = true,
-  enforceSalesforceWriteLimit = true,
-} = {}) {
+async function currentEligibleAccountGroup(body = {}, { includeGroupChildren = true, enforceSalesforceWriteLimit = true } = {}) {
   await accountManagerSchema();
   let requestedName = String(body.accountName || body.buyerName || '').trim();
   const legacyAccountId = String(body.buyerAccountId || '').trim();
 
   if (!requestedName && legacyAccountId) {
-    const legacyRows = await queryRows(`
+    const legacyRows = await queryRows(
+      `
       SELECT Id, Name
       FROM Account
       WHERE Id = '${escapeSoql(legacyAccountId)}'
       LIMIT 1
-    `, { limit: 1 });
+    `,
+      { limit: 1 },
+    );
     requestedName = String(legacyRows[0]?.Name || '').trim();
   }
   if (!requestedName) throw appError('Account name is required.', 400);
 
-  const rows = await queryRows(`
+  const rows = await queryRows(
+    `
     SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
     FROM Account
     WHERE Name = '${escapeSoql(requestedName)}'
@@ -2228,7 +2170,9 @@ async function currentEligibleAccountGroup(body = {}, {
       AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
     ORDER BY Id ASC
     LIMIT 200
-  `, { limit: 200 });
+  `,
+    { limit: 200 },
+  );
   const requestedKey = String(body.accountNameKey || body.buyerAccountKey || accountNameKey(requestedName));
   const group = groupEligibleSalesforceAccounts(rows).find((candidate) => candidate.accountNameKey === requestedKey);
   if (!group) {
@@ -2237,12 +2181,15 @@ async function currentEligibleAccountGroup(body = {}, {
   group.directSalesforceAccountIds = group.salesforceAccountIds.slice();
   if (group.isGroupAccount && includeGroupChildren) {
     const parentIds = group.directSalesforceAccountIds.map((id) => `'${escapeSoql(id)}'`).join(',');
-    const childResult = await queryResult(`
+    const childResult = await queryResult(
+      `
       SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
       FROM Account
       WHERE ParentId IN (${parentIds})
       ORDER BY Name ASC, Id ASC
-    `, { limit: 5000 });
+    `,
+      { limit: 5000 },
+    );
     if (Number(childResult.totalSize || 0) > (childResult.records || []).length) {
       throw appError('This GROUP has more than 5,000 direct child Accounts and cannot be updated safely.', 409);
     }
@@ -2254,18 +2201,21 @@ async function currentEligibleAccountGroup(body = {}, {
       const accountName = String(record.Name || '').trim();
       const childKey = accountNameKey(accountName);
       if (childKey && childKey !== group.accountNameKey && !childAccountsByKey.has(childKey)) {
-        childAccountsByKey.set(childKey, { accountNameKey: childKey, accountName });
+        childAccountsByKey.set(childKey, {
+          accountNameKey: childKey,
+          accountName,
+        });
       }
     }
-    group.childAccounts = [...childAccountsByKey.values()]
-      .sort((left, right) => left.accountName.localeCompare(right.accountName, undefined, { sensitivity: 'base' }));
+    group.childAccounts = [...childAccountsByKey.values()].sort((left, right) =>
+      left.accountName.localeCompare(right.accountName, undefined, {
+        sensitivity: 'base',
+      }),
+    );
     group.childAccountNameKeys = group.childAccounts.map((account) => account.accountNameKey);
     group.childAccountNames = [...new Set(childGroups.map((child) => child.accountName))];
     group.childAccountCount = childRecords.length;
-    group.salesforceAccountIds = [...new Set([
-      ...group.directSalesforceAccountIds,
-      ...childRecords.map((record) => String(record.Id || '').trim()).filter(Boolean),
-    ])];
+    group.salesforceAccountIds = [...new Set([...group.directSalesforceAccountIds, ...childRecords.map((record) => String(record.Id || '').trim()).filter(Boolean)])];
     if (enforceSalesforceWriteLimit && group.salesforceAccountIds.length > 200) {
       throw appError(`This GROUP contains ${group.salesforceAccountIds.length} Account records, which exceeds the 200-record all-or-none Salesforce update limit.`, 409);
     }
@@ -2301,7 +2251,11 @@ async function syncAccountManagerToSalesforce(client, groupRow, profile) {
     });
     const failures = (Array.isArray(result) ? result : []).filter((item) => item?.success !== true);
     if (failures.length) {
-      const message = failures.flatMap((item) => item.errors || []).map((item) => item.message).filter(Boolean).join('; ');
+      const message = failures
+        .flatMap((item) => item.errors || [])
+        .map((item) => item.message)
+        .filter(Boolean)
+        .join('; ');
       throw new Error(message || 'Salesforce rejected the Account Manager update.');
     }
 
@@ -2311,7 +2265,11 @@ async function syncAccountManagerToSalesforce(client, groupRow, profile) {
     };
   } catch (error) {
     const message = String(error?.message || 'Salesforce Account Manager synchronization failed.').slice(0, 2000);
-    let failedRow = { ...groupRow, salesforce_sync_status: 'failed', salesforce_sync_error: message };
+    let failedRow = {
+      ...groupRow,
+      salesforce_sync_status: 'failed',
+      salesforce_sync_error: message,
+    };
     try {
       failedRow = await finalizeAccountManagerSync(client, groupRow, 'failed', message, profile);
     } catch (finalizeError) {
@@ -2333,27 +2291,22 @@ async function accountManagersList(body = {}, req = null, accessContext = null) 
       body,
       req,
       accessContext,
-      loader: () => queryResult(`
+      loader: () =>
+        queryResult(
+          `
         SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
         FROM Account
         WHERE Inactive_Suspended__c = false
           AND (Is_Broker__c = true OR Buyer_Payment_Term__c != null)
         ORDER BY Name ASC
-      `, { limit: 10000 }),
+      `,
+          { limit: 10000 },
+        ),
     }).then((cached) => cached.value),
-    client
-      .from('account_manager_groups')
-      .select('account_name_key,account_name,salesforce_account_ids,account_roles,salesforce_manager_text,propagate_to_children,salesforce_sync_status,salesforce_sync_error,salesforce_synced_at,revision,updated_at,updated_by_email'),
-    client
-      .from('account_manager_assignments')
-      .select('account_name_key,manager_user_id,assignment_order'),
-    client
-      .from('user_profiles')
-      .select('id,email,full_name,user_type,active')
-      .order('full_name', { ascending: true }),
-    client
-      .from('account_manager_notes')
-      .select('account_name_key,account_name,account_note,source_group_account_name_key,source_group_account_name,revision,updated_at,updated_by_email'),
+    client.from('account_manager_groups').select('account_name_key,account_name,salesforce_account_ids,account_roles,salesforce_manager_text,propagate_to_children,salesforce_sync_status,salesforce_sync_error,salesforce_synced_at,revision,updated_at,updated_by_email'),
+    client.from('account_manager_assignments').select('account_name_key,manager_user_id,assignment_order'),
+    client.from('user_profiles').select('id,email,full_name,user_type,active').order('full_name', { ascending: true }),
+    client.from('account_manager_notes').select('account_name_key,account_name,account_note,source_group_account_name_key,source_group_account_name,revision,updated_at,updated_by_email'),
   ]);
 
   for (const result of [groupsResult, assignmentsResult, profilesResult, notesResult]) {
@@ -2394,9 +2347,7 @@ async function accountManagersSaveNote(body = {}, req = null, accessContext = nu
     throw appError('Account note cannot exceed 255 characters.', 400);
   }
 
-  const rpcName = propagateToChildren
-    ? 'save_account_manager_note_family'
-    : 'save_account_manager_note';
+  const rpcName = propagateToChildren ? 'save_account_manager_note_family' : 'save_account_manager_note';
   const rpcPayload = {
     p_account_name_key: salesforceGroup.accountNameKey,
     p_account_name: salesforceGroup.accountName,
@@ -2412,7 +2363,10 @@ async function accountManagersSaveNote(body = {}, req = null, accessContext = nu
       const childNotesResult = await client
         .from('account_manager_notes')
         .select('account_name_key,revision')
-        .in('account_name_key', childAccounts.map((account) => account.accountNameKey));
+        .in(
+          'account_name_key',
+          childAccounts.map((account) => account.accountNameKey),
+        );
       if (childNotesResult.error) throw accountManagerStorageError(childNotesResult.error);
       childNotes = childNotesResult.data || [];
     }
@@ -2465,10 +2419,7 @@ async function accountManagersSave(body = {}, req = null, accessContext = null) 
   const propagateToChildren = salesforceGroup.isGroupAccount && requestedPropagation;
   let selectedProfiles = [];
   if (managerUserIds.length) {
-    const { data, error } = await client
-      .from('user_profiles')
-      .select('id,email,full_name,user_type,active')
-      .in('id', managerUserIds);
+    const { data, error } = await client.from('user_profiles').select('id,email,full_name,user_type,active').in('id', managerUserIds);
     if (error) throw error;
     const profilesById = new Map((data || []).map((candidate) => [candidate.id, candidate]));
     selectedProfiles = managerUserIds.map((userId) => profilesById.get(userId)).filter(Boolean);
@@ -2483,9 +2434,7 @@ async function accountManagersSave(body = {}, req = null, accessContext = null) 
     throw appError(`Selected manager names exceed the Salesforce ${schema.managerFieldLength}-character limit.`, 400);
   }
 
-  const rpcName = salesforceGroup.isGroupAccount
-    ? 'save_account_manager_group_with_scope'
-    : 'save_account_manager_group';
+  const rpcName = salesforceGroup.isGroupAccount ? 'save_account_manager_group_with_scope' : 'save_account_manager_group';
   const rpcPayload = {
     p_account_name_key: salesforceGroup.accountNameKey,
     p_account_name: salesforceGroup.accountName,
@@ -2512,7 +2461,11 @@ async function accountManagersSave(body = {}, req = null, accessContext = null) 
 
   const syncResult = await syncAccountManagerToSalesforce(client, data || {}, profile);
   const managers = selectedProfiles.map(accountManagerProfile);
-  const account = accountManagerResponse({ salesforceGroup, groupRow: syncResult.groupRow, managers });
+  const account = accountManagerResponse({
+    salesforceGroup,
+    groupRow: syncResult.groupRow,
+    managers,
+  });
   return { account, buyer: account, syncError: syncResult.syncError };
 }
 
@@ -2522,62 +2475,36 @@ async function accountManagersRetrySync(body = {}, req = null, accessContext = n
   const key = String(body.accountNameKey || '').trim();
   if (!/^[a-f0-9]{64}$/.test(key)) throw appError('A valid Account name key is required.', 400);
 
-  const [groupResult, assignmentResult] = await Promise.all([
-    client
-      .from('account_manager_groups')
-      .select('account_name_key,account_name,propagate_to_children,revision')
-      .eq('account_name_key', key)
-      .maybeSingle(),
-    client
-      .from('account_manager_assignments')
-      .select('manager_user_id,assignment_order')
-      .eq('account_name_key', key)
-      .order('assignment_order', { ascending: true }),
-  ]);
+  const [groupResult, assignmentResult] = await Promise.all([client.from('account_manager_groups').select('account_name_key,account_name,propagate_to_children,revision').eq('account_name_key', key).maybeSingle(), client.from('account_manager_assignments').select('manager_user_id,assignment_order').eq('account_name_key', key).order('assignment_order', { ascending: true })]);
   if (groupResult.error) throw accountManagerStorageError(groupResult.error);
   if (assignmentResult.error) throw accountManagerStorageError(assignmentResult.error);
   if (!groupResult.data) throw appError('This Account Manager assignment no longer exists.', 404);
 
-  return accountManagersSave({
-    accountNameKey: key,
-    accountName: groupResult.data.account_name,
-    managerUserIds: (assignmentResult.data || []).map((row) => row.manager_user_id),
-    expectedRevision: groupResult.data.revision,
-    propagateToChildren: groupResult.data.propagate_to_children === true,
-  }, req, accessContext);
+  return accountManagersSave(
+    {
+      accountNameKey: key,
+      accountName: groupResult.data.account_name,
+      managerUserIds: (assignmentResult.data || []).map((row) => row.manager_user_id),
+      expectedRevision: groupResult.data.revision,
+      propagateToChildren: groupResult.data.propagate_to_children === true,
+    },
+    req,
+    accessContext,
+  );
 }
 
 const buyersAdministratorList = accountManagersList;
 const buyersAdministratorSave = accountManagersSave;
 
 const BUYER_REMINDER_RULE_SELECT = 'salesforce_account_id,account_name,account_type,parent_salesforce_account_id,policy,note,inherit_to_children,revision,updated_by_email,created_at,updated_at';
-const BUYER_REMINDER_ACCOUNT_FIELDS = [
-  'Id',
-  'Name',
-  'Company_Code__c',
-  'RecordType.Name',
-  'ParentId',
-  'Parent.Name',
-  'Parent.Company_Code__c',
-  'Buyer_Payment_Term__c',
-  'Supplier_Payment_Term__c',
-  'Is_Broker__c',
-  'Inactive_Suspended__c',
-];
+const BUYER_REMINDER_ACCOUNT_FIELDS = ['Id', 'Name', 'Company_Code__c', 'RecordType.Name', 'ParentId', 'Parent.Name', 'Parent.Company_Code__c', 'Buyer_Payment_Term__c', 'Supplier_Payment_Term__c', 'Is_Broker__c', 'Inactive_Suspended__c'];
 
 function buyerReminderStorageError(error) {
   const message = String(error?.message || '');
-  if (
-    error?.code === '42P01'
-    || error?.code === 'PGRST205'
-    || /buyer_invoice_reminder_rules.*does not exist/i.test(message)
-  ) {
+  if (error?.code === '42P01' || error?.code === 'PGRST205' || /buyer_invoice_reminder_rules.*does not exist/i.test(message)) {
     return appError('Buyer Invoice reminder rule storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
-  if (
-    error?.code === 'PGRST202'
-    || /buyer_invoice_reminder_rule/i.test(message) && /schema cache|could not find/i.test(message)
-  ) {
+  if (error?.code === 'PGRST202' || (/buyer_invoice_reminder_rule/i.test(message) && /schema cache|could not find/i.test(message))) {
     return appError('Buyer Invoice reminder rule storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
   }
   return error;
@@ -2590,12 +2517,13 @@ async function loadBuyerInvoiceReminderRules({ required = false, client = null }
     return { available: false, rules: [], error: 'storage_unavailable' };
   }
 
-  const { data, error } = await supabase
-    .from('buyer_invoice_reminder_rules')
-    .select(BUYER_REMINDER_RULE_SELECT);
+  const { data, error } = await supabase.from('buyer_invoice_reminder_rules').select(BUYER_REMINDER_RULE_SELECT);
   if (error) {
     if (required) throw buyerReminderStorageError(error);
-    console.error('[buyerInvoiceReminderRules] storage unavailable', { code: error.code, message: error.message });
+    console.error('[buyerInvoiceReminderRules] storage unavailable', {
+      code: error.code,
+      message: error.message,
+    });
     return { available: false, rules: [], error: 'storage_unavailable' };
   }
   return { available: true, rules: data || [], error: null };
@@ -2615,7 +2543,7 @@ async function buyerReminderAccountSchema() {
   ];
   for (const [fieldName, expectedType] of requiredFields) {
     const field = fieldsByName.get(fieldName);
-    if (!field || expectedType && field.type !== expectedType) {
+    if (!field || (expectedType && field.type !== expectedType)) {
       throw appError(`Salesforce Account.${fieldName} is missing or has an incompatible type. Reminder Rules is unavailable until the schema is corrected.`, 503);
     }
   }
@@ -2634,11 +2562,7 @@ function buyerReminderAccountSnapshot(account = {}) {
     accountName: String(account.Name || '').trim(),
     clKey: String(account.Company_Code__c || '').trim(),
     accountType,
-    accountTypeLabel: accountType === 'group'
-      ? 'GROUP'
-      : accountType === 'buyer_supplier'
-        ? 'Buyer & Supplier'
-        : 'Buyer',
+    accountTypeLabel: accountType === 'group' ? 'GROUP' : accountType === 'buyer_supplier' ? 'Buyer & Supplier' : 'Buyer',
     parentAccountId: parentAccountId || null,
     parentAccountName: String(account.Parent?.Name || '').trim(),
     parentClKey: String(account.Parent?.Company_Code__c || '').trim(),
@@ -2647,9 +2571,7 @@ function buyerReminderAccountSnapshot(account = {}) {
 }
 
 function isActiveBuyerReminderAccount(account = {}) {
-  return account.Inactive_Suspended__c === false
-    && Boolean(buyerReminderAccountType(account))
-    && Boolean(String(account.Company_Code__c || '').trim());
+  return account.Inactive_Suspended__c === false && Boolean(buyerReminderAccountType(account)) && Boolean(String(account.Company_Code__c || '').trim());
 }
 
 async function loadBuyerReminderAccountDirectory(body = {}, req = null, accessContext = null) {
@@ -2662,7 +2584,9 @@ async function loadBuyerReminderAccountDirectory(body = {}, req = null, accessCo
     body,
     req,
     accessContext,
-    loader: () => queryResult(`
+    loader: () =>
+      queryResult(
+        `
       SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
       FROM Account
       WHERE Inactive_Suspended__c = false
@@ -2670,7 +2594,9 @@ async function loadBuyerReminderAccountDirectory(body = {}, req = null, accessCo
         AND Company_Code__c != null
         AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
       ORDER BY Name ASC, Id ASC
-    `, { limit: 10000 }),
+    `,
+        { limit: 10000 },
+      ),
   });
   const records = (result.records || []).filter(isActiveBuyerReminderAccount);
   if (Number(result.totalSize || 0) > records.length) {
@@ -2683,12 +2609,15 @@ async function currentBuyerReminderAccount(accountId, { includeChildren = false 
   await buyerReminderAccountSchema();
   const canonicalId = canonicalSalesforceAccountId(accountId);
   if (!canonicalId) throw appError('A valid Salesforce Account ID is required.', 400);
-  const records = await queryRows(`
+  const records = await queryRows(
+    `
     SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
     FROM Account
     WHERE Id = '${escapeSoql(canonicalId)}'
     LIMIT 1
-  `, { limit: 1 });
+  `,
+    { limit: 1 },
+  );
   const account = records[0];
   if (!account || !isActiveBuyerReminderAccount(account)) {
     throw appError('This Account is no longer an active Buyer, Buyer & Supplier, or GROUP Account with a CL Key. Refresh Reminder Rules.', 409);
@@ -2697,7 +2626,8 @@ async function currentBuyerReminderAccount(accountId, { includeChildren = false 
   const snapshot = buyerReminderAccountSnapshot(account);
   let children = [];
   if (includeChildren && snapshot.isGroup) {
-    const result = await queryResult(`
+    const result = await queryResult(
+      `
       SELECT ${BUYER_REMINDER_ACCOUNT_FIELDS.join(', ')}
       FROM Account
       WHERE ParentId = '${escapeSoql(canonicalId)}'
@@ -2706,7 +2636,9 @@ async function currentBuyerReminderAccount(accountId, { includeChildren = false 
         AND Company_Code__c != null
         AND (Buyer_Payment_Term__c != null OR RecordType.Name = 'Group')
       ORDER BY Name ASC, Id ASC
-    `, { limit: 10000 });
+    `,
+      { limit: 10000 },
+    );
     children = (result.records || []).filter(isActiveBuyerReminderAccount);
     if (Number(result.totalSize || 0) > children.length) {
       throw appError('This GROUP has more than 10,000 eligible direct child Accounts and cannot be updated safely.', 409);
@@ -2733,10 +2665,7 @@ function serializeBuyerReminderRule(rule = null) {
 
 async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
-  const [salesforceAccounts, stored] = await Promise.all([
-    loadBuyerReminderAccountDirectory(body, req, accessContext),
-    loadBuyerInvoiceReminderRules({ required: true, client }),
-  ]);
+  const [salesforceAccounts, stored] = await Promise.all([loadBuyerReminderAccountDirectory(body, req, accessContext), loadBuyerInvoiceReminderRules({ required: true, client })]);
   const ruleMap = buyerReminderRuleMap(stored.rules);
   const snapshots = salesforceAccounts.map(buyerReminderAccountSnapshot);
   const childrenByParent = new Map();
@@ -2746,38 +2675,43 @@ async function buyerInvoiceReminderRulesList(body = {}, req = null, accessContex
     childrenByParent.get(account.parentAccountId).push(account);
   }
 
-  const accounts = snapshots.map((account) => {
-    const directRule = ruleMap.get(account.accountId) || null;
-    const parentRule = ruleMap.get(account.parentAccountId);
-    const inheritedRule = !directRule && parentRule?.inheritToChildren ? parentRule : null;
-    const effectiveRule = directRule || inheritedRule || null;
-    const availableGroupRule = parentRule?.inheritToChildren ? parentRule : null;
-    const children = childrenByParent.get(account.accountId) || [];
-    const childOverrideCount = children.filter((child) => ruleMap.has(child.accountId)).length;
-    return {
-      ...account,
-      policy: effectiveRule?.policy || 'standard',
-      note: effectiveRule?.note || '',
-      source: directRule ? 'direct' : inheritedRule ? 'group' : 'default',
-      sourceAccountId: inheritedRule?.accountId || directRule?.accountId || null,
-      sourceAccountName: inheritedRule?.accountName || directRule?.accountName || '',
-      hasDirectRule: Boolean(directRule),
-      canUseGroupRule: Boolean(directRule && availableGroupRule),
-      availableGroupRule: serializeBuyerReminderRule(availableGroupRule),
-      directRule: serializeBuyerReminderRule(directRule),
-      revision: Number(directRule?.revision || 0),
-      inheritToChildren: directRule?.inheritToChildren === true,
-      childCount: children.length,
-      eligibleChildCount: children.length,
-      childOverrideCount,
-      updatedAt: (directRule || inheritedRule)?.updatedAt || null,
-      updatedByEmail: (directRule || inheritedRule)?.updatedByEmail || null,
-    };
-  }).sort((left, right) => (
-    Number(right.isGroup) - Number(left.isGroup)
-    || left.accountName.localeCompare(right.accountName, undefined, { sensitivity: 'base' })
-    || left.accountId.localeCompare(right.accountId)
-  ));
+  const accounts = snapshots
+    .map((account) => {
+      const directRule = ruleMap.get(account.accountId) || null;
+      const parentRule = ruleMap.get(account.parentAccountId);
+      const inheritedRule = !directRule && parentRule?.inheritToChildren ? parentRule : null;
+      const effectiveRule = directRule || inheritedRule || null;
+      const availableGroupRule = parentRule?.inheritToChildren ? parentRule : null;
+      const children = childrenByParent.get(account.accountId) || [];
+      const childOverrideCount = children.filter((child) => ruleMap.has(child.accountId)).length;
+      return {
+        ...account,
+        policy: effectiveRule?.policy || 'standard',
+        note: effectiveRule?.note || '',
+        source: directRule ? 'direct' : inheritedRule ? 'group' : 'default',
+        sourceAccountId: inheritedRule?.accountId || directRule?.accountId || null,
+        sourceAccountName: inheritedRule?.accountName || directRule?.accountName || '',
+        hasDirectRule: Boolean(directRule),
+        canUseGroupRule: Boolean(directRule && availableGroupRule),
+        availableGroupRule: serializeBuyerReminderRule(availableGroupRule),
+        directRule: serializeBuyerReminderRule(directRule),
+        revision: Number(directRule?.revision || 0),
+        inheritToChildren: directRule?.inheritToChildren === true,
+        childCount: children.length,
+        eligibleChildCount: children.length,
+        childOverrideCount,
+        updatedAt: (directRule || inheritedRule)?.updatedAt || null,
+        updatedByEmail: (directRule || inheritedRule)?.updatedByEmail || null,
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.isGroup) - Number(left.isGroup) ||
+        left.accountName.localeCompare(right.accountName, undefined, {
+          sensitivity: 'base',
+        }) ||
+        left.accountId.localeCompare(right.accountId),
+    );
 
   return { accounts };
 }
@@ -2817,9 +2751,7 @@ async function buyerInvoiceReminderRuleSave(body = {}, req = null, accessContext
     p_note: note,
     p_inherit_to_children: snapshot.isGroup && includeChildren,
     p_replace_child_overrides: replaceChildOverrides,
-    p_child_account_ids: includeChildren
-      ? children.map((child) => canonicalSalesforceAccountId(child.Id)).filter(Boolean)
-      : [],
+    p_child_account_ids: includeChildren ? children.map((child) => canonicalSalesforceAccountId(child.Id)).filter(Boolean) : [],
     p_expected_revision: expectedRevision,
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
@@ -2884,7 +2816,9 @@ function safeReportFileName(value) {
 }
 
 function decodeBase64File(value) {
-  const raw = String(value || '').replace(/^data:[^;]+;base64,/i, '').replace(/\s/g, '');
+  const raw = String(value || '')
+    .replace(/^data:[^;]+;base64,/i, '')
+    .replace(/\s/g, '');
   if (!raw) throw appError('XLS content is required.', 400);
   const buffer = Buffer.from(raw, 'base64');
   if (!buffer.length) throw appError('XLS content is empty.', 400);
@@ -3004,12 +2938,7 @@ async function googleDriveUploadFile({ fileName, mimeType, buffer }) {
     mimeType,
     parents: [folderId],
   };
-  const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, 'utf8'),
-    Buffer.from(`--${boundary}\r\ncontent-type: ${mimeType}\r\n\r\n`, 'utf8'),
-    buffer,
-    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
-  ]);
+  const body = Buffer.concat([Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, 'utf8'), Buffer.from(`--${boundary}\r\ncontent-type: ${mimeType}\r\n\r\n`, 'utf8'), buffer, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')]);
   const fields = encodeURIComponent('id,name,mimeType,size,webViewLink,webContentLink,createdTime,modifiedTime');
   const response = await googleDriveFetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${fields}`, {
     method: 'POST',
@@ -3055,9 +2984,11 @@ async function googleDriveDownloadFile(fileId) {
 }
 
 async function reportExportCreate(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   requireExternalActionGate('google_drive');
-  const reportType = String(body.reportType || body.report_type || 'xls_report').trim().toLowerCase();
+  const reportType = String(body.reportType || body.report_type || 'xls_report')
+    .trim()
+    .toLowerCase();
   const fileName = safeReportFileName(body.fileName || body.file_name);
   const mimeType = String(body.mimeType || body.mime_type || REPORT_EXPORT_MIME_TYPE);
   if (mimeType !== REPORT_EXPORT_MIME_TYPE && !mimeType.includes('excel')) throw appError('Only XLS report files are supported.', 400);
@@ -3080,16 +3011,16 @@ async function reportExportCreate(body, req, accessContext = null) {
     created_at: nowIso,
     updated_at: nowIso,
   };
-  const { data: inserted, error: insertError } = await client
-    .from('report_exports')
-    .insert(insertPayload)
-    .select(REPORT_EXPORT_SELECT)
-    .single();
+  const { data: inserted, error: insertError } = await client.from('report_exports').insert(insertPayload).select(REPORT_EXPORT_SELECT).single();
   if (insertError) throw insertError;
 
   let driveFile = null;
   try {
-    driveFile = await googleDriveUploadFile({ fileName, mimeType: REPORT_EXPORT_MIME_TYPE, buffer });
+    driveFile = await googleDriveUploadFile({
+      fileName,
+      mimeType: REPORT_EXPORT_MIME_TYPE,
+      buffer,
+    });
     const updatePayload = {
       drive_file_id: driveFile.id || null,
       drive_web_view_link: driveFile.webViewLink || null,
@@ -3098,16 +3029,15 @@ async function reportExportCreate(body, req, accessContext = null) {
       error_message: null,
       updated_at: new Date().toISOString(),
     };
-    const { data: updated, error: updateError } = await client
-      .from('report_exports')
-      .update(updatePayload)
-      .eq('id', inserted.id)
-      .select(REPORT_EXPORT_SELECT)
-      .single();
+    const { data: updated, error: updateError } = await client.from('report_exports').update(updatePayload).eq('id', inserted.id).select(REPORT_EXPORT_SELECT).single();
     if (updateError) throw updateError;
     await writeReportExportEvent(client, updated.id, 'exported', profile, {
       newFileName: fileName,
-      metadata: { driveFileId: driveFile.id, rowCount: metadata.rowCount, sizeBytes: buffer.length },
+      metadata: {
+        driveFileId: driveFile.id,
+        rowCount: metadata.rowCount,
+        sizeBytes: buffer.length,
+      },
     });
     return { report: serializeReportExport(updated, []) };
   } catch (error) {
@@ -3129,7 +3059,11 @@ async function reportExportCreate(body, req, accessContext = null) {
       .maybeSingle();
     await writeReportExportEvent(client, inserted.id, 'upload_failed', profile, {
       newFileName: fileName,
-      metadata: { error: message, rowCount: metadata.rowCount, sizeBytes: buffer.length },
+      metadata: {
+        error: message,
+        rowCount: metadata.rowCount,
+        sizeBytes: buffer.length,
+      },
     });
     const failure = appError(`Google Drive upload failed: ${message}`, error.status || 502);
     failure.report = failed;
@@ -3138,14 +3072,10 @@ async function reportExportCreate(body, req, accessContext = null) {
 }
 
 async function reportExportsList(body, req, accessContext = null) {
-  const { client } = accessContext || await requireActiveUser(req);
+  const { client } = accessContext || (await requireActiveUser(req));
   const includeDeleted = body.includeDeleted === true || body.include_deleted === true;
   const limit = Math.max(10, Math.min(Number(body.limit) || 200, 500));
-  let query = client
-    .from('report_exports')
-    .select(REPORT_EXPORT_SELECT)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  let query = client.from('report_exports').select(REPORT_EXPORT_SELECT).order('created_at', { ascending: false }).limit(limit);
   if (!includeDeleted) query = query.eq('status', 'active');
   const { data: rows, error } = await query;
   if (error) throw error;
@@ -3153,11 +3083,7 @@ async function reportExportsList(body, req, accessContext = null) {
   const ids = (rows || []).map((row) => row.id);
   let eventsByReport = {};
   if (ids.length) {
-    const { data: events, error: eventsError } = await client
-      .from('report_export_events')
-      .select('id,report_export_id,event_type,actor_user_id,actor_email,previous_file_name,new_file_name,metadata,created_at')
-      .in('report_export_id', ids)
-      .order('created_at', { ascending: false });
+    const { data: events, error: eventsError } = await client.from('report_export_events').select('id,report_export_id,event_type,actor_user_id,actor_email,previous_file_name,new_file_name,metadata,created_at').in('report_export_id', ids).order('created_at', { ascending: false });
     if (eventsError) throw eventsError;
     eventsByReport = (events || []).reduce((acc, event) => {
       if (!acc[event.report_export_id]) acc[event.report_export_id] = [];
@@ -3172,11 +3098,7 @@ async function reportExportsList(body, req, accessContext = null) {
 }
 
 async function loadReportExportForAction(client, id) {
-  const { data, error } = await client
-    .from('report_exports')
-    .select(REPORT_EXPORT_SELECT)
-    .eq('id', id)
-    .maybeSingle();
+  const { data, error } = await client.from('report_exports').select(REPORT_EXPORT_SELECT).eq('id', id).maybeSingle();
   if (error) throw error;
   if (!data) throw appError('Report export not found.', 404);
   if (data.status !== 'active') throw appError('Only active report exports can be managed.', 400);
@@ -3185,7 +3107,7 @@ async function loadReportExportForAction(client, id) {
 }
 
 async function reportExportRename(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   requireExternalActionGate('google_drive');
   await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
@@ -3218,7 +3140,7 @@ async function reportExportRename(body, req, accessContext = null) {
 }
 
 async function reportExportDelete(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   requireExternalActionGate('google_drive');
   await requireReportArchiveFullAccess(client, profile);
   const id = String(body.id || '').trim();
@@ -3252,7 +3174,7 @@ async function reportExportDelete(body, req, accessContext = null) {
 }
 
 async function reportExportDownload(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   requireExternalActionGate('google_drive');
   const id = String(body.id || '').trim();
   if (!id) throw appError('Report export id is required.', 400);
@@ -3271,21 +3193,21 @@ async function reportExportDownload(body, req, accessContext = null) {
 }
 
 async function buyerInvoiceCollectionList(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
-  const stemIds = Array.isArray(body.stemIds)
-    ? body.stemIds.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  const stemIds = Array.isArray(body.stemIds) ? body.stemIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
   await Promise.all(stemIds.map((stemId) => requireInterofficeStemAccess(stemId, { client, profile })));
   const map = await loadBuyerInvoiceCollectionMap(stemIds);
   return {
-    items: Object.values(map).map((entry) => entry.item).filter(Boolean),
+    items: Object.values(map)
+      .map((entry) => entry.item)
+      .filter(Boolean),
     events: Object.values(map).flatMap((entry) => entry.events || []),
     byStemId: map,
   };
 }
 
 async function persistBuyerInvoiceCollection(body, req, eventOverride = null, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const stemId = String(body.stemId || body.stem_id || '').trim();
   if (!stemId) throw appError('stemId is required.', 400);
   await requireInterofficeStemAccess(stemId, { client, profile });
@@ -3315,7 +3237,10 @@ async function persistBuyerInvoiceCollection(body, req, eventOverride = null, ac
   const event = data?.event;
   if (!item || !event) throw appError('Collection save did not return the updated workflow state.', 500);
 
-  return { item: serializeCollectionItem(item), event: serializeCollectionEvent(event) };
+  return {
+    item: serializeCollectionItem(item),
+    event: serializeCollectionEvent(event),
+  };
 }
 
 async function buyerInvoiceCollectionSave(body, req, accessContext = null) {
@@ -3344,7 +3269,12 @@ async function salesforceSchema() {
   const data = await sfRequest('/sobjects/');
   const objects = (data.sobjects || [])
     .filter((o) => o.queryable)
-    .map((o) => ({ name: o.name, label: o.label, queryable: o.queryable, custom: o.custom }));
+    .map((o) => ({
+      name: o.name,
+      label: o.label,
+      queryable: o.queryable,
+      custom: o.custom,
+    }));
   return { objects };
 }
 
@@ -3381,8 +3311,17 @@ async function salesforceObjectFields(body) {
       }));
       const childRelationships = (data.childRelationships || [])
         .filter((r) => r.relationshipName && r.childSObject)
-        .map((r) => ({ relationshipName: r.relationshipName, childSObject: r.childSObject, field: r.field }));
-      return { objectName: normalizedObjectName, label: data.label, fields, childRelationships };
+        .map((r) => ({
+          relationshipName: r.relationshipName,
+          childSObject: r.childSObject,
+          field: r.field,
+        }));
+      return {
+        objectName: normalizedObjectName,
+        label: data.label,
+        fields,
+        childRelationships,
+      };
     },
   });
   return cached.value;
@@ -3391,9 +3330,7 @@ async function salesforceObjectFields(body) {
 const DASHBOARD_AI_SETTINGS_ID = 'default';
 
 function serializeDashboardAiSettings(row = null, storageAvailable = true) {
-  const configuredModel = isAllowedDashboardAiModel(row?.model_id)
-    ? row.model_id
-    : DEFAULT_DASHBOARD_AI_MODEL;
+  const configuredModel = isAllowedDashboardAiModel(row?.model_id) ? row.model_id : DEFAULT_DASHBOARD_AI_MODEL;
   return {
     modelId: configuredModel,
     model: dashboardAiModel(configuredModel),
@@ -3407,11 +3344,7 @@ function serializeDashboardAiSettings(row = null, storageAvailable = true) {
 
 async function loadDashboardAiSettings(client = safeSupabaseAdminClient()) {
   if (!client) return serializeDashboardAiSettings(null, false);
-  const { data, error } = await client
-    .from('dashboard_ai_settings')
-    .select('id,model_id,revision,updated_at,updated_by_email')
-    .eq('id', DASHBOARD_AI_SETTINGS_ID)
-    .maybeSingle();
+  const { data, error } = await client.from('dashboard_ai_settings').select('id,model_id,revision,updated_at,updated_by_email').eq('id', DASHBOARD_AI_SETTINGS_ID).maybeSingle();
   if (error) return serializeDashboardAiSettings(null, false);
   return serializeDashboardAiSettings(data, true);
 }
@@ -3481,9 +3414,8 @@ async function loadDashboardAiUsage(client = safeSupabaseAdminClient()) {
 
 async function recordDashboardAiUsage(client, profile, usage) {
   if (!client || !usage?.openAiResponseId || !isAllowedDashboardAiModel(usage.modelId)) return;
-  const { error } = await client
-    .from('dashboard_ai_usage_events')
-    .upsert({
+  const { error } = await client.from('dashboard_ai_usage_events').upsert(
+    {
       openai_response_id: usage.openAiResponseId,
       model_id: usage.modelId,
       service_tier: usage.serviceTier,
@@ -3496,19 +3428,18 @@ async function recordDashboardAiUsage(client, profile, usage) {
       estimated_cost_usd: usage.estimatedCostUsd,
       pricing_as_of: usage.pricingAsOf,
       actor_id: profile?.id || null,
-    }, {
+    },
+    {
       onConflict: 'openai_response_id',
       ignoreDuplicates: true,
-    });
+    },
+  );
   if (error) throw error;
 }
 
 async function dashboardAiSettingsGet(body, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
-  const [settings, usage] = await Promise.all([
-    loadDashboardAiSettings(context.client),
-    loadDashboardAiUsage(context.client),
-  ]);
+  const context = accessContext || (await requireActiveUser(req));
+  const [settings, usage] = await Promise.all([loadDashboardAiSettings(context.client), loadDashboardAiUsage(context.client)]);
   return {
     settings,
     models: DASHBOARD_AI_MODELS,
@@ -3529,11 +3460,7 @@ async function dashboardAiSettingsSave(body, req) {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
     throw appError('The current Dashboard AI settings revision is required.', 400);
   }
-  const { data: current, error: currentError } = await client
-    .from('dashboard_ai_settings')
-    .select('id,model_id,revision,updated_at,updated_by_email')
-    .eq('id', DASHBOARD_AI_SETTINGS_ID)
-    .maybeSingle();
+  const { data: current, error: currentError } = await client.from('dashboard_ai_settings').select('id,model_id,revision,updated_at,updated_by_email').eq('id', DASHBOARD_AI_SETTINGS_ID).maybeSingle();
   if (currentError) throw currentError;
   if (!current) throw appError('Dashboard AI settings storage is unavailable. Apply the database migration first.', 503);
   if (Number(current.revision) !== expectedRevision) {
@@ -3561,18 +3488,11 @@ async function dashboardAiSettingsSave(body, req) {
     conflict.details = { settings: await loadDashboardAiSettings(client) };
     throw conflict;
   }
-  await writeAdminAudit(
-    client,
-    profile,
-    'dashboard_ai_model_changed',
-    null,
-    null,
-    {
-      previousModelId: current.model_id,
-      modelId,
-      revision: expectedRevision + 1,
-    },
-  );
+  await writeAdminAudit(client, profile, 'dashboard_ai_model_changed', null, null, {
+    previousModelId: current.model_id,
+    modelId,
+    revision: expectedRevision + 1,
+  });
   await expireRuntimeCacheTags(['dashboard:ai-interpretation']);
   return {
     settings: serializeDashboardAiSettings(data, true),
@@ -3583,12 +3503,12 @@ async function dashboardAiSettingsSave(body, req) {
 }
 
 function dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths) {
-  const years = [...new Set((Array.isArray(selectedYears) ? selectedYears : []).map(Number).filter(Number.isInteger))]
-    .sort((a, b) => a - b);
-  const months = [...new Set((Array.isArray(selectedMonths) ? selectedMonths : []).map(Number)
-    .filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))]
-    .sort((a, b) => a - b);
-  const monthFormatter = new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'Asia/Hong_Kong' });
+  const years = [...new Set((Array.isArray(selectedYears) ? selectedYears : []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const months = [...new Set((Array.isArray(selectedMonths) ? selectedMonths : []).map(Number).filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const monthFormatter = new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    timeZone: 'Asia/Hong_Kong',
+  });
   const monthLabels = months.map((month) => monthFormatter.format(new Date(Date.UTC(2026, month - 1, 1))));
   return `${years.join(', ') || 'Current year'} · ${monthLabels.join(', ') || 'Current month'}`;
 }
@@ -3604,16 +3524,14 @@ function dashboardAiTrendYear(interpretation, selectedYears) {
 }
 
 async function dashboardAiSearch(body, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const prompt = normalizeDashboardAiPrompt(body.prompt);
-  const clarification = String(body.clarification || '').trim().slice(0, 200);
+  const clarification = String(body.clarification || '')
+    .trim()
+    .slice(0, 200);
   const currentYear = new Date().getFullYear();
-  const selectedYears = Array.isArray(body.selectedYears) && body.selectedYears.length
-    ? body.selectedYears
-    : [currentYear];
-  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length
-    ? body.selectedMonths
-    : [new Date().getMonth() + 1];
+  const selectedYears = Array.isArray(body.selectedYears) && body.selectedYears.length ? body.selectedYears : [currentYear];
+  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length ? body.selectedMonths : [new Date().getMonth() + 1];
   const selectedPeriodLabel = dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths);
   const settings = await loadDashboardAiSettings(context.client);
   if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
@@ -3632,16 +3550,17 @@ async function dashboardAiSearch(body, req, accessContext = null) {
     ttlSeconds: 5 * 60,
     tags: ['dashboard:ai-interpretation'],
     force,
-    loader: () => interpretDashboardAiSearch({
-      prompt,
-      clarification,
-      modelId: settings.modelId,
-      selectedPeriodLabel,
-      today: dateOnly(new Date()),
-      safetyIdentifier,
-      signal: AbortSignal.timeout(15_000),
-      onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
-    }),
+    loader: () =>
+      interpretDashboardAiSearch({
+        prompt,
+        clarification,
+        modelId: settings.modelId,
+        selectedPeriodLabel,
+        today: dateOnly(new Date()),
+        safetyIdentifier,
+        signal: AbortSignal.timeout(15_000),
+        onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
+      }),
   });
   const interpretation = interpretationResult.value;
   const baseAiSearch = {
@@ -3651,9 +3570,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
     includeCancelled: interpretation.includeCancelled,
     dateScope: {
       ...interpretation.dateScope,
-      label: interpretation.dateScope.mode === 'selected_period'
-        ? selectedPeriodLabel
-        : interpretation.dateScope.label,
+      label: interpretation.dateScope.mode === 'selected_period' ? selectedPeriodLabel : interpretation.dateScope.label,
     },
     clarification: interpretation.clarification,
     model: settings.model,
@@ -3669,27 +3586,42 @@ async function dashboardAiSearch(body, req, accessContext = null) {
 
   const [stem, account, lineItem, extraCost, product, port] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'Account', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Port__c', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({
+      objectName: 'Account',
+      forceRefresh: force,
+    }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({
+      objectName: 'STEM_Line_Item__c',
+      forceRefresh: force,
+    }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({
+      objectName: 'STEM_Extra_Cost__c',
+      forceRefresh: force,
+    }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({
+      objectName: 'Product2',
+      forceRefresh: force,
+    }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({
+      objectName: 'Port__c',
+      forceRefresh: force,
+    }).catch(() => ({ fields: [] })),
   ]);
-  const where = compileDashboardAiWhere(
-    interpretation,
-    { stem, account, lineItem, extraCost, product, port },
-    { selectedYears, selectedMonths },
+  const where = compileDashboardAiWhere(interpretation, { stem, account, lineItem, extraCost, product, port }, { selectedYears, selectedMonths });
+  const dashboard = await salesforceDashboardFilteredFull(
+    {
+      mode: 'dashboard',
+      where,
+      trendYear: dashboardAiTrendYear(interpretation, selectedYears),
+      disputeOnly: false,
+      portCountry: null,
+      companyFilterMode: 'buyer',
+      companyKeyword: null,
+      force,
+    },
+    req,
+    context,
   );
-  const dashboard = await salesforceDashboardFilteredFull({
-    mode: 'dashboard',
-    where,
-    trendYear: dashboardAiTrendYear(interpretation, selectedYears),
-    disputeOnly: false,
-    portCountry: null,
-    companyFilterMode: 'buyer',
-    companyKeyword: null,
-    force,
-  }, req, context);
   const matchedCount = Number(dashboard.stemTotal || 0);
   const loadedCount = dashboard.recentStems?.length || 0;
   return {
@@ -3710,7 +3642,11 @@ async function salesforceQuery(body, req = null, accessContext = null) {
   if (isInterofficeAccess(accessContext)) throw appError('Raw Salesforce query is not available for Interoffice users.', 403);
   if (!body.soql) throw new Error('soql query required');
   const result = await sfQuery(body.soql, { clean: true, limit: 2000 });
-  return { records: result.records, totalSize: result.totalSize, fetched: result.records.length };
+  return {
+    records: result.records,
+    totalSize: result.totalSize,
+    fetched: result.records.length,
+  };
 }
 
 async function salesforceFullSchema() {
@@ -3718,11 +3654,14 @@ async function salesforceFullSchema() {
   const objects = await Promise.all(
     list.objects.slice(0, 2000).map(async (object) => {
       try {
-        return { ...object, ...(await salesforceObjectFields({ objectName: object.name })) };
+        return {
+          ...object,
+          ...(await salesforceObjectFields({ objectName: object.name })),
+        };
       } catch {
         return object;
       }
-    })
+    }),
   );
   return { objects };
 }
@@ -3743,12 +3682,18 @@ async function salesforceDashboard(body = {}, req = null, accessContext = null) 
   if (fieldNames.includes('OwnerId')) usefulFields.push('OwnerId');
 
   const [totalRes, statusRes, typeRes, recentRes, accountRes, amountRes, profitRes] = await Promise.all([
-    sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
+    sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, {
+      softFail: true,
+    }),
     hasStatus ? sfQuery(`SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, { softFail: true }) : { records: [] },
     hasType ? sfQuery(`SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, { softFail: true }) : { records: [] },
     sfQuery(`SELECT ${usefulFields.join(', ')} FROM stem__c ${whereClause} ORDER BY CreatedDate DESC LIMIT 20`, { clean: true, softFail: true }),
     sfQuery('SELECT COUNT(Id) total FROM Account', { softFail: true }),
-    hasAmount ? sfQuery(`SELECT SUM(Amount__c) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
+    hasAmount
+      ? sfQuery(`SELECT SUM(Amount__c) total FROM stem__c ${whereClause}`, {
+          softFail: true,
+        })
+      : { records: [] },
     profitField ? sfQuery(`SELECT SUM(${profitField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
   ]);
 
@@ -3758,8 +3703,14 @@ async function salesforceDashboard(body = {}, req = null, accessContext = null) 
     totalAmount: amountRes.records?.[0]?.total ?? null,
     totalProfit: profitRes.records?.[0]?.total ?? null,
     profitField,
-    stemByStatus: (statusRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
-    stemByType: (typeRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
+    stemByStatus: (statusRes.records || []).map((r) => ({
+      label: r.val || 'Unknown',
+      value: r.total,
+    })),
+    stemByType: (typeRes.records || []).map((r) => ({
+      label: r.val || 'Unknown',
+      value: r.total,
+    })),
     recentStems: recentRes.records || [],
     availableFields: fieldNames,
     hasStatus,
@@ -3793,7 +3744,9 @@ async function salesforceDashboardFiltered(body) {
   if (fieldNames.includes('Port__c')) plFields.push('Port__c', 'Port__r.Name', 'Port__r.Country__c');
 
   const [totalRes, recentRes, buyerRes, supplierRes, costsRes, monthlyRes] = await Promise.all([
-    sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, { softFail: true }),
+    sfQuery(`SELECT COUNT(Id) total FROM stem__c ${whereClause}`, {
+      softFail: true,
+    }),
     sfQuery(`SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, { clean: true, limit: 3000, softFail: true }),
     buyerAmountField ? sfQuery(`SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
     supplierAmountField ? sfQuery(`SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, { softFail: true }) : { records: [] },
@@ -3809,10 +3762,7 @@ async function salesforceDashboardFiltered(body) {
 
   for (const chunk of chunkIds(recentStemIds)) {
     const ids = chunk.map((id) => `'${id}'`).join(',');
-    const lineItems = await sfQuery(
-      `SELECT STEM__c, Total_Cost__c, Cancelled__c FROM STEM_Line_Item__c WHERE STEM__c IN (${ids}) LIMIT 5000`,
-      { clean: true, limit: 5000, softFail: true }
-    );
+    const lineItems = await sfQuery(`SELECT STEM__c, Total_Cost__c, Cancelled__c FROM STEM_Line_Item__c WHERE STEM__c IN (${ids}) LIMIT 5000`, { clean: true, limit: 5000, softFail: true });
 
     for (const item of lineItems.records || []) {
       if (!item.STEM__c || item.Cancelled__c) continue;
@@ -3833,7 +3783,12 @@ async function salesforceDashboardFiltered(body) {
   const totalSupplier = recentStems.reduce((sum, stem) => sum + (stem[sf] || 0), 0);
   const totalCosts = costsRes.records?.[0]?.total ?? 0;
   const totalProfit = totalBuyer - totalSupplier;
-  const monthlyNetPnl = Array.from({ length: 12 }, (_, idx) => ({ month: idx + 1, label: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][idx], netPnl: 0, turnover: 0 }));
+  const monthlyNetPnl = Array.from({ length: 12 }, (_, idx) => ({
+    month: idx + 1,
+    label: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][idx],
+    netPnl: 0,
+    turnover: 0,
+  }));
   for (const stem of monthlyRes.records || []) {
     const month = Number(String(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || '').split('-')[1]);
     if (month >= 1 && month <= 12) {
@@ -3873,14 +3828,17 @@ async function salesforceDashboardFiltered(body) {
 async function stemPnl(body) {
   const { where, limit = 500 } = body;
   const whereClause = where ? `WHERE ${where}` : '';
-  const stems = await sfQuery(`
+  const stems = await sfQuery(
+    `
     SELECT Id, KeyStem__c, Name, Delivery_Date__c, Account__r.Name,
            Total_Invoice_Amount__c, Total_Invoiced_Amount_From_Suppliers__c, QLIK_Total_Profit__c
     FROM stem__c
     ${whereClause}
     ORDER BY Delivery_Date__c DESC
     LIMIT ${Number(limit) || 500}
-  `, { clean: true, limit: 3000 });
+  `,
+    { clean: true, limit: 3000 },
+  );
 
   const rows = stems.records.map((s) => {
     const buyer = s.Total_Invoice_Amount__c ?? 0;
@@ -3927,10 +3885,16 @@ async function salesforceStemDetail(body) {
     actualStemId = lookup.records[0].Id;
   }
   if (childObject && childId && childUpdates && Object.keys(childUpdates).length) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, { method: 'PATCH', body: childUpdates });
+    await sfRequest(`/sobjects/${childObject}/${childId}`, {
+      method: 'PATCH',
+      body: childUpdates,
+    });
   }
   if (updates && Object.keys(updates).length) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, { method: 'PATCH', body: updates });
+    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
+      method: 'PATCH',
+      body: updates,
+    });
   }
   const [record, lineItems, extraCosts, buyerBrokers] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
@@ -3938,7 +3902,12 @@ async function salesforceStemDetail(body) {
     sfQuery(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
     sfQuery(`SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
   ]);
-  return { record, lineItems: lineItems.records || [], extraCosts: extraCosts.records || [], buyerBrokers: buyerBrokers.records || [] };
+  return {
+    record,
+    lineItems: lineItems.records || [],
+    extraCosts: extraCosts.records || [],
+    buyerBrokers: buyerBrokers.records || [],
+  };
 }
 
 async function salesforceDescribeChildren(body) {
@@ -3952,7 +3921,12 @@ async function salesforceTopBuyers(body = {}, req = null, accessContext = null) 
   const interofficeCondition = await interofficeStemAccessCondition(accessContext);
   const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
   const rows = await sfQuery(`SELECT Account__r.Name buyer, SUM(Total_Invoice_Amount__c) total FROM stem__c ${whereClause} GROUP BY Account__r.Name ORDER BY SUM(Total_Invoice_Amount__c) DESC LIMIT 10`, { clean: true, softFail: true });
-  return { buyers: (rows.records || []).map((r) => ({ name: r.buyer || 'Unknown', total: r.total || 0 })) };
+  return {
+    buyers: (rows.records || []).map((r) => ({
+      name: r.buyer || 'Unknown',
+      total: r.total || 0,
+    })),
+  };
 }
 
 async function salesforceBrokerRegister(body) {
@@ -3969,9 +3943,30 @@ async function salesforceBrokerRegister(body) {
       const qty = financialQuantity(item, !!stem.Delivery_Date__c);
       const supplierAmount = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) * Number(qty || 0);
       const buyerAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0) || Number(item.Buyers_Brokers_Commission_Per_Unit__c || 0) * Number(qty || 0);
-      if (item.Supplier_Broker__c && supplierAmount) rows.push({ id: `supplier-${item.Id}`, stemId: item.STEM__c, stemName: stem.Name, productName: item.Product__r?.Name || item.Name, deliveryDate: stem.Delivery_Date__c, brokerType: 'Supplier Broker', brokerName: item.Supplier_Broker__c, commissionAmount: supplierAmount });
+      if (item.Supplier_Broker__c && supplierAmount)
+        rows.push({
+          id: `supplier-${item.Id}`,
+          stemId: item.STEM__c,
+          stemName: stem.Name,
+          productName: item.Product__r?.Name || item.Name,
+          deliveryDate: stem.Delivery_Date__c,
+          brokerType: 'Supplier Broker',
+          brokerName: item.Supplier_Broker__c,
+          commissionAmount: supplierAmount,
+        });
       const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
-      if (buyerBrokerId && buyerAmount) rows.push({ id: `buyer-${item.Id}`, stemId: item.STEM__c, stemName: stem.Name, productName: item.Product__r?.Name || item.Name, deliveryDate: stem.Delivery_Date__c, brokerType: 'Buyer Broker', brokerName: buyerBrokerId, commissionAmount: buyerAmount, paymentDate: stem.Payment_Date__c || null });
+      if (buyerBrokerId && buyerAmount)
+        rows.push({
+          id: `buyer-${item.Id}`,
+          stemId: item.STEM__c,
+          stemName: stem.Name,
+          productName: item.Product__r?.Name || item.Name,
+          deliveryDate: stem.Delivery_Date__c,
+          brokerType: 'Buyer Broker',
+          brokerName: buyerBrokerId,
+          commissionAmount: buyerAmount,
+          paymentDate: stem.Payment_Date__c || null,
+        });
     }
   }
   return { rows };
@@ -4068,11 +4063,7 @@ function prpspDisplayStatus(rawStatus, uploadDate) {
   if (status === 'A - w/ Agreement (Payment Conditional)') {
     return uploadLabel ? `Conditional-Sent on ${uploadLabel}` : 'Conditional-Not Sent';
   }
-  if ([
-    'B - w/ Agreement (Payment Unconditional)',
-    'C - w/o Agreement (Payment Received)',
-    'D - w/o Agreement (Payment NOT Received)',
-  ].includes(status)) {
+  if (['B - w/ Agreement (Payment Unconditional)', 'C - w/o Agreement (Payment Received)', 'D - w/o Agreement (Payment NOT Received)'].includes(status)) {
     return uploadLabel ? `Not Conditional-Sent on ${uploadLabel}` : 'Not Conditional-Not Sent';
   }
   if (status === 'Sent') return uploadLabel ? `Sent on ${uploadLabel}` : 'Sent';
@@ -4104,7 +4095,9 @@ const FRANKFURTER_PROVIDER_DETAILS = {
 };
 
 function normalizeFrankfurterProvider(provider) {
-  const key = String(provider || 'blended').trim().toUpperCase();
+  const key = String(provider || 'blended')
+    .trim()
+    .toUpperCase();
   if (!key || key === 'BLENDED' || key === 'DEFAULT') return 'blended';
   return FRANKFURTER_PROVIDER_DETAILS[key] ? key : 'blended';
 }
@@ -4174,7 +4167,10 @@ function splitBuyerTraderNames(value) {
 }
 
 function traderEmailLookupKey(value) {
-  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
@@ -4199,15 +4195,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
   paymentReminderBody: '<p>Dear {{primaryRecipientName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>{{invoiceTable}}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
 };
-const BUYER_INVOICE_COLLECTION_STATUSES = [
-  'Not Started',
-  'Reminder Sent',
-  'Awaiting Buyer Reply',
-  'Promise to Pay',
-  'Escalated',
-  'Paid / Closed',
-  'On Hold',
-];
+const BUYER_INVOICE_COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
 const BUYER_INVOICE_EVENT_TYPES = ['update', 'status_change', 'note', 'follow_up', 'promise', 'owner_change'];
 const DISPUTE_BETA_WORKFLOW_STATUSES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_BETA_APPROVAL_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Revision Requested'];
@@ -4221,36 +4209,16 @@ const DISPUTE_BETA_ACTION_LABELS = {
   close_supplier_dispute: 'Close dispute with supplier (no recovery)',
   close_buyer_dispute: 'Close dispute with buyer (no credit note)',
 };
-const DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS = new Set([
-  'hold_supplier_payment',
-  'pay_full_supplier_invoice',
-  'deduct_specific_amount',
-]);
+const DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS = new Set(['hold_supplier_payment', 'pay_full_supplier_invoice', 'deduct_specific_amount']);
 const DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS = ['No Balance Payment', 'Pay Immediately', 'Pay with next supplier invoice'];
-const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set([
-  'settlement_agreement',
-  'buyer_credit_note',
-  'supplier_credit_note',
-  'payment_instruction',
-  'proof_of_payment',
-  'correspondence',
-  'other_support',
-]);
+const DISPUTE_WORKFLOW_DOCUMENT_TYPES = new Set(['settlement_agreement', 'buyer_credit_note', 'supplier_credit_note', 'payment_instruction', 'proof_of_payment', 'correspondence', 'other_support']);
 const DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 const DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS = new Set(['from_supplier', 'to_supplier', 'from_buyer', 'to_buyer']);
 const DISPUTE_BETA_CASE_SELECT = 'id,stem_id,stem_name,buyer_name,supplier_names,current_salesforce_status,workflow_status,approval_status,latest_note,submitted_by,submitted_by_email,submitted_at,approved_by,approved_by_email,approved_at,rejected_by,rejected_by_email,rejected_at,rejection_reason,closed_by,closed_by_email,closed_at,settlement_financials,settlement_pnl,salesforce_writeback_status,salesforce_writeback_error,created_at,updated_at';
 const DISPUTE_WORKFLOW_PARTY_SELECT = 'id,case_id,stem_id,account_id,account_key,account_name,roles,source_types,source_record_ids,payment_terms,products,cancelled_source_only,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
 const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_id,party_side,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
 const DISPUTE_SUPPLIER_INSTRUCTION_SELECT = 'id,case_id,action_id,party_id,stem_id,instruction_type,recovery_method,source_supplier_invoice_id,source_supplier_invoice_name,source_stem_id,target_supplier_invoice_id,target_supplier_invoice_name,target_stem_id,currency_iso_code,planned_amount,allocated_amount,source_invoice_amount_snapshot,source_payable_balance_snapshot,source_paid_amount_snapshot,target_invoice_amount_snapshot,target_payable_amount_snapshot,source_invoice_snapshot,source_stem_snapshot,target_invoice_snapshot,target_stem_snapshot,payment_snapshot,allocation_fingerprint,status,matched_salesforce_payment_id,matching_payment_snapshot,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,revision,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at,acknowledged_by,acknowledged_by_email,acknowledged_at,settled_by,settled_by_email,settled_at';
-const DISPUTE_SUPPLIER_INSTRUCTION_STATUSES = new Set([
-  'Provisional Hold',
-  'Hold Acknowledged',
-  'Pending Accounting',
-  'Instruction Issued',
-  'Settled',
-  'Not Required',
-  'Superseded',
-]);
+const DISPUTE_SUPPLIER_INSTRUCTION_STATUSES = new Set(['Provisional Hold', 'Hold Acknowledged', 'Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required', 'Superseded']);
 const DISPUTE_BETA_EVENT_SELECT = 'id,case_id,action_id,stem_id,event_type,note,metadata,actor_user_id,actor_email,created_at';
 const DISPUTE_WORKFLOW_DOCUMENT_SELECT = 'id,case_id,action_id,supplier_instruction_id,party_id,party_side,stem_id,party_name,party_account_id,document_direction,document_type,original_filename,requested_filename,smart_filename,upload_status,content_type,file_extension,content_size,salesforce_content_version_id,salesforce_content_document_id,salesforce_linked_record_id,salesforce_url,uploaded_by,uploaded_by_email,created_at';
 
@@ -4268,11 +4236,7 @@ function normalizedUrl(value) {
 }
 
 function buyerInvoiceAppUrl(settings = {}) {
-  return normalizedUrl(settings.appUrl)
-    || normalizedUrl(process.env.BUYER_INVOICE_REPORT_APP_URL)
-    || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
-    || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://fcos.fcuno.com';
+  return normalizedUrl(settings.appUrl) || normalizedUrl(process.env.BUYER_INVOICE_REPORT_APP_URL) || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL) || normalizedUrl(process.env.VERCEL_URL) || 'https://fcos.fcuno.com';
 }
 
 function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
@@ -4283,11 +4247,7 @@ function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
 }
 
 function incomingPaymentAppUrl(settings = {}) {
-  return normalizedUrl(settings.appUrl)
-    || normalizedUrl(process.env.INCOMING_PAYMENT_REPORT_APP_URL)
-    || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL)
-    || normalizedUrl(process.env.VERCEL_URL)
-    || 'https://fcos.fcuno.com';
+  return normalizedUrl(settings.appUrl) || normalizedUrl(process.env.INCOMING_PAYMENT_REPORT_APP_URL) || normalizedUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL) || normalizedUrl(process.env.VERCEL_URL) || 'https://fcos.fcuno.com';
 }
 
 function incomingPaymentFilterUrl(settings, report) {
@@ -4376,7 +4336,10 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(data.error_description || data.error?.message || data.message || `Request failed: ${response.status}`);
@@ -4409,9 +4372,7 @@ function healthRow(base, result = null) {
   }
   return {
     ...base,
-    status: result.ok
-      ? (result.status || result.details?.healthStatus || (base.warning ? 'warning' : 'online'))
-      : (result.status || 'unavailable'),
+    status: result.ok ? result.status || result.details?.healthStatus || (base.warning ? 'warning' : 'online') : result.status || 'unavailable',
     checkedAt,
     latencyMs: result.latencyMs,
     error: result.error || null,
@@ -4425,86 +4386,58 @@ async function salesforceHealthRow({ force = false } = {}) {
   const usesRefreshToken = authMode === 'refresh_token';
   const usesAccessToken = authMode === 'access_token';
   const isMisconfigured = authMode === 'misconfigured';
-  const required = usesJwt
-    ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY']
-    : usesRefreshToken
-      ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
-      : isMisconfigured
-        ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN']
-        : ['SALESFORCE_ACCESS_TOKEN'];
+  const required = usesJwt ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY'] : usesRefreshToken ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'] : isMisconfigured ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'] : ['SALESFORCE_ACCESS_TOKEN'];
   const configured = authMode !== 'missing' && !isMisconfigured;
-  const result = isMisconfigured ? {
-    ok: false,
-    latencyMs: null,
-    error: 'Salesforce OAuth env vars are missing or blank.',
-  } : configured ? await timedCheck(async () => {
-    const limitsResult = await getOrLoadRuntimeCache({
-      namespace: 'salesforce-api-limits',
-      version: '1',
-      accessScope: 'health',
-      apiVersion: salesforceCacheApiIdentity(),
-      payload: null,
-      ttlSeconds: 60,
-      tags: ['salesforce:health'],
-      force,
-      loader: () => sfRequest('/limits'),
-    });
-    const limits = limitsResult.value;
-    const dailyApi = salesforceLimitFromBody(limits);
-    const healthStatus = dailyApi == null
-      ? 'monitoring_unavailable'
-      : dailyApi.usedPct >= 85
-        ? 'critical'
-        : dailyApi.usedPct >= 70
-          ? 'warning'
-          : 'online';
-    return {
-      apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
-      instanceUrl: getInstanceUrl(),
-      limitsChecked: Boolean(limits),
-      dailyApi,
-      healthStatus,
-    };
-  }) : null;
-  return healthRow({
-    id: 'salesforce',
-    name: 'Salesforce REST API',
-    category: 'Salesforce',
-    purpose: 'Dashboard, STEM details, documents, invoices, brokers, disputes, and payments.',
-    scope: 'server',
-    provider: 'Salesforce',
-    endpoint: getInstanceUrl(),
-    authType: usesJwt ? 'OAuth JWT bearer' : usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : isMisconfigured ? 'OAuth misconfigured' : 'OAuth',
-    configured: configured || isMisconfigured,
-    configuredEnv: configuredEnv([
-      'SALESFORCE_JWT_CLIENT_ID',
-      'SALESFORCE_JWT_USERNAME',
-      'SALESFORCE_JWT_PRIVATE_KEY',
-      'SALESFORCE_CLIENT_ID',
-      'SALESFORCE_CLIENT_SECRET',
-      'SALESFORCE_REFRESH_TOKEN',
-      'SALESFORCE_ACCESS_TOKEN',
-      'SALESFORCE_INSTANCE_URL',
-      'SALESFORCE_LOGIN_URL',
-      'SALESFORCE_API_VERSION',
-    ]),
-    missingEnv: usesJwt || usesRefreshToken ? [] : missingEnv(required),
-    tokenExpiry: usesJwt
-      ? 'JWT bearer issues short-lived access tokens on demand. Long-term validity depends on the Connected App certificate and user access.'
-      : usesRefreshToken
-        ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.'
-        : usesAccessToken
-          ? 'Temporary access token expiry is not exposed to the app.'
-          : null,
-    warning: isMisconfigured || (usesAccessToken && !usesRefreshToken),
-    notes: usesJwt
-      ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.']
-      : isMisconfigured
-        ? ['Salesforce OAuth variables exist but at least one required value is blank. The temporary access-token fallback is intentionally blocked until durable auth is fixed.']
-      : usesAccessToken && !usesRefreshToken
-        ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.']
-        : ['Connected app refresh-token policy controls long-term validity.'],
-  }, result);
+  const result = isMisconfigured
+    ? {
+        ok: false,
+        latencyMs: null,
+        error: 'Salesforce OAuth env vars are missing or blank.',
+      }
+    : configured
+      ? await timedCheck(async () => {
+          const limitsResult = await getOrLoadRuntimeCache({
+            namespace: 'salesforce-api-limits',
+            version: '1',
+            accessScope: 'health',
+            apiVersion: salesforceCacheApiIdentity(),
+            payload: null,
+            ttlSeconds: 60,
+            tags: ['salesforce:health'],
+            force,
+            loader: () => sfRequest('/limits'),
+          });
+          const limits = limitsResult.value;
+          const dailyApi = salesforceLimitFromBody(limits);
+          const healthStatus = dailyApi == null ? 'monitoring_unavailable' : dailyApi.usedPct >= 85 ? 'critical' : dailyApi.usedPct >= 70 ? 'warning' : 'online';
+          return {
+            apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
+            instanceUrl: getInstanceUrl(),
+            limitsChecked: Boolean(limits),
+            dailyApi,
+            healthStatus,
+          };
+        })
+      : null;
+  return healthRow(
+    {
+      id: 'salesforce',
+      name: 'Salesforce REST API',
+      category: 'Salesforce',
+      purpose: 'Dashboard, STEM details, documents, invoices, brokers, disputes, and payments.',
+      scope: 'server',
+      provider: 'Salesforce',
+      endpoint: getInstanceUrl(),
+      authType: usesJwt ? 'OAuth JWT bearer' : usesRefreshToken ? 'OAuth refresh token' : usesAccessToken ? 'Temporary access token' : isMisconfigured ? 'OAuth misconfigured' : 'OAuth',
+      configured: configured || isMisconfigured,
+      configuredEnv: configuredEnv(['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN', 'SALESFORCE_INSTANCE_URL', 'SALESFORCE_LOGIN_URL', 'SALESFORCE_API_VERSION']),
+      missingEnv: usesJwt || usesRefreshToken ? [] : missingEnv(required),
+      tokenExpiry: usesJwt ? 'JWT bearer issues short-lived access tokens on demand. Long-term validity depends on the Connected App certificate and user access.' : usesRefreshToken ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.' : usesAccessToken ? 'Temporary access token expiry is not exposed to the app.' : null,
+      warning: isMisconfigured || (usesAccessToken && !usesRefreshToken),
+      notes: usesJwt ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.'] : isMisconfigured ? ['Salesforce OAuth variables exist but at least one required value is blank. The temporary access-token fallback is intentionally blocked until durable auth is fixed.'] : usesAccessToken && !usesRefreshToken ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.'] : ['Connected app refresh-token policy controls long-term validity.'],
+    },
+    result,
+  );
 }
 
 async function supabaseMetricsHealth({ force = false } = {}) {
@@ -4549,154 +4482,153 @@ async function supabaseHealthRow({ force = false } = {}) {
   const required = ['SUPABASE_SERVICE_ROLE_KEY'];
   const hasUrl = Boolean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
   const configured = hasUrl && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const result = configured ? await timedCheck(async () => {
-    const client = supabaseAdminClient();
-    const [authResult, profileResult, metricsResult] = await Promise.all([
-      client.auth.admin.listUsers({ page: 1, perPage: 1 }),
-      client
-        .from('user_profiles')
-        .select('id', { count: 'exact', head: true }),
-      supabaseMetricsHealth({ force })
-        .then((metrics) => ({ metrics, error: null }))
-        .catch((error) => ({ metrics: null, error: error.message })),
-    ]);
-    const { error: authError } = authResult;
-    if (authError) throw authError;
-    const { count, error: profileError } = profileResult;
-    if (profileError) throw profileError;
-    const metrics = metricsResult.metrics;
-    return {
-      userProfilesCount: count ?? null,
-      monitoringAvailable: metrics?.monitoringAvailable === true,
-      monitoringError: metricsResult.error || null,
-      healthStatus: metrics?.monitoringAvailable
-        ? metrics.severity
-        : 'monitoring_unavailable',
-      metrics: metrics?.kpis || null,
-      metricSeverities: metrics?.severities || null,
-      thresholds: metrics?.thresholds || null,
-    };
-  }) : null;
-  return healthRow({
-    id: 'supabase',
-    name: 'Supabase Auth and Database',
-    category: 'Database',
-    purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute workflow, cashflow settings, and universal audit trail.',
-    scope: 'server',
-    provider: 'Supabase',
-    endpoint: hasUrl ? maskValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, 18, 8) : null,
-    authType: 'Service role key',
-    configured,
-    configuredEnv: {
-      SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
-      VITE_SUPABASE_URL: Boolean(process.env.VITE_SUPABASE_URL),
-      SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  const result = configured
+    ? await timedCheck(async () => {
+        const client = supabaseAdminClient();
+        const [authResult, profileResult, metricsResult] = await Promise.all([
+          client.auth.admin.listUsers({ page: 1, perPage: 1 }),
+          client.from('user_profiles').select('id', { count: 'exact', head: true }),
+          supabaseMetricsHealth({ force })
+            .then((metrics) => ({ metrics, error: null }))
+            .catch((error) => ({ metrics: null, error: error.message })),
+        ]);
+        const { error: authError } = authResult;
+        if (authError) throw authError;
+        const { count, error: profileError } = profileResult;
+        if (profileError) throw profileError;
+        const metrics = metricsResult.metrics;
+        return {
+          userProfilesCount: count ?? null,
+          monitoringAvailable: metrics?.monitoringAvailable === true,
+          monitoringError: metricsResult.error || null,
+          healthStatus: metrics?.monitoringAvailable ? metrics.severity : 'monitoring_unavailable',
+          metrics: metrics?.kpis || null,
+          metricSeverities: metrics?.severities || null,
+          thresholds: metrics?.thresholds || null,
+        };
+      })
+    : null;
+  return healthRow(
+    {
+      id: 'supabase',
+      name: 'Supabase Auth and Database',
+      category: 'Database',
+      purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute workflow, cashflow settings, and universal audit trail.',
+      scope: 'server',
+      provider: 'Supabase',
+      endpoint: hasUrl ? maskValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, 18, 8) : null,
+      authType: 'Service role key',
+      configured,
+      configuredEnv: {
+        SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
+        VITE_SUPABASE_URL: Boolean(process.env.VITE_SUPABASE_URL),
+        SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      },
+      missingEnv: [...(hasUrl ? [] : ['SUPABASE_URL or VITE_SUPABASE_URL']), ...missingEnv(required)],
+      tokenExpiry: jwtExpiresAt(process.env.SUPABASE_SERVICE_ROLE_KEY) || 'No expiry claim exposed.',
+      notes: ['Service role key is never sent to the browser.'],
     },
-    missingEnv: [
-      ...(hasUrl ? [] : ['SUPABASE_URL or VITE_SUPABASE_URL']),
-      ...missingEnv(required),
-    ],
-    tokenExpiry: jwtExpiresAt(process.env.SUPABASE_SERVICE_ROLE_KEY) || 'No expiry claim exposed.',
-    notes: ['Service role key is never sent to the browser.'],
-  }, result);
+    result,
+  );
 }
 
 async function backboneBridgeHealthRow(accessContext) {
   const config = backboneBridgeConfig();
-  const result = config.configured ? await timedCheck(async () => {
-    const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload(
-      { operation: 'identity.resolve' },
-      accessContext,
-    ));
-    return {
-      schemaVersion: response.schemaVersion,
-      identityLinked: Boolean(response.identity?.userId),
-      officeCodes: response.identity?.officeCodes || [],
-      roles: response.identity?.roles || [],
-      mode: response.authority?.mode || null,
-      credentialVersion: response.bridgeCredentialVersion,
-    };
-  }) : null;
-  return healthRow({
-    id: 'fcos-backbone-bridge',
-    name: 'FCOS Backbone Shared Boundary',
-    category: 'Shared Platform',
-    purpose: 'Resolves the current FCOS user to Backbone and reads scoped trade projections and audit without changing FCOS live operations.',
-    scope: 'server',
-    provider: 'FCOS Backbone',
-    endpoint: `${config.baseUrl}/api/fcos/v1/bridge`,
-    authType: 'Timestamped HMAC with one-time request id',
-    details: {
-      credentialRotation: 'Backbone reports only the accepted credential label after a valid signed request.',
+  const result = config.configured
+    ? await timedCheck(async () => {
+        const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload({ operation: 'identity.resolve' }, accessContext));
+        return {
+          schemaVersion: response.schemaVersion,
+          identityLinked: Boolean(response.identity?.userId),
+          officeCodes: response.identity?.officeCodes || [],
+          roles: response.identity?.roles || [],
+          mode: response.authority?.mode || null,
+          credentialVersion: response.bridgeCredentialVersion,
+        };
+      })
+    : null;
+  return healthRow(
+    {
+      id: 'fcos-backbone-bridge',
+      name: 'FCOS Backbone Shared Boundary',
+      category: 'Shared Platform',
+      purpose: 'Resolves the current FCOS user to Backbone and reads scoped trade projections and audit without changing FCOS live operations.',
+      scope: 'server',
+      provider: 'FCOS Backbone',
+      endpoint: `${config.baseUrl}/api/fcos/v1/bridge`,
+      authType: 'Timestamped HMAC with one-time request id',
+      details: {
+        credentialRotation: 'Backbone reports only the accepted credential label after a valid signed request.',
+      },
+      configured: config.configured,
+      configuredEnv: {
+        FCOS_BACKBONE_URL: Boolean(process.env.FCOS_BACKBONE_URL),
+        FCOS_BACKBONE_BRIDGE_SECRET: Boolean(process.env.FCOS_BACKBONE_BRIDGE_SECRET),
+      },
+      missingEnv: config.configured ? [] : ['FCOS_BACKBONE_BRIDGE_SECRET'],
+      tokenExpiry: 'Each signed request expires after five minutes and its request id cannot be replayed.',
+      notes: ['Read-only shadow boundary. Salesforce and the dedicated FCOS Supabase project remain live during parallel operation.', 'During a rotation window, credentialVersion should return primary before the previous Backbone secret is removed.'],
     },
-    configured: config.configured,
-    configuredEnv: {
-      FCOS_BACKBONE_URL: Boolean(process.env.FCOS_BACKBONE_URL),
-      FCOS_BACKBONE_BRIDGE_SECRET: Boolean(process.env.FCOS_BACKBONE_BRIDGE_SECRET),
-    },
-    missingEnv: config.configured ? [] : ['FCOS_BACKBONE_BRIDGE_SECRET'],
-    tokenExpiry: 'Each signed request expires after five minutes and its request id cannot be replayed.',
-    notes: [
-      'Read-only shadow boundary. Salesforce and the dedicated FCOS Supabase project remain live during parallel operation.',
-      'During a rotation window, credentialVersion should return primary before the previous Backbone secret is removed.',
-    ],
-  }, result);
+    result,
+  );
 }
 
 async function googleDriveHealthRow() {
   const required = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'GOOGLE_DRIVE_REPORT_FOLDER_ID'];
   const configured = missingEnv(required).length === 0;
   const gateEnabled = isExternalActionEnabled('google_drive');
-  const result = configured && gateEnabled ? await timedCheck(async () => {
-    const { clientId, clientSecret, refreshToken, folderId } = googleDriveConfig();
-    const token = await fetchJsonWithTimeout('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-      }),
-    });
-    if (!token.access_token) throw new Error('Google OAuth did not return an access token.');
-    const fields = encodeURIComponent('id,name,mimeType,trashed');
-    const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
-      headers: { Authorization: `Bearer ${token.access_token}` },
-    });
-    return {
-      accessTokenExpiresAt: addSecondsIso(token.expires_in),
-      folderName: folder.name || null,
-      folderId: maskValue(folder.id, 6, 4),
-      folderTrashed: folder.trashed === true,
-    };
-  }) : null;
-  const row = healthRow({
-    id: 'google-drive',
-    name: 'Google Drive Report Archive',
-    category: 'Reports',
-    purpose: 'Stores exported XLS reports and supports archive rename, download, open, and delete actions.',
-    scope: 'server',
-    provider: 'Google Drive API',
-    endpoint: 'https://www.googleapis.com/drive/v3',
-    authType: 'OAuth refresh token',
-    configured,
-    configuredEnv: configuredEnv(required),
-    missingEnv: missingEnv(required),
-    tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
-    details: { gateEnabled },
-    notes: gateEnabled
-      ? ['Files are uploaded as XLS files, not converted to Google Sheets.']
-      : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
-  }, result);
+  const result =
+    configured && gateEnabled
+      ? await timedCheck(async () => {
+          const { clientId, clientSecret, refreshToken, folderId } = googleDriveConfig();
+          const token = await fetchJsonWithTimeout('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              client_id: clientId,
+              client_secret: clientSecret,
+              refresh_token: refreshToken,
+            }),
+          });
+          if (!token.access_token) throw new Error('Google OAuth did not return an access token.');
+          const fields = encodeURIComponent('id,name,mimeType,trashed');
+          const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          });
+          return {
+            accessTokenExpiresAt: addSecondsIso(token.expires_in),
+            folderName: folder.name || null,
+            folderId: maskValue(folder.id, 6, 4),
+            folderTrashed: folder.trashed === true,
+          };
+        })
+      : null;
+  const row = healthRow(
+    {
+      id: 'google-drive',
+      name: 'Google Drive Report Archive',
+      category: 'Reports',
+      purpose: 'Stores exported XLS reports and supports archive rename, download, open, and delete actions.',
+      scope: 'server',
+      provider: 'Google Drive API',
+      endpoint: 'https://www.googleapis.com/drive/v3',
+      authType: 'OAuth refresh token',
+      configured,
+      configuredEnv: configuredEnv(required),
+      missingEnv: missingEnv(required),
+      tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
+      details: { gateEnabled },
+      notes: gateEnabled ? ['Files are uploaded as XLS files, not converted to Google Sheets.'] : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
+    },
+    result,
+  );
   return gateEnabled ? row : { ...row, status: 'disabled', latencyMs: null, error: null };
 }
 
 function externalActionGateHealthRow() {
   const gates = externalActionGates();
-  const unexpected = Object.values(gates).filter((gate) => (
-    gate.expectedState === 'live' ? !gate.enabled : gate.enabled
-  ));
+  const unexpected = Object.values(gates).filter((gate) => (gate.expectedState === 'live' ? !gate.enabled : gate.enabled));
   return {
     id: 'external-action-gates',
     name: 'External action gates',
@@ -4712,13 +4644,8 @@ function externalActionGateHealthRow() {
     latencyMs: null,
     error: null,
     tokenExpiry: 'Not applicable.',
-    details: Object.fromEntries(Object.values(gates).map((gate) => [
-      gate.label,
-      `${gate.enabled ? 'Enabled' : 'Disabled'} (${gate.expectedState === 'live' ? 'existing live function' : 'UAT gated'})`,
-    ])),
-    notes: unexpected.length
-      ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`]
-      : ['Existing Salesforce, Google Drive, and shared SMTP functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
+    details: Object.fromEntries(Object.values(gates).map((gate) => [gate.label, `${gate.enabled ? 'Enabled' : 'Disabled'} (${gate.expectedState === 'live' ? 'existing live function' : 'UAT gated'})`])),
+    notes: unexpected.length ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`] : ['Existing Salesforce, Google Drive, and shared SMTP functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
   };
 }
 
@@ -4732,18 +4659,21 @@ async function frankfurterHealthRow() {
       rateAvailable: Number.isFinite(Number(data.rate)),
     };
   });
-  return healthRow({
-    id: 'frankfurter',
-    name: 'Frankfurter USD/CNY API',
-    category: 'Exchange Rate',
-    purpose: "Broker's Commission CNY conversion. API mid-rate is reduced by 0.2% to estimate bank buy rate.",
-    scope: 'public',
-    provider: 'Frankfurter',
-    endpoint: 'https://api.frankfurter.dev/v2/rate/USD/CNY',
-    authType: 'No API key',
-    configured: true,
-    tokenExpiry: 'Not applicable.',
-  }, result);
+  return healthRow(
+    {
+      id: 'frankfurter',
+      name: 'Frankfurter USD/CNY API',
+      category: 'Exchange Rate',
+      purpose: "Broker's Commission CNY conversion. API mid-rate is reduced by 0.2% to estimate bank buy rate.",
+      scope: 'public',
+      provider: 'Frankfurter',
+      endpoint: 'https://api.frankfurter.dev/v2/rate/USD/CNY',
+      authType: 'No API key',
+      configured: true,
+      tokenExpiry: 'Not applicable.',
+    },
+    result,
+  );
 }
 
 async function nagerHealthRow() {
@@ -4756,94 +4686,111 @@ async function nagerHealthRow() {
       holidayCount: Array.isArray(data) ? data.length : null,
     };
   });
-  return healthRow({
-    id: 'nager-date',
-    name: 'Nager.Date Holiday API',
-    category: 'Cashflow Forecast',
-    purpose: 'Weekend, Singapore public holiday, and US holiday blocking for cashflow forecast dates.',
-    scope: 'public',
-    provider: 'Nager.Date',
-    endpoint: 'https://date.nager.at/api/v4/Holidays',
-    authType: 'No API key',
-    configured: true,
-    tokenExpiry: 'Not applicable.',
-    notes: ['Holiday results are cached in Supabase when available.'],
-  }, result);
+  return healthRow(
+    {
+      id: 'nager-date',
+      name: 'Nager.Date Holiday API',
+      category: 'Cashflow Forecast',
+      purpose: 'Weekend, Singapore public holiday, and US holiday blocking for cashflow forecast dates.',
+      scope: 'public',
+      provider: 'Nager.Date',
+      endpoint: 'https://date.nager.at/api/v4/Holidays',
+      authType: 'No API key',
+      configured: true,
+      tokenExpiry: 'Not applicable.',
+      notes: ['Holiday results are cached in Supabase when available.'],
+    },
+    result,
+  );
 }
 
 async function smtpHealthRow() {
   const required = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD'];
   const configured = missingEnv(required).length === 0;
-  const result = configured ? await timedCheck(async () => {
-    const nodemailer = await import('nodemailer');
-    const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
-    if (!createTransport) throw new Error('SMTP email library failed to load.');
-    const port = Number(process.env.SMTP_PORT || 587);
-    const transporter = createTransport({
-      host: process.env.SMTP_HOST,
-      port,
-      secure: process.env.SMTP_SECURE != null ? process.env.SMTP_SECURE === 'true' : port === 465,
-      connectionTimeout: 7000,
-      greetingTimeout: 7000,
-      socketTimeout: 10000,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
+  const result = configured
+    ? await timedCheck(async () => {
+        const nodemailer = await import('nodemailer');
+        const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
+        if (!createTransport) throw new Error('SMTP email library failed to load.');
+        const port = Number(process.env.SMTP_PORT || 587);
+        const transporter = createTransport({
+          host: process.env.SMTP_HOST,
+          port,
+          secure: process.env.SMTP_SECURE != null ? process.env.SMTP_SECURE === 'true' : port === 465,
+          connectionTimeout: 7000,
+          greetingTimeout: 7000,
+          socketTimeout: 10000,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASSWORD,
+          },
+        });
+        await transporter.verify();
+        return {
+          host: process.env.SMTP_HOST,
+          port,
+          user: maskValue(process.env.SMTP_USER),
+        };
+      })
+    : null;
+  return healthRow(
+    {
+      id: 'server-smtp',
+      name: 'Shared Server SMTP Sender',
+      category: 'Email',
+      purpose: 'Shared sender for every External Payment Reminder, plus scheduled and server-generated email delivery.',
+      scope: 'server',
+      provider: 'SMTP',
+      endpoint: process.env.SMTP_HOST || null,
+      authType: 'SMTP username/password',
+      configured,
+      configuredEnv: configuredEnv(['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE']),
+      missingEnv: missingEnv(required),
+      tokenExpiry: 'Not applicable.',
+      details: {
+        deliveryGateEnabled: isExternalActionEnabled('email_delivery'),
       },
-    });
-    await transporter.verify();
-    return {
-      host: process.env.SMTP_HOST,
-      port,
-      user: maskValue(process.env.SMTP_USER),
-    };
-  }) : null;
-  return healthRow({
-    id: 'server-smtp',
-    name: 'Shared Server SMTP Sender',
-    category: 'Email',
-    purpose: 'Shared sender for every External Payment Reminder, plus scheduled and server-generated email delivery.',
-    scope: 'server',
-    provider: 'SMTP',
-    endpoint: process.env.SMTP_HOST || null,
-    authType: 'SMTP username/password',
-    configured,
-    configuredEnv: configuredEnv(['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE']),
-    missingEnv: missingEnv(required),
-    tokenExpiry: 'Not applicable.',
-    details: { deliveryGateEnabled: isExternalActionEnabled('email_delivery') },
-    notes: ['This check verifies login only; it does not send an email. The emergency delivery control is reported separately.'],
-  }, result);
+      notes: ['This check verifies login only; it does not send an email. The emergency delivery control is reported separately.'],
+    },
+    result,
+  );
 }
 
 async function outlookCalendarHealthRow() {
   const required = ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'];
   const configured = missingEnv(required).length === 0;
-  const result = configured ? await timedCheck(async () => {
-    const health = await growthCalendarHealth();
-    if (health.status !== 'Online') throw new Error(health.error || 'Microsoft Graph calendar authentication failed.');
-    return {
-      permission: 'Application Calendars.ReadWrite',
-      mailboxScope: 'Exchange Online Application RBAC',
-      calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
-    };
-  }) : null;
-  return healthRow({
-    id: 'outlook-growth-calendar',
-    name: 'Outlook Coaching Calendar',
-    category: 'Growth & Coaching',
-    purpose: 'Creates and updates private 1:1 coaching invitations without placing agendas or notes in Outlook.',
-    scope: 'server',
-    provider: 'Microsoft Graph',
-    endpoint: 'https://graph.microsoft.com/v1.0',
-    authType: 'OAuth client credentials with Exchange Application RBAC',
-    configured,
-    configuredEnv: configuredEnv(required),
-    missingEnv: missingEnv(required),
-    tokenExpiry: 'Short-lived Microsoft Graph tokens are refreshed server-side.',
-    details: { calendarGateEnabled: isExternalActionEnabled('outlook_calendar') },
-    notes: ['This check validates credentials only and never creates a calendar event.'],
-  }, result);
+  const result = configured
+    ? await timedCheck(async () => {
+        const health = await growthCalendarHealth();
+        if (health.status !== 'Online') throw new Error(health.error || 'Microsoft Graph calendar authentication failed.');
+        return {
+          permission: 'Application Calendars.ReadWrite',
+          mailboxScope: 'Exchange Online Application RBAC',
+          calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
+        };
+      })
+    : null;
+  return healthRow(
+    {
+      id: 'outlook-growth-calendar',
+      name: 'Outlook Coaching Calendar',
+      category: 'Growth & Coaching',
+      purpose: 'Creates and updates private 1:1 coaching invitations without placing agendas or notes in Outlook.',
+      scope: 'server',
+      provider: 'Microsoft Graph',
+      endpoint: 'https://graph.microsoft.com/v1.0',
+      authType: 'OAuth client credentials with Exchange Application RBAC',
+      configured,
+      configuredEnv: configuredEnv(required),
+      missingEnv: missingEnv(required),
+      tokenExpiry: 'Short-lived Microsoft Graph tokens are refreshed server-side.',
+      details: {
+        calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
+      },
+      notes: ['This check validates credentials only and never creates a calendar event.'],
+    },
+    result,
+  );
 }
 
 function cronHealthRow() {
@@ -4869,31 +4816,36 @@ function vercelRuntimeHealthRow() {
   const configured = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.VERCEL_URL);
   const telemetry = currentRequestTelemetry();
   const runtimeDurationMs = telemetry ? Date.now() - telemetry.startedAtMs : 0;
-  return healthRow({
-    id: 'vercel-runtime',
-    name: 'Vercel Runtime',
-    category: 'Hosting',
-    purpose: 'Hosts the React app and serverless API functions.',
-    scope: 'server',
-    provider: 'Vercel',
-    endpoint: process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || null,
-    authType: 'Deployment environment',
-    configured,
-    details: {
-      environment: process.env.VERCEL_ENV || null,
-      region: process.env.VERCEL_REGION || process.env.AWS_REGION || null,
-      deploymentId: maskValue(process.env.VERCEL_DEPLOYMENT_ID, 8, 6),
-      commit: String(process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 8) || null,
-      nodeVersion: process.version,
-      functionCheckDurationMs: runtimeDurationMs,
+  return healthRow(
+    {
+      id: 'vercel-runtime',
+      name: 'Vercel Runtime',
+      category: 'Hosting',
+      purpose: 'Hosts the React app and serverless API functions.',
+      scope: 'server',
+      provider: 'Vercel',
+      endpoint: process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || null,
+      authType: 'Deployment environment',
+      configured,
+      details: {
+        environment: process.env.VERCEL_ENV || null,
+        region: process.env.VERCEL_REGION || process.env.AWS_REGION || null,
+        deploymentId: maskValue(process.env.VERCEL_DEPLOYMENT_ID, 8, 6),
+        commit: String(process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 8) || null,
+        nodeVersion: process.version,
+        functionCheckDurationMs: runtimeDurationMs,
+      },
+      tokenExpiry: 'Not applicable.',
     },
-    tokenExpiry: 'Not applicable.',
-  }, configured ? {
-    ok: true,
-    latencyMs: runtimeDurationMs,
-    status: 'online',
-    details: {},
-  } : null);
+    configured
+      ? {
+          ok: true,
+          latencyMs: runtimeDurationMs,
+          status: 'online',
+          details: {},
+        }
+      : null,
+  );
 }
 
 function googleFontsHealthRow() {
@@ -4920,15 +4872,10 @@ function providerDashboardLinks() {
       return '';
     }
   })();
-  const supabaseProjectRef = supabaseHost.endsWith('.supabase.co')
-    ? supabaseHost.split('.')[0]
-    : '';
+  const supabaseProjectRef = supabaseHost.endsWith('.supabase.co') ? supabaseHost.split('.')[0] : '';
   const vercelDashboard = process.env.VERCEL_DASHBOARD_URL || 'https://vercel.com/dashboard';
   return {
-    supabaseReports: process.env.SUPABASE_DASHBOARD_URL
-      || (supabaseProjectRef
-        ? `https://supabase.com/dashboard/project/${supabaseProjectRef}/reports/database`
-        : 'https://supabase.com/dashboard/projects'),
+    supabaseReports: process.env.SUPABASE_DASHBOARD_URL || (supabaseProjectRef ? `https://supabase.com/dashboard/project/${supabaseProjectRef}/reports/database` : 'https://supabase.com/dashboard/projects'),
     vercelObservability: process.env.VERCEL_OBSERVABILITY_URL || vercelDashboard,
     vercelRuntimeCache: process.env.VERCEL_RUNTIME_CACHE_URL || vercelDashboard,
     vercelSpeedInsights: process.env.VERCEL_SPEED_INSIGHTS_URL || vercelDashboard,
@@ -4956,24 +4903,22 @@ async function systemHealth(body = {}, req = null, accessContext) {
   const rows = await Promise.all([
     salesforceHealthRow({ force }),
     supabaseHealthRow({ force }),
-    profile ? cachedHealthCheck(
-      'backbone',
-      60,
-      force,
-      () => backboneBridgeHealthRow(accessContext),
-      { profileId: profile.id },
-    ) : Promise.resolve(healthRow({
-      id: 'fcos-backbone-bridge',
-      name: 'FCOS Backbone Shared Boundary',
-      category: 'Shared Platform',
-      purpose: 'Resolves FCOS identities and reads Backbone projections.',
-      scope: 'server',
-      provider: 'FCOS Backbone',
-      endpoint: null,
-      authType: 'Timestamped HMAC',
-      configured: false,
-      missingEnv: ['Active FCOS profile'],
-    })),
+    profile
+      ? cachedHealthCheck('backbone', 60, force, () => backboneBridgeHealthRow(accessContext), { profileId: profile.id })
+      : Promise.resolve(
+          healthRow({
+            id: 'fcos-backbone-bridge',
+            name: 'FCOS Backbone Shared Boundary',
+            category: 'Shared Platform',
+            purpose: 'Resolves FCOS identities and reads Backbone projections.',
+            scope: 'server',
+            provider: 'FCOS Backbone',
+            endpoint: null,
+            authType: 'Timestamped HMAC',
+            configured: false,
+            missingEnv: ['Active FCOS profile'],
+          }),
+        ),
     cachedHealthCheck('google-drive', 5 * 60, force, googleDriveHealthRow),
     cachedHealthCheck('frankfurter', 30 * 60, force, frankfurterHealthRow),
     cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
@@ -4981,11 +4926,14 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
-  const summary = rows.reduce((acc, row) => {
-    acc.total += 1;
-    acc[row.status] = (acc[row.status] || 0) + 1;
-    return acc;
-  }, { total: 0 });
+  const summary = rows.reduce(
+    (acc, row) => {
+      acc.total += 1;
+      acc[row.status] = (acc[row.status] || 0) + 1;
+      return acc;
+    },
+    { total: 0 },
+  );
   const rowById = Object.fromEntries(rows.map((row) => [row.id, row]));
   const telemetry = currentRequestTelemetry();
   const providerLinks = providerDashboardLinks();
@@ -5020,14 +4968,16 @@ async function systemHealth(body = {}, req = null, accessContext) {
         nodeVersion: rowById['vercel-runtime']?.details?.nodeVersion || null,
         functionCheckDurationMs: rowById['vercel-runtime']?.details?.functionCheckDurationMs ?? null,
       },
-      request: telemetry ? {
-        salesforceCalls: telemetry.salesforce.quotaCalls,
-        salesforceLogicalQueries: telemetry.salesforce.logicalQueries,
-        salesforceCompositeCalls: telemetry.salesforce.compositeCalls,
-        cacheHits: telemetry.cache.hits,
-        cacheMisses: telemetry.cache.misses,
-        supabaseRequests: telemetry.supabase.requests,
-      } : null,
+      request: telemetry
+        ? {
+            salesforceCalls: telemetry.salesforce.quotaCalls,
+            salesforceLogicalQueries: telemetry.salesforce.logicalQueries,
+            salesforceCompositeCalls: telemetry.salesforce.compositeCalls,
+            cacheHits: telemetry.cache.hits,
+            cacheMisses: telemetry.cache.misses,
+            supabaseRequests: telemetry.supabase.requests,
+          }
+        : null,
     },
     externalActionGates: externalActionGates(),
     rows,
@@ -5035,15 +4985,12 @@ async function systemHealth(body = {}, req = null, accessContext) {
 }
 
 async function backboneBridgeIdentity(_body, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
-  return backboneBridgeRequest(authenticatedBackboneBridgePayload(
-    { operation: 'identity.resolve' },
-    context,
-  ));
+  const context = accessContext || (await requireActiveUser(req));
+  return backboneBridgeRequest(authenticatedBackboneBridgePayload({ operation: 'identity.resolve' }, context));
 }
 
 async function backboneTradeProjection(body, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const operation = String(body.operation || 'trade.find');
   if (!['trade.find', 'trade.changes', 'audit.list'].includes(operation)) {
     throw appError('Unsupported FCOS Backbone read operation.', 400);
@@ -5054,32 +5001,29 @@ async function backboneTradeProjection(body, req, accessContext = null) {
 }
 
 async function backboneFinanceHandoffs(body = {}, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const limit = body.limit == null ? 50 : Number(body.limit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw appError('Finance handoff limit must be between 1 and 100.', 400);
   }
-  return backboneBridgeRequest(authenticatedBackboneBridgePayload(
-    { operation: 'finance.handoffs', limit },
-    context,
-  ));
+  return backboneBridgeRequest(authenticatedBackboneBridgePayload({ operation: 'finance.handoffs', limit }, context));
 }
 
 async function backboneFinanceHandoffDetail(body = {}, req, accessContext = null) {
-  const context = accessContext || await requireActiveUser(req);
+  const context = accessContext || (await requireActiveUser(req));
   const handoffId = String(body.handoffId || '').trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoffId)) {
     throw appError('A valid Finance handoff is required.', 400);
   }
-  const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload(
-    { operation: 'finance.handoff.detail', handoffId },
-    context,
-  ));
+  const response = await backboneBridgeRequest(authenticatedBackboneBridgePayload({ operation: 'finance.handoff.detail', handoffId }, context));
   return browserSafeBackboneFinanceHandoff(response);
 }
 
 function isSafeSalesforceFieldPath(value) {
-  const parts = String(value || '').trim().split('.').filter(Boolean);
+  const parts = String(value || '')
+    .trim()
+    .split('.')
+    .filter(Boolean);
   if (!parts.length || parts.length > 4) return false;
   return parts.every((part) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(part));
 }
@@ -5132,9 +5076,7 @@ function deliveredQuantityInMt(item) {
   const litersPerMt = litersPerMetricTon(item);
   if (!litersPerMt) return delivered;
   const quantityInMt = firstNumber(item.Quantity_in_MT__c);
-  const looksLikeLiters = quantityInMt != null && quantityInMt > 0
-    ? delivered > quantityInMt * 20
-    : delivered >= litersPerMt * 50;
+  const looksLikeLiters = quantityInMt != null && quantityInMt > 0 ? delivered > quantityInMt * 20 : delivered >= litersPerMt * 50;
   return looksLikeLiters ? delivered / litersPerMt : delivered;
 }
 
@@ -5210,7 +5152,10 @@ function formatStemName(stem) {
 function parseEmailList(value, fallback = []) {
   if (Array.isArray(value)) return value.map(canonicalizeBuyerInvoiceEmail).filter(Boolean);
   if (typeof value !== 'string') return fallback;
-  const parsed = value.split(/[,\n;]/).map(canonicalizeBuyerInvoiceEmail).filter(Boolean);
+  const parsed = value
+    .split(/[,\n;]/)
+    .map(canonicalizeBuyerInvoiceEmail)
+    .filter(Boolean);
   return parsed.length ? parsed : fallback;
 }
 
@@ -5223,7 +5168,10 @@ function uniqueEmailList(...values) {
       return;
     }
     if (typeof value !== 'string') return;
-    for (const email of value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)) {
+    for (const email of value
+      .split(/[,\n;]/)
+      .map((item) => item.trim())
+      .filter(Boolean)) {
       const key = email.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -5249,7 +5197,9 @@ function uniqueTextList(values = []) {
 }
 
 function normalizedFieldToken(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function fieldMatchesAny(field, exactTokens = [], includeTokens = []) {
@@ -5262,24 +5212,7 @@ function accountInvoiceFormatFields(accountFields = []) {
   return accountFields
     .filter((field) => {
       const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
-      return fieldMatchesAny(field, [
-        'invoiceformat',
-        'invoiceformatc',
-        'invoiceemailsetting',
-        'invoiceemailsettingc',
-        'invoiceemailformat',
-        'invoiceemailformatc',
-        'invoiceemailrouting',
-        'invoiceemailroutingc',
-      ], [
-        'invoiceformat',
-        'invoiceemailsetting',
-        'invoiceemailformat',
-        'invoiceemailrouting',
-        'brokerinvoiceformat',
-        'brokerinvoiceemail',
-      ])
-        || (token.includes('invoiceemail') && ['picklist', 'multipicklist', 'string'].includes(field?.type));
+      return fieldMatchesAny(field, ['invoiceformat', 'invoiceformatc', 'invoiceemailsetting', 'invoiceemailsettingc', 'invoiceemailformat', 'invoiceemailformatc', 'invoiceemailrouting', 'invoiceemailroutingc'], ['invoiceformat', 'invoiceemailsetting', 'invoiceemailformat', 'invoiceemailrouting', 'brokerinvoiceformat', 'brokerinvoiceemail']) || (token.includes('invoiceemail') && ['picklist', 'multipicklist', 'string'].includes(field?.type));
     })
     .map((field) => field.name);
 }
@@ -5293,44 +5226,25 @@ function accountBrokerEmailFields(accountFields = []) {
     .filter((field) => {
       if (excluded(field)) return false;
       const token = normalizedFieldToken(`${field?.name || ''} ${field?.label || ''}`);
-      return fieldMatchesAny(field, [
-        'email',
-        'emailc',
-        'emailaddress',
-        'emailaddressc',
-        'brokeremail',
-        'brokeremailc',
-        'brokeremailaddress',
-        'brokeremailaddressc',
-      ])
-        || field.type === 'email'
-        || token.includes('email')
-        || token.includes('mail');
+      return fieldMatchesAny(field, ['email', 'emailc', 'emailaddress', 'emailaddressc', 'brokeremail', 'brokeremailc', 'brokeremailaddress', 'brokeremailaddressc']) || field.type === 'email' || token.includes('email') || token.includes('mail');
     })
     .map((field) => field.name);
 }
 
 function emailTokensFromValue(value) {
   if (Array.isArray(value)) return value.flatMap(emailTokensFromValue);
-  return [...String(value || '').matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)]
-    .map((match) => match[0]);
+  return [...String(value || '').matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)].map((match) => match[0]);
 }
 
 function routingFormatValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
-  const text = raw.toLowerCase().replace(/[./_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (
-    text.includes('buyer only')
-    || text.includes('broker only')
-    || /^to broker\b/.test(text)
-    || text.includes('buyer c o broker')
-    || text.includes('buyer co broker')
-    || text.includes('buyer cc broker')
-    || text.includes('cc broker')
-    || text.includes('copy broker')
-    || text.includes('c o broker')
-  ) {
+  const text = raw
+    .toLowerCase()
+    .replace(/[./_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.includes('buyer only') || text.includes('broker only') || /^to broker\b/.test(text) || text.includes('buyer c o broker') || text.includes('buyer co broker') || text.includes('buyer cc broker') || text.includes('cc broker') || text.includes('copy broker') || text.includes('c o broker')) {
     return raw;
   }
   return null;
@@ -5338,7 +5252,11 @@ function routingFormatValue(value) {
 
 function buyerBrokerRoutingMode(format, brokerEmails = []) {
   const raw = String(format || '').trim();
-  const text = raw.toLowerCase().replace(/[./_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = raw
+    .toLowerCase()
+    .replace(/[./_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const hasBrokerEmail = uniqueEmailList(brokerEmails).length > 0;
   if (!raw) {
     return {
@@ -5357,14 +5275,7 @@ function buyerBrokerRoutingMode(format, brokerEmails = []) {
       warnings: hasBrokerEmail ? [] : [`Broker email is missing for ${raw}; enter the broker email manually before sending.`],
     };
   }
-  if (
-    text.includes('buyer c o broker')
-    || text.includes('buyer co broker')
-    || text.includes('buyer cc broker')
-    || text.includes('cc broker')
-    || text.includes('copy broker')
-    || text.includes('c o broker')
-  ) {
+  if (text.includes('buyer c o broker') || text.includes('buyer co broker') || text.includes('buyer cc broker') || text.includes('cc broker') || text.includes('copy broker') || text.includes('c o broker')) {
     return {
       mode: 'buyer_cc_broker',
       label: raw,
@@ -5404,11 +5315,7 @@ function combineBuyerBrokerRouting(details = []) {
     }
   }
   const validModes = modes.filter((mode) => mode !== 'buyer_only');
-  const routingMode = validModes.includes('broker_only') && !validModes.includes('buyer_cc_broker')
-    ? 'broker_only'
-    : validModes.includes('buyer_cc_broker')
-      ? 'buyer_cc_broker'
-      : 'buyer_only';
+  const routingMode = validModes.includes('broker_only') && !validModes.includes('buyer_cc_broker') ? 'broker_only' : validModes.includes('buyer_cc_broker') ? 'buyer_cc_broker' : 'buyer_only';
   if (new Set(validModes).size > 1) {
     warnings.push('Multiple buyer broker routing formats found on this invoice; buyer with broker copied is used.');
   }
@@ -5431,7 +5338,10 @@ function combineBuyerBrokerRouting(details = []) {
 function parseStringList(value, fallback = []) {
   if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
   if (typeof value !== 'string') return fallback;
-  const parsed = value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+  const parsed = value
+    .split(/[,\n;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
   return parsed.length ? parsed : fallback;
 }
 
@@ -5512,10 +5422,7 @@ async function loadBuyerInvoiceCollectionMap(stemIds = []) {
 
   try {
     const [itemsRes, eventsRes] = await Promise.all([
-      client
-        .from('buyer_invoice_collection_items')
-        .select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at')
-        .in('stem_id', ids),
+      client.from('buyer_invoice_collection_items').select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at').in('stem_id', ids),
       client
         .from('buyer_invoice_collection_events')
         .select('id,stem_id,event_type,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,actor_user_id,actor_email,created_at')
@@ -5613,7 +5520,11 @@ function prettyDate(value) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 async function resolveViaQuery(objectType, id, nameField = 'Name') {
@@ -5626,18 +5537,7 @@ async function resolveViaQuery(objectType, id, nameField = 'Name') {
   }
 }
 
-const DOCUMENT_SOURCE_GROUPS = [
-  'Direct STEM',
-  'Invoices to Buyer',
-  'Invoices from Suppliers',
-  'Contracts and Compliance',
-  'Dispute / Support',
-  'Product Line Attachments',
-  'Extra Cost',
-  'Broker',
-  'Email',
-  'Other Related',
-];
+const DOCUMENT_SOURCE_GROUPS = ['Direct STEM', 'Invoices to Buyer', 'Invoices from Suppliers', 'Contracts and Compliance', 'Dispute / Support', 'Product Line Attachments', 'Extra Cost', 'Broker', 'Email', 'Other Related'];
 
 const SALESFORCE_ID_RE = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 
@@ -5646,11 +5546,13 @@ function isSalesforceId(value) {
 }
 
 function cleanDownloadFilename(value, fallback = 'salesforce-document') {
-  return String(value || fallback)
-    .replace(/[\\/:*?"<>|]+/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 180) || fallback;
+  return (
+    String(value || fallback)
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180) || fallback
+  );
 }
 
 const DOCUMENT_MIME_TYPES = {
@@ -5671,10 +5573,15 @@ const DOCUMENT_MIME_TYPES = {
 };
 
 function documentContentType(filename, salesforceContentType) {
-  const rawType = String(salesforceContentType || '').trim().toLowerCase();
+  const rawType = String(salesforceContentType || '')
+    .trim()
+    .toLowerCase();
   const genericTypes = new Set(['', 'application/octet-stream', 'application/octetstream', 'binary/octet-stream']);
   if (!genericTypes.has(rawType)) return salesforceContentType;
-  const extension = String(filename || '').split('.').pop()?.toLowerCase();
+  const extension = String(filename || '')
+    .split('.')
+    .pop()
+    ?.toLowerCase();
   return DOCUMENT_MIME_TYPES[extension] || 'application/octet-stream';
 }
 
@@ -5735,12 +5642,7 @@ async function recordsLinkedToStemByLookup(objectName, stemId, sourceGroup, sour
   const nameField = fields.some((field) => field.name === 'Name') ? 'Name' : null;
   const lookupFields = fields.filter((field) => {
     const referenceTargets = (field.referenceTo || []).map((target) => String(target).toLowerCase());
-    return field.type === 'reference'
-      && (
-        referenceTargets.includes('stem__c')
-        || field.name.toLowerCase() === 'stem__c'
-        || String(field.relationshipName || '').toLowerCase() === 'stem__r'
-      );
+    return field.type === 'reference' && (referenceTargets.includes('stem__c') || field.name.toLowerCase() === 'stem__c' || String(field.relationshipName || '').toLowerCase() === 'stem__r');
   });
   const records = [];
   const seen = new Set();
@@ -5793,16 +5695,9 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
     });
   }
 
-  const [lineItems, extraCosts, buyerBrokers] = await Promise.all([
-    queryRows(`SELECT Id, Name, Supplier_Invoice__c, Supplier_Name__c, Product__r.Name FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true }),
-    queryRows(`SELECT Id, Name, Supplier_Invoice__c, Supplier_Name__c, Description__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true }),
-    queryRows(`SELECT Id, Refcode_Index__c, Buyer_Broker__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true }),
-  ]);
+  const [lineItems, extraCosts, buyerBrokers] = await Promise.all([queryRows(`SELECT Id, Name, Supplier_Invoice__c, Supplier_Name__c, Product__r.Name FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true }), queryRows(`SELECT Id, Name, Supplier_Invoice__c, Supplier_Name__c, Description__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true }), queryRows(`SELECT Id, Refcode_Index__c, Buyer_Broker__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC LIMIT 500`, { limit: 500, softFail: true })]);
 
-  const supplierInvoiceIds = [
-    ...lineItems.map((row) => row.Supplier_Invoice__c),
-    ...extraCosts.map((row) => row.Supplier_Invoice__c),
-  ].filter(isSalesforceId);
+  const supplierInvoiceIds = [...lineItems.map((row) => row.Supplier_Invoice__c), ...extraCosts.map((row) => row.Supplier_Invoice__c)].filter(isSalesforceId);
   const supplierInvoiceNames = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
 
   for (const item of lineItems) {
@@ -5853,12 +5748,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
     });
   }
 
-  const lookupRelatedGroups = await Promise.all([
-    recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Invoices from Suppliers', 'Supplier Invoice'),
-    recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Invoices to Buyer', 'Buyer / Factoring Invoice'),
-    recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Contracts and Compliance', 'Nomination'),
-    recordsLinkedToStemByLookup('EmailMessage', actualStemId, 'Email', 'Email'),
-  ]);
+  const lookupRelatedGroups = await Promise.all([recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Invoices from Suppliers', 'Supplier Invoice'), recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Invoices to Buyer', 'Buyer / Factoring Invoice'), recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Contracts and Compliance', 'Nomination'), recordsLinkedToStemByLookup('EmailMessage', actualStemId, 'Email', 'Email')]);
   for (const related of lookupRelatedGroups.flat()) {
     addRelatedRecord(relatedRecords, seenRecordIds, related);
   }
@@ -5869,10 +5759,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
   let attachments = [];
   for (const chunk of chunkIds(relatedIds, 150)) {
     const inList = chunk.map((id) => `'${id}'`).join(',');
-    const [linksChunk, attachmentsChunk] = await Promise.all([
-      queryRows(`SELECT ContentDocumentId, LinkedEntityId, ShareType, Visibility FROM ContentDocumentLink WHERE LinkedEntityId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true }),
-      queryRows(`SELECT Id, ParentId, Name, ContentType, BodyLength, CreatedDate, LastModifiedDate, Owner.Name FROM Attachment WHERE ParentId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true }),
-    ]);
+    const [linksChunk, attachmentsChunk] = await Promise.all([queryRows(`SELECT ContentDocumentId, LinkedEntityId, ShareType, Visibility FROM ContentDocumentLink WHERE LinkedEntityId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true }), queryRows(`SELECT Id, ParentId, Name, ContentType, BodyLength, CreatedDate, LastModifiedDate, Owner.Name FROM Attachment WHERE ParentId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true })]);
     contentLinks = contentLinks.concat(linksChunk);
     attachments = attachments.concat(attachmentsChunk);
   }
@@ -5989,9 +5876,7 @@ async function salesforceDocumentDownload(req, res) {
   const id = url.searchParams.get('id');
   const filename = cleanDownloadFilename(url.searchParams.get('filename') || 'salesforce-document');
   if (!isSalesforceId(id)) return sendJson(res, { error: 'Valid document id required' }, 400);
-  const path = kind === 'attachment'
-    ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body`
-    : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
+  const path = kind === 'attachment' ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body` : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
   const file = await sfDownload(path);
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
@@ -6005,46 +5890,38 @@ async function salesforceDocumentDownload(req, res) {
 }
 
 async function salesforceDashboardFilteredUncached(body, req = null, accessContext = null) {
-  const {
-    where,
-    trendYear,
-    disputeOnly,
-    portCountry,
-    companyKeyword,
-    companyFilterMode,
-    dateBasis,
-    dateWindows,
-  } = body;
+  const { where, trendYear, disputeOnly, portCountry, companyKeyword, companyFilterMode, dateBasis, dateWindows } = body;
   const currentYear = Number(trendYear) || new Date().getFullYear();
   const [describe, lineItemDescribe, productDescribe, extraCostDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c' }),
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({
+      fields: [],
+    })),
+    salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({
+      fields: [],
+    })),
     salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }).catch(() => ({ fields: [] })),
   ]);
   const fieldNames = describe.fields.map((f) => f.name);
   const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields, 'product');
   const extraCostFieldNames = new Set((extraCostDescribe.fields || []).map((field) => field.name));
-  const extraCostProductLookup = (extraCostDescribe.fields || [])
-    .find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
+  const extraCostProductLookup = (extraCostDescribe.fields || []).find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
   if (dateBasis && dateBasis !== EXCEPTION_REVIEW_DATE_BASIS) {
     throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
   }
   const exceptionScheduleMode = dateBasis === EXCEPTION_REVIEW_DATE_BASIS;
-  const requestMode = body.mode === 'exception_review' || exceptionScheduleMode
-    ? 'exception_review'
-    : 'dashboard';
+  const requestMode = body.mode === 'exception_review' || exceptionScheduleMode ? 'exception_review' : 'dashboard';
   const exceptionReviewMode = requestMode === 'exception_review';
   const missingScheduleFields = exceptionScheduleMode ? exceptionScheduleSchemaIssues(fieldNames) : [];
   if (missingScheduleFields.length) {
     throw new Error(`Exception Review Schedule schema error: missing Salesforce STEM fields ${missingScheduleFields.join(', ')}.`);
   }
-  const effectiveWhere = exceptionScheduleMode
-    ? buildExceptionReviewScheduleWhere(dateWindows)
-    : where;
+  const effectiveWhere = exceptionScheduleMode ? buildExceptionReviewScheduleWhere(dateWindows) : where;
   const accountDescribe = fieldNames.includes('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
@@ -6061,35 +5938,20 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
   const buyerNameField = fieldNames.includes('Buyer_Name__c') ? 'Buyer_Name__c' : fieldNames.includes('Buyer__c') ? 'Buyer__c' : null;
   const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
-  const disputeCondition = disputeOnly
-    ? hasDisputeStatus
-      ? "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null"
-      : hasDispute
-        ? 'Dispute__c = true'
-        : ''
-    : '';
+  const disputeCondition = disputeOnly ? (hasDisputeStatus ? "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null" : hasDispute ? 'Dispute__c = true' : '') : '';
   const normalizedPortCountry = String(portCountry || '').trim();
   const portCountryLike = normalizedPortCountry ? `%${escapeSoql(normalizedPortCountry)}%` : '';
-  const portCountryCondition = normalizedPortCountry
-    ? `(Port__r.Country__c LIKE '${portCountryLike}' OR Port__r.Name LIKE '${portCountryLike}')`
-    : '';
+  const portCountryCondition = normalizedPortCountry ? `(Port__r.Country__c LIKE '${portCountryLike}' OR Port__r.Name LIKE '${portCountryLike}')` : '';
   const normalizedCompanyKeyword = String(companyKeyword || '').trim();
   const companyMode = companyFilterMode === 'supplier' ? 'supplier' : 'buyer';
   const companyLike = normalizedCompanyKeyword ? `%${escapeSoql(normalizedCompanyKeyword)}%` : '';
   const supplierCompanyFilterActive = Boolean(normalizedCompanyKeyword && companyMode === 'supplier');
-  const companyMatches = (name) => !normalizedCompanyKeyword
-    || String(name || '').toLowerCase().includes(normalizedCompanyKeyword.toLowerCase());
-  const companyCondition = normalizedCompanyKeyword
-    ? companyMode === 'supplier'
-      ? `Id IN (SELECT STEM__c FROM STEM_Line_Item__c WHERE Supplier_Name__c LIKE '${companyLike}' AND Cancelled__c = false)`
-      : buyerNameField
-        ? [
-            `${buyerNameField} LIKE '${companyLike}'`,
-            accountField ? `Account__r.Group_Name__c LIKE '${companyLike}'` : '',
-            accountField ? `Account__r.Parent.Name LIKE '${companyLike}'` : '',
-          ].filter(Boolean).join(' OR ')
-        : ''
-    : '';
+  const companyMatches = (name) =>
+    !normalizedCompanyKeyword ||
+    String(name || '')
+      .toLowerCase()
+      .includes(normalizedCompanyKeyword.toLowerCase());
+  const companyCondition = normalizedCompanyKeyword ? (companyMode === 'supplier' ? `Id IN (SELECT STEM__c FROM STEM_Line_Item__c WHERE Supplier_Name__c LIKE '${companyLike}' AND Cancelled__c = false)` : buyerNameField ? [`${buyerNameField} LIKE '${companyLike}'`, accountField ? `Account__r.Group_Name__c LIKE '${companyLike}'` : '', accountField ? `Account__r.Parent.Name LIKE '${companyLike}'` : ''].filter(Boolean).join(' OR ') : '') : '';
   const baseWhereConditions = [effectiveWhere, companyCondition, interofficeCondition].filter(Boolean);
   const baseWhere = combineWhereConditions(baseWhereConditions);
   const combinedWhere = combineWhereConditions([...baseWhereConditions, disputeCondition]);
@@ -6125,24 +5987,75 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   }
 
   const queries = [
-    { soql: `SELECT COUNT(Id) total FROM stem__c ${whereClause}`, softFail: true },
-    !exceptionReviewMode && hasStatus ? { soql: `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`, softFail: true } : null,
-    !exceptionReviewMode && hasType ? { soql: `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`, softFail: true } : null,
-    { soql: `SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`, limit: 3000, softFail: true },
+    {
+      soql: `SELECT COUNT(Id) total FROM stem__c ${whereClause}`,
+      softFail: true,
+    },
+    !exceptionReviewMode && hasStatus
+      ? {
+          soql: `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`,
+          softFail: true,
+        }
+      : null,
+    !exceptionReviewMode && hasType
+      ? {
+          soql: `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`,
+          softFail: true,
+        }
+      : null,
+    {
+      soql: `SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`,
+      limit: 3000,
+      softFail: true,
+    },
     !exceptionReviewMode && hasDisputeStatus
-      ? { soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`, softFail: true }
+      ? {
+          soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`,
+          softFail: true,
+        }
       : !exceptionReviewMode && hasDispute
-        ? { soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`, softFail: true }
+        ? {
+            soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`,
+            softFail: true,
+          }
         : null,
-    !exceptionReviewMode && accountField ? { soql: `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`, softFail: true } : null,
-    !exceptionReviewMode && buyerAmountField ? { soql: `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
-    !exceptionReviewMode && supplierAmountField ? { soql: `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
-    !exceptionReviewMode && totalCostsField ? { soql: `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`, softFail: true } : null,
-    !exceptionReviewMode
-      ? { soql: `SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`, limit: 3000, softFail: true }
+    !exceptionReviewMode && accountField
+      ? {
+          soql: `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`,
+          softFail: true,
+        }
+      : null,
+    !exceptionReviewMode && buyerAmountField
+      ? {
+          soql: `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`,
+          softFail: true,
+        }
+      : null,
+    !exceptionReviewMode && supplierAmountField
+      ? {
+          soql: `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`,
+          softFail: true,
+        }
+      : null,
+    !exceptionReviewMode && totalCostsField
+      ? {
+          soql: `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`,
+          softFail: true,
+        }
       : null,
     !exceptionReviewMode
-      ? { soql: `SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`, limit: 3000, softFail: true }
+      ? {
+          soql: `SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`,
+          limit: 3000,
+          softFail: true,
+        }
+      : null,
+    !exceptionReviewMode
+      ? {
+          soql: `SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`,
+          limit: 3000,
+          softFail: true,
+        }
       : null,
   ];
 
@@ -6156,10 +6069,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   const allStemsRes = exceptionReviewMode ? recentRes : results[9];
   const monthlyStemsRes = results[10];
 
-  const allStemIds = [...new Set([
-    ...(allStemsRes.records || []).map((s) => s.Id),
-    ...(monthlyStemsRes.records || []).map((s) => s.Id),
-  ])];
+  const allStemIds = [...new Set([...(allStemsRes.records || []).map((s) => s.Id), ...(monthlyStemsRes.records || []).map((s) => s.Id)])];
   const stemById = {};
   for (const stem of [...(allStemsRes.records || []), ...(monthlyStemsRes.records || [])]) stemById[stem.Id] = stem;
   const monthlyMonthByStem = {};
@@ -6173,56 +6083,42 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   let buyerBrokers = [];
   let extraCosts = [];
   if (allStemIds.length > 0) {
-    const lineItemFields = [
-      'STEM__c',
-      'Total_Price__c',
-      'Total_Cost__c',
-      'Supplier_Invoice__c',
-      'Cancelled__c',
-      'Supplier_Name__c',
-      'Buyers_Brokers_Commission_Per_Unit__c',
-      'Quantity__c',
-      'Quantity_Delivered_Per_BDN__c',
-      'Quantity_Max__c',
-      'Quantity_in_MT__c',
-      'Is_Quantity_Range__c',
-      'Product__r.Name',
-      'Product__r.Family',
-      'Price_Per_Unit__c',
-      'Cost_Per_Unit__c',
-      'Unit_Sell_At__c',
-      'Unit_Buy_At__c',
-      'Unit_Cost__c',
-      'Subtotal_Sell_At__c',
-      'Subtotal_Buy_At__c',
-      'Commission_Cost__c',
-      'Suppliers_Brokers_Commission_Per_Unit__c',
-      'Supplier_Broker__r.Name',
-      'Buyers_Broker__r.Name',
-      'Offer_Line_Item__r.UnitPrice',
-      'Offer_Line_Item__r.Supplier_Unit_Price__c',
-    ];
+    const lineItemFields = ['STEM__c', 'Total_Price__c', 'Total_Cost__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Supplier_Name__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Product__r.Name', 'Product__r.Family', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Subtotal_Sell_At__c', 'Subtotal_Buy_At__c', 'Commission_Cost__c', 'Suppliers_Brokers_Commission_Per_Unit__c', 'Supplier_Broker__r.Name', 'Buyers_Broker__r.Name', 'Offer_Line_Item__r.UnitPrice', 'Offer_Line_Item__r.Supplier_Unit_Price__c'];
     if (lineItemUomField) lineItemFields.push(lineItemUomField);
     if (productUomField) lineItemFields.push(`Product__r.${productUomField}`);
     const stemChunks = chunkIds(allStemIds);
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        return { soql: `SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
-      })),
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        return { soql: `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
-      })),
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        const identityFields = [
-          extraCostFieldNames.has('Name') ? 'Name' : '',
-          extraCostFieldNames.has('Description__c') ? 'Description__c' : '',
-          extraCostProductLookup ? `${extraCostProductLookup.relationshipName}.Name` : '',
-        ].filter(Boolean);
-        return { soql: `SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c${identityFields.length ? `, ${identityFields.join(', ')}` : ''} FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`, limit: 2000, softFail: true };
-      })),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${id}'`).join(',');
+          return {
+            soql: `SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
+            limit: 2000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${id}'`).join(',');
+          return {
+            soql: `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
+            limit: 2000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${id}'`).join(',');
+          const identityFields = [extraCostFieldNames.has('Name') ? 'Name' : '', extraCostFieldNames.has('Description__c') ? 'Description__c' : '', extraCostProductLookup ? `${extraCostProductLookup.relationshipName}.Name` : ''].filter(Boolean);
+          return {
+            soql: `SELECT STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c${identityFields.length ? `, ${identityFields.join(', ')}` : ''} FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
+            limit: 2000,
+            softFail: true,
+          };
+        }),
+      ),
     ]);
     lineItems = lineItemChunks.flat();
     buyerBrokers = buyerBrokerChunks.flat();
@@ -6237,11 +6133,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   const extraCostNamesByStem = {};
   for (const ec of extraCosts) {
     if (!ec.STEM__c || ec.Cancelled__c) continue;
-    const extraCostIdentity = [
-      extraCostProductLookup ? ec[extraCostProductLookup.relationshipName]?.Name : null,
-      ec.Description__c,
-      ec.Name,
-    ].map((value) => String(value || '').trim()).filter(Boolean);
+    const extraCostIdentity = [extraCostProductLookup ? ec[extraCostProductLookup.relationshipName]?.Name : null, ec.Description__c, ec.Name].map((value) => String(value || '').trim()).filter(Boolean);
     if (extraCostIdentity.length) {
       if (!extraCostNamesByStem[ec.STEM__c]) extraCostNamesByStem[ec.STEM__c] = new Set();
       for (const value of extraCostIdentity) extraCostNamesByStem[ec.STEM__c].add(value);
@@ -6343,7 +6235,13 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     }
     if (li.Supplier_Invoice__c) hasSupplierInvoiceByStem[id] = true;
 
-    if (!brokerByStem[id]) brokerByStem[id] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
+    if (!brokerByStem[id])
+      brokerByStem[id] = {
+        buyerComm: 0,
+        suppCommPerUnit: 0,
+        suppBrokerName: null,
+        buyerBrokerName: null,
+      };
     brokerByStem[id].buyerComm += buyerBrokerCommission(li, stemHasDelivery);
     brokerByStem[id].suppCommPerUnit += supplierBrokerCommission(li, stemHasDelivery);
     if (!brokerByStem[id].suppBrokerName && li['Supplier_Broker__r']?.Name) brokerByStem[id].suppBrokerName = li['Supplier_Broker__r'].Name;
@@ -6367,7 +6265,13 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   }
   for (const bb of buyerBrokers) {
     if (!bb.STEM__c) continue;
-    if (!brokerByStem[bb.STEM__c]) brokerByStem[bb.STEM__c] = { buyerComm: 0, suppCommPerUnit: 0, suppBrokerName: null, buyerBrokerName: null };
+    if (!brokerByStem[bb.STEM__c])
+      brokerByStem[bb.STEM__c] = {
+        buyerComm: 0,
+        suppCommPerUnit: 0,
+        suppBrokerName: null,
+        buyerBrokerName: null,
+      };
     brokerByStem[bb.STEM__c].buyerComm += bb.Commission_Lumpsum__c ?? 0;
   }
 
@@ -6384,20 +6288,22 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     const supplierBase = invoicedSupplier + (hasSupplierInvoiceByStem[stem.Id] ? uninvoicedSupplierLineBuy : supplierLineBuy);
     const extraCostBuy = extraCostBuyByStem[stem.Id] || 0;
     const rawSupplier = supplierBase + extraCostBuy;
-    const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id]
-      ? Math.max(0, (sellOnlyExtraSellByStem[stem.Id] || 0) - (invoicedExtraCostBuyByStem[stem.Id] || 0))
-      : 0;
-    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
-      ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0)
-      : null;
+    const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id] ? Math.max(0, (sellOnlyExtraSellByStem[stem.Id] || 0) - (invoicedExtraCostBuyByStem[stem.Id] || 0)) : 0;
+    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0) : null;
     const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
-      ? qlikSupplierCost
-      : rawSupplier;
+    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
     const buyerComm = brokerByStem[stem.Id]?.buyerComm || 0;
     const suppCommPerUnit = brokerByStem[stem.Id]?.suppCommPerUnit || 0;
     const brokerCommissions = buyerComm + suppCommPerUnit;
-    return { buyer, supplier, extraCostBuy, buyerComm, suppCommPerUnit, brokerCommissions, netPnl: buyer != null ? buyer - supplier - brokerCommissions : null };
+    return {
+      buyer,
+      supplier,
+      extraCostBuy,
+      buyerComm,
+      suppCommPerUnit,
+      brokerCommissions,
+      netPnl: buyer != null ? buyer - supplier - brokerCommissions : null,
+    };
   };
 
   const allocateStemPnlToSuppliers = (stem, netPnl) => {
@@ -6424,25 +6330,33 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     const buyerAccount = stem['Account__r'] || {};
     const buyerGroup = buyerAccount.Group_Name__c || buyerAccount.Parent?.Name || null;
     const port = stem['Port__r'] || {};
-    const supplierAmountMap = { ...(supplierInvoiceAmountByStem[stem.Id] || {}) };
+    const supplierAmountMap = {
+      ...(supplierInvoiceAmountByStem[stem.Id] || {}),
+    };
     if (unassignedExtraCostBuyByStem[stem.Id]) {
       supplierAmountMap['Unassigned Extra Costs'] = (supplierAmountMap['Unassigned Extra Costs'] || 0) + unassignedExtraCostBuyByStem[stem.Id];
     }
     let supplierInvoiceAmountList = Object.entries(supplierAmountMap)
-      .map(([supplierName, amount]) => ({ supplierName, amount: Number(amount || 0) }))
+      .map(([supplierName, amount]) => ({
+        supplierName,
+        amount: Number(amount || 0),
+      }))
       .filter((item) => item.amount !== 0)
       .sort((a, b) => a.supplierName.localeCompare(b.supplierName));
     const supplierListTotal = supplierInvoiceAmountList.reduce((sum, item) => sum + item.amount, 0);
     const supplierDiff = Number(calc.supplier || 0) - supplierListTotal;
     if (Math.abs(supplierDiff) > 0.05) {
       if (!supplierInvoiceAmountList.length) {
-        supplierInvoiceAmountList = [{ supplierName: 'Supplier Invoice Amount', amount: Number(calc.supplier || 0) }];
+        supplierInvoiceAmountList = [
+          {
+            supplierName: 'Supplier Invoice Amount',
+            amount: Number(calc.supplier || 0),
+          },
+        ];
       } else {
         const denominator = supplierInvoiceAmountList.reduce((sum, item) => sum + Math.abs(item.amount), 0) || supplierInvoiceAmountList.length;
         supplierInvoiceAmountList = supplierInvoiceAmountList.map((item) => {
-          const ratio = denominator === supplierInvoiceAmountList.length
-            ? 1 / supplierInvoiceAmountList.length
-            : Math.abs(item.amount) / denominator;
+          const ratio = denominator === supplierInvoiceAmountList.length ? 1 / supplierInvoiceAmountList.length : Math.abs(item.amount) / denominator;
           return { ...item, amount: item.amount + supplierDiff * ratio };
         });
       }
@@ -6515,7 +6429,11 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     .slice(0, 10)
     .map(([name, pnl]) => ({ name, netPnl: pnl }));
 
-  const monthlyTotals = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, netPnl: 0, turnover: 0 }));
+  const monthlyTotals = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1,
+    netPnl: 0,
+    turnover: 0,
+  }));
   const buyerMonthTotals = {};
   const supplierMonthTotals = {};
   for (const stem of monthlyStemsRes.records || []) {
@@ -6545,7 +6463,10 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     grossMarginPct: grossMarginPercent(item.netPnl, item.turnover),
   }));
   const monthlyBuyerNames = Object.entries(buyerMonthTotals)
-    .map(([name, months]) => ({ name, total: months.reduce((sum, value) => sum + value, 0) }))
+    .map(([name, months]) => ({
+      name,
+      total: months.reduce((sum, value) => sum + value, 0),
+    }))
     .sort((a, b) => b.total - a.total)
     .slice(0, 8)
     .map((item) => item.name);
@@ -6555,7 +6476,10 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     return row;
   });
   const monthlySupplierNames = Object.entries(supplierMonthTotals)
-    .map(([name, months]) => ({ name, total: months.reduce((sum, value) => sum + value, 0) }))
+    .map(([name, months]) => ({
+      name,
+      total: months.reduce((sum, value) => sum + value, 0),
+    }))
     .sort((a, b) => b.total - a.total)
     .slice(0, 8)
     .map((item) => item.name);
@@ -6564,9 +6488,12 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     for (const supplierName of monthlySupplierNames) row[supplierName] = supplierMonthTotals[supplierName]?.[idx] || 0;
     return row;
   });
-  const productFamilyQuantities = [...productFamilyQuantityByUnit.values()]
-    .sort((a, b) => b.quantity - a.quantity);
-  const productFamilyOrder = new Map([['HSFO', 0], ['VLSFO', 1], ['LSMGO', 2]]);
+  const productFamilyQuantities = [...productFamilyQuantityByUnit.values()].sort((a, b) => b.quantity - a.quantity);
+  const productFamilyOrder = new Map([
+    ['HSFO', 0],
+    ['VLSFO', 1],
+    ['LSMGO', 2],
+  ]);
   const monthlyProductVolumeSeries = [...monthlyProductVolumeByUnit.values()]
     .sort((a, b) => {
       const familyDifference = (productFamilyOrder.get(a.family) ?? 99) - (productFamilyOrder.get(b.family) ?? 99);
@@ -6604,8 +6531,14 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     totalProfit,
     totalInvoicedProfit,
     disputedCount: disputedRes.records?.[0]?.total ?? 0,
-    stemByStatus: (statusRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
-    stemByType: (typeRes.records || []).map((r) => ({ label: r.val || 'Unknown', value: r.total })),
+    stemByStatus: (statusRes.records || []).map((r) => ({
+      label: r.val || 'Unknown',
+      value: r.total,
+    })),
+    stemByType: (typeRes.records || []).map((r) => ({
+      label: r.val || 'Unknown',
+      value: r.total,
+    })),
     recentStems,
     totalCosts,
     buyerAmountField,
@@ -6632,9 +6565,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
 }
 
 async function salesforceDashboardFilteredFull(body, req = null, accessContext = null) {
-  const mode = body.mode === 'exception_review' || body.dateBasis === EXCEPTION_REVIEW_DATE_BASIS
-    ? 'exception_review'
-    : 'dashboard';
+  const mode = body.mode === 'exception_review' || body.dateBasis === EXCEPTION_REVIEW_DATE_BASIS ? 'exception_review' : 'dashboard';
   const cachePayload = { ...body, mode };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
@@ -6657,7 +6588,8 @@ async function stemPnlFull(body, req = null, accessContext = null) {
   const interofficeCondition = await interofficeStemAccessCondition(accessContext);
   const combinedWhere = combineWhereConditions([where, interofficeCondition]);
   const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
-  const stems = await queryRows(`
+  const stems = await queryRows(
+    `
     SELECT Id, KeyStem__c, Name, Delivery_Date__c, Expected_Delivery_Date__c,
            Account__r.Name,
            Total_Invoice_Amount__c,
@@ -6669,18 +6601,34 @@ async function stemPnlFull(body, req = null, accessContext = null) {
     ${whereClause}
     ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC
     LIMIT ${Number(limit) || 500}
-  `, { limit: Math.max(Number(limit) || 500, 500) });
+  `,
+    { limit: Math.max(Number(limit) || 500, 500) },
+  );
 
   if (!stems.length) {
-    return { rows: [], totals: { count: 0, complete: 0, Buyer_Invoice: 0, Supplier_Invoice: 0, Costs: 0, Total_Broker_Comm: 0, Gross_Profit: 0, Net_Profit: 0 } };
+    return {
+      rows: [],
+      totals: {
+        count: 0,
+        complete: 0,
+        Buyer_Invoice: 0,
+        Supplier_Invoice: 0,
+        Costs: 0,
+        Total_Broker_Comm: 0,
+        Gross_Profit: 0,
+        Net_Profit: 0,
+      },
+    };
   }
 
   const stemIds = stems.map((s) => s.Id);
   const idChunks = chunkIds(stemIds);
   const [lineItemArrays, buyerBrokerArrays, extraCostArrays] = await Promise.all([
-    Promise.all(idChunks.map((chunk) => {
-      const inList = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+    Promise.all(
+      idChunks.map((chunk) => {
+        const inList = chunk.map((id) => `'${id}'`).join(',');
+        return queryRows(
+          `
         SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                Product__r.Name, Product__r.Family,
                Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
@@ -6695,12 +6643,17 @@ async function stemPnlFull(body, req = null, accessContext = null) {
         FROM STEM_Line_Item__c
         WHERE STEM__c IN (${inList})
         LIMIT 2000
-      `, { limit: 2000, softFail: true });
-    })),
+      `,
+          { limit: 2000, softFail: true },
+        );
+      }),
+    ),
     Promise.all(idChunks.map(() => Promise.resolve([]))),
-    Promise.all(idChunks.map((chunk) => {
-      const inList = chunk.map((id) => `'${id}'`).join(',');
-      return queryRows(`
+    Promise.all(
+      idChunks.map((chunk) => {
+        const inList = chunk.map((id) => `'${id}'`).join(',');
+        return queryRows(
+          `
         SELECT STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c,
                Quantity_Range_Max__c, Is_Quantity_Range__c,
                Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c,
@@ -6708,8 +6661,11 @@ async function stemPnlFull(body, req = null, accessContext = null) {
         FROM STEM_Extra_Cost__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
-      `, { limit: 5000, softFail: true });
-    })),
+      `,
+          { limit: 5000, softFail: true },
+        );
+      }),
+    ),
   ]);
 
   const lineItems = lineItemArrays.flat();
@@ -6718,7 +6674,20 @@ async function stemPnlFull(body, req = null, accessContext = null) {
   const stemById = Object.fromEntries(stems.map((stem) => [stem.Id, stem]));
   const byId = {};
   const initStem = (id) => {
-    if (!byId[id]) byId[id] = { suppBrokerComm: 0, buyerBrokerComm: 0, extraCostSell: 0, extraCostBuy: 0, invoicedExtraCostBuy: 0, sellOnlyExtraSell: 0, buyerLineSell: 0, supplierLineBuy: 0, uninvoicedSupplierLineBuy: 0, hasSupplierInvoice: false, suppBrokerName: null };
+    if (!byId[id])
+      byId[id] = {
+        suppBrokerComm: 0,
+        buyerBrokerComm: 0,
+        extraCostSell: 0,
+        extraCostBuy: 0,
+        invoicedExtraCostBuy: 0,
+        sellOnlyExtraSell: 0,
+        buyerLineSell: 0,
+        supplierLineBuy: 0,
+        uninvoicedSupplierLineBuy: 0,
+        hasSupplierInvoice: false,
+        suppBrokerName: null,
+      };
   };
 
   for (const li of lineItems) {
@@ -6761,13 +6730,9 @@ async function stemPnlFull(body, req = null, accessContext = null) {
     const supplierBase = (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + (agg.hasSupplierInvoice ? (agg.uninvoicedSupplierLineBuy ?? 0) : (agg.supplierLineBuy ?? 0));
     const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
     const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
-    const qlikSupplierCost = s.QLIK_STEM_Line_Item_Total_Cost__c != null || s.QLIK_Costs_Total_Cost__c != null
-      ? (s.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (s.QLIK_Costs_Total_Cost__c || 0)
-      : null;
+    const qlikSupplierCost = s.QLIK_STEM_Line_Item_Total_Cost__c != null || s.QLIK_Costs_Total_Cost__c != null ? (s.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (s.QLIK_Costs_Total_Cost__c || 0) : null;
     const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
-      ? qlikSupplierCost
-      : rawSupplier;
+    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
     const suppBrokerComm = agg.suppBrokerComm ?? 0;
     const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
     const totalBroker = suppBrokerComm + buyerBrokerComm;
@@ -6817,7 +6782,9 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const describe = await salesforceObjectFields({ objectName: 'stem__c' });
   const fieldNames = describe.fields.map((f) => f.name);
   const accountDescribe = fieldNames.includes('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
@@ -6860,17 +6827,9 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
 
-  const storedDueCondition = dueFields
-    .map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`)
-    .join(' OR ');
-  const calculatedDueDateConditions = [
-    fieldNames.includes('Delivery_Date__c') ? `Delivery_Date__c != null AND Delivery_Date__c <= ${dueThrough}` : '',
-    fieldNames.includes('Delivery_Date_Or_Expected__c') ? `Delivery_Date_Or_Expected__c != null AND Delivery_Date_Or_Expected__c <= ${dueThrough}` : '',
-    fieldNames.includes('Expected_Delivery_Date__c') ? `Expected_Delivery_Date__c != null AND Expected_Delivery_Date__c <= ${dueThrough}` : '',
-  ].filter(Boolean);
-  const calculatedDueCondition = fieldNames.includes('Payment_Term__c') && calculatedDueDateConditions.length
-    ? `(Payment_Term__c != null AND (${calculatedDueDateConditions.map((condition) => `(${condition})`).join(' OR ')}))`
-    : '';
+  const storedDueCondition = dueFields.map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`).join(' OR ');
+  const calculatedDueDateConditions = [fieldNames.includes('Delivery_Date__c') ? `Delivery_Date__c != null AND Delivery_Date__c <= ${dueThrough}` : '', fieldNames.includes('Delivery_Date_Or_Expected__c') ? `Delivery_Date_Or_Expected__c != null AND Delivery_Date_Or_Expected__c <= ${dueThrough}` : '', fieldNames.includes('Expected_Delivery_Date__c') ? `Expected_Delivery_Date__c != null AND Expected_Delivery_Date__c <= ${dueThrough}` : ''].filter(Boolean);
+  const calculatedDueCondition = fieldNames.includes('Payment_Term__c') && calculatedDueDateConditions.length ? `(Payment_Term__c != null AND (${calculatedDueDateConditions.map((condition) => `(${condition})`).join(' OR ')}))` : '';
   const dueCondition = [storedDueCondition, calculatedDueCondition].filter(Boolean).join(' OR ');
   const outstandingConditions = [];
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
@@ -6878,13 +6837,16 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const whereParts = [`(${dueCondition})`, ...outstandingConditions];
   if (interofficeCondition) whereParts.push(interofficeCondition);
 
-  const stems = await queryRows(`
+  const stems = await queryRows(
+    `
     SELECT ${[...new Set(fields)].join(', ')}
     FROM stem__c
     WHERE ${whereParts.join(' AND ')}
     ORDER BY ${dueFields[0]} ASC NULLS LAST, Name ASC
     LIMIT ${rowLimit}
-  `, { limit: rowLimit, softFail: true });
+  `,
+    { limit: rowLimit, softFail: true },
+  );
 
   const stemIds = stems.map((stem) => stem.Id);
   const traderByStem = {};
@@ -6894,48 +6856,79 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (stemIds.length) {
     const stemChunks = chunkIds(stemIds);
     const [nominationArrays, supplierInvoiceArrays, brokerLineItemArrays, buyerBrokerArrays] = await Promise.all([
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c
           FROM Nomination__c
           WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
           ORDER BY CreatedDate ASC
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, PSPRS_Upload_Date__c
           FROM Supplier_Invoice__c
           WHERE STEM__c IN (${inList}) AND PSPRS_Upload_Date__c != null
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Buyers_Broker__c, Buyer_Broker__c, Cancelled__c
           FROM STEM_Line_Item__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(stemChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        stemChunks.map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Buyer_Broker__c
           FROM STEM_Buyer_Broker__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
     ]);
 
     for (const nomination of nominationArrays.flat()) {
       if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-      if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [], buyerEmails: [], allEmails: [], emailByName: {} };
+      if (!traderByStem[nomination.STEM__c])
+        traderByStem[nomination.STEM__c] = {
+          buyer: [],
+          all: [],
+          buyerEmails: [],
+          allEmails: [],
+          emailByName: {},
+        };
       const name = String(nomination.Name || '');
       const value = nomination.Buyer_Supplier_Trader__c;
       const emails = uniqueEmailList(nomination.BT_ST_Email_Address__c);
@@ -6947,10 +6940,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
         }
       }
       if (traderKey && emails.length) {
-        traderByStem[nomination.STEM__c].emailByName[traderKey] = uniqueEmailList(
-          traderByStem[nomination.STEM__c].emailByName[traderKey] || [],
-          emails,
-        );
+        traderByStem[nomination.STEM__c].emailByName[traderKey] = uniqueEmailList(traderByStem[nomination.STEM__c].emailByName[traderKey] || [], emails);
         traderEmailByName[traderKey] = uniqueEmailList(traderEmailByName[traderKey] || [], emails);
       }
       if (name.startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(value)) {
@@ -6967,10 +6957,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
 
     for (const invoice of supplierInvoiceArrays.flat()) {
       if (!invoice.STEM__c || !invoice.PSPRS_Upload_Date__c) continue;
-      prpspUploadDateByStem[invoice.STEM__c] = latestDate([
-        prpspUploadDateByStem[invoice.STEM__c],
-        invoice.PSPRS_Upload_Date__c,
-      ]);
+      prpspUploadDateByStem[invoice.STEM__c] = latestDate([prpspUploadDateByStem[invoice.STEM__c], invoice.PSPRS_Upload_Date__c]);
     }
 
     const brokerLinksByStem = {};
@@ -6996,15 +6983,21 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
       brokerAccountFields.push(...brokerInvoiceFormatFields, ...brokerEmailFields);
       if (accountFieldNames.includes('Hidden_Broker__c')) brokerAccountFields.push('Hidden_Broker__c');
       if (accountFieldNames.includes('Hidden_Broker_Company__c')) brokerAccountFields.push('Hidden_Broker_Company__c');
-      const brokerAccountChunks = await compositeQueryRows(chunkIds(brokerIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+      const brokerAccountChunks = await compositeQueryRows(
+        chunkIds(brokerIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT ${[...new Set(brokerAccountFields)].join(', ')}
           FROM Account
           WHERE Id IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      }));
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      );
       for (const account of brokerAccountChunks.flat()) {
         if (account.Hidden_Broker__c === true || account.Hidden_Broker_Company__c === true) continue;
         const detail = {
@@ -7018,24 +7011,16 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
       }
     }
     for (const [stemId, ids] of Object.entries(brokerLinksByStem)) {
-      buyerBrokerDetailsByStem[stemId] = ids
-        .map((id) => brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || null)
-        .filter(Boolean);
+      buyerBrokerDetailsByStem[stemId] = ids.map((id) => brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || null).filter(Boolean);
     }
   }
 
   const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(body, 'buyerTraders');
-  const selectedBuyerTradersInput = Array.isArray(body.buyerTraders)
-    ? body.buyerTraders
-    : splitBuyerTraderNames(body.buyerTraders);
+  const selectedBuyerTradersInput = Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders);
 
   const allRows = stems
     .map((stem) => {
-      const dueDate = calculatedBuyerPayTermDate(stem)
-        || stem.Invoice_Due_Date__c
-        || stem.Due_Date__c
-        || stem.Buyer_Pay_Term_Date__c
-        || earliestDate(dueFields.map((field) => stem[field]));
+      const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate(dueFields.map((field) => stem[field]));
       if (!dueDate || dueDate > dueThrough) return null;
       if (dueDate < MIN_BUYER_INVOICE_DUE_DATE) return null;
       if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
@@ -7104,43 +7089,19 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
     body,
     req,
     accessContext,
-    loader: () => salesforceBuyerInvoicesSnapshot(
-      { daysAhead, receivableThreshold },
-      req,
-      accessContext,
-    ),
+    loader: () => salesforceBuyerInvoicesSnapshot({ daysAhead, receivableThreshold }, req, accessContext),
   });
-  const {
-    allRows,
-    today,
-    dueThrough,
-    traderEmailByName,
-    hasBuyerTraderFilter,
-    selectedBuyerTradersInput,
-  } = {
+  const { allRows, today, dueThrough, traderEmailByName, hasBuyerTraderFilter, selectedBuyerTradersInput } = {
     ...cached.value,
     hasBuyerTraderFilter: Object.prototype.hasOwnProperty.call(body, 'buyerTraders'),
-    selectedBuyerTradersInput: Array.isArray(body.buyerTraders)
-      ? body.buyerTraders
-      : splitBuyerTraderNames(body.buyerTraders),
+    selectedBuyerTradersInput: Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders),
   };
-  const [collectionMap, reminderRulesState] = await Promise.all([
-    loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId)),
-    loadBuyerInvoiceReminderRules(),
-  ]);
+  const [collectionMap, reminderRulesState] = await Promise.all([loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId)), loadBuyerInvoiceReminderRules()]);
   const rowsWithCollection = allRows.map((row) => {
     const collection = collectionMap[row.stemId] || {};
     const paymentHandlerName = collection.item?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
-    const paymentHandlerEmail = uniqueEmailList(
-      row.buyerTraderEmailByName?.[traderEmailLookupKey(paymentHandlerName)] || [],
-      traderEmailByName[traderEmailLookupKey(paymentHandlerName)] || [],
-    );
-    const paymentReminderRecipients = uniqueEmailList(
-      row.paymentReminderRecipients || [],
-      row.buyerAccountsEmail || '',
-      row.buyerTraderEmail || '',
-      paymentHandlerEmail,
-    );
+    const paymentHandlerEmail = uniqueEmailList(row.buyerTraderEmailByName?.[traderEmailLookupKey(paymentHandlerName)] || [], traderEmailByName[traderEmailLookupKey(paymentHandlerName)] || []);
+    const paymentReminderRecipients = uniqueEmailList(row.paymentReminderRecipients || [], row.buyerAccountsEmail || '', row.buyerTraderEmail || '', paymentHandlerEmail);
     return {
       ...row,
       paymentHandlerName,
@@ -7151,23 +7112,13 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
       collectionEvents: collection.events || [],
     };
   });
-  const rowsWithReminderRules = applyBuyerReminderRules(
-    rowsWithCollection,
-    reminderRulesState.rules,
-    reminderRulesState.available,
-  );
+  const rowsWithReminderRules = applyBuyerReminderRules(rowsWithCollection, reminderRulesState.rules, reminderRulesState.available);
 
   const buyerTraderOptions = [...new Set(rowsWithReminderRules.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))].sort((a, b) => a.localeCompare(b));
-  const selectedBuyerTraders = selectedBuyerTradersInput
-    .map((name) => String(name || '').trim())
-    .filter((name) => buyerTraderOptions.includes(name));
+  const selectedBuyerTraders = selectedBuyerTradersInput.map((name) => String(name || '').trim()).filter((name) => buyerTraderOptions.includes(name));
   const activeBuyerTraders = hasBuyerTraderFilter ? selectedBuyerTraders : buyerTraderOptions;
   const activeBuyerTraderSet = new Set(activeBuyerTraders);
-  const rows = hasBuyerTraderFilter && !activeBuyerTraderSet.size
-    ? []
-    : activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length
-    ? rowsWithReminderRules.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name)))
-    : rowsWithReminderRules;
+  const rows = hasBuyerTraderFilter && !activeBuyerTraderSet.size ? [] : activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length ? rowsWithReminderRules.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name))) : rowsWithReminderRules;
 
   return {
     rows,
@@ -7198,11 +7149,7 @@ function serializeIncomingPaymentSettings(row = null) {
 async function loadIncomingPaymentSettings() {
   const client = safeSupabaseAdminClient();
   if (!client) return serializeIncomingPaymentSettings(null);
-  const { data, error } = await client
-    .from('incoming_payment_settings')
-    .select('id,fully_paid_threshold,updated_by_email,updated_at')
-    .eq('id', INCOMING_PAYMENT_SETTINGS_ID)
-    .maybeSingle();
+  const { data, error } = await client.from('incoming_payment_settings').select('id,fully_paid_threshold,updated_by_email,updated_at').eq('id', INCOMING_PAYMENT_SETTINGS_ID).maybeSingle();
   if (error) return serializeIncomingPaymentSettings(null);
   return serializeIncomingPaymentSettings(data);
 }
@@ -7225,11 +7172,7 @@ async function incomingPaymentSettingsSave(body, req) {
     updated_by_email: profile.email,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await client
-    .from('incoming_payment_settings')
-    .upsert(payload, { onConflict: 'id' })
-    .select('id,fully_paid_threshold,updated_by_email,updated_at')
-    .single();
+  const { data, error } = await client.from('incoming_payment_settings').upsert(payload, { onConflict: 'id' }).select('id,fully_paid_threshold,updated_by_email,updated_at').single();
   if (error) throw error;
   return { settings: serializeIncomingPaymentSettings(data) };
 }
@@ -7263,11 +7206,7 @@ function serializeCashflowSettings(row = null) {
 async function loadCashflowSettings() {
   const client = safeSupabaseAdminClient();
   if (!client) return serializeCashflowSettings(null);
-  const { data, error } = await client
-    .from('cashflow_forecast_settings')
-    .select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at')
-    .eq('id', CASHFLOW_SETTINGS_ID)
-    .maybeSingle();
+  const { data, error } = await client.from('cashflow_forecast_settings').select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at').eq('id', CASHFLOW_SETTINGS_ID).maybeSingle();
   if (error) return serializeCashflowSettings(null);
   return serializeCashflowSettings(data);
 }
@@ -7288,10 +7227,7 @@ function serializeCashflowHolidayOverride(row) {
 async function loadCashflowHolidayOverrides(years = []) {
   const client = safeSupabaseAdminClient();
   if (!client) return [];
-  let query = client
-    .from('cashflow_holiday_overrides')
-    .select('id,holiday_date,country_code,name,is_blocked,note,created_by_email,created_at,updated_by_email,updated_at')
-    .order('holiday_date', { ascending: true });
+  let query = client.from('cashflow_holiday_overrides').select('id,holiday_date,country_code,name,is_blocked,note,created_by_email,created_at,updated_by_email,updated_at').order('holiday_date', { ascending: true });
   const normalizedYears = [...new Set(years.map((year) => Number(year)).filter(Number.isFinite))];
   if (normalizedYears.length) {
     const from = `${Math.min(...normalizedYears)}-01-01`;
@@ -7334,24 +7270,21 @@ async function cashflowCachedHolidays(countryCode, year, warnings = []) {
   const client = safeSupabaseAdminClient();
   const cacheSelect = 'id,country_code,calendar_year,source,holidays,fetched_at,expires_at,error_message';
   if (client) {
-    const { data: cached } = await client
-      .from('cashflow_holiday_cache')
-      .select(cacheSelect)
-      .eq('country_code', countryCode)
-      .eq('calendar_year', year)
-      .eq('source', CASHFLOW_HOLIDAY_SOURCE)
-      .maybeSingle();
+    const { data: cached } = await client.from('cashflow_holiday_cache').select(cacheSelect).eq('country_code', countryCode).eq('calendar_year', year).eq('source', CASHFLOW_HOLIDAY_SOURCE).maybeSingle();
     const notExpired = cached?.expires_at && new Date(cached.expires_at).getTime() > Date.now();
     if (cached?.holidays && notExpired) {
-      return { holidays: cached.holidays, fetchedAt: cached.fetched_at, fromCache: true };
+      return {
+        holidays: cached.holidays,
+        fetchedAt: cached.fetched_at,
+        fromCache: true,
+      };
     }
     try {
       const holidays = await fetchNagerHolidays(countryCode, year);
       const expiresAt = new Date();
       expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
-      await client
-        .from('cashflow_holiday_cache')
-        .upsert({
+      await client.from('cashflow_holiday_cache').upsert(
+        {
           country_code: countryCode,
           calendar_year: year,
           source: CASHFLOW_HOLIDAY_SOURCE,
@@ -7359,20 +7292,46 @@ async function cashflowCachedHolidays(countryCode, year, warnings = []) {
           fetched_at: new Date().toISOString(),
           expires_at: expiresAt.toISOString(),
           error_message: null,
-        }, { onConflict: 'country_code,calendar_year,source' });
-      return { holidays, fetchedAt: new Date().toISOString(), fromCache: false };
+        },
+        { onConflict: 'country_code,calendar_year,source' },
+      );
+      return {
+        holidays,
+        fetchedAt: new Date().toISOString(),
+        fromCache: false,
+      };
     } catch (error) {
       warnings.push(error.message);
-      if (cached?.holidays) return { holidays: cached.holidays, fetchedAt: cached.fetched_at, fromCache: true, error: error.message };
-      return { holidays: [], fetchedAt: null, fromCache: false, error: error.message };
+      if (cached?.holidays)
+        return {
+          holidays: cached.holidays,
+          fetchedAt: cached.fetched_at,
+          fromCache: true,
+          error: error.message,
+        };
+      return {
+        holidays: [],
+        fetchedAt: null,
+        fromCache: false,
+        error: error.message,
+      };
     }
   }
 
   try {
-    return { holidays: await fetchNagerHolidays(countryCode, year), fetchedAt: new Date().toISOString(), fromCache: false };
+    return {
+      holidays: await fetchNagerHolidays(countryCode, year),
+      fetchedAt: new Date().toISOString(),
+      fromCache: false,
+    };
   } catch (error) {
     warnings.push(error.message);
-    return { holidays: [], fetchedAt: null, fromCache: false, error: error.message };
+    return {
+      holidays: [],
+      fetchedAt: null,
+      fromCache: false,
+      error: error.message,
+    };
   }
 }
 
@@ -7482,7 +7441,7 @@ function cashflowWeightedDelay(samples) {
   const weighted = weightedTotal / weightTotal;
   if (recent.length >= Math.min(3, samples.length)) {
     const recentAverage = recent.reduce((sum, sample) => sum + Number(sample.delayDays || 0), 0) / recent.length;
-    return Math.round((weighted * 0.7) + (recentAverage * 0.3));
+    return Math.round(weighted * 0.7 + recentAverage * 0.3);
   }
   return Math.round(weighted);
 }
@@ -7553,48 +7512,36 @@ function cashflowPaymentText(payment, fields = []) {
 async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = null }) {
   const today = dateOnly(new Date());
   const lookbackStart = [addDays(today, -Math.max(1, Number(lookbackMonths || 12)) * 31), CASHFLOW_FORECAST_START_DATE].sort().at(-1);
-  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentDescribe = await salesforceObjectFields({
+    objectName: 'Payment__c',
+  }).catch(() => ({ fields: [] }));
   const paymentFields = paymentDescribe.fields || [];
   const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
   const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
   if (!paymentFieldNames.size) return { samples: [], warnings: ['Payment__c is not queryable.'] };
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, [
-    'Amount__c',
-    'Payment_Amount__c',
-    'Paid_Amount__c',
-    'Received_Amount__c',
-    'Total_Amount__c',
-    'Amount_Paid__c',
-    'Payment_Value__c',
-    'Actual_Amount__c',
-  ]);
-  if (!dateField || !amountField) return { samples: [], warnings: ['Payment__c date or amount field was not found.'] };
+  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
+  if (!dateField || !amountField)
+    return {
+      samples: [],
+      warnings: ['Payment__c date or amount field was not found.'],
+    };
   const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
   const referenceFields = incomingPaymentReferenceFields(paymentFields);
   const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
   const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const directionFields = incomingPaymentDirectionFields(paymentFields);
   const dateType = paymentFieldByName[dateField]?.type || null;
-  const payments = await queryRows(`
-    SELECT ${[...new Set([
-      'Id',
-      ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c', 'RecordTypeId']),
-      paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null,
-      paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null,
-      dateField,
-      amountField,
-      ...supplierInvoiceLookupFields,
-      ...referenceFields,
-      ...statusFields,
-      ...typeFields,
-      ...directionFields,
-    ].filter(Boolean))].join(', ')}
+  const payments = await queryRows(
+    `
+    SELECT ${[...new Set(['Id', ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c', 'RecordTypeId']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, dateField, amountField, ...supplierInvoiceLookupFields, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean))].join(', ')}
     FROM Payment__c
     WHERE ${dateField} >= ${soqlDateValue(dateField, dateType, lookbackStart, false)}
     ORDER BY ${dateField} DESC NULLS LAST
     LIMIT 10000
-  `, { limit: 10000, softFail: true });
+  `,
+    { limit: 10000, softFail: true },
+  );
   const eligiblePayments = payments
     .filter((payment) => payment.STEM__c)
     .filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]))
@@ -7602,46 +7549,40 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
   const stemIds = [...new Set(eligiblePayments.map((payment) => payment.STEM__c).filter(Boolean))];
   if (!stemIds.length) return { samples: [], warnings: [] };
 
-  const stemDescribe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
+  const stemDescribe = await salesforceObjectFields({
+    objectName: 'stem__c',
+  }).catch(() => ({ fields: [] }));
   const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
   const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = [
-    'Id',
-    'Name',
-    ...selectedFields(stemFieldNames, [
-      'KeyStem__c',
-      'Buyer_Name__c',
-      'Buyer__c',
-      'Account__c',
-      'Payment_Term__c',
-      'Invoice_Due_Date__c',
-      'Buyer_Pay_Term_Date__c',
-      'Due_Date__c',
-      'Delivery_Date__c',
-      'Delivery_Date_Or_Expected__c',
-      'Expected_Delivery_Date__c',
-    ]),
-  ];
+  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Account__c')) {
     stemSelectFields.push('Account__r.Name');
     if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
     if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
   }
   const stemMap = {};
-  const stemRows = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-    const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-    const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-    return { soql: `
+  const stemRows = await compositeQueryRows(
+    chunkIds(stemIds).map((chunk) => {
+      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
+      return {
+        soql: `
       SELECT ${[...new Set(stemSelectFields)].join(', ')}
       FROM stem__c
       WHERE ${stemWhere}
       LIMIT 5000
-    `, limit: 5000, softFail: true };
-  }));
+    `,
+        limit: 5000,
+        softFail: true,
+      };
+    }),
+  );
   for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
 
   const textFields = [...referenceFields, ...directionFields, ...typeFields, ...statusFields];
@@ -7654,7 +7595,15 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
     if (amount == null || amount <= 0) continue;
     const text = cashflowPaymentText(payment, textFields);
     if (/(bank\s*charge|broker|commission|payable|supplier)/i.test(text)) continue;
-    if (incomingPaymentLooksBankCharge(payment, { referenceFields, directionFields, typeFields, statusFields })) continue;
+    if (
+      incomingPaymentLooksBankCharge(payment, {
+        referenceFields,
+        directionFields,
+        typeFields,
+        statusFields,
+      })
+    )
+      continue;
     const type = incomingPaymentTypeFromContext(payment, {
       amount,
       stem,
@@ -7665,11 +7614,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
       statusFields,
     });
     if (type !== 'Buyer Payment') continue;
-    const dueDate = calculatedBuyerPayTermDate(stem)
-      || stem.Invoice_Due_Date__c
-      || stem.Due_Date__c
-      || stem.Buyer_Pay_Term_Date__c
-      || null;
+    const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
     const paymentDate = dateOnly(payment[dateField] || payment.CreatedDate);
     if (!dueDate || !paymentDate) continue;
     if (isBeforeCashflowForecastStart(paymentDate)) continue;
@@ -7727,7 +7672,14 @@ function cashflowSummarizeRows(rows, bucket = 'daily') {
       totals.supplierPayments += amount;
     }
     const key = cashflowBucketKey(row.forecastDate, bucket);
-    if (!buckets.has(key)) buckets.set(key, { bucket: key, label: cashflowBucketLabel(key, bucket), inflow: 0, outflow: 0, net: 0 });
+    if (!buckets.has(key))
+      buckets.set(key, {
+        bucket: key,
+        label: cashflowBucketLabel(key, bucket),
+        inflow: 0,
+        outflow: 0,
+        net: 0,
+      });
     const current = buckets.get(key);
     if (row.direction === 'inflow') current.inflow += amount;
     if (row.direction === 'outflow') current.outflow += amount;
@@ -7743,7 +7695,9 @@ function cashflowSummarizeRows(rows, bucket = 'daily') {
 async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext = null }) {
   const warnings = [];
   const today = dateOnly(new Date());
-  const describe = await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }));
+  const describe = await salesforceObjectFields({
+    objectName: 'Supplier_Invoice__c',
+  }).catch(() => ({ fields: [] }));
   const fields = describe.fields || [];
   const fieldNames = new Set(fields.map((field) => field.name));
   if (!fieldNames.size) return { rows: [], warnings: ['Supplier_Invoice__c is not queryable.'] };
@@ -7756,59 +7710,57 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
   const supplierFields = selectedFields(fieldNames, ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']);
   const supplierRelationships = supplierFields.map((field) => fieldByName[field]?.relationshipName).filter(Boolean);
   if (!stemField || !dueDateField || (!payableField && !amountField)) {
-    return { rows: [], warnings: ['Supplier invoice STEM, due date, or amount fields were not found.'] };
+    return {
+      rows: [],
+      warnings: ['Supplier invoice STEM, due date, or amount fields were not found.'],
+    };
   }
-  const selectFields = [
-    'Id',
-    'Name',
-    stemField,
-    dueDateField,
-    payableField,
-    amountField,
-    paidDateField,
-    ...selectedFields(fieldNames, ['Supplier_Name__c', 'CurrencyIsoCode', 'Currency__c']),
-    ...supplierFields,
-    ...supplierRelationships.map((relationship) => `${relationship}.Name`),
-  ].filter(Boolean);
-  const whereParts = [
-    `${dueDateField} != null`,
-    `${dueDateField} <= ${dateTo}`,
-  ];
+  const selectFields = ['Id', 'Name', stemField, dueDateField, payableField, amountField, paidDateField, ...selectedFields(fieldNames, ['Supplier_Name__c', 'CurrencyIsoCode', 'Currency__c']), ...supplierFields, ...supplierRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+  const whereParts = [`${dueDateField} != null`, `${dueDateField} <= ${dateTo}`];
   if (paidDateField) whereParts.push(`${paidDateField} = null`);
-  const invoices = await queryRows(`
+  const invoices = await queryRows(
+    `
     SELECT ${[...new Set(selectFields)].join(', ')}
     FROM Supplier_Invoice__c
     WHERE ${whereParts.join(' AND ')}
     ORDER BY ${dueDateField} ASC NULLS LAST
     LIMIT 10000
-  `, { limit: 10000, softFail: true });
+  `,
+    { limit: 10000, softFail: true },
+  );
   const stemIds = [...new Set(invoices.map((invoice) => invoice[stemField]).filter(Boolean))];
   const stemMap = {};
   if (stemIds.length) {
-    const stemDescribe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
+    const stemDescribe = await salesforceObjectFields({
+      objectName: 'stem__c',
+    }).catch(() => ({ fields: [] }));
     const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
     const accountDescribe = stemFieldNames.has('Account__c')
-      ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+      ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+          fields: [],
+        }))
       : { fields: [] };
     const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
     const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-    const stemSelectFields = [
-      'Id',
-      'Name',
-      ...selectedFields(stemFieldNames, ['KeyStem__c', 'Delivery_Date__c']),
-    ];
+    const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Delivery_Date__c'])];
     if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
     if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
-    const stemRows = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-      return { soql: `
+    const stemRows = await compositeQueryRows(
+      chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
+        return {
+          soql: `
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
         WHERE ${stemWhere}
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    }));
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    );
     for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
   }
   const rows = [];
@@ -7822,11 +7774,7 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
     const stem = stemMap[invoice[stemField]] || null;
     if (isInterofficeAccess(accessContext) && invoice[stemField] && !stem) continue;
     if (isBeforeCashflowForecastStart(stem?.Delivery_Date__c)) continue;
-    const counterparty = supplierRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean)
-      || invoice.Supplier_Name__c
-      || supplierFields.map((field) => invoice[field]).find(Boolean)
-      || invoice.Name
-      || 'Supplier';
+    const counterparty = supplierRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || invoice.Supplier_Name__c || supplierFields.map((field) => invoice[field]).find(Boolean) || invoice.Name || 'Supplier';
     rows.push({
       id: `supplier-${invoice.Id}`,
       forecastDate: adjusted.date,
@@ -7928,9 +7876,7 @@ async function cashflowForecast(body, req = null, accessContext = null) {
   const today = dateOnly(new Date());
   const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
   const dateTo = dateOnly(body.dateTo || body.date_to || addDays(today, settings.horizonDays));
-  const bucket = ['daily', 'weekly', 'monthly'].includes(String(body.bucket || '').toLowerCase())
-    ? String(body.bucket).toLowerCase()
-    : 'daily';
+  const bucket = ['daily', 'weekly', 'monthly'].includes(String(body.bucket || '').toLowerCase()) ? String(body.bucket).toLowerCase() : 'daily';
   const holidayData = await loadCashflowHolidayData(yearsBetween(dateFrom, addDays(dateTo, 14)), warnings);
   const incomingSettings = await loadIncomingPaymentSettings();
   const receivableThreshold = Number(incomingSettings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
@@ -7949,21 +7895,30 @@ async function cashflowForecast(body, req = null, accessContext = null) {
     req,
     accessContext,
     loader: async () => {
-      const buyerSamplesData = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
+      const buyerSamplesData = await cashflowBuyerPaymentSamples({
+        lookbackMonths: settings.lookbackMonths,
+        accessContext,
+      });
       const models = cashflowBuildDelayModels(buyerSamplesData.samples || [], settings);
       const [buyerRows, supplierData] = await Promise.all([
-        cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap: holidayData.blockedMap, receivableThreshold, accessContext }),
-        cashflowSupplierInvoiceRows({ dateTo, blockedMap: holidayData.blockedMap, accessContext }),
+        cashflowBuyerReceiptRows({
+          dateTo,
+          settings,
+          models,
+          blockedMap: holidayData.blockedMap,
+          receivableThreshold,
+          accessContext,
+        }),
+        cashflowSupplierInvoiceRows({
+          dateTo,
+          blockedMap: holidayData.blockedMap,
+          accessContext,
+        }),
       ]);
       return { buyerSamplesData, models, buyerRows, supplierData };
     },
   });
-  const {
-    buyerSamplesData,
-    models,
-    buyerRows,
-    supplierData,
-  } = cached.value;
+  const { buyerSamplesData, models, buyerRows, supplierData } = cached.value;
   warnings.push(...(buyerSamplesData.warnings || []));
   warnings.push(...(supplierData.warnings || []));
   const rows = [...buyerRows, ...(supplierData.rows || [])]
@@ -7974,9 +7929,7 @@ async function cashflowForecast(body, req = null, accessContext = null) {
       return String(a.counterparty || '').localeCompare(String(b.counterparty || ''));
     });
   const summary = cashflowSummarizeRows(rows, bucket);
-  const canManageSettings = accessContext
-    ? await userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage')
-    : false;
+  const canManageSettings = accessContext ? await userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage') : false;
   return {
     dateFrom,
     dateTo,
@@ -8001,7 +7954,10 @@ async function cashflowBuyerPaymentPerformance(body, req = null, accessContext =
     ...baseSettings,
     lookbackMonths: clampInteger(body.lookbackMonths, baseSettings.lookbackMonths, 1, 36),
   };
-  const data = await cashflowBuyerPaymentSamples({ lookbackMonths: settings.lookbackMonths, accessContext });
+  const data = await cashflowBuyerPaymentSamples({
+    lookbackMonths: settings.lookbackMonths,
+    accessContext,
+  });
   const models = cashflowBuildDelayModels(data.samples || [], settings);
   return {
     settings,
@@ -8012,28 +7968,32 @@ async function cashflowBuyerPaymentPerformance(body, req = null, accessContext =
 }
 
 async function cashflowSettingsGet(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const today = dateOnly(new Date());
   const settings = await loadCashflowSettings();
-  const years = Array.isArray(body.years) && body.years.length
-    ? body.years
-    : yearsBetween(today, addDays(today, settings.horizonDays + 14));
+  const years = Array.isArray(body.years) && body.years.length ? body.years : yearsBetween(today, addDays(today, settings.horizonDays + 14));
   const holidayData = await loadCashflowHolidayData(years, []);
   return {
     settings,
     holidayOverrides: holidayData.overrides,
     holidaySourceStatus: holidayData.statuses,
-    capabilities: { canManageSettings: await userHasCapability(client, profile, 'cashflow_forecast_manage') },
+    capabilities: {
+      canManageSettings: await userHasCapability(client, profile, 'cashflow_forecast_manage'),
+    },
   };
 }
 
 async function cashflowSettingsSave(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'cashflow_forecast_manage', 'Cashflow settings management permission is required.');
   if (body.overrideAction === 'add') {
     const date = dateOnly(body.date || body.holidayDate);
     if (!date) throw appError('Blocked date is required.', 400);
-    const countryCode = String(body.countryCode || 'MANUAL').trim().toUpperCase().slice(0, 12) || 'MANUAL';
+    const countryCode =
+      String(body.countryCode || 'MANUAL')
+        .trim()
+        .toUpperCase()
+        .slice(0, 12) || 'MANUAL';
     const payload = {
       holiday_date: date,
       country_code: countryCode,
@@ -8046,9 +8006,7 @@ async function cashflowSettingsSave(body, req, accessContext = null) {
       created_by: profile.id,
       created_by_email: profile.email,
     };
-    const { error } = await client
-      .from('cashflow_holiday_overrides')
-      .upsert(payload, { onConflict: 'holiday_date,country_code' });
+    const { error } = await client.from('cashflow_holiday_overrides').upsert(payload, { onConflict: 'holiday_date,country_code' });
     if (error) throw error;
     return cashflowSettingsGet({}, req);
   }
@@ -8069,13 +8027,12 @@ async function cashflowSettingsSave(body, req, accessContext = null) {
     updated_by_email: profile.email,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await client
-    .from('cashflow_forecast_settings')
-    .upsert(payload, { onConflict: 'id' })
-    .select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at')
-    .single();
+  const { data, error } = await client.from('cashflow_forecast_settings').upsert(payload, { onConflict: 'id' }).select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at').single();
   if (error) throw error;
-  return { settings: serializeCashflowSettings(data), holidayOverrides: await loadCashflowHolidayOverrides() };
+  return {
+    settings: serializeCashflowSettings(data),
+    holidayOverrides: await loadCashflowHolidayOverrides(),
+  };
 }
 
 async function cashflowHolidayCalendar(body, req) {
@@ -8122,57 +8079,9 @@ function selectedFields(fieldNames, fields) {
 
 function incomingPaymentReferenceFields(paymentFields = []) {
   const fieldNames = new Set(paymentFields.map((field) => field.name));
-  const exactFields = [
-    'Bank_Reference__c',
-    'Reference__c',
-    'Payment_Reference__c',
-    'Transaction_Reference__c',
-    'Description__c',
-    'Remarks__c',
-  ].filter((field) => fieldNames.has(field));
+  const exactFields = ['Bank_Reference__c', 'Reference__c', 'Payment_Reference__c', 'Transaction_Reference__c', 'Description__c', 'Remarks__c'].filter((field) => fieldNames.has(field));
   const allowedTypes = new Set(['string', 'textarea', 'picklist', 'email', 'phone', 'url']);
-  const dynamicFields = paymentFields
-    .filter((field) => (
-      field?.name &&
-      field.name !== 'Name' &&
-      !field.name.endsWith('__c__r') &&
-      allowedTypes.has(field.type) &&
-      fieldMatchesAny(field, [
-        'bankreference',
-        'bankreferencec',
-        'paymentreference',
-        'paymentreferencec',
-        'transactionreference',
-        'transactionreferencec',
-        'reference',
-        'referencec',
-        'description',
-        'descriptionc',
-        'remarks',
-        'remarksc',
-        'narration',
-        'narrationc',
-        'paymentdetails',
-        'paymentdetailsc',
-        'receiptreference',
-        'receiptreferencec',
-      ], [
-        'bankref',
-        'reference',
-        'transaction',
-        'remittance',
-        'description',
-        'remark',
-        'narration',
-        'receipt',
-        'cheque',
-        'check',
-        'details',
-        'payer',
-        'payor',
-      ])
-    ))
-    .map((field) => field.name);
+  const dynamicFields = paymentFields.filter((field) => field?.name && field.name !== 'Name' && !field.name.endsWith('__c__r') && allowedTypes.has(field.type) && fieldMatchesAny(field, ['bankreference', 'bankreferencec', 'paymentreference', 'paymentreferencec', 'transactionreference', 'transactionreferencec', 'reference', 'referencec', 'description', 'descriptionc', 'remarks', 'remarksc', 'narration', 'narrationc', 'paymentdetails', 'paymentdetailsc', 'receiptreference', 'receiptreferencec'], ['bankref', 'reference', 'transaction', 'remittance', 'description', 'remark', 'narration', 'receipt', 'cheque', 'check', 'details', 'payer', 'payor'])).map((field) => field.name);
   return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 10);
 }
 
@@ -8184,17 +8093,7 @@ function incomingPaymentSupplierInvoiceFields(paymentFields = []) {
       if (!field?.name || field.name === 'Name') return false;
       if (field.type !== 'reference') return false;
       const referenceTo = Array.isArray(field.referenceTo) ? field.referenceTo : [];
-      return referenceTo.includes('Supplier_Invoice__c')
-        || fieldMatchesAny(field, [
-          'supplierinvoice',
-          'supplierinvoicec',
-          'supplierinvoiceid',
-          'supplierinvoiceidc',
-        ], [
-          'supplierinvoice',
-          'supplierinv',
-          'vendorinvoice',
-        ]);
+      return referenceTo.includes('Supplier_Invoice__c') || fieldMatchesAny(field, ['supplierinvoice', 'supplierinvoicec', 'supplierinvoiceid', 'supplierinvoiceidc'], ['supplierinvoice', 'supplierinv', 'vendorinvoice']);
     })
     .map((field) => field.name);
   return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 8);
@@ -8202,86 +8101,17 @@ function incomingPaymentSupplierInvoiceFields(paymentFields = []) {
 
 function incomingPaymentDirectionFields(paymentFields = []) {
   const fieldNames = new Set(paymentFields.map((field) => field.name));
-  const exactFields = [
-    'Type__c',
-    'Payment_Type__c',
-    'Status__c',
-    'Payment_Status__c',
-    'Direction__c',
-    'Payment_Direction__c',
-    'Category__c',
-    'Payment_Category__c',
-    'Payable_Receivable__c',
-    'AP_AR__c',
-    'Payer__c',
-    'Payor__c',
-    'Payee__c',
-    'From__c',
-    'To__c',
-    'Supplier__c',
-    'Vendor__c',
-    'Account__c',
-  ].filter((field) => fieldNames.has(field));
+  const exactFields = ['Type__c', 'Payment_Type__c', 'Status__c', 'Payment_Status__c', 'Direction__c', 'Payment_Direction__c', 'Category__c', 'Payment_Category__c', 'Payable_Receivable__c', 'AP_AR__c', 'Payer__c', 'Payor__c', 'Payee__c', 'From__c', 'To__c', 'Supplier__c', 'Vendor__c', 'Account__c'].filter((field) => fieldNames.has(field));
   const allowedTypes = new Set(['string', 'textarea', 'picklist', 'reference']);
-  const dynamicFields = paymentFields
-    .filter((field) => (
-      field?.name &&
-      field.name !== 'Name' &&
-      allowedTypes.has(field.type) &&
-      fieldMatchesAny(field, [
-        'paymenttype',
-        'paymenttypec',
-        'paymentdirection',
-        'paymentdirectionc',
-        'direction',
-        'directionc',
-        'payablereceivable',
-        'payablereceivablec',
-        'apar',
-        'aparc',
-        'supplier',
-        'supplierc',
-        'vendor',
-        'vendorc',
-        'payee',
-        'payeec',
-        'payer',
-        'payerc',
-        'payor',
-        'payorc',
-      ], [
-        'paymenttype',
-        'direction',
-        'payable',
-        'receivable',
-        'supplier',
-        'vendor',
-        'payee',
-        'payer',
-        'payor',
-        'payfrom',
-        'payto',
-        'recipient',
-        'beneficiary',
-        'party',
-      ])
-    ))
-    .map((field) => field.name);
+  const dynamicFields = paymentFields.filter((field) => field?.name && field.name !== 'Name' && allowedTypes.has(field.type) && fieldMatchesAny(field, ['paymenttype', 'paymenttypec', 'paymentdirection', 'paymentdirectionc', 'direction', 'directionc', 'payablereceivable', 'payablereceivablec', 'apar', 'aparc', 'supplier', 'supplierc', 'vendor', 'vendorc', 'payee', 'payeec', 'payer', 'payerc', 'payor', 'payorc'], ['paymenttype', 'direction', 'payable', 'receivable', 'supplier', 'vendor', 'payee', 'payer', 'payor', 'payfrom', 'payto', 'recipient', 'beneficiary', 'party'])).map((field) => field.name);
   return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 20);
 }
 
 function incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields = []) {
-  return supplierInvoiceFields
-    .map((field) => payment?.[field])
-    .find((value) => isSalesforceId(value)) || null;
+  return supplierInvoiceFields.map((field) => payment?.[field]).find((value) => isSalesforceId(value)) || null;
 }
 
-function incomingPaymentLooksSupplierSide(payment, {
-  supplierInvoiceFields = [],
-  directionFields = [],
-  typeFields = [],
-  statusFields = [],
-} = {}) {
+function incomingPaymentLooksSupplierSide(payment, { supplierInvoiceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
   if (incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields)) return true;
   const fields = uniqueTextList([...directionFields, ...typeFields, ...statusFields]);
   const hasSupplierLookup = fields.some((field) => {
@@ -8292,103 +8122,66 @@ function incomingPaymentLooksSupplierSide(payment, {
     return fieldToken.includes('supplier') || fieldToken.includes('vendor') || fieldToken.includes('supplierinvoice');
   });
   if (hasSupplierLookup) return true;
-  const valueToken = normalizedFieldToken(fields
-    .filter((field) => payment?.[field] != null && payment[field] !== '')
-    .map((field) => payment[field])
-    .join(' '));
+  const valueToken = normalizedFieldToken(
+    fields
+      .filter((field) => payment?.[field] != null && payment[field] !== '')
+      .map((field) => payment[field])
+      .join(' '),
+  );
   if (!valueToken) return false;
-  const supplierSignals = [
-    'supplierinvoice',
-    'supplierpayment',
-    'supplierrefund',
-    'vendor',
-    'payable',
-    'accountspayable',
-    'outgoing',
-    'paymenttosupplier',
-    'tosupplier',
-    'fromsupplier',
-    'supplieraccount',
-    'supplierc',
-    'suppliername',
-  ];
+  const supplierSignals = ['supplierinvoice', 'supplierpayment', 'supplierrefund', 'vendor', 'payable', 'accountspayable', 'outgoing', 'paymenttosupplier', 'tosupplier', 'fromsupplier', 'supplieraccount', 'supplierc', 'suppliername'];
   const hasSupplierSignal = supplierSignals.some((signal) => valueToken.includes(signal));
   if (!hasSupplierSignal) return false;
-  const mixedBuyerSupplierOnly = valueToken.includes('buyersupplier')
-    && !['supplierinvoice', 'supplierpayment', 'supplierrefund', 'paymenttosupplier', 'payable', 'vendor'].some((signal) => valueToken.includes(signal));
+  const mixedBuyerSupplierOnly = valueToken.includes('buyersupplier') && !['supplierinvoice', 'supplierpayment', 'supplierrefund', 'paymenttosupplier', 'payable', 'vendor'].some((signal) => valueToken.includes(signal));
   return !mixedBuyerSupplierOnly;
 }
 
-function incomingPaymentLooksBankCharge(payment, {
-  referenceFields = [],
-  directionFields = [],
-  typeFields = [],
-  statusFields = [],
-} = {}) {
+function incomingPaymentLooksBankCharge(payment, { referenceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
   if (payment?.Id === 'a0Sfu00000FsN0c' || String(payment?.Id || '').startsWith('a0Sfu00000FsN0c')) return true;
   const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(fields
-    .filter((field) => payment?.[field] != null && payment[field] !== '')
-    .map((field) => payment[field])
-    .join(' '));
+  const valueToken = normalizedFieldToken(
+    fields
+      .filter((field) => payment?.[field] != null && payment[field] !== '')
+      .map((field) => payment[field])
+      .join(' '),
+  );
   if (!valueToken) return false;
-  return [
-    'bankcharge',
-    'bankcharges',
-    'bankfee',
-    'bankfees',
-    'remittancecharge',
-    'remittancefee',
-    'transfercharge',
-    'transferfee',
-  ].some((signal) => valueToken.includes(signal));
+  return ['bankcharge', 'bankcharges', 'bankfee', 'bankfees', 'remittancecharge', 'remittancefee', 'transfercharge', 'transferfee'].some((signal) => valueToken.includes(signal));
 }
 
-function incomingPaymentLooksBuyerSide(payment, {
-  referenceFields = [],
-  directionFields = [],
-  typeFields = [],
-  statusFields = [],
-} = {}) {
+function incomingPaymentLooksBuyerSide(payment, { referenceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
   const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(fields
-    .filter((field) => payment?.[field] != null && payment[field] !== '')
-    .map((field) => payment[field])
-    .join(' '));
+  const valueToken = normalizedFieldToken(
+    fields
+      .filter((field) => payment?.[field] != null && payment[field] !== '')
+      .map((field) => payment[field])
+      .join(' '),
+  );
   if (!valueToken) return false;
-  return [
-    'buyerpayment',
-    'buyerreceipt',
-    'paymentfrombuyer',
-    'frombuyer',
-    'customerpayment',
-    'customerreceipt',
-    'receivable',
-    'accountsreceivable',
-  ].some((signal) => valueToken.includes(signal));
+  return ['buyerpayment', 'buyerreceipt', 'paymentfrombuyer', 'frombuyer', 'customerpayment', 'customerreceipt', 'receivable', 'accountsreceivable'].some((signal) => valueToken.includes(signal));
 }
 
-function incomingPaymentLooksStemPayableCalculation(payment, {
-  amount,
-  payableAmounts = [],
-  referenceFields = [],
-  directionFields = [],
-  typeFields = [],
-  statusFields = [],
-  allowBlankSignal = false,
-} = {}) {
+function incomingPaymentLooksStemPayableCalculation(payment, { amount, payableAmounts = [], referenceFields = [], directionFields = [], typeFields = [], statusFields = [], allowBlankSignal = false } = {}) {
   if (amount == null || amount <= 0) return false;
-  const matchesPayableAmount = payableAmounts
-    .filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0)
-    .some((value) => amountNearlyEqual(amount, value, 1));
+  const matchesPayableAmount = payableAmounts.filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0).some((value) => amountNearlyEqual(amount, value, 1));
   if (!matchesPayableAmount) return false;
-  if (incomingPaymentLooksBuyerSide(payment, { referenceFields, directionFields, typeFields, statusFields })) return false;
+  if (
+    incomingPaymentLooksBuyerSide(payment, {
+      referenceFields,
+      directionFields,
+      typeFields,
+      statusFields,
+    })
+  )
+    return false;
 
   const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(fields
-    .filter((field) => payment?.[field] != null && payment[field] !== '')
-    .map((field) => payment[field])
-    .join(' '));
+  const valueToken = normalizedFieldToken(
+    fields
+      .filter((field) => payment?.[field] != null && payment[field] !== '')
+      .map((field) => payment[field])
+      .join(' '),
+  );
   if (!valueToken) return allowBlankSignal;
   return true;
 }
@@ -8399,38 +8192,23 @@ function stemPayableAmountCandidates({ stem = {}, lineItems = [], extraCosts = [
   const activeExtraCosts = extraCosts.filter((item) => !item.Cancelled__c);
   const supplierInvoiceTotal = numericValue(stem.Total_Invoiced_Amount_From_Suppliers__c) ?? 0;
   const supplierLineBuyTotal = activeLineItems.reduce((sum, item) => sum + lineBuyAmount(item, stemHasDelivery), 0);
-  const uninvoicedSupplierLineBuyTotal = activeLineItems.reduce((sum, item) => item.Supplier_Invoice__c ? sum : sum + lineBuyAmount(item, stemHasDelivery), 0);
+  const uninvoicedSupplierLineBuyTotal = activeLineItems.reduce((sum, item) => (item.Supplier_Invoice__c ? sum : sum + lineBuyAmount(item, stemHasDelivery)), 0);
   const supplierExtraBuyTotal = activeExtraCosts.reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0);
-  const uninvoicedSupplierExtraBuyTotal = activeExtraCosts.reduce((sum, item) => item.Supplier_Invoice__c ? sum : sum + extraBuyAmount(item, stemHasDelivery), 0);
+  const uninvoicedSupplierExtraBuyTotal = activeExtraCosts.reduce((sum, item) => (item.Supplier_Invoice__c ? sum : sum + extraBuyAmount(item, stemHasDelivery)), 0);
   const hasSupplierInvoiceLines = activeLineItems.some((item) => item.Supplier_Invoice__c);
   const calculatedSupplierInvoice = supplierInvoiceTotal + (hasSupplierInvoiceLines ? uninvoicedSupplierLineBuyTotal : supplierLineBuyTotal);
-  return [
-    calculatedSupplierInvoice,
-    calculatedSupplierInvoice + supplierExtraBuyTotal,
-    calculatedSupplierInvoice + uninvoicedSupplierExtraBuyTotal,
-    supplierLineBuyTotal,
-    uninvoicedSupplierLineBuyTotal,
-    supplierExtraBuyTotal,
-    uninvoicedSupplierExtraBuyTotal,
-    supplierLineBuyTotal + supplierExtraBuyTotal,
-    uninvoicedSupplierLineBuyTotal + uninvoicedSupplierExtraBuyTotal,
-    supplierInvoiceTotal,
-    numericValue(stem.Payable_Balance__c),
-    numericValue(stem.Total_Costs__c),
-    numericValue(stem.Total_Cost__c),
-    numericValue(stem.Total_Cost_Amount__c),
-    ...activeLineItems.map((item) => lineBuyAmount(item, stemHasDelivery)),
-    ...activeExtraCosts.map((item) => extraBuyAmount(item, stemHasDelivery)),
-  ].filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0);
+  return [calculatedSupplierInvoice, calculatedSupplierInvoice + supplierExtraBuyTotal, calculatedSupplierInvoice + uninvoicedSupplierExtraBuyTotal, supplierLineBuyTotal, uninvoicedSupplierLineBuyTotal, supplierExtraBuyTotal, uninvoicedSupplierExtraBuyTotal, supplierLineBuyTotal + supplierExtraBuyTotal, uninvoicedSupplierLineBuyTotal + uninvoicedSupplierExtraBuyTotal, supplierInvoiceTotal, numericValue(stem.Payable_Balance__c), numericValue(stem.Total_Costs__c), numericValue(stem.Total_Cost__c), numericValue(stem.Total_Cost_Amount__c), ...activeLineItems.map((item) => lineBuyAmount(item, stemHasDelivery)), ...activeExtraCosts.map((item) => extraBuyAmount(item, stemHasDelivery))].filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0);
 }
 
 function incomingPaymentTypeFromContext(payment, { amount, stem, supplierInvoice, supplierInvoiceFields, directionFields, typeFields, statusFields }) {
-  const supplierSide = supplierInvoice || incomingPaymentLooksSupplierSide(payment, {
-    supplierInvoiceFields,
-    directionFields,
-    typeFields,
-    statusFields,
-  });
+  const supplierSide =
+    supplierInvoice ||
+    incomingPaymentLooksSupplierSide(payment, {
+      supplierInvoiceFields,
+      directionFields,
+      typeFields,
+      statusFields,
+    });
   if (supplierSide) return amount != null && amount < 0 ? 'Supplier Refund' : 'Supplier Payment';
   if (stem && (amount == null || amount >= 0)) return 'Buyer Payment';
   return 'Unmatched';
@@ -8444,19 +8222,17 @@ function amountNearlyEqual(left, right, tolerance = 0.05) {
 }
 
 function paymentSearchToken(payment, fields = []) {
-  return normalizedFieldToken(uniqueTextList([...fields, 'Name'])
-    .filter((field) => payment?.[field] != null && payment[field] !== '')
-    .map((field) => payment[field])
-    .join(' '));
+  return normalizedFieldToken(
+    uniqueTextList([...fields, 'Name'])
+      .filter((field) => payment?.[field] != null && payment[field] !== '')
+      .map((field) => payment[field])
+      .join(' '),
+  );
 }
 
 function addBrokerCommissionGroup(groupsByStem, group) {
   if (!group?.stemId || !group.brokerType || !group.amount) return;
-  const key = [
-    group.stemId,
-    group.brokerType,
-    group.brokerId || group.brokerName || 'unknown',
-  ].join('::');
+  const key = [group.stemId, group.brokerType, group.brokerId || group.brokerName || 'unknown'].join('::');
   if (!groupsByStem[group.stemId]) groupsByStem[group.stemId] = [];
   const existing = groupsByStem[group.stemId].find((item) => item.key === key);
   if (existing) {
@@ -8516,9 +8292,7 @@ function buildBrokerCommissionGroups({ stemMap = {}, lineItems = [], buyerBroker
       });
     }
 
-    const secondaryAmount = !hasSupplierBrokerUnit && item.Commission_Cost__c != null
-      ? Number(item.Commission_Cost__c || 0) - buyerPerUnitAmount
-      : 0;
+    const secondaryAmount = !hasSupplierBrokerUnit && item.Commission_Cost__c != null ? Number(item.Commission_Cost__c || 0) - buyerPerUnitAmount : 0;
     const secondaryBrokers = (buyerBrokersByStem[item.STEM__c] || []).filter((broker) => {
       if (!broker.Buyer_Broker__c) return true;
       if (!buyerBrokerId) return true;
@@ -8554,19 +8328,14 @@ function findBrokerCommissionPaymentMatch(payment, amount, groups = [], textFiel
 }
 
 function incomingPaymentReference(payment, referenceFields = []) {
-  const value = referenceFields
-    .map((field) => payment[field])
-    .find((item) => item != null && item !== '');
+  const value = referenceFields.map((field) => payment[field]).find((item) => item != null && item !== '');
   return value == null ? null : String(value).trim() || null;
 }
 
 function generatedPaymentName(value) {
   const text = String(value || '').trim();
   if (!text) return true;
-  return /^pay(?:ment)?[-_\s]?\d+$/i.test(text)
-    || /^p[-_\s]?\d+$/i.test(text)
-    || /^[a-z]{0,4}\d{5,}$/i.test(text)
-    || /^[a-z0-9]{15,18}$/i.test(text);
+  return /^pay(?:ment)?[-_\s]?\d+$/i.test(text) || /^p[-_\s]?\d+$/i.test(text) || /^[a-z]{0,4}\d{5,}$/i.test(text) || /^[a-z0-9]{15,18}$/i.test(text);
 }
 
 function incomingPaymentDisplayName({ payment, referenceFields = [], stem, supplierInvoice, type }) {
@@ -8623,8 +8392,7 @@ function incomingPaymentBankChargeTarget(charge, rows = []) {
       if (targetAmount < chargeAmount * 10) return false;
       const targetDate = dateOnly(row.paymentDate);
       const targetCreatedDate = dateOnly(row.createdDate);
-      return (chargeDate && targetDate && chargeDate === targetDate)
-        || (chargeCreatedDate && targetCreatedDate && chargeCreatedDate === targetCreatedDate);
+      return (chargeDate && targetDate && chargeDate === targetDate) || (chargeCreatedDate && targetCreatedDate && chargeCreatedDate === targetCreatedDate);
     })
     .sort((a, b) => Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0)));
   return candidates[0] || null;
@@ -8646,11 +8414,7 @@ function attachBankChargeToPayment(target, charge) {
 }
 
 function incomingPaymentRecordTypeToken(payment) {
-  return normalizedFieldToken([
-    payment?.RecordTypeId,
-    payment?.RecordType?.DeveloperName,
-    payment?.RecordType?.Name,
-  ].filter(Boolean).join(' '));
+  return normalizedFieldToken([payment?.RecordTypeId, payment?.RecordType?.DeveloperName, payment?.RecordType?.Name].filter(Boolean).join(' '));
 }
 
 function incomingPaymentIsRemittanceRecord(payment, fields = []) {
@@ -8658,51 +8422,32 @@ function incomingPaymentIsRemittanceRecord(payment, fields = []) {
   if (token.includes('remittance')) return true;
   return uniqueTextList(fields).some((field) => {
     const valueToken = normalizedFieldToken(payment?.[field]);
-    return valueToken.includes('receivableremittance')
-      || valueToken.includes('remittancereceivable')
-      || valueToken.includes('payableremittance')
-      || valueToken.includes('remittancepayable');
+    return valueToken.includes('receivableremittance') || valueToken.includes('remittancereceivable') || valueToken.includes('payableremittance') || valueToken.includes('remittancepayable');
   });
 }
 
 const incomingPaymentIsReceivableRemittance = incomingPaymentIsRemittanceRecord;
 
 function supplierInvoicePartyName(invoice, supplierRelationships = []) {
-  return invoice?.Supplier_Name__c
-    || invoice?.['Supplier__r']?.Name
-    || invoice?.['Expected_Supplier__r']?.Name
-    || invoice?.['Substitute_Supplier__r']?.Name
-    || supplierRelationships.map((relationship) => invoice?.[relationship]?.Name).find(Boolean)
-    || null;
+  return invoice?.Supplier_Name__c || invoice?.['Supplier__r']?.Name || invoice?.['Expected_Supplier__r']?.Name || invoice?.['Substitute_Supplier__r']?.Name || supplierRelationships.map((relationship) => invoice?.[relationship]?.Name).find(Boolean) || null;
 }
 
 async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null } = {}) {
-  const describe = await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }));
+  const describe = await salesforceObjectFields({
+    objectName: 'stem__c',
+  }).catch(() => ({ fields: [] }));
   const fields = describe.fields || [];
   const fieldNames = new Set(fields.map((field) => field.name));
   if (!fieldNames.has('Payment_Term__c')) return [];
 
   const accountDescribe = fieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
-  const selectFields = [
-    'Id',
-    'Name',
-    ...selectedFields(fieldNames, [
-      'KeyStem__c',
-      'Buyer_Name__c',
-      'Buyer__c',
-      'Account__c',
-      'Payment_Term__c',
-      'Total_Invoice_Amount__c',
-      'Receivable_Balance__c',
-      'Payment_Date__c',
-      'Delivery_Date__c',
-      'Expected_Delivery_Date__c',
-    ]),
-  ];
+  const selectFields = ['Id', 'Name', ...selectedFields(fieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Date__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'])];
   if (fieldNames.has('Vessel__c')) selectFields.push('Vessel__r.Name');
   if (fieldNames.has('Port__c')) selectFields.push('Port__r.Name');
   if (fieldNames.has('Account__c')) {
@@ -8716,53 +8461,72 @@ async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null }
   if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
   if (fieldNames.has('Delivery_Date__c')) whereParts.push('(Delivery_Date__c = null OR Delivery_Date__c >= 2026-01-01)');
   if (interofficeCondition) whereParts.push(interofficeCondition);
-  const orderBy = fieldNames.has('Delivery_Date__c')
-    ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC'
-    : 'CreatedDate DESC';
+  const orderBy = fieldNames.has('Delivery_Date__c') ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC' : 'CreatedDate DESC';
 
-  const stems = await queryRows(`
+  const stems = await queryRows(
+    `
     SELECT ${[...new Set(selectFields)].join(', ')}
     FROM stem__c
     WHERE ${whereParts.join(' AND ')}
     ORDER BY ${orderBy}
     LIMIT 1000
-  `, { limit: 1000, softFail: true });
+  `,
+    { limit: 1000, softFail: true },
+  );
   const stemIds = stems.map((stem) => stem.Id).filter(Boolean);
   if (!stemIds.length) return [];
 
   const traderByStem = {};
   const [nominationArrays, lineItemArrays, extraCostArrays] = await Promise.all([
-    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return { soql: `
+    compositeQueryRows(
+      chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return {
+          soql: `
         SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c
         FROM Nomination__c
         WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
         ORDER BY CreatedDate ASC
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    })),
-    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return { soql: `
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    ),
+    compositeQueryRows(
+      chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return {
+          soql: `
         SELECT STEM__c, Total_Price__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                Price_Per_Unit__c, Unit_Sell_At__c, Offer_Line_Item__r.UnitPrice
         FROM STEM_Line_Item__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    })),
-    compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return { soql: `
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    ),
+    compositeQueryRows(
+      chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return {
+          soql: `
         SELECT STEM__c, Line_Total__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c
         FROM STEM_Extra_Cost__c
         WHERE STEM__c IN (${inList})
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    })),
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    ),
   ]);
 
   for (const nomination of nominationArrays.flat()) {
@@ -8791,9 +8555,7 @@ async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null }
   return stems.map((stem) => {
     const account = stem['Account__r'] || {};
     const traderInfo = traderByStem[stem.Id] || {};
-    const calculatedAmount = calculatedByStem[stem.Id] > 0
-      ? calculatedByStem[stem.Id]
-      : incomingPaymentNumber(stem.Total_Invoice_Amount__c);
+    const calculatedAmount = calculatedByStem[stem.Id] > 0 ? calculatedByStem[stem.Id] : incomingPaymentNumber(stem.Total_Invoice_Amount__c);
     return {
       id: stem.Id,
       stemId: stem.Id,
@@ -8811,147 +8573,110 @@ async function incomingBuyerCiaInvoices({ threshold = 50, accessContext = null }
 }
 
 async function incomingPaymentsListSnapshot(body, req = null, accessContext = null) {
-  const settings = body._settingsOverride || await loadIncomingPaymentSettings();
+  const settings = body._settingsOverride || (await loadIncomingPaymentSettings());
   const threshold = Number(settings.fullyPaidThreshold ?? DEFAULT_INCOMING_PAYMENT_SETTINGS.fullyPaidThreshold);
   const today = dateOnly(new Date());
   const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
   const dateTo = dateOnly(body.dateTo || body.date_to || today);
   const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
 
-  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentDescribe = await salesforceObjectFields({
+    objectName: 'Payment__c',
+  }).catch(() => ({ fields: [] }));
   const paymentFields = paymentDescribe.fields || [];
   const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
   const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
-  if (!paymentFieldNames.size) return { rows: [], availableBalances: [], summary: {}, settings, schemaWarnings: ['Payment__c is not queryable.'] };
+  if (!paymentFieldNames.size)
+    return {
+      rows: [],
+      availableBalances: [],
+      summary: {},
+      settings,
+      schemaWarnings: ['Payment__c is not queryable.'],
+    };
 
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, [
-    'Amount__c',
-    'Payment_Amount__c',
-    'Paid_Amount__c',
-    'Received_Amount__c',
-    'Total_Amount__c',
-    'Amount_Paid__c',
-    'Payment_Value__c',
-    'Actual_Amount__c',
-  ]);
+  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
   const referenceFields = incomingPaymentReferenceFields(paymentFields);
   const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
   const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
   const directionFields = incomingPaymentDirectionFields(paymentFields);
-  const paymentSelectFields = [
-    'Id',
-    ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']),
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null,
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null,
-    ...supplierInvoiceLookupFields,
-    dateField,
-    amountField,
-    ...referenceFields,
-    ...statusFields,
-    ...typeFields,
-    ...directionFields,
-  ].filter(Boolean);
+  const paymentSelectFields = ['Id', ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, ...supplierInvoiceLookupFields, dateField, amountField, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean);
 
   const filterDateField = paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : dateField;
   const filterDateType = paymentFieldByName[filterDateField]?.type || null;
-  const filterDateValue = (isoDate, endOfDay = false) => (
-    filterDateField === 'CreatedDate'
-      ? soqlHongKongDateTimeValue(isoDate, endOfDay)
-      : soqlDateValue(filterDateField, filterDateType, isoDate, endOfDay)
-  );
+  const filterDateValue = (isoDate, endOfDay = false) => (filterDateField === 'CreatedDate' ? soqlHongKongDateTimeValue(isoDate, endOfDay) : soqlDateValue(filterDateField, filterDateType, isoDate, endOfDay));
   const whereParts = [];
   if (filterDateField && dateFrom) whereParts.push(`${filterDateField} >= ${filterDateValue(dateFrom, false)}`);
   if (filterDateField && dateTo) whereParts.push(`${filterDateField} <= ${filterDateValue(dateTo, true)}`);
   const orderBy = filterDateField ? `${filterDateField} DESC NULLS LAST${filterDateField !== 'CreatedDate' ? ', CreatedDate DESC' : ''}` : 'CreatedDate DESC';
-  const payments = await queryRows(`
+  const payments = await queryRows(
+    `
     SELECT ${[...new Set(paymentSelectFields)].join(', ')}
     FROM Payment__c
     ${whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : ''}
     ORDER BY ${orderBy}
     LIMIT ${limit}
-  `, { limit, softFail: true });
+  `,
+    { limit, softFail: true },
+  );
 
   const eligiblePayments = payments.filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]));
   const directStemIds = eligiblePayments.map((payment) => payment.STEM__c).filter(Boolean);
-  const supplierInvoiceIds = eligiblePayments
-    .map((payment) => incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields))
-    .filter(Boolean);
-  const supplierInvoiceDescribe = supplierInvoiceIds.length
-    ? await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }))
-    : { fields: [] };
+  const supplierInvoiceIds = eligiblePayments.map((payment) => incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields)).filter(Boolean);
+  const supplierInvoiceDescribe = supplierInvoiceIds.length ? await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] })) : { fields: [] };
   const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
   const supplierInvoiceFieldNames = new Set(supplierInvoiceFields.map((field) => field.name));
   const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
   const supplierInvoicePayableField = firstAvailableField(supplierInvoiceFieldNames, ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']);
   const supplierInvoiceAmountField = firstAvailableField(supplierInvoiceFieldNames, ['Invoice_Amount__c', 'Calculated_Amount__c', 'Amount__c', 'Total_Amount__c']);
   const supplierInvoiceSupplierFields = selectedFields(supplierInvoiceFieldNames, ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']);
-  const supplierInvoiceSupplierRelationships = supplierInvoiceSupplierFields
-    .map((field) => supplierInvoiceFieldByName[field]?.relationshipName)
-    .filter(Boolean);
+  const supplierInvoiceSupplierRelationships = supplierInvoiceSupplierFields.map((field) => supplierInvoiceFieldByName[field]?.relationshipName).filter(Boolean);
   const supplierInvoiceMap = {};
   if (supplierInvoiceIds.length && supplierInvoiceFieldNames.size) {
-    const supplierInvoiceSelectFields = [
-      'Id',
-      'Name',
-      ...selectedFields(supplierInvoiceFieldNames, ['STEM__c', 'Supplier_Name__c']),
-      supplierInvoiceAmountField,
-      supplierInvoicePayableField,
-      ...supplierInvoiceSupplierFields,
-      ...supplierInvoiceSupplierRelationships.map((relationship) => `${relationship}.Name`),
-    ].filter(Boolean);
-    const invoiceChunks = await compositeQueryRows(chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      return { soql: `
+    const supplierInvoiceSelectFields = ['Id', 'Name', ...selectedFields(supplierInvoiceFieldNames, ['STEM__c', 'Supplier_Name__c']), supplierInvoiceAmountField, supplierInvoicePayableField, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+    const invoiceChunks = await compositeQueryRows(
+      chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        return {
+          soql: `
         SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
         FROM Supplier_Invoice__c
         WHERE Id IN (${inList})
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    }));
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    );
     for (const invoice of invoiceChunks.flat()) supplierInvoiceMap[invoice.Id] = invoice;
   }
 
-  const stemIds = [...new Set([
-    ...directStemIds,
-    ...Object.values(supplierInvoiceMap).map((invoice) => invoice.STEM__c).filter(Boolean),
-  ])];
+  const stemIds = [
+    ...new Set([
+      ...directStemIds,
+      ...Object.values(supplierInvoiceMap)
+        .map((invoice) => invoice.STEM__c)
+        .filter(Boolean),
+    ]),
+  ];
   const stemDescribe = stemIds.length
-    ? await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const stemFields = stemDescribe.fields || [];
   const stemFieldNames = new Set(stemFields.map((field) => field.name));
   const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = [
-    'Id',
-    'Name',
-    ...selectedFields(stemFieldNames, [
-      'KeyStem__c',
-      'Buyer_Name__c',
-      'Buyer__c',
-      'Account__c',
-      'Total_Invoice_Amount__c',
-      'Total_Invoiced_Amount_From_Suppliers__c',
-      'Receivable_Balance__c',
-      'Payable_Balance__c',
-      'Total_Costs__c',
-      'Total_Cost__c',
-      'Total_Cost_Amount__c',
-      'Payment_Date__c',
-      'Payment_Term__c',
-      'Invoice_Due_Date__c',
-      'Buyer_Pay_Term_Date__c',
-      'Due_Date__c',
-      'Delivery_Date__c',
-      'Delivery_Date_Or_Expected__c',
-      'Expected_Delivery_Date__c',
-    ]),
-  ];
+  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -8961,16 +8686,22 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
   }
   const stemMap = {};
   if (stemIds.length && stemFieldNames.size) {
-    const stemChunks = await compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-      return { soql: `
+    const stemChunks = await compositeQueryRows(
+      chunkIds(stemIds).map((chunk) => {
+        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+        const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
+        return {
+          soql: `
         SELECT ${[...new Set(stemSelectFields)].join(', ')}
         FROM stem__c
         WHERE ${stemWhere}
         LIMIT 5000
-      `, limit: 5000, softFail: true };
-    }));
+      `,
+          limit: 5000,
+          softFail: true,
+        };
+      }),
+    );
     for (const stem of stemChunks.flat()) stemMap[stem.Id] = stem;
   }
   let brokerCommissionGroupsByStem = {};
@@ -8978,9 +8709,11 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
   let extraCostsByStem = {};
   if (stemIds.length) {
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                  Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                  Cost_Per_Unit__c, Unit_Buy_At__c, Unit_Cost__c, Total_Cost__c,
@@ -8991,28 +8724,44 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
           FROM STEM_Line_Item__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Buyer_Broker__c
           FROM STEM_Buyer_Broker__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                  Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c,
                  Unit_Cost__c, Line_Total_Buy__c, Supplier_Invoice__c
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
     ]);
     const brokerLineItems = lineItemChunks.flat();
     const brokerRows = buyerBrokerChunks.flat();
@@ -9029,11 +8778,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
       acc[item.STEM__c].push(item);
       return acc;
     }, {});
-    const brokerAccountIds = [...new Set([
-      ...brokerLineItems.map((item) => item.Supplier_Broker__c).filter(Boolean),
-      ...brokerLineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
-      ...brokerRows.map((item) => item.Buyer_Broker__c).filter(Boolean),
-    ])];
+    const brokerAccountIds = [...new Set([...brokerLineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...brokerLineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...brokerRows.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
     const accountMap = await namesByIds('Account', brokerAccountIds);
     for (const [id, name] of Object.entries(accountMap)) accountMap[String(id).slice(0, 15)] = name;
     brokerCommissionGroupsByStem = buildBrokerCommissionGroups({
@@ -9046,144 +8791,150 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
 
   const availableStemKeys = new Set();
   const availableBalancesByGroup = {};
-  const allRows = eligiblePayments.map((payment) => {
-    const supplierInvoiceId = incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
-    const supplierInvoice = supplierInvoiceId ? supplierInvoiceMap[supplierInvoiceId] || null : null;
-    const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
-    const stem = stemId ? stemMap[stemId] || null : null;
-    if (stemId && !stem) return null;
-    const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
-    const brokerCommissionMatch = stem?.Id
-      ? findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroupsByStem[stem.Id] || [], [...referenceFields, ...directionFields, ...typeFields, ...statusFields])
-      : null;
-    const bankCharge = incomingPaymentLooksBankCharge(payment, {
-      referenceFields,
-      directionFields,
-      typeFields,
-      statusFields,
-    });
-    const payableCalculation = stem?.Id
-      ? incomingPaymentLooksStemPayableCalculation(payment, {
-        amount,
-        payableAmounts: stemPayableAmountCandidates({
-          stem,
-          lineItems: lineItemsByStem[stem.Id] || [],
-          extraCosts: extraCostsByStem[stem.Id] || [],
-        }),
+  const allRows = eligiblePayments
+    .map((payment) => {
+      const supplierInvoiceId = incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
+      const supplierInvoice = supplierInvoiceId ? supplierInvoiceMap[supplierInvoiceId] || null : null;
+      const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
+      const stem = stemId ? stemMap[stemId] || null : null;
+      if (stemId && !stem) return null;
+      const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
+      const brokerCommissionMatch = stem?.Id ? findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroupsByStem[stem.Id] || [], [...referenceFields, ...directionFields, ...typeFields, ...statusFields]) : null;
+      const bankCharge = incomingPaymentLooksBankCharge(payment, {
         referenceFields,
         directionFields,
         typeFields,
         statusFields,
-        allowBlankSignal: !stem.Delivery_Date__c,
-      })
-      : false;
-    const type = brokerCommissionMatch
-      ? 'Broker Commission'
-      : bankCharge
-      ? 'Bank Charge'
-      : payableCalculation
-      ? 'Supplier Payment'
-      : incomingPaymentTypeFromContext(payment, {
+      });
+      const payableCalculation = stem?.Id
+        ? incomingPaymentLooksStemPayableCalculation(payment, {
+            amount,
+            payableAmounts: stemPayableAmountCandidates({
+              stem,
+              lineItems: lineItemsByStem[stem.Id] || [],
+              extraCosts: extraCostsByStem[stem.Id] || [],
+            }),
+            referenceFields,
+            directionFields,
+            typeFields,
+            statusFields,
+            allowBlankSignal: !stem.Delivery_Date__c,
+          })
+        : false;
+      const type = brokerCommissionMatch
+        ? 'Broker Commission'
+        : bankCharge
+          ? 'Bank Charge'
+          : payableCalculation
+            ? 'Supplier Payment'
+            : incomingPaymentTypeFromContext(payment, {
+                amount,
+                stem,
+                supplierInvoice,
+                supplierInvoiceFields: supplierInvoiceLookupFields,
+                directionFields,
+                typeFields,
+                statusFields,
+              });
+      let incomingAmount = amount;
+      if (type.startsWith('Supplier')) {
+        incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
+      }
+      const paymentDate = dateField ? payment[dateField] || null : payment.CreatedDate || null;
+      const buyerInvoiceDueDate = type === 'Buyer Payment' && stem ? calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null : null;
+      const delayDays = type === 'Buyer Payment' && buyerInvoiceDueDate && paymentDate ? daysBetween(buyerInvoiceDueDate, dateOnly(paymentDate)) : null;
+      const status = incomingPaymentStatus({
+        type,
         amount,
         stem,
         supplierInvoice,
-        supplierInvoiceFields: supplierInvoiceLookupFields,
-        directionFields,
-        typeFields,
-        statusFields,
+        threshold,
       });
-    let incomingAmount = amount;
-    if (type.startsWith('Supplier')) {
-      incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
-    }
-    const paymentDate = dateField ? payment[dateField] || null : payment.CreatedDate || null;
-    const buyerInvoiceDueDate = type === 'Buyer Payment' && stem
-      ? calculatedBuyerPayTermDate(stem)
-        || stem.Invoice_Due_Date__c
-        || stem.Due_Date__c
-        || stem.Buyer_Pay_Term_Date__c
-        || null
-      : null;
-    const delayDays = type === 'Buyer Payment' && buyerInvoiceDueDate && paymentDate
-      ? daysBetween(buyerInvoiceDueDate, dateOnly(paymentDate))
-      : null;
-    const status = incomingPaymentStatus({ type, amount, stem, supplierInvoice, threshold });
-    const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
-    const buyerName = incomingPaymentBuyerName(stem);
-    const buyerGroupName = incomingPaymentBuyerGroup(stem);
-    const partyName = type.startsWith('Supplier')
-      ? supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships)
-      : buyerName;
-    if (stem?.Id && receivable != null && receivable < 0) {
-      const key = stem.Id;
-      if (!availableStemKeys.has(key)) {
-        availableStemKeys.add(key);
-        const groupKey = buyerGroupName || buyerName || 'Ungrouped buyer';
-        if (!availableBalancesByGroup[groupKey]) {
-          availableBalancesByGroup[groupKey] = {
-            buyerGroupName: groupKey,
-            buyerNames: new Set(),
-            totalAvailableBalance: 0,
-            stems: [],
-          };
+      const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
+      const buyerName = incomingPaymentBuyerName(stem);
+      const buyerGroupName = incomingPaymentBuyerGroup(stem);
+      const partyName = type.startsWith('Supplier') ? supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships) : buyerName;
+      if (stem?.Id && receivable != null && receivable < 0) {
+        const key = stem.Id;
+        if (!availableStemKeys.has(key)) {
+          availableStemKeys.add(key);
+          const groupKey = buyerGroupName || buyerName || 'Ungrouped buyer';
+          if (!availableBalancesByGroup[groupKey]) {
+            availableBalancesByGroup[groupKey] = {
+              buyerGroupName: groupKey,
+              buyerNames: new Set(),
+              totalAvailableBalance: 0,
+              stems: [],
+            };
+          }
+          if (buyerName) availableBalancesByGroup[groupKey].buyerNames.add(buyerName);
+          availableBalancesByGroup[groupKey].totalAvailableBalance += Math.abs(receivable);
+          availableBalancesByGroup[groupKey].stems.push({
+            stemId: stem.Id,
+            stemName: formatStemName(stem),
+            buyerName,
+            availableBalance: Math.abs(receivable),
+            receivableBalance: receivable,
+            paymentDate: stem.Payment_Date__c || payment[dateField] || payment.CreatedDate || null,
+          });
         }
-        if (buyerName) availableBalancesByGroup[groupKey].buyerNames.add(buyerName);
-        availableBalancesByGroup[groupKey].totalAvailableBalance += Math.abs(receivable);
-        availableBalancesByGroup[groupKey].stems.push({
-          stemId: stem.Id,
-          stemName: formatStemName(stem),
-          buyerName,
-          availableBalance: Math.abs(receivable),
-          receivableBalance: receivable,
-          paymentDate: stem.Payment_Date__c || payment[dateField] || payment.CreatedDate || null,
-        });
       }
-    }
-    return {
-      id: payment.Id,
-      paymentId: payment.Id,
-      paymentName: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice, type }),
-      paymentDisplayName: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice, type }),
-      salesforcePaymentName: payment.Name || null,
-      paymentRecordTypeName: payment.RecordType?.Name || null,
-      paymentRecordTypeDeveloperName: payment.RecordType?.DeveloperName || null,
-      paymentDate,
-      createdDate: payment.CreatedDate || null,
-      invoiceDueDate: buyerInvoiceDueDate,
-      delayDays,
-      paymentTerms: type === 'Buyer Payment' ? stem?.Payment_Term__c || null : null,
-      type,
-      isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',
-      isBankCharge: type === 'Bank Charge',
-      amount,
-      incomingAmount,
-      currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
-      reference: incomingPaymentReference(payment, referenceFields),
-      salesforceStatus: statusFields.map((field) => payment[field]).find(Boolean) || null,
-      salesforceType: typeFields.map((field) => payment[field]).find(Boolean) || null,
-      stemId,
-      stemName: stem ? formatStemName(stem) : null,
-      keyStem: stem?.KeyStem__c || null,
-      buyerName,
-      buyerGroupName,
-      supplierInvoiceId: supplierInvoice?.Id || supplierInvoiceId || null,
-      supplierInvoiceName: supplierInvoice?.Name || null,
-      supplierName: supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships),
-      partyName,
-      invoiceAmount: incomingPaymentNumber(stem?.Total_Invoice_Amount__c),
-      receivableBalance: receivable,
-      payableBalance: supplierInvoicePayableField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoicePayableField]) : incomingPaymentNumber(stem?.Payable_Balance__c),
-      supplierInvoiceAmount: supplierInvoiceAmountField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoiceAmountField]) : null,
-      status: status.label,
-      statusTone: status.tone,
-      paymentObjectAmountField: amountField,
-      paymentObjectSupplierInvoiceFields: supplierInvoiceLookupFields,
-      brokerCommissionMatch,
-    };
-  }).filter(Boolean);
-  const rows = allRows
-    .filter((row) => row.type !== 'Supplier Payment' && row.type !== 'Bank Charge' && row.type !== 'Broker Commission')
-    .map((row) => ({ ...row, bankCharges: [] }));
+      return {
+        id: payment.Id,
+        paymentId: payment.Id,
+        paymentName: incomingPaymentDisplayName({
+          payment,
+          referenceFields,
+          stem,
+          supplierInvoice,
+          type,
+        }),
+        paymentDisplayName: incomingPaymentDisplayName({
+          payment,
+          referenceFields,
+          stem,
+          supplierInvoice,
+          type,
+        }),
+        salesforcePaymentName: payment.Name || null,
+        paymentRecordTypeName: payment.RecordType?.Name || null,
+        paymentRecordTypeDeveloperName: payment.RecordType?.DeveloperName || null,
+        paymentDate,
+        createdDate: payment.CreatedDate || null,
+        invoiceDueDate: buyerInvoiceDueDate,
+        delayDays,
+        paymentTerms: type === 'Buyer Payment' ? stem?.Payment_Term__c || null : null,
+        type,
+        isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',
+        isBankCharge: type === 'Bank Charge',
+        amount,
+        incomingAmount,
+        currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
+        reference: incomingPaymentReference(payment, referenceFields),
+        salesforceStatus: statusFields.map((field) => payment[field]).find(Boolean) || null,
+        salesforceType: typeFields.map((field) => payment[field]).find(Boolean) || null,
+        stemId,
+        stemName: stem ? formatStemName(stem) : null,
+        keyStem: stem?.KeyStem__c || null,
+        buyerName,
+        buyerGroupName,
+        supplierInvoiceId: supplierInvoice?.Id || supplierInvoiceId || null,
+        supplierInvoiceName: supplierInvoice?.Name || null,
+        supplierName: supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships),
+        partyName,
+        invoiceAmount: incomingPaymentNumber(stem?.Total_Invoice_Amount__c),
+        receivableBalance: receivable,
+        payableBalance: supplierInvoicePayableField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoicePayableField]) : incomingPaymentNumber(stem?.Payable_Balance__c),
+        supplierInvoiceAmount: supplierInvoiceAmountField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoiceAmountField]) : null,
+        status: status.label,
+        statusTone: status.tone,
+        paymentObjectAmountField: amountField,
+        paymentObjectSupplierInvoiceFields: supplierInvoiceLookupFields,
+        brokerCommissionMatch,
+      };
+    })
+    .filter(Boolean);
+  const rows = allRows.filter((row) => row.type !== 'Supplier Payment' && row.type !== 'Bank Charge' && row.type !== 'Broker Commission').map((row) => ({ ...row, bankCharges: [] }));
   const ungroupedBankCharges = [];
   for (const charge of allRows.filter((row) => row.type === 'Bank Charge')) {
     const chargeDate = dateOnly(charge.paymentDate);
@@ -9212,9 +8963,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
   const displayRows = rows.filter((row) => !implicitBankChargeIds.has(row.id || row.paymentId));
   displayRows.push(...ungroupedBankCharges);
 
-  const interestNotificationMap = body._omitIncomingLiveState
-    ? {}
-    : await loadIncomingPaymentInterestNotificationMap(displayRows.map((row) => row.paymentId || row.id));
+  const interestNotificationMap = body._omitIncomingLiveState ? {} : await loadIncomingPaymentInterestNotificationMap(displayRows.map((row) => row.paymentId || row.id));
   const rowsWithInterestNotifications = displayRows.map((row) => {
     const notification = interestNotificationMap[row.paymentId || row.id] || null;
     return {
@@ -9226,7 +8975,10 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
   });
 
   const includedIncomingRows = rowsWithInterestNotifications.filter((row) => row.isIncoming);
-  const buyerCiaInvoices = await incomingBuyerCiaInvoices({ threshold, accessContext });
+  const buyerCiaInvoices = await incomingBuyerCiaInvoices({
+    threshold,
+    accessContext,
+  });
   const availableBalances = Object.values(availableBalancesByGroup)
     .map((group) => ({
       buyerGroupName: group.buyerGroupName,
@@ -9252,11 +9004,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
       supplierInvoicePayableField,
       supplierInvoiceAmountField,
     },
-    schemaWarnings: [
-      amountField ? null : 'No amount-like field was found on Payment__c.',
-      dateField ? null : 'No date-like field was found on Payment__c.',
-      'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.',
-    ].filter(Boolean),
+    schemaWarnings: [amountField ? null : 'No amount-like field was found on Payment__c.', dateField ? null : 'No date-like field was found on Payment__c.', 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.'].filter(Boolean),
     summary: {
       totalRows: rowsWithInterestNotifications.length,
       incomingRows: includedIncomingRows.length,
@@ -9282,28 +9030,25 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
     namespace: 'incoming-payments',
     payload: { dateFrom, dateTo, limit, threshold },
     ttlSeconds: 60,
-    tags: [
-      'salesforce:incoming-payments',
-      'salesforce:stem',
-      'salesforce:account',
-      'salesforce:object:Payment__c',
-      'salesforce:object:Supplier_Invoice__c',
-    ],
+    tags: ['salesforce:incoming-payments', 'salesforce:stem', 'salesforce:account', 'salesforce:object:Payment__c', 'salesforce:object:Supplier_Invoice__c'],
     body,
     req,
     accessContext,
-    loader: () => incomingPaymentsListSnapshot({
-      ...body,
-      dateFrom,
-      dateTo,
-      limit,
-      _settingsOverride: settings,
-      _omitIncomingLiveState: true,
-    }, req, accessContext),
+    loader: () =>
+      incomingPaymentsListSnapshot(
+        {
+          ...body,
+          dateFrom,
+          dateTo,
+          limit,
+          _settingsOverride: settings,
+          _omitIncomingLiveState: true,
+        },
+        req,
+        accessContext,
+      ),
   });
-  const notificationMap = await loadIncomingPaymentInterestNotificationMap(
-    (snapshot.rows || []).map((row) => row.paymentId || row.id),
-  );
+  const notificationMap = await loadIncomingPaymentInterestNotificationMap((snapshot.rows || []).map((row) => row.paymentId || row.id));
   return {
     ...snapshot,
     settings,
@@ -9327,35 +9072,7 @@ async function incomingPaymentAllocationConfirm(body, req) {
 }
 
 const INCOMING_PAYMENT_INTEREST_RECIPIENT = 'louisa@cosulich.com.hk';
-const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = [
-  'id',
-  'payment_id',
-  'payment_name',
-  'stem_id',
-  'stem_name',
-  'buyer_name',
-  'buyer_group_name',
-  'received_date',
-  'payment_created_date',
-  'delay_days',
-  'amount',
-  'currency',
-  'receivable_balance',
-  'recipient_email',
-  'email_subject',
-  'email_message_id',
-  'email_provider',
-  'actor_user_id',
-  'actor_email',
-  'actor_name',
-  'metadata',
-  'delivery_status',
-  'last_attempt_at',
-  'last_error',
-  'sent_at',
-  'created_at',
-  'updated_at',
-].join(',');
+const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = ['id', 'payment_id', 'payment_name', 'stem_id', 'stem_name', 'buyer_name', 'buyer_group_name', 'received_date', 'payment_created_date', 'delay_days', 'amount', 'currency', 'receivable_balance', 'recipient_email', 'email_subject', 'email_message_id', 'email_provider', 'actor_user_id', 'actor_email', 'actor_name', 'metadata', 'delivery_status', 'last_attempt_at', 'last_error', 'sent_at', 'created_at', 'updated_at'].join(',');
 
 function incomingPaymentDbNumber(value) {
   const number = Number(value);
@@ -9412,10 +9129,7 @@ async function loadIncomingPaymentInterestNotificationMap(paymentIds = []) {
   if (!ids.length) return {};
   const notifications = {};
   for (const chunk of chunkIds(ids, 500)) {
-    const { data, error } = await client
-      .from('incoming_payment_interest_notifications')
-      .select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS)
-      .in('payment_id', chunk);
+    const { data, error } = await client.from('incoming_payment_interest_notifications').select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).in('payment_id', chunk);
     if (error) {
       if (!incomingPaymentInterestTableUnavailable(error)) {
         console.error('Failed to load incoming payment interest notifications', error.message);
@@ -9428,11 +9142,7 @@ async function loadIncomingPaymentInterestNotificationMap(paymentIds = []) {
 }
 
 async function fetchIncomingPaymentInterestNotification(client, paymentId) {
-  const { data, error } = await client
-    .from('incoming_payment_interest_notifications')
-    .select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS)
-    .eq('payment_id', paymentId)
-    .maybeSingle();
+  const { data, error } = await client.from('incoming_payment_interest_notifications').select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).eq('payment_id', paymentId).maybeSingle();
   if (error) {
     if (incomingPaymentInterestTableUnavailable(error)) {
       throw appError('Missing Supabase table incoming_payment_interest_notifications. Run the latest Supabase migration before requesting late payment interest invoices.', 500);
@@ -9444,34 +9154,15 @@ async function fetchIncomingPaymentInterestNotification(client, paymentId) {
 
 function incomingPaymentInterestRateField(accountFields = []) {
   const allowedTypes = new Set(['double', 'percent', 'currency', 'int', 'string', 'picklist']);
-  const matches = accountFields
-    .filter((field) => (
-      field?.name &&
-      allowedTypes.has(field.type) &&
-      fieldMatchesAny(field, [
-        'latepaymentinterestrate',
-        'latepaymentinterestratec',
-        'paymentinterestrate',
-        'paymentinterestratec',
-        'overdueinterestrate',
-        'overdueinterestratec',
-        'interestrate',
-        'interestratec',
-        'financechargerate',
-        'financechargeratec',
-      ], [
-        'latepaymentinterest',
-        'overdueinterest',
-        'interestrate',
-        'financecharge',
-      ])
-    ));
+  const matches = accountFields.filter((field) => field?.name && allowedTypes.has(field.type) && fieldMatchesAny(field, ['latepaymentinterestrate', 'latepaymentinterestratec', 'paymentinterestrate', 'paymentinterestratec', 'overdueinterestrate', 'overdueinterestratec', 'interestrate', 'interestratec', 'financechargerate', 'financechargeratec'], ['latepaymentinterest', 'overdueinterest', 'interestrate', 'financecharge']));
   return matches[0] || null;
 }
 
 function parseIncomingPaymentInterestRate(value) {
   if (value == null || value === '') return null;
-  const match = String(value).replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  const match = String(value)
+    .replace(/,/g, '')
+    .match(/-?\d+(\.\d+)?/);
   if (!match) return null;
   const number = Number(match[0]);
   if (!Number.isFinite(number) || number < 0) return null;
@@ -9493,8 +9184,12 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   await requireInterofficeStemAccess(stemId, accessContext);
 
   const [stemDescribe, paymentDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({
+      fields: [],
+    })),
+    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({
+      fields: [],
+    })),
   ]);
   const stemFields = stemDescribe.fields || [];
   const stemFieldNames = new Set(stemFields.map((field) => field.name));
@@ -9503,31 +9198,15 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   if (!paymentFieldNames.size) throw appError('Payment__c is not queryable, so interest cannot be calculated.', 500);
 
   const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
+        fields: [],
+      }))
     : { fields: [] };
   const accountFields = accountDescribe.fields || [];
   const accountFieldNames = new Set(accountFields.map((field) => field.name));
   const interestField = incomingPaymentInterestRateField(accountFields);
 
-  const stemSelectFields = [
-    'Id',
-    'Name',
-    ...selectedFields(stemFieldNames, [
-      'KeyStem__c',
-      'Buyer_Name__c',
-      'Buyer__c',
-      'Account__c',
-      'Total_Invoice_Amount__c',
-      'Receivable_Balance__c',
-      'Payment_Term__c',
-      'Invoice_Due_Date__c',
-      'Buyer_Pay_Term_Date__c',
-      'Due_Date__c',
-      'Delivery_Date__c',
-      'Delivery_Date_Or_Expected__c',
-      'Expected_Delivery_Date__c',
-    ]),
-  ];
+  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -9537,26 +9216,20 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
     if (interestField?.name) stemSelectFields.push(`Account__r.${interestField.name}`);
   }
 
-  const stemRows = await queryRows(`
+  const stemRows = await queryRows(
+    `
     SELECT ${[...new Set(stemSelectFields)].join(', ')}
     FROM stem__c
     WHERE Id = '${escapeSoql(stemId)}'
     LIMIT 1
-  `, { limit: 1, softFail: true });
+  `,
+    { limit: 1, softFail: true },
+  );
   const stem = stemRows[0];
   if (!stem) throw appError('STEM was not found in Salesforce.', 404);
 
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, [
-    'Amount__c',
-    'Payment_Amount__c',
-    'Paid_Amount__c',
-    'Received_Amount__c',
-    'Total_Amount__c',
-    'Amount_Paid__c',
-    'Payment_Value__c',
-    'Actual_Amount__c',
-  ]);
+  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
   if (!dateField || !amountField) throw appError('Payment date or amount field was not found on Payment__c.', 500);
 
   const referenceFields = incomingPaymentReferenceFields(paymentFields);
@@ -9564,22 +9237,11 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const directionFields = incomingPaymentDirectionFields(paymentFields);
   const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
-  const paymentSelectFields = [
-    'Id',
-    ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']),
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null,
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null,
-    ...supplierInvoiceLookupFields,
-    dateField,
-    amountField,
-    ...referenceFields,
-    ...statusFields,
-    ...typeFields,
-    ...directionFields,
-  ].filter(Boolean);
+  const paymentSelectFields = ['Id', ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, ...supplierInvoiceLookupFields, dateField, amountField, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean);
 
   const [lineItems, buyerBrokers, payments] = await Promise.all([
-    queryRows(`
+    queryRows(
+      `
       SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
              Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
              Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
@@ -9588,35 +9250,40 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
       FROM STEM_Line_Item__c
       WHERE STEM__c = '${escapeSoql(stemId)}'
       LIMIT 5000
-    `, { limit: 5000, softFail: true }),
-    queryRows(`
+    `,
+      { limit: 5000, softFail: true },
+    ),
+    queryRows(
+      `
       SELECT Id, STEM__c, Buyer_Broker__c
       FROM STEM_Buyer_Broker__c
       WHERE STEM__c = '${escapeSoql(stemId)}'
       LIMIT 5000
-    `, { limit: 5000, softFail: true }),
-    queryRows(`
+    `,
+      { limit: 5000, softFail: true },
+    ),
+    queryRows(
+      `
       SELECT ${[...new Set(paymentSelectFields)].join(', ')}
       FROM Payment__c
       WHERE STEM__c = '${escapeSoql(stemId)}'
       ORDER BY ${dateField} ASC NULLS LAST, CreatedDate ASC
       LIMIT 5000
-    `, { limit: 5000, softFail: true }),
+    `,
+      { limit: 5000, softFail: true },
+    ),
   ]);
 
-  const brokerAccountIds = [...new Set([
-    ...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean),
-    ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
-    ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean),
-  ])];
+  const brokerAccountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
   const brokerAccountMap = await namesByIds('Account', brokerAccountIds);
   for (const [id, name] of Object.entries(brokerAccountMap)) brokerAccountMap[String(id).slice(0, 15)] = name;
-  const brokerGroups = buildBrokerCommissionGroups({
-    stemMap: { [stem.Id]: stem },
-    lineItems,
-    buyerBrokers,
-    accountMap: brokerAccountMap,
-  })[stem.Id] || [];
+  const brokerGroups =
+    buildBrokerCommissionGroups({
+      stemMap: { [stem.Id]: stem },
+      lineItems,
+      buyerBrokers,
+      accountMap: brokerAccountMap,
+    })[stem.Id] || [];
 
   const buyerPayments = payments
     .filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]))
@@ -9626,7 +9293,12 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
       const brokerCommissionMatch = findBrokerCommissionPaymentMatch(payment, amount, brokerGroups, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]);
       const type = brokerCommissionMatch
         ? 'Broker Commission'
-        : incomingPaymentLooksBankCharge(payment, { referenceFields, directionFields, typeFields, statusFields })
+        : incomingPaymentLooksBankCharge(payment, {
+              referenceFields,
+              directionFields,
+              typeFields,
+              statusFields,
+            })
           ? 'Bank Charge'
           : incomingPaymentTypeFromContext(payment, {
               amount,
@@ -9639,7 +9311,13 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
             });
       return {
         id: payment.Id,
-        name: incomingPaymentDisplayName({ payment, referenceFields, stem, supplierInvoice: null, type }),
+        name: incomingPaymentDisplayName({
+          payment,
+          referenceFields,
+          stem,
+          supplierInvoice: null,
+          type,
+        }),
         amount,
         paymentDate,
         dateOnly: dateOnly(paymentDate),
@@ -9649,22 +9327,14 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
     .filter((payment) => payment.type === 'Buyer Payment' && payment.amount != null && payment.amount > 0 && payment.dateOnly)
     .sort((a, b) => String(a.dateOnly).localeCompare(String(b.dateOnly)) || String(a.id).localeCompare(String(b.id)));
 
-  const rawDueDate = calculatedBuyerPayTermDate(stem)
-    || stem.Invoice_Due_Date__c
-    || stem.Due_Date__c
-    || stem.Buyer_Pay_Term_Date__c
-    || null;
+  const rawDueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
   const dueDate = dateOnly(rawDueDate);
   if (!dueDate) throw appError('Buyer invoice due date is missing, so late payment interest cannot be calculated.', 400);
 
   const rawRate = interestField?.name ? stem['Account__r']?.[interestField.name] : null;
   const monthlyRate = parseIncomingPaymentInterestRate(rawRate) ?? 0.02;
-  const rateWarning = rawRate == null || rawRate === ''
-    ? 'Buyer account interest rate was not found; defaulted to 2.00% per month.'
-    : null;
-  const invoiceAmount = incomingPaymentNumber(stem.Total_Invoice_Amount__c)
-    ?? incomingPaymentNumber(body.invoiceAmount)
-    ?? (buyerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) + Math.max(0, Number(body.receivableBalance || 0)));
+  const rateWarning = rawRate == null || rawRate === '' ? 'Buyer account interest rate was not found; defaulted to 2.00% per month.' : null;
+  const invoiceAmount = incomingPaymentNumber(stem.Total_Invoice_Amount__c) ?? incomingPaymentNumber(body.invoiceAmount) ?? buyerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) + Math.max(0, Number(body.receivableBalance || 0));
   if (!invoiceAmount || invoiceAmount <= 0) throw appError('Buyer invoice amount is missing, so late payment interest cannot be calculated.', 400);
 
   const today = dateOnly(new Date());
@@ -9676,7 +9346,11 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
     const paymentAmount = Math.min(Number(payment.amount || 0), Math.max(0, balance));
     if (payment.dateOnly <= dueDate) {
       balance = Math.max(0, balance - paymentAmount);
-      paymentSchedule.push({ ...payment, balanceAfter: balance, note: 'Paid on/before due date' });
+      paymentSchedule.push({
+        ...payment,
+        balanceAfter: balance,
+        note: 'Paid on/before due date',
+      });
       continue;
     }
     if (balance > 0 && payment.dateOnly > lastDate) {
@@ -9695,7 +9369,11 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
       }
     }
     balance = Math.max(0, balance - paymentAmount);
-    paymentSchedule.push({ ...payment, balanceAfter: balance, note: paymentAmount < Number(payment.amount || 0) ? 'Payment exceeds remaining balance' : '' });
+    paymentSchedule.push({
+      ...payment,
+      balanceAfter: balance,
+      note: paymentAmount < Number(payment.amount || 0) ? 'Payment exceeds remaining balance' : '',
+    });
     lastDate = payment.dateOnly;
   }
   const currentReceivable = incomingPaymentNumber(stem.Receivable_Balance__c);
@@ -9726,7 +9404,12 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
     dueDate,
     invoiceAmount,
     receivableBalance: currentReceivable,
-    interestRateField: interestField ? { name: interestField.name, label: interestField.label || interestField.name } : null,
+    interestRateField: interestField
+      ? {
+          name: interestField.name,
+          label: interestField.label || interestField.name,
+        }
+      : null,
     rawInterestRate: rawRate,
     monthlyRate,
     rateWarning,
@@ -9737,21 +9420,29 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
 }
 
 function incomingPaymentInterestCalculationHtml(calculation) {
-  const segmentRows = (calculation.segments || []).map((segment) => `
+  const segmentRows = (calculation.segments || [])
+    .map(
+      (segment) => `
     <tr>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(segment.balance)}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${segment.days}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(segment.formula)}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;font-weight:700;white-space:nowrap">${money(segment.interest)}</td>
-    </tr>`).join('');
-  const paymentRows = (calculation.paymentSchedule || []).map((payment) => `
+    </tr>`,
+    )
+    .join('');
+  const paymentRows = (calculation.paymentSchedule || [])
+    .map(
+      (payment) => `
     <tr>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(payment.paymentDate)}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(payment.name || payment.id || '-')}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.amount)}</td>
       <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.balanceAfter)}</td>
-    </tr>`).join('');
+    </tr>`,
+    )
+    .join('');
   return `
     <div style="margin-top:16px">
       <h3 style="margin:0 0 8px;font-size:15px">Late Payment Interest Calculation</h3>
@@ -9777,21 +9468,7 @@ function incomingPaymentInterestCalculationHtml(calculation) {
 }
 
 function incomingPaymentInterestCalculationText(calculation) {
-  return [
-    'Late Payment Interest Calculation',
-    `Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30`,
-    calculation.rateWarning || '',
-    `Buyer invoice amount: ${money(calculation.invoiceAmount)}`,
-    `Buyer invoice due date: ${prettyDate(calculation.dueDate)}`,
-    `Account interest rate: ${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${calculation.interestRateField.label})` : ''}`,
-    `Calculated interest total: ${money(calculation.totalInterest)}`,
-    '',
-    'Interest segments:',
-    ...((calculation.segments || []).map((segment) => `${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)} | ${segment.formula} = ${money(segment.interest)}`)),
-    '',
-    'Buyer payment schedule:',
-    ...((calculation.paymentSchedule || []).map((payment) => `${prettyDate(payment.paymentDate)} | ${payment.name || payment.id || '-'} | Payment ${money(payment.amount)} | Balance after ${money(payment.balanceAfter)}`)),
-  ].filter((line) => line !== '').join('\n');
+  return ['Late Payment Interest Calculation', `Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30`, calculation.rateWarning || '', `Buyer invoice amount: ${money(calculation.invoiceAmount)}`, `Buyer invoice due date: ${prettyDate(calculation.dueDate)}`, `Account interest rate: ${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${calculation.interestRateField.label})` : ''}`, `Calculated interest total: ${money(calculation.totalInterest)}`, '', 'Interest segments:', ...(calculation.segments || []).map((segment) => `${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)} | ${segment.formula} = ${money(segment.interest)}`), '', 'Buyer payment schedule:', ...(calculation.paymentSchedule || []).map((payment) => `${prettyDate(payment.paymentDate)} | ${payment.name || payment.id || '-'} | Payment ${money(payment.amount)} | Balance after ${money(payment.balanceAfter)}`)].filter((line) => line !== '').join('\n');
 }
 
 const INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN = /\{\{\s*interestCalculationTable\s*\}\}/i;
@@ -9815,9 +9492,7 @@ function incomingPaymentInterestTemplate(input = {}) {
 }
 
 function renderIncomingPaymentInterestTemplate(value, context) {
-  return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (
-    Object.prototype.hasOwnProperty.call(context, key) ? context[key] : match
-  ));
+  return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (Object.prototype.hasOwnProperty.call(context, key) ? context[key] : match));
 }
 
 function replaceIncomingPaymentInterestToken(source, pattern, replacement) {
@@ -9841,9 +9516,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   const buyerName = calculation?.buyerName || String(body.buyerName || body.partyName || '').trim();
   const buyerGroupName = calculation?.buyerGroupName || String(body.buyerGroupName || '').trim();
   const receivedDate = prettyDate(body.paymentDate || body.receivedDate);
-  const insertedDate = body.createdDate && dateOnly(body.createdDate) !== dateOnly(body.paymentDate || body.receivedDate)
-    ? prettyDate(body.createdDate)
-    : '';
+  const insertedDate = body.createdDate && dateOnly(body.createdDate) !== dateOnly(body.paymentDate || body.receivedDate) ? prettyDate(body.createdDate) : '';
   const delayLabel = body.delayDays == null ? '-' : `${Number(body.delayDays).toLocaleString()} Days`;
   const context = {
     requestedBy,
@@ -9873,18 +9546,10 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
   const bodyText = hasHtmlMarkup(bodyContent) ? htmlToPlainText(bodyContent) : bodyContent;
   const calculationHtml = calculation ? incomingPaymentInterestCalculationHtml(calculation) : '';
   const calculationText = calculation ? incomingPaymentInterestCalculationText(calculation) : '';
-  const htmlBody = replaceIncomingPaymentInterestToken(
-    emailContentHtml(bodyContent),
-    INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN,
-    incomingPaymentInterestStemLinkHtml(stemUrl),
-  )
+  const htmlBody = replaceIncomingPaymentInterestToken(emailContentHtml(bodyContent), INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN, incomingPaymentInterestStemLinkHtml(stemUrl))
     .replace(/<p\b[^>]*>\s*\{\{\s*interestCalculationTable\s*\}\}\s*<\/p>/i, calculationHtml)
     .replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationHtml);
-  const textBody = replaceIncomingPaymentInterestToken(
-    bodyText,
-    INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN,
-    incomingPaymentInterestStemLinkText(stemUrl),
-  ).replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
+  const textBody = replaceIncomingPaymentInterestToken(bodyText, INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN, incomingPaymentInterestStemLinkText(stemUrl)).replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${htmlBody}
@@ -9893,7 +9558,7 @@ function buildIncomingPaymentInterestEmail(body, profile, calculation) {
 }
 
 async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const paymentId = String(body.paymentId || body.payment_id || '').trim();
   if (!paymentId) throw appError('paymentId is required.', 400);
 
@@ -9906,7 +9571,13 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   const forceResend = body.force === true || body.confirmResend === true || body.allowResend === true;
   if (existing && !forceResend) {
     const deliveryUncertain = ['sending', 'uncertain'].includes(existing.deliveryStatus);
-    return { sent: false, alreadySent: existing.deliveryStatus === 'sent', deliveryUncertain, requiresConfirmation: true, notification: existing };
+    return {
+      sent: false,
+      alreadySent: existing.deliveryStatus === 'sent',
+      deliveryUncertain,
+      requiresConfirmation: true,
+      notification: existing,
+    };
   }
 
   const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId }, accessContext);
@@ -9953,12 +9624,14 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
       requestedAtTimezone: 'Asia/Hong_Kong',
       resent: Boolean(existing),
       resendCount: Number(existing?.metadata?.resendCount || 0) + (existing ? 1 : 0),
-      previousRequest: existing ? {
-        sentAt: existing.sentAt || null,
-        actorEmail: existing.actorEmail || null,
-        recipientEmail: existing.recipientEmail || null,
-        emailSubject: existing.emailSubject || null,
-      } : null,
+      previousRequest: existing
+        ? {
+            sentAt: existing.sentAt || null,
+            actorEmail: existing.actorEmail || null,
+            recipientEmail: existing.recipientEmail || null,
+            emailSubject: existing.emailSubject || null,
+          }
+        : null,
       interestCalculation: {
         invoiceAmount: calculation.invoiceAmount,
         dueDate: calculation.dueDate,
@@ -9973,17 +9646,8 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
     },
   };
 
-  const reserveQuery = existing
-    ? client
-      .from('incoming_payment_interest_notifications')
-      .update(payload)
-      .eq('payment_id', paymentId)
-    : client
-      .from('incoming_payment_interest_notifications')
-      .insert(payload);
-  const { data: reserved, error: reserveError } = await reserveQuery
-    .select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS)
-    .single();
+  const reserveQuery = existing ? client.from('incoming_payment_interest_notifications').update(payload).eq('payment_id', paymentId) : client.from('incoming_payment_interest_notifications').insert(payload);
+  const { data: reserved, error: reserveError } = await reserveQuery.select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).single();
   if (reserveError) throw reserveError;
 
   let result;
@@ -10000,7 +9664,11 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   } catch (error) {
     await client
       .from('incoming_payment_interest_notifications')
-      .update({ delivery_status: 'failed', last_error: error.message, updated_at: new Date().toISOString() })
+      .update({
+        delivery_status: 'failed',
+        last_error: error.message,
+        updated_at: new Date().toISOString(),
+      })
       .eq('payment_id', paymentId);
     throw error;
   }
@@ -10021,13 +9689,20 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   if (error) {
     await client
       .from('incoming_payment_interest_notifications')
-      .update({ delivery_status: 'uncertain', last_error: `Email sent but tracking update failed: ${error.message}`, updated_at: new Date().toISOString() })
+      .update({
+        delivery_status: 'uncertain',
+        last_error: `Email sent but tracking update failed: ${error.message}`,
+        updated_at: new Date().toISOString(),
+      })
       .eq('payment_id', paymentId);
     return {
       sent: true,
       trackingWarning: 'Email was sent, but FCOS could not finalize its delivery record. Do not resend until an administrator reconciles it.',
       to: recipients,
-      notification: { ...serializeIncomingPaymentInterestNotification(reserved), deliveryStatus: 'uncertain' },
+      notification: {
+        ...serializeIncomingPaymentInterestNotification(reserved),
+        deliveryStatus: 'uncertain',
+      },
     };
   }
   return {
@@ -10041,10 +9716,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
 
 const INCOMING_PAYMENT_RECEIVABLE_TABLE_TOKEN_PATTERN = /\{\{\s*receivablePaymentsTable\s*\}\}/i;
 const INCOMING_PAYMENT_BUYER_CIA_TABLE_TOKEN_PATTERN = /\{\{\s*buyerCiaInvoicesTable\s*\}\}/i;
-const INCOMING_PAYMENT_LATE_INTEREST_LINK_TOKEN_PATTERNS = [
-  /\{\{\s*requestLatePaymentInterestInvoiceLink\s*\}\}/i,
-  /\{\{\s*latePaymentInterestLink\s*\}\}/i,
-];
+const INCOMING_PAYMENT_LATE_INTEREST_LINK_TOKEN_PATTERNS = [/\{\{\s*requestLatePaymentInterestInvoiceLink\s*\}\}/i, /\{\{\s*latePaymentInterestLink\s*\}\}/i];
 const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: ['bt@cosulich.com.hk'],
@@ -10081,9 +9753,15 @@ function incomingPaymentEmailSettings(input = {}) {
 }
 
 function incomingPaymentSearchMatches(row, search, fields) {
-  const query = String(search || '').trim().toLowerCase();
+  const query = String(search || '')
+    .trim()
+    .toLowerCase();
   if (!query) return true;
-  return fields.some((field) => String(row?.[field] || '').toLowerCase().includes(query));
+  return fields.some((field) =>
+    String(row?.[field] || '')
+      .toLowerCase()
+      .includes(query),
+  );
 }
 
 function renderIncomingPaymentTemplate(value, context = {}) {
@@ -10126,13 +9804,11 @@ function incomingPaymentAmountText(row) {
 }
 
 function incomingPaymentReceivableTableHtml(rows = []) {
-  const tableRows = rows.map((row) => {
-    const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
-    const amountLines = [
-      escapeHtml(money(row.amount)),
-      ...(row.bankCharges || []).map((charge) => `<span style="display:block;color:#92400e;font-weight:600">Bank Charge ${escapeHtml(money(charge.amount))}</span>`),
-    ].join('');
-    return `
+  const tableRows = rows
+    .map((row) => {
+      const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
+      const amountLines = [escapeHtml(money(row.amount)), ...(row.bankCharges || []).map((charge) => `<span style="display:block;color:#92400e;font-weight:600">Bank Charge ${escapeHtml(money(charge.amount))}</span>`)].join('');
+      return `
       <tr>
         <td style="${cell};white-space:nowrap">${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? `<span style="display:block;color:#92400e;font-size:11px;font-weight:600">Inserted on ${prettyDate(row.createdDate)}</span>` : ''}</td>
         <td style="${cell};white-space:nowrap;text-align:right">${escapeHtml(incomingPaymentTermsValue(row))}</td>
@@ -10143,7 +9819,8 @@ function incomingPaymentReceivableTableHtml(rows = []) {
         <td style="${cell};white-space:nowrap;text-align:right;font-weight:600">${amountLines}</td>
         <td style="${cell};white-space:nowrap;text-align:right">${money(row.receivableBalance)}</td>
       </tr>`;
-  }).join('');
+    })
+    .join('');
   return `
     <div style="margin:14px 0 18px">
       <div style="font-size:13px;font-weight:700;margin:0 0 8px;color:#1f2937">Receivable Payments (${rows.length.toLocaleString()})</div>
@@ -10168,9 +9845,10 @@ function incomingPaymentReceivableTableHtml(rows = []) {
 }
 
 function incomingPaymentBuyerCiaTableHtml(rows = []) {
-  const tableRows = rows.map((row) => {
-    const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
-    return `
+  const tableRows = rows
+    .map((row) => {
+      const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
+      return `
       <tr>
         <td style="${cell};min-width:180px;font-weight:600">${escapeHtml(row.buyerName || '-')}</td>
         <td style="${cell};min-width:140px">${escapeHtml(row.buyerGroupName || '-')}</td>
@@ -10180,7 +9858,8 @@ function incomingPaymentBuyerCiaTableHtml(rows = []) {
         <td style="${cell};white-space:nowrap;text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
         <td style="${cell};white-space:nowrap">${prettyDate(row.deliveryDate)}</td>
       </tr>`;
-  }).join('');
+    })
+    .join('');
   return `
     <div style="margin:14px 0 18px">
       <div style="font-size:13px;font-weight:700;margin:0 0 8px;color:#1f2937">Buyer CIA Invoices (${rows.length.toLocaleString()})</div>
@@ -10205,19 +9884,12 @@ function incomingPaymentBuyerCiaTableHtml(rows = []) {
 
 function incomingPaymentReceivableTableText(rows = []) {
   if (!rows.length) return 'Receivable Payments: none';
-  return [
-    `Receivable Payments (${rows.length})`,
-    'Received Date | Terms | Delay | From | Group | STEM | Amount | Receivable',
-    ...rows.map((row) => `${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? ` (${incomingPaymentInsertedNote(row)})` : ''} | ${incomingPaymentTermsValue(row)} | ${incomingPaymentDelayValue(row)} | ${row.partyName || '-'} | ${row.buyerGroupName || '-'} | ${row.stemName || '-'} | ${incomingPaymentAmountText(row)} | ${money(row.receivableBalance)}`),
-  ].join('\n');
+  return [`Receivable Payments (${rows.length})`, 'Received Date | Terms | Delay | From | Group | STEM | Amount | Receivable', ...rows.map((row) => `${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? ` (${incomingPaymentInsertedNote(row)})` : ''} | ${incomingPaymentTermsValue(row)} | ${incomingPaymentDelayValue(row)} | ${row.partyName || '-'} | ${row.buyerGroupName || '-'} | ${row.stemName || '-'} | ${incomingPaymentAmountText(row)} | ${money(row.receivableBalance)}`)].join('\n');
 }
 
 function incomingPaymentBuyerCiaTableText(rows = []) {
   if (!rows.length) return 'Buyer CIA Invoices: none';
-  return [
-    `Buyer CIA Invoices (${rows.length})`,
-    ...rows.map((row) => `${row.buyerName || '-'} | ${row.buyerGroupName || '-'} | ${row.buyerTrader || '-'} | ${row.stemName || '-'} | Calculated ${money(row.calculatedAmount)} | Receivable ${money(row.receivableBalance)} | Delivery ${prettyDate(row.deliveryDate)}`),
-  ].join('\n');
+  return [`Buyer CIA Invoices (${rows.length})`, ...rows.map((row) => `${row.buyerName || '-'} | ${row.buyerGroupName || '-'} | ${row.buyerTrader || '-'} | ${row.stemName || '-'} | Calculated ${money(row.calculatedAmount)} | Receivable ${money(row.receivableBalance)} | Delivery ${prettyDate(row.deliveryDate)}`)].join('\n');
 }
 
 function replaceIncomingPaymentToken(source, pattern, replacement) {
@@ -10289,62 +9961,31 @@ function buildIncomingPaymentEmail(report, settings) {
         </td>
       </tr>
     </table>`;
-  const contentHtml = injectIncomingPaymentLateInterestLink(
-    emailContentHtml(content),
-    incomingPaymentLateInterestLinkHtml(lateInterestUrl),
-  );
+  const contentHtml = injectIncomingPaymentLateInterestLink(emailContentHtml(content), incomingPaymentLateInterestLinkHtml(lateInterestUrl));
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${summaryHtml}
-      ${injectIncomingPaymentTables(
-        contentHtml,
-        settings,
-        incomingPaymentReceivableTableHtml(report.rows || []),
-        incomingPaymentBuyerCiaTableHtml(report.buyerCiaInvoices || []),
-      )}
+      ${injectIncomingPaymentTables(contentHtml, settings, incomingPaymentReceivableTableHtml(report.rows || []), incomingPaymentBuyerCiaTableHtml(report.buyerCiaInvoices || []))}
     </div>`;
-  const textContent = injectIncomingPaymentTables(
-    [
-      `Incoming Total: ${money(summary.totalIncomingAmount)}`,
-      `Buyer Payments: ${money(summary.buyerPaymentTotal)}`,
-      `Supplier Refunds: ${money(summary.supplierRefundTotal)}`,
-      `Incoming Records: ${incomingRows.toLocaleString()}`,
-      `Needs Review: ${needsReviewCount.toLocaleString()}`,
-      '',
-      injectIncomingPaymentLateInterestLink(contentText, incomingPaymentLateInterestLinkText(lateInterestUrl)),
-    ].join('\n'),
-    settings,
-    `\n\n${incomingPaymentReceivableTableText(report.rows || [])}\n\n`,
-    `\n\n${incomingPaymentBuyerCiaTableText(report.buyerCiaInvoices || [])}\n\n`,
-  );
+  const textContent = injectIncomingPaymentTables([`Incoming Total: ${money(summary.totalIncomingAmount)}`, `Buyer Payments: ${money(summary.buyerPaymentTotal)}`, `Supplier Refunds: ${money(summary.supplierRefundTotal)}`, `Incoming Records: ${incomingRows.toLocaleString()}`, `Needs Review: ${needsReviewCount.toLocaleString()}`, '', injectIncomingPaymentLateInterestLink(contentText, incomingPaymentLateInterestLinkText(lateInterestUrl))].join('\n'), settings, `\n\n${incomingPaymentReceivableTableText(report.rows || [])}\n\n`, `\n\n${incomingPaymentBuyerCiaTableText(report.buyerCiaInvoices || [])}\n\n`);
   return { subject, html, text: textContent, summary };
 }
 
 async function incomingPaymentEmailReport(body = {}, req = null, accessContext = null) {
   if (!accessContext) await requireActiveUser(req);
   const settings = incomingPaymentEmailSettings(body.settings || body);
-  const source = await incomingPaymentsList({
-    dateFrom: body.dateFrom,
-    dateTo: body.dateTo,
-    limit: body.limit || 5000,
-  }, null, accessContext);
+  const source = await incomingPaymentsList(
+    {
+      dateFrom: body.dateFrom,
+      dateTo: body.dateTo,
+      limit: body.limit || 5000,
+    },
+    null,
+    accessContext,
+  );
   const search = String(body.search || '').trim();
-  const rows = (source.rows || []).filter((row) => incomingPaymentSearchMatches(row, search, [
-    'partyName',
-    'stemName',
-    'keyStem',
-    'buyerName',
-    'buyerGroupName',
-    'supplierName',
-    'supplierInvoiceName',
-  ]));
-  const buyerCiaInvoices = (source.buyerCiaInvoices || []).filter((row) => incomingPaymentSearchMatches(row, search, [
-    'buyerName',
-    'buyerGroupName',
-    'buyerTrader',
-    'stemName',
-    'keyStem',
-  ]));
+  const rows = (source.rows || []).filter((row) => incomingPaymentSearchMatches(row, search, ['partyName', 'stemName', 'keyStem', 'buyerName', 'buyerGroupName', 'supplierName', 'supplierInvoiceName']));
+  const buyerCiaInvoices = (source.buyerCiaInvoices || []).filter((row) => incomingPaymentSearchMatches(row, search, ['buyerName', 'buyerGroupName', 'buyerTrader', 'stemName', 'keyStem']));
   const report = {
     ...source,
     rows,
@@ -10367,7 +10008,12 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
       preview: true,
       settings,
       report: reportMeta,
-      email: { subject: email.subject, html: email.html, text: email.text, summary: email.summary },
+      email: {
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+        summary: email.summary,
+      },
     };
   }
   if (!settings.to.length) throw appError('At least one To recipient is required before sending the Incoming Payment report.', 400);
@@ -10391,7 +10037,12 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
     report: reportMeta,
     rows: rows.length,
     buyerCiaRows: buyerCiaInvoices.length,
-    email: { subject: email.subject, html: email.html, text: email.text, summary: email.summary },
+    email: {
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      summary: email.summary,
+    },
   };
 }
 
@@ -10437,11 +10088,7 @@ async function loadStoredBuyerInvoiceEmailSettings() {
   const client = safeSupabaseAdminClient();
   if (!client) return serializeBuyerInvoiceEmailSettingsRow(null, null, false);
   try {
-    const { data, error } = await client
-      .from('buyer_invoice_email_settings')
-      .select('id,settings,last_preview_at,last_preview_row_count,last_sent_at,last_sent_row_count,last_error,updated_by_email,updated_at')
-      .eq('id', 'default')
-      .maybeSingle();
+    const { data, error } = await client.from('buyer_invoice_email_settings').select('id,settings,last_preview_at,last_preview_row_count,last_sent_at,last_sent_row_count,last_error,updated_by_email,updated_at').eq('id', 'default').maybeSingle();
     if (error) throw error;
     return serializeBuyerInvoiceEmailSettingsRow(data);
   } catch (error) {
@@ -10454,9 +10101,7 @@ async function saveStoredBuyerInvoiceEmailSettings(settings, profile = null) {
   const client = supabaseAdminClient();
   const inputPatch = buyerInvoiceEmailSettingsPatch(settings);
   const normalized = normalizeBuyerInvoiceEmailSettings(inputPatch);
-  const settingsPatch = Object.fromEntries(
-    Object.keys(inputPatch).map((key) => [key, normalized[key]]),
-  );
+  const settingsPatch = Object.fromEntries(Object.keys(inputPatch).map((key) => [key, normalized[key]]));
   if (!Object.keys(settingsPatch).length) {
     throw appError('No recognized buyer invoice email settings were supplied.', 400);
   }
@@ -10474,22 +10119,22 @@ async function saveStoredBuyerInvoiceEmailSettings(settings, profile = null) {
 async function updateBuyerInvoiceEmailSettingsMeta(patch = {}) {
   const client = safeSupabaseAdminClient();
   if (!client) return;
-  const { error } = await client
-    .from('buyer_invoice_email_settings')
-    .upsert({ id: 'default', ...patch }, { onConflict: 'id' });
+  const { error } = await client.from('buyer_invoice_email_settings').upsert({ id: 'default', ...patch }, { onConflict: 'id' });
   if (error) console.error('Failed to update buyer invoice email settings metadata', error.message);
 }
 
 async function buyerInvoiceEmailSettingsGet(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   return {
-    ...await loadStoredBuyerInvoiceEmailSettings(),
-    capabilities: { canManageSettings: await userHasCapability(client, profile, 'buyer_invoices_manage') },
+    ...(await loadStoredBuyerInvoiceEmailSettings()),
+    capabilities: {
+      canManageSettings: await userHasCapability(client, profile, 'buyer_invoices_manage'),
+    },
   };
 }
 
 async function buyerInvoiceEmailSettingsSave(body, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'buyer_invoices_manage', 'Buyer invoice shared settings management permission is required.');
   return saveStoredBuyerInvoiceEmailSettings(body.settings || body, profile);
 }
@@ -10515,7 +10160,9 @@ function hongKongScheduleParts(date = new Date()) {
 }
 
 function scheduleMinuteOfDay(time) {
-  const match = String(time || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  const match = String(time || '')
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
   const hour = Number(match[1]);
   const minute = Number(match[2]);
@@ -10585,14 +10232,32 @@ function overdueDisplayValue(daysUntilDue) {
 function overdueEmailStyles(daysUntilDue, prpspStatus) {
   const severity = overdueSeverity(daysUntilDue);
   const styles = {
-    red: { row: 'background:#fee2e2', border: '#fca5a5', text: '#991b1b', pill: 'background:#fecaca;border-color:#f87171;color:#7f1d1d' },
-    orange: { row: 'background:#fed7aa', border: '#fb923c', text: '#9a3412', pill: 'background:#fdba74;border-color:#f97316;color:#7c2d12' },
-    yellow: { row: 'background:#fde68a', border: '#facc15', text: '#854d0e', pill: 'background:#fcd34d;border-color:#eab308;color:#713f12' },
+    red: {
+      row: 'background:#fee2e2',
+      border: '#fca5a5',
+      text: '#991b1b',
+      pill: 'background:#fecaca;border-color:#f87171;color:#7f1d1d',
+    },
+    orange: {
+      row: 'background:#fed7aa',
+      border: '#fb923c',
+      text: '#9a3412',
+      pill: 'background:#fdba74;border-color:#f97316;color:#7c2d12',
+    },
+    yellow: {
+      row: 'background:#fde68a',
+      border: '#facc15',
+      text: '#854d0e',
+      pill: 'background:#fcd34d;border-color:#eab308;color:#713f12',
+    },
   };
-  const base = styles[severity] || { row: '', border: '#e5e7eb', text: '#2563eb', pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8' };
-  return prpspStatus === 'Conditional-Not Sent'
-    ? { ...base, row: 'background:#e9d5ff', border: '#c084fc' }
-    : base;
+  const base = styles[severity] || {
+    row: '',
+    border: '#e5e7eb',
+    text: '#2563eb',
+    pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8',
+  };
+  return prpspStatus === 'Conditional-Not Sent' ? { ...base, row: 'background:#e9d5ff', border: '#c084fc' } : base;
 }
 
 function renderBuyerInvoiceEmailContent(template, report, settings) {
@@ -10604,27 +10269,34 @@ function renderBuyerInvoiceEmailContent(template, report, settings) {
 
 function emailContentHtml(content) {
   if (hasHtmlMarkup(content)) return sanitizeReminderHtml(content);
-  const blocks = String(content || '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const blocks = String(content || '')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
   if (!blocks.length) return '';
-  return blocks.map((block, index) => {
-    const html = escapeHtml(block).replaceAll('\n', '<br>');
-    if (index === 0) return `<h2 style="margin:0 0 6px;font-size:20px">${html}</h2>`;
-    return `<p style="margin:0 0 14px;color:#667085">${html}</p>`;
-  }).join('');
+  return blocks
+    .map((block, index) => {
+      const html = escapeHtml(block).replaceAll('\n', '<br>');
+      if (index === 0) return `<h2 style="margin:0 0 6px;font-size:20px">${html}</h2>`;
+      return `<p style="margin:0 0 14px;color:#667085">${html}</p>`;
+    })
+    .join('');
 }
 
 function buyerTraderFilterHtml(report, settings) {
   const options = report.buyerTraderOptions || [];
   if (!options.length) return '';
-  const selected = new Set(report.hasBuyerTraderFilter ? (report.selectedBuyerTraders || []) : options);
+  const selected = new Set(report.hasBuyerTraderFilter ? report.selectedBuyerTraders || [] : options);
   const allActive = selected.size === options.length;
   const allUrl = buyerInvoiceFilterUrl(settings, report, null);
   const allChip = `<a href="${escapeHtml(allUrl)}" style="display:inline-block;text-decoration:none;border:1px solid ${allActive ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${allActive ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">All</a>`;
-  const chips = options.map((name) => {
-    const active = selected.has(name);
-    const url = buyerInvoiceFilterUrl(settings, report, name);
-    return `<a href="${escapeHtml(url)}" style="display:inline-block;text-decoration:none;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">${escapeHtml(name)}</a>`;
-  }).join('');
+  const chips = options
+    .map((name) => {
+      const active = selected.has(name);
+      const url = buyerInvoiceFilterUrl(settings, report, name);
+      return `<a href="${escapeHtml(url)}" style="display:inline-block;text-decoration:none;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">${escapeHtml(name)}</a>`;
+    })
+    .join('');
   return `
     <div style="margin:0 0 12px">
       <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Open filtered view by Buyer Trader / Payment Handler</div>
@@ -10645,7 +10317,8 @@ function buildBuyerInvoiceReportEmail(report, settings) {
     dueSoonReceivable: dueSoon.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
   };
   const subject = `${settings.subject} - ${prettyDate(report.today)}`;
-  const summaryHtml = settings.includeSummary ? `
+  const summaryHtml = settings.includeSummary
+    ? `
     <table role="presentation" style="border-collapse:collapse;margin:18px 0;width:100%;max-width:620px">
       <tr>
         <td style="border:1px solid #d9e2ef;border-radius:8px 0 0 8px;padding:12px;background:#fff7f7">
@@ -10657,11 +10330,13 @@ function buildBuyerInvoiceReportEmail(report, settings) {
           <div style="font-size:20px;font-weight:700;color:#2563eb">${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})</div>
         </td>
       </tr>
-    </table>` : '';
-  const tableRows = rows.map((row) => {
-    const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
-    const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
-    return `
+    </table>`
+    : '';
+  const tableRows = rows
+    .map((row) => {
+      const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
+      const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
+      return `
     <tr style="${severity.row}">
       <td style="${cellStyle};font-weight:600;white-space:nowrap">${escapeHtml(row.stemName)}</td>
       <td style="${cellStyle};min-width:180px">${escapeHtml(row.buyerName || '-')}</td>
@@ -10677,8 +10352,10 @@ function buildBuyerInvoiceReportEmail(report, settings) {
       </td>
       <td style="${cellStyle};text-align:right;font-weight:600;color:${severity.text};white-space:nowrap">${overdueDisplayValue(row.daysUntilDue)}</td>
     </tr>`;
-  }).join('');
-  const tableHtml = settings.includeTable ? `
+    })
+    .join('');
+  const tableHtml = settings.includeTable
+    ? `
     ${buyerTraderFilterHtml(report, settings)}
     <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
       <table style="border-collapse:collapse;width:100%;min-width:1260px;font-size:13px">
@@ -10699,35 +10376,27 @@ function buildBuyerInvoiceReportEmail(report, settings) {
         </thead>
         <tbody>${tableRows || '<tr><td colspan="11" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
       </table>
-    </div>` : '';
+    </div>`
+    : '';
   const contentHtml = emailContentHtml(content);
   const hasAttentionMarker = /for your attention\./i.test(contentHtml);
   const contentText = hasHtmlMarkup(content) ? htmlToPlainText(content) : content;
-  const reportBodyHtml = hasAttentionMarker && tableHtml
-    ? `${insertAfterAttentionSentence(contentHtml, tableHtml)}${summaryHtml}`
-    : `${contentHtml}${summaryHtml}${tableHtml}`;
+  const reportBodyHtml = hasAttentionMarker && tableHtml ? `${insertAfterAttentionSentence(contentHtml, tableHtml)}${summaryHtml}` : `${contentHtml}${summaryHtml}${tableHtml}`;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
       ${reportBodyHtml}
     </div>`;
   const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`).join('\n');
-  const introText = hasAttentionMarker && tableText
-    ? insertAfterAttentionSentence(contentText, `\n\n${tableText}\n\n`)
-    : contentText;
-  const textLines = [
-    introText,
-    `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`,
-    `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`,
-    `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`,
-    ...((report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`)),
-    '',
-    ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`)),
-  ];
+  const introText = hasAttentionMarker && tableText ? insertAfterAttentionSentence(contentText, `\n\n${tableText}\n\n`) : contentText;
+  const textLines = [introText, `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`, `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`, `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`, ...(report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`), '', ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`))];
   return { subject, html, text: textLines.join('\n'), totals };
 }
 
 function reminderCandidateKey(value) {
-  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 function isFratelliCosulichBuyerGroup(value) {
@@ -10747,13 +10416,7 @@ function isPaymentReminderCandidate(row, selected) {
 }
 
 function rowBuyerReminderRecipients(row) {
-  return uniqueEmailList(
-    row?.paymentReminderRecipients || [],
-    row?.paymentReminderRecipient || '',
-    row?.buyerAccountsEmail || '',
-    row?.buyerTraderEmail || '',
-    row?.paymentHandlerEmail || '',
-  );
+  return uniqueEmailList(row?.paymentReminderRecipients || [], row?.paymentReminderRecipient || '', row?.buyerAccountsEmail || '', row?.buyerTraderEmail || '', row?.paymentHandlerEmail || '');
 }
 
 function rowBrokerReminderEmails(row) {
@@ -10846,9 +10509,7 @@ function paymentReminderTemplateContext(report, rows, selected, routing = null) 
 
 function renderPaymentReminderTemplate(template, context) {
   const values = context || {};
-  return String(template || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (
-    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
-  ));
+  return String(template || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match));
 }
 
 function renderPaymentReminderEmailList(value, context) {
@@ -10887,11 +10548,12 @@ function htmlToPlainText(value) {
 function paymentReminderContentHtml(content) {
   const html = hasHtmlMarkup(content)
     ? sanitizeReminderHtml(content)
-    : String(content || '').split(/\n{2,}/).map((block) => `<p>${escapeHtml(block.trim()).replaceAll('\n', '<br>')}</p>`).join('');
+    : String(content || '')
+        .split(/\n{2,}/)
+        .map((block) => `<p>${escapeHtml(block.trim()).replaceAll('\n', '<br>')}</p>`)
+        .join('');
   const matches = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)];
-  const paragraphs = matches.length
-    ? matches.map((match) => match[1])
-    : html.split(/<br\s*\/?>|\n{2,}/i).map((block) => escapeHtml(block.trim()));
+  const paragraphs = matches.length ? matches.map((match) => match[1]) : html.split(/<br\s*\/?>|\n{2,}/i).map((block) => escapeHtml(block.trim()));
   return paragraphs
     .map((inner) => inner.trim())
     .filter((inner) => htmlToPlainText(inner).trim())
@@ -10924,9 +10586,7 @@ function insertAfterAttentionSentence(content, insertContent) {
 function insertInvoiceTable(content, insertContent) {
   const source = String(content || '');
   if (INVOICE_TABLE_TOKEN_PATTERN.test(source)) {
-    return source
-      .replace(new RegExp(`<p\\b[^>]*>\\s*${INVOICE_TABLE_TOKEN_PATTERN.source}\\s*<\\/p>`, 'i'), insertContent)
-      .replace(INVOICE_TABLE_TOKEN_PATTERN, insertContent);
+    return source.replace(new RegExp(`<p\\b[^>]*>\\s*${INVOICE_TABLE_TOKEN_PATTERN.source}\\s*<\\/p>`, 'i'), insertContent).replace(INVOICE_TABLE_TOKEN_PATTERN, insertContent);
   }
   return insertAfterAttentionSentence(source, insertContent);
 }
@@ -10936,11 +10596,12 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
   const context = paymentReminderTemplateContext(report, selectedRows, selected, routing);
   const subject = renderPaymentReminderTemplate(overrides.subject || settings.paymentReminderSubject, context);
   const body = renderPaymentReminderTemplate(overrides.body || settings.paymentReminderBody, context);
-  const tableRows = selectedRows.map((row) => {
-    const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
-    const cellStyle = `border-bottom:1px solid ${severity.border};padding:7px 8px;vertical-align:top`;
-    const nowrapCellStyle = `${cellStyle};white-space:nowrap`;
-    return `
+  const tableRows = selectedRows
+    .map((row) => {
+      const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
+      const cellStyle = `border-bottom:1px solid ${severity.border};padding:7px 8px;vertical-align:top`;
+      const nowrapCellStyle = `${cellStyle};white-space:nowrap`;
+      return `
     <tr style="${severity.row}">
       <td style="${cellStyle};font-weight:600;min-width:150px">${escapeHtml(row.stemName)}</td>
       <td style="${cellStyle};min-width:110px">${escapeHtml(row.buyerName || '-')}</td>
@@ -10954,7 +10615,8 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       </td>
       <td style="${nowrapCellStyle};text-align:right;font-weight:600;color:${severity.text}">${overdueDisplayValue(row.daysUntilDue)}</td>
     </tr>`;
-  }).join('');
+    })
+    .join('');
   const tableHtml = `
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #d9e2ef;border-radius:10px;margin:14px 0 16px;max-width:100%">
       <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
@@ -10995,10 +10657,14 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     ...buyerInvoiceEmailSettings(stored.settings),
     hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
   };
-  const report = await salesforceBuyerInvoicesDue({
-    daysAhead: body.daysAhead ?? settings.daysAhead,
-    force: body.forceLive === true,
-  }, null, accessContext);
+  const report = await salesforceBuyerInvoicesDue(
+    {
+      daysAhead: body.daysAhead ?? settings.daysAhead,
+      force: body.forceLive === true,
+    },
+    null,
+    accessContext,
+  );
   if (report.paymentReminderRulesAvailable !== true) {
     throw appError('Buyer Invoice reminder rules are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
   }
@@ -11022,9 +10688,17 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
   }
   const eligibleCandidates = candidates.filter((row) => row.paymentReminderEligible === true);
   const routing = paymentReminderRoutingForRows(eligibleCandidates);
-  const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
-    || routing.groups[0]
-    || { key: 'default', rows: eligibleCandidates, to: [], cc: [], bcc: [], primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [] };
+  const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId)) ||
+    routing.groups[0] || {
+      key: 'default',
+      rows: eligibleCandidates,
+      to: [],
+      cc: [],
+      bcc: [],
+      primaryRecipientName: selected.buyerName || 'Customer',
+      mode: 'buyer_only',
+      warnings: [],
+    };
   const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
   const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
   const preparedGroups = routing.groups.map((group) => {
@@ -11041,9 +10715,12 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
       stemIds: group.rows.map((row) => row.stemId),
     };
   });
-  const firstPreparedGroup = preparedGroups.find((group) => group.key === firstGroup.key)
-    || preparedGroups[0]
-    || { to: firstGroup.to, cc: firstGroup.cc, bcc: firstGroup.bcc };
+  const firstPreparedGroup = preparedGroups.find((group) => group.key === firstGroup.key) ||
+    preparedGroups[0] || {
+      to: firstGroup.to,
+      cc: firstGroup.cc,
+      bcc: firstGroup.bcc,
+    };
   return {
     selected,
     candidates,
@@ -11070,24 +10747,21 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
 
 async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) {
   if (!accessContext) await requireActiveUser(req);
-  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext({
-    ...body,
-    forceLive: true,
-  }, accessContext);
-  const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : [])
-    .map((id) => String(id || '').trim())
-    .filter(Boolean));
+  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(
+    {
+      ...body,
+      forceLive: true,
+    },
+    accessContext,
+  );
+  const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : []).map((id) => String(id || '').trim()).filter(Boolean));
   if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
   const selection = evaluateBuyerReminderSelection(candidates, [...selectedStemIds]);
   if (selection.unknownStemIds.length) {
     throw appError('The selected invoice list is stale or does not belong to this buyer reminder. Reopen the preview and review the current invoices.', 409);
   }
   if (selection.restrictedRows.length) {
-    throw appError(
-      selection.restrictedRows[0].paymentReminderBlockingReason
-        || 'One or more selected invoices are no longer eligible for an external payment reminder. Reopen the preview.',
-      409,
-    );
+    throw appError(selection.restrictedRows[0].paymentReminderBlockingReason || 'One or more selected invoices are no longer eligible for an external payment reminder. Reopen the preview.', 409);
   }
   const rows = selection.rows;
 
@@ -11096,9 +10770,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
   if (!Array.isArray(body.recipientBatches)) {
     throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
   }
-  const reviewedRecipientBatches = new Map(body.recipientBatches
-    .filter((batch) => batch?.key)
-    .map((batch) => [batch.key, batch]));
+  const reviewedRecipientBatches = new Map(body.recipientBatches.filter((batch) => batch?.key).map((batch) => [batch.key, batch]));
   const sharedSmtp = { user: process.env.SMTP_USER };
   const configuredFrom = process.env.PAYMENT_REMINDER_FROM || settings.from;
   const smtpFrom = smtpAuthenticatedFromAddress(sharedSmtp, configuredFrom) || configuredFrom;
@@ -11116,10 +10788,17 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     const cc = uniqueEmailList(reviewedBatch.cc || '');
     const bcc = uniqueEmailList(reviewedBatch.bcc || '');
     if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
-    const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, {
-      subject: body.subject,
-      body: body.body,
-    }, effectiveGroup);
+    const email = buildBuyerInvoicePaymentReminderEmail(
+      report,
+      settings,
+      groupSelected,
+      group.rows,
+      {
+        subject: body.subject,
+        body: body.body,
+      },
+      effectiveGroup,
+    );
     let result;
     try {
       const delivery = await sendWithSmtpSendAsFallback({
@@ -11147,34 +10826,42 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
       });
       throw error;
     }
-    sendResults.push({ result, to, cc, bcc, subject: email.subject, rows: group.rows.length, mode: group.mode });
+    sendResults.push({
+      result,
+      to,
+      cc,
+      bcc,
+      subject: email.subject,
+      rows: group.rows.length,
+      mode: group.mode,
+    });
 
-    const note = [
-      `Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`,
-      `Subject: ${email.subject}`,
-      `Routing: ${group.mode}`,
-      `Included invoices: ${group.rows.length}`,
-    ].join('\n');
+    const note = [`Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`, `Subject: ${email.subject}`, `Routing: ${group.mode}`, `Included invoices: ${group.rows.length}`].join('\n');
     for (const row of group.rows) {
       const currentStatus = row.collection?.status || 'Not Started';
       const nextStatus = currentStatus === 'Not Started' ? 'Reminder Sent' : currentStatus;
       const ownerName = row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
       try {
-        const collectionResult = await persistBuyerInvoiceCollection({
-          stemId: row.stemId,
-          expectedUpdatedAt: row.collection?.updatedAt || null,
-          updates: {
-            status: nextStatus,
-            ownerName,
-            latestNote: note,
+        const collectionResult = await persistBuyerInvoiceCollection(
+          {
+            stemId: row.stemId,
+            expectedUpdatedAt: row.collection?.updatedAt || null,
+            updates: {
+              status: nextStatus,
+              ownerName,
+              latestNote: note,
+            },
+            event: {
+              eventType: currentStatus === 'Not Started' ? 'status_change' : 'note',
+              status: nextStatus,
+              ownerName,
+              note,
+            },
           },
-          event: {
-            eventType: currentStatus === 'Not Started' ? 'status_change' : 'note',
-            status: nextStatus,
-            ownerName,
-            note,
-          },
-        }, req, null, accessContext);
+          req,
+          null,
+          accessContext,
+        );
         collectionResults.push(collectionResult);
       } catch (error) {
         collectionWarnings.push({ stemId: row.stemId, error: error.message });
@@ -11243,8 +10930,7 @@ function requireCronAuthorization(req) {
 
 async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
   if (!body.scheduled) await requireActiveUser(req);
-  const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl']
-    .some((key) => Object.prototype.hasOwnProperty.call(body, key));
+  const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
   const stored = hasExplicitSettings ? null : await loadStoredBuyerInvoiceEmailSettings();
   if (stored && stored.meta.storageAvailable !== true) {
     throw appError('Buyer Invoice email settings are temporarily unavailable. Report sending is disabled until storage is restored.', 503);
@@ -11262,7 +10948,11 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
       sent: false,
       skipped: true,
       reason: 'Current Hong Kong time is outside the configured report schedule.',
-      schedule: { weekdays: settings.weekdays, sendTimes: settings.sendTimes, now: hongKongScheduleParts() },
+      schedule: {
+        weekdays: settings.weekdays,
+        sendTimes: settings.sendTimes,
+        now: hongKongScheduleParts(),
+      },
     };
   }
   const reportPayload = { daysAhead: settings.daysAhead };
@@ -11289,7 +10979,12 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
         selectedBuyerTraders: report.selectedBuyerTraders,
         hasBuyerTraderFilter: report.hasBuyerTraderFilter,
       },
-      email: { subject: email.subject, html: email.html, text: email.text, totals: email.totals },
+      email: {
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+        totals: email.totals,
+      },
     };
   }
   const smtpFrom = smtpAuthenticatedFromAddress({ user: process.env.SMTP_USER }, settings.from) || settings.from;
@@ -11341,7 +11036,12 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
     ...buyerInvoiceEmailSettings(stored.settings),
     hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
   };
-  if (settings.enabled === false) return { sent: false, skipped: true, reason: 'Email schedule is disabled.' };
+  if (settings.enabled === false)
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'Email schedule is disabled.',
+    };
 
   const window = buyerInvoiceScheduledWindow(settings);
   if (!window) {
@@ -11349,20 +11049,39 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
       sent: false,
       skipped: true,
       reason: 'Current Hong Kong time is outside the configured report schedule.',
-      schedule: { weekdays: settings.weekdays, sendTimes: settings.sendTimes, now: hongKongScheduleParts() },
+      schedule: {
+        weekdays: settings.weekdays,
+        sendTimes: settings.sendTimes,
+        now: hongKongScheduleParts(),
+      },
     };
   }
 
   const run = await startBuyerInvoiceEmailRun(window);
-  if (!run.allowed) return { sent: false, skipped: true, duplicate: true, runKey: window.runKey };
+  if (!run.allowed)
+    return {
+      sent: false,
+      skipped: true,
+      duplicate: true,
+      runKey: window.runKey,
+    };
 
   try {
-    const result = await outstandingBuyerInvoicesEmailReport({ settings, force: true, scheduled: true });
+    const result = await outstandingBuyerInvoicesEmailReport({
+      settings,
+      force: true,
+      scheduled: true,
+    });
     await finishBuyerInvoiceEmailRun(window.runKey, {
       status: 'sent',
       rows_count: result.rows,
       totals: result.totals || {},
-      provider_result: { id: result.id || null, to: result.to || [], cc: result.cc || [], subject: result.subject || null },
+      provider_result: {
+        id: result.id || null,
+        to: result.to || [],
+        cc: result.cc || [],
+        subject: result.subject || null,
+      },
     });
     return { ...result, scheduled: true, runKey: window.runKey };
   } catch (error) {
@@ -11383,11 +11102,15 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const hasDispute = fieldNames.includes('Dispute__c');
   const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
   if (!hasDispute && !hasDisputeStatus) return { rows: [] };
-  const supplierInvoiceDescribe = await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] }));
+  const supplierInvoiceDescribe = await salesforceObjectFields({
+    objectName: 'Supplier_Invoice__c',
+  }).catch(() => ({ fields: [] }));
   const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
   const supplierInvoiceFieldNames = supplierInvoiceFields.map((f) => f.name);
   const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
-  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentDescribe = await salesforceObjectFields({
+    objectName: 'Payment__c',
+  }).catch(() => ({ fields: [] }));
   const paymentFields = paymentDescribe.fields || [];
   const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
   const supplierSettlementSchema = resolveSupplierSettlementSchema({
@@ -11395,20 +11118,20 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
     paymentFields,
   });
   const supplierInvoicePayableField = supplierSettlementSchema.invoicePayableField;
-  const supplierInvoiceAmountFields = supplierSettlementSchema.invoiceAmountField
-    ? [supplierSettlementSchema.invoiceAmountField]
-    : [];
+  const supplierInvoiceAmountFields = supplierSettlementSchema.invoiceAmountField ? [supplierSettlementSchema.invoiceAmountField] : [];
   const supplierInvoiceDueDateFields = supplierSettlementSchema.invoiceDueDateFields;
   const supplierInvoiceDateFields = supplierSettlementSchema.invoiceDateFields;
   const supplierInvoiceStatusFields = supplierSettlementSchema.invoiceStatusFields;
   const supplierInvoiceSupplierFields = supplierSettlementSchema.supplierAccountFields;
-  const supplierInvoiceSupplierNameRelationships = supplierInvoiceSupplierFields
-    .map((field) => supplierInvoiceFieldByName[field]?.relationshipName)
-    .filter(Boolean);
-  const lineItemDescribe = await salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] }));
+  const supplierInvoiceSupplierNameRelationships = supplierInvoiceSupplierFields.map((field) => supplierInvoiceFieldByName[field]?.relationshipName).filter(Boolean);
+  const lineItemDescribe = await salesforceObjectFields({
+    objectName: 'STEM_Line_Item__c',
+  }).catch(() => ({ fields: [] }));
   const originalSupplierLookup = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
   const originalSupplierRelationship = originalSupplierLookup.relationshipName || 'Original_Supplier__r';
-  const extraCostDescribe = await salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }).catch(() => ({ fields: [] }));
+  const extraCostDescribe = await salesforceObjectFields({
+    objectName: 'STEM_Extra_Cost__c',
+  }).catch(() => ({ fields: [] }));
   const extraCostFields = extraCostDescribe.fields || [];
   const extraCostFieldNames = new Set(extraCostFields.map((field) => field.name));
   const extraCostSupplierLookup = resolveExtraCostSupplierLookup(extraCostFields);
@@ -11416,26 +11139,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const extraCostSupplierRelationship = extraCostSupplierLookup.relationshipName;
 
   const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
-  for (const field of [
-    'KeyStem__c',
-    'Delivery_Date__c',
-    'Expected_Delivery_Date__c',
-    'ETA_Start_Date__c',
-    'Buyer_Pay_Term_Date__c',
-    'Invoice_Due_Date__c',
-    'Due_Date__c',
-    'Buyer_Name__c',
-    'Buyer__c',
-    'Account__c',
-    'Dispute__c',
-    'Dispute_Status__c',
-    'Total_Invoice_Amount__c',
-    'Total_Invoiced_Amount_From_Suppliers__c',
-    'Payable_Balance__c',
-    'Receivable_Balance__c',
-    'QLIK_STEM_Line_Item_Total_Cost__c',
-    'QLIK_Costs_Total_Cost__c',
-  ]) {
+  for (const field of ['KeyStem__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_Start_Date__c', 'Buyer_Pay_Term_Date__c', 'Invoice_Due_Date__c', 'Due_Date__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Dispute__c', 'Dispute_Status__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Payable_Balance__c', 'Receivable_Balance__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) {
     if (fieldNames.includes(field)) fields.push(field);
   }
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
@@ -11443,21 +11147,18 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   if (fieldNames.includes('Account__c')) fields.push('Account__r.Name');
 
   const activeDisputeStatusCondition = "(Dispute_Status__c != null AND Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != 'No Disputes' AND Dispute_Status__c != 'no dispute' AND Dispute_Status__c != 'no disputes')";
-  const disputeCondition = hasDisputeStatus
-    ? activeDisputeStatusCondition
-    : 'Dispute__c = true';
-  const stemWhere = combineWhereConditions([
-    disputeCondition,
-    interofficeCondition,
-    requestedStemId ? `Id = '${escapeSoql(requestedStemId)}'` : '',
-  ]);
-  const rows = await queryRows(`
+  const disputeCondition = hasDisputeStatus ? activeDisputeStatusCondition : 'Dispute__c = true';
+  const stemWhere = combineWhereConditions([disputeCondition, interofficeCondition, requestedStemId ? `Id = '${escapeSoql(requestedStemId)}'` : '']);
+  const rows = await queryRows(
+    `
     SELECT ${[...new Set(fields)].join(', ')}
     FROM stem__c
     WHERE ${stemWhere}
     ORDER BY LastModifiedDate DESC
     LIMIT ${limit}
-  `, { limit, softFail: true });
+  `,
+    { limit, softFail: true },
+  );
 
   const stemIds = rows.map((stem) => stem.Id).filter(Boolean);
   const lineItemsByStem = {};
@@ -11468,9 +11169,11 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
 
   if (stemIds.length) {
     const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return { soql: `
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
                  ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
@@ -11482,53 +11185,45 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           WHERE STEM__c IN (${inList})
           ORDER BY STEM__c, CreatedDate ASC
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        const extraCostSelectFields = [
-          'Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c',
-          'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
-          'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c',
-          'Supplier_Invoice__c', 'Cancelled__c',
-          extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null,
-          extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null,
-          extraCostSupplierLookup.valid ? extraCostSupplierField : null,
-          extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null,
-        ].filter(Boolean);
-        return { soql: `
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          const extraCostSelectFields = ['Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Supplier_Invoice__c', 'Cancelled__c', extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null, extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null, extraCostSupplierLookup.valid ? extraCostSupplierField : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null].filter(Boolean);
+          return {
+            soql: `
           SELECT ${[...new Set(extraCostSelectFields)].join(', ')}
           FROM STEM_Extra_Cost__c
           WHERE STEM__c IN (${inList})
           LIMIT 5000
-        `, limit: 5000, softFail: true };
-      })),
+        `,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
       supplierInvoiceFieldNames.includes('STEM__c')
-        ? compositeQueryRows(chunkIds(stemIds).map((chunk) => {
-            const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-            const supplierInvoiceSelectFields = [
-              'STEM__c',
-              'Id',
-              'Name',
-              'CreatedDate',
-              'LastModifiedDate',
-              ...supplierInvoiceAmountFields,
-              ...supplierInvoiceDueDateFields,
-              ...supplierInvoiceDateFields,
-              ...supplierInvoiceStatusFields,
-              supplierInvoicePayableField,
-              supplierInvoiceFieldNames.includes('CurrencyIsoCode') ? 'CurrencyIsoCode' : null,
-              supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null,
-              ...supplierInvoiceSupplierFields,
-              ...supplierInvoiceSupplierNameRelationships.map((relationship) => `${relationship}.Name`),
-            ].filter(Boolean);
-            return { soql: `
+        ? compositeQueryRows(
+            chunkIds(stemIds).map((chunk) => {
+              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+              const supplierInvoiceSelectFields = ['STEM__c', 'Id', 'Name', 'CreatedDate', 'LastModifiedDate', ...supplierInvoiceAmountFields, ...supplierInvoiceDueDateFields, ...supplierInvoiceDateFields, ...supplierInvoiceStatusFields, supplierInvoicePayableField, supplierInvoiceFieldNames.includes('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierNameRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+              return {
+                soql: `
               SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
               FROM Supplier_Invoice__c
               WHERE STEM__c IN (${inList})
               LIMIT 5000
-            `, limit: 5000, softFail: true };
-          }))
+            `,
+                limit: 5000,
+                softFail: true,
+              };
+            }),
+          )
         : Promise.resolve([]),
     ]);
 
@@ -11550,47 +11245,48 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
       supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
     }
 
-    const supplierInvoiceIds = supplierInvoiceArrays.flat().map((invoice) => invoice.Id).filter(isSalesforceId);
+    const supplierInvoiceIds = supplierInvoiceArrays
+      .flat()
+      .map((invoice) => invoice.Id)
+      .filter(isSalesforceId);
     if (supplierInvoiceIds.length && supplierSettlementSchema.paymentSupplierInvoiceFields.length && supplierSettlementSchema.paymentAmountField) {
-      const paymentSelectFields = [
-        'Id',
-        paymentFieldNames.has('Name') ? 'Name' : null,
-        paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null,
-        paymentFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null,
-        supplierSettlementSchema.paymentAmountField,
-        supplierSettlementSchema.paymentDateField,
-        ...supplierSettlementSchema.paymentSupplierInvoiceFields,
-        ...supplierSettlementSchema.paymentStatusFields,
-      ].filter(Boolean);
-      await Promise.all(supplierSettlementSchema.paymentSupplierInvoiceFields.map(async (lookupField) => {
-        const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return { soql: `
+      const paymentSelectFields = ['Id', paymentFieldNames.has('Name') ? 'Name' : null, paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null, paymentFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierSettlementSchema.paymentAmountField, supplierSettlementSchema.paymentDateField, ...supplierSettlementSchema.paymentSupplierInvoiceFields, ...supplierSettlementSchema.paymentStatusFields].filter(Boolean);
+      await Promise.all(
+        supplierSettlementSchema.paymentSupplierInvoiceFields.map(async (lookupField) => {
+          const paymentChunks = await compositeQueryRows(
+            chunkIds(supplierInvoiceIds).map((chunk) => {
+              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+              return {
+                soql: `
             SELECT ${[...new Set(paymentSelectFields)].join(', ')}
             FROM Payment__c
             WHERE ${lookupField} IN (${inList})
             ORDER BY ${supplierSettlementSchema.paymentDateField || 'CreatedDate'} DESC NULLS LAST
             LIMIT 5000
-          `, limit: 5000, softFail: true };
-        }));
-        for (const payment of paymentChunks.flat()) {
-          if (!validSupplierSettlementPayment(payment, supplierSettlementSchema.paymentStatusFields)) continue;
-          const invoiceId = payment[lookupField];
-          if (!isSalesforceId(invoiceId)) continue;
-          if (!supplierPaymentsByInvoice[invoiceId]) supplierPaymentsByInvoice[invoiceId] = [];
-          if (supplierPaymentsByInvoice[invoiceId].some((existing) => existing.id === payment.Id)) continue;
-          supplierPaymentsByInvoice[invoiceId].push({
-            id: payment.Id,
-            name: payment.Name || payment.Id,
-            amount: Number(payment[supplierSettlementSchema.paymentAmountField] || 0),
-            date: payment[supplierSettlementSchema.paymentDateField] || payment.CreatedDate || null,
-            currencyIsoCode: payment.CurrencyIsoCode || 'USD',
-            status: supplierSettlementSchema.paymentStatusFields.map((field) => payment[field]).find(Boolean) || null,
-          });
-        }
-      }));
+          `,
+                limit: 5000,
+                softFail: true,
+              };
+            }),
+          );
+          for (const payment of paymentChunks.flat()) {
+            if (!validSupplierSettlementPayment(payment, supplierSettlementSchema.paymentStatusFields)) continue;
+            const invoiceId = payment[lookupField];
+            if (!isSalesforceId(invoiceId)) continue;
+            if (!supplierPaymentsByInvoice[invoiceId]) supplierPaymentsByInvoice[invoiceId] = [];
+            if (supplierPaymentsByInvoice[invoiceId].some((existing) => existing.id === payment.Id)) continue;
+            supplierPaymentsByInvoice[invoiceId].push({
+              id: payment.Id,
+              name: payment.Name || payment.Id,
+              amount: Number(payment[supplierSettlementSchema.paymentAmountField] || 0),
+              date: payment[supplierSettlementSchema.paymentDateField] || payment.CreatedDate || null,
+              currencyIsoCode: payment.CurrencyIsoCode || 'USD',
+              status: supplierSettlementSchema.paymentStatusFields.map((field) => payment[field]).find(Boolean) || null,
+            });
+          }
+        }),
+      );
     }
-
   }
 
   return {
@@ -11682,10 +11378,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           const productName = disputeQueueExtraCostProductName(item);
           const supplierAccountId = extraCostSupplierField ? item[extraCostSupplierField] : null;
           const supplierAccountKey = disputeSalesforceIdKey(supplierAccountId);
-          const supplierName = (extraCostSupplierRelationship ? item[extraCostSupplierRelationship]?.Name : null)
-            || item.Supplier_Name__c
-            || supplierAccountId
-            || null;
+          const supplierName = (extraCostSupplierRelationship ? item[extraCostSupplierRelationship]?.Name : null) || item.Supplier_Name__c || supplierAccountId || null;
           if (productName) productNames.add(productName);
           if (supplierName || productName) {
             const pairKey = `${supplierAccountKey || supplierName || ''}\u0000${productName || ''}`;
@@ -11733,21 +11426,14 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           }
         }
 
-        const supplierBase = Number(stem.Total_Invoiced_Amount_From_Suppliers__c || 0)
-          + (hasSupplierInvoice ? uninvoicedSupplierLineBuy : supplierLineBuy);
+        const supplierBase = Number(stem.Total_Invoiced_Amount_From_Suppliers__c || 0) + (hasSupplierInvoice ? uninvoicedSupplierLineBuy : supplierLineBuy);
         const rawSupplier = supplierBase + extraCostBuy;
         const unmatchedSellOnlyExtra = hasSupplierInvoice ? Math.max(0, sellOnlyExtraSell - invoicedExtraCostBuy) : 0;
-        const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
-          ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0)
-          : null;
+        const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0) : null;
         const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-        const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
-          ? qlikSupplierCost
-          : rawSupplier;
+        const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
         const calculatedBuyerInvoice = lineSellTotal + extraSellTotal;
-        const buyerInvoiceAmount = !stem.Delivery_Date__c && calculatedBuyerInvoice > 0
-          ? calculatedBuyerInvoice
-          : stem.Total_Invoice_Amount__c;
+        const buyerInvoiceAmount = !stem.Delivery_Date__c && calculatedBuyerInvoice > 0 ? calculatedBuyerInvoice : stem.Total_Invoice_Amount__c;
         const stemBasePnl = buyerInvoiceAmount == null ? null : Number(buyerInvoiceAmount || 0) - Number(calculatedSupplierInvoice || 0);
         const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
         const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
@@ -11772,19 +11458,11 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           const supplierAccountField = supplierInvoiceSupplierFields.find((field) => invoice[field]);
           const supplierAccountId = supplierAccountField ? invoice[supplierAccountField] : null;
           const supplierAccountRelationship = supplierAccountField ? supplierInvoiceFieldByName[supplierAccountField]?.relationshipName : null;
-          const supplierName = (supplierAccountRelationship ? invoice[supplierAccountRelationship]?.Name : null)
-            || invoice['Supplier__r']?.Name
-            || invoice.Supplier_Name__c
-            || invoice['Expected_Supplier__r']?.Name
-            || invoice['Substitute_Supplier__r']?.Name
-            || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean)
-            || null;
+          const supplierName = (supplierAccountRelationship ? invoice[supplierAccountRelationship]?.Name : null) || invoice['Supplier__r']?.Name || invoice.Supplier_Name__c || invoice['Expected_Supplier__r']?.Name || invoice['Substitute_Supplier__r']?.Name || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || null;
           const invoiceAmountField = supplierInvoiceAmountFields.find((field) => invoice[field] != null);
           const invoiceAmount = invoiceAmountField ? Number(invoice[invoiceAmountField] || 0) : 0;
           const supplierPayableBalanceValue = supplierInvoicePayableField ? invoice[supplierInvoicePayableField] : null;
-          const supplierPayableBalanceAvailable = supplierPayableBalanceValue != null
-            && supplierPayableBalanceValue !== ''
-            && Number.isFinite(Number(supplierPayableBalanceValue));
+          const supplierPayableBalanceAvailable = supplierPayableBalanceValue != null && supplierPayableBalanceValue !== '' && Number.isFinite(Number(supplierPayableBalanceValue));
           const supplierPayableBalance = supplierPayableBalanceAvailable ? Number(supplierPayableBalanceValue) : 0;
           addSupplierFinanceByAccount(supplierAccountId, supplierName, invoiceAmount, supplierPayableBalance);
           const dueDateField = supplierInvoiceDueDateFields.find((field) => invoice[field]);
@@ -11793,10 +11471,8 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           const invoiceDate = invoiceDateField ? invoice[invoiceDateField] : invoice.CreatedDate || null;
           const invoiceStatus = supplierInvoiceStatusFields.map((field) => invoice[field]).find(Boolean) || null;
           const paymentRows = supplierPaymentsByInvoice[invoice.Id] || [];
-          const positivePayments = paymentRows.filter((payment) => Number(payment.amount) > 0)
-            .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-          const supplierRefunds = Math.abs(paymentRows.filter((payment) => Number(payment.amount) < 0)
-            .reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+          const positivePayments = paymentRows.filter((payment) => Number(payment.amount) > 0).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+          const supplierRefunds = Math.abs(paymentRows.filter((payment) => Number(payment.amount) < 0).reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
           const exposure = normalizeSupplierInvoiceExposure({
             supplierInvoiceId: invoice.Id,
             invoiceName: invoice.Name,
@@ -11870,9 +11546,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           supplierPaymentDueDatesByAccount.set(accountKey, dueDates);
         }
         const paymentDueDatesForAccount = (accountKey) => [...(supplierPaymentDueDatesByAccount.get(accountKey) || [])].sort();
-        const supplementalLineBuyByAccount = (hasSupplierInvoice || supplierInvoices.length)
-          ? uninvoicedSupplierLineBuyByAccount
-          : supplierLineBuyByAccount;
+        const supplementalLineBuyByAccount = hasSupplierInvoice || supplierInvoices.length ? uninvoicedSupplierLineBuyByAccount : supplierLineBuyByAccount;
         for (const supplierLine of supplementalLineBuyByAccount.values()) {
           addSupplierFinanceByAccount(supplierLine.accountId, supplierLine.supplierName, supplierLine.amount, 0);
         }
@@ -11919,9 +11593,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             };
           });
         const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
-        const supplierFinanceRows = supplierCandidateRows.length
-          ? supplierCandidateRows
-          : supplierFinanceOnlyRows;
+        const supplierFinanceRows = supplierCandidateRows.length ? supplierCandidateRows : supplierFinanceOnlyRows;
         const buyerFinanceRow = {
           buyerName: disputePartyRegistry.buyer?.name || stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
@@ -11974,9 +11646,9 @@ function serializeDisputeWorkflowParty(row) {
     accountKey: row.account_key || row.accountKey,
     name: row.account_name || row.name || row.account_id || row.accountId,
     roles: Array.isArray(row.roles) ? row.roles : [],
-    sourceTypes: Array.isArray(row.source_types) ? row.source_types : (row.sourceTypes || []),
-    sourceRecordIds: Array.isArray(row.source_record_ids) ? row.source_record_ids : (row.sourceRecordIds || []),
-    paymentTerms: Array.isArray(row.payment_terms) ? row.payment_terms : (row.paymentTerms || []),
+    sourceTypes: Array.isArray(row.source_types) ? row.source_types : row.sourceTypes || [],
+    sourceRecordIds: Array.isArray(row.source_record_ids) ? row.source_record_ids : row.sourceRecordIds || [],
+    paymentTerms: Array.isArray(row.payment_terms) ? row.payment_terms : row.paymentTerms || [],
     products: Array.isArray(row.products) ? row.products : [],
     cancelledSourceOnly: row.cancelled_source_only === true || row.cancelledSourceOnly === true,
     createdAt: row.created_at || row.createdAt || null,
@@ -12000,7 +11672,12 @@ function disputeRegistryWithSelection(registry, partyRows = []) {
       });
       continue;
     }
-    selected.push({ ...candidate, id: stored.id, caseId: stored.caseId, selected: true });
+    selected.push({
+      ...candidate,
+      id: stored.id,
+      caseId: stored.caseId,
+      selected: true,
+    });
   }
   const candidateSchemaValid = registry?.candidateSchemaValid === true;
   const selectionValid = selected.length > 0 && !issues.some((item) => item.code === 'selected_account_stale');
@@ -12045,10 +11722,7 @@ function normalizeDisputeBetaStatus(value, allowed, fallback) {
 }
 
 async function disputeWorkflowCapabilities(client, profile = {}) {
-  const [isApprover, isAccounting] = await Promise.all([
-    userHasCapability(client, profile, 'disputes_approve'),
-    userHasCapability(client, profile, 'disputes_account'),
-  ]);
+  const [isApprover, isAccounting] = await Promise.all([userHasCapability(client, profile, 'disputes_approve'), userHasCapability(client, profile, 'disputes_account')]);
   return {
     role: profile.user_type || 'user',
     canPrepare: true,
@@ -12180,9 +11854,7 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
   if (!row) return null;
   const party = partyMap.get(row.party_id) || null;
   const actionType = row.action_type;
-  const supplierInstructions = instructionRows
-    .filter((instruction) => instruction.action_id === row.id && instruction.status !== 'Superseded')
-    .map(serializeDisputeSupplierInstruction);
+  const supplierInstructions = instructionRows.filter((instruction) => instruction.action_id === row.id && instruction.status !== 'Superseded').map(serializeDisputeSupplierInstruction);
   const invoiceAllocationMap = new Map();
   for (const instruction of supplierInstructions) {
     const existing = invoiceAllocationMap.get(instruction.sourceSupplierInvoiceId) || {
@@ -12193,11 +11865,7 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
     existing.amount = Math.max(existing.amount, instruction.allocatedAmount);
     invoiceAllocationMap.set(instruction.sourceSupplierInvoiceId, existing);
   }
-  const closeReason = actionType === 'close_supplier_dispute'
-    ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS)
-    : actionType === 'close_buyer_dispute'
-      ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_BUYER_CLOSE_REASONS)
-      : row.close_reason;
+  const closeReason = actionType === 'close_supplier_dispute' ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS) : actionType === 'close_buyer_dispute' ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_BUYER_CLOSE_REASONS) : row.close_reason;
   return {
     id: row.id,
     caseId: row.case_id,
@@ -12216,18 +11884,10 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
     currencyIsoCode: supplierInstructions[0]?.currencyIsoCode || 'USD',
     invoiceAllocations: [...invoiceAllocationMap.values()],
     supplierInstructions,
-    totalDoNotPay: supplierInstructions
-      .filter((instruction) => instruction.instructionType === 'withhold_unpaid')
-      .reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
-    totalGetBackPaid: supplierInstructions
-      .filter((instruction) => instruction.instructionType === 'get_back_paid')
-      .reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
-    supplierDisputeAmountRequired: row.party_side === 'supplier'
-      && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type)
-      && row.amount == null,
-    supplierInstructionConversionRequired: row.party_side === 'supplier'
-      && row.amount != null
-      && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type),
+    totalDoNotPay: supplierInstructions.filter((instruction) => instruction.instructionType === 'withhold_unpaid').reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
+    totalGetBackPaid: supplierInstructions.filter((instruction) => instruction.instructionType === 'get_back_paid').reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
+    supplierDisputeAmountRequired: row.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type) && row.amount == null,
+    supplierInstructionConversionRequired: row.party_side === 'supplier' && row.amount != null && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type),
     specialSellPrice: row.special_sell_price == null ? null : Number(row.special_sell_price),
     specialBuyPrice: row.special_buy_price == null ? null : Number(row.special_buy_price),
     quantity: row.quantity == null ? null : Number(row.quantity),
@@ -12334,11 +11994,7 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
     throw appError('Enter an agreed buyer credit note amount above zero, or choose Close dispute with buyer (no credit note).', 400);
   }
   const closeReasonInput = String(input.closeReason || input.close_reason || '').trim();
-  const closeReason = actionType === 'close_supplier_dispute'
-    ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS)
-    : actionType === 'close_buyer_dispute'
-      ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_BUYER_CLOSE_REASONS)
-      : (closeReasonInput || null);
+  const closeReason = actionType === 'close_supplier_dispute' ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS) : actionType === 'close_buyer_dispute' ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_BUYER_CLOSE_REASONS) : closeReasonInput || null;
   if (actionType === 'close_supplier_dispute' && !DISPUTE_BETA_SUPPLIER_CLOSE_REASONS.includes(closeReason)) {
     throw appError('Valid supplier close reason is required.', 400);
   }
@@ -12352,7 +12008,10 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
   if (actionType === 'close_supplier_dispute' && !balancePaymentInstruction) {
     throw appError('Balance payment instruction is required when closing a supplier dispute without recovery.', 400);
   }
-  const currencyIsoCode = String(input.currencyIsoCode || input.currency_iso_code || 'USD').trim().toUpperCase() || 'USD';
+  const currencyIsoCode =
+    String(input.currencyIsoCode || input.currency_iso_code || 'USD')
+      .trim()
+      .toUpperCase() || 'USD';
   if (actionType === 'resolve_supplier_dispute' && !/^[A-Z]{3}$/.test(currencyIsoCode)) {
     throw appError('Supplier dispute currency must be a three-letter ISO code.', 400);
   }
@@ -12375,9 +12034,7 @@ function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry)
     requires_attachment: Boolean(input.requiresAttachment ?? input.requires_attachment),
     execution_status: normalizeDisputeBetaStatus(input.accountingStatus || input.executionStatus || input.execution_status, DISPUTE_BETA_EXECUTION_STATUSES, 'Pending Accounting'),
     currency_iso_code: currencyIsoCode,
-    invoice_allocations: Array.isArray(input.invoiceAllocations || input.invoice_allocations)
-      ? (input.invoiceAllocations || input.invoice_allocations)
-      : [],
+    invoice_allocations: Array.isArray(input.invoiceAllocations || input.invoice_allocations) ? input.invoiceAllocations || input.invoice_allocations : [],
     updated_by: profile.id,
     updated_by_email: profile.email,
   };
@@ -12390,8 +12047,7 @@ function prepareSupplierSettlementAction(action, currentStem) {
     throw appError(`Supplier payment automation is unavailable: ${(schema?.issues || ['Salesforce invoice/payment schema is incomplete.']).join(' ')}`, 400);
   }
   const accountKey = disputeSalesforceIdKey(action.party_account_key);
-  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || [])
-    .filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
+  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || []).filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
   const invalidInvoices = invoices.filter((invoice) => (invoice.warnings || []).some((warning) => /no valid supplier Account lookup|negative|exceeds its invoice amount/i.test(warning)));
   if (invalidInvoices.length) {
     throw appError('Correct the supplier invoice Account or payable balance in Salesforce before saving this supplier resolution.', 400);
@@ -12432,15 +12088,24 @@ function calculateDisputeBetaSettlement(actions = []) {
     const amount = Number(action.amount ?? action.amount_cents ?? 0) || 0;
     if (action.action_type === 'issue_buyer_credit_note' || action.actionType === 'issue_buyer_credit_note') {
       buyerImpact -= amount;
-      lines.push({ label: action.action_label || action.actionLabel || 'Buyer credit note', impact: -amount });
+      lines.push({
+        label: action.action_label || action.actionLabel || 'Buyer credit note',
+        impact: -amount,
+      });
     }
     if (action.action_type === 'deduct_specific_amount' || action.actionType === 'deduct_specific_amount') {
       supplierImpact += amount;
-      lines.push({ label: action.action_label || action.actionLabel || 'Supplier deduction', impact: amount });
+      lines.push({
+        label: action.action_label || action.actionLabel || 'Supplier deduction',
+        impact: amount,
+      });
     }
     if (action.action_type === 'resolve_supplier_dispute' || action.actionType === 'resolve_supplier_dispute') {
       supplierImpact += amount;
-      lines.push({ label: action.action_label || action.actionLabel || 'Supplier dispute resolution', impact: amount });
+      lines.push({
+        label: action.action_label || action.actionLabel || 'Supplier dispute resolution',
+        impact: amount,
+      });
     }
 
     const buyerCreditNote = Number(action.special_sell_price ?? action.specialSellPrice);
@@ -12482,37 +12147,17 @@ async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
   const ids = [...new Set(stemIds.filter(Boolean))];
   if (!ids.length) return {};
   const [casesRes, partiesRes, actionsRes, instructionsRes, eventsRes, documentsRes] = await Promise.all([
-    client
-      .from('dispute_beta_cases')
-      .select(DISPUTE_BETA_CASE_SELECT)
-      .in('stem_id', ids),
-    client
-      .from('dispute_workflow_parties')
-      .select(DISPUTE_WORKFLOW_PARTY_SELECT)
-      .in('stem_id', ids)
-      .order('created_at', { ascending: true }),
-    client
-      .from('dispute_beta_actions')
-      .select(DISPUTE_BETA_ACTION_SELECT)
-      .in('stem_id', ids)
-      .order('created_at', { ascending: true }),
-    client
-      .from('dispute_workflow_supplier_instructions')
-      .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-      .in('stem_id', ids)
-      .order('created_at', { ascending: true }),
+    client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT).in('stem_id', ids),
+    client.from('dispute_workflow_parties').select(DISPUTE_WORKFLOW_PARTY_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
+    client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
+    client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
     client
       .from('dispute_beta_events')
       .select(DISPUTE_BETA_EVENT_SELECT)
       .in('stem_id', ids)
       .order('created_at', { ascending: false })
       .limit(Math.max(100, Math.min(ids.length * 25, 2500))),
-    client
-      .from('dispute_workflow_documents')
-      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
-      .in('stem_id', ids)
-      .eq('upload_status', 'complete')
-      .order('created_at', { ascending: false }),
+    client.from('dispute_workflow_documents').select(DISPUTE_WORKFLOW_DOCUMENT_SELECT).in('stem_id', ids).eq('upload_status', 'complete').order('created_at', { ascending: false }),
   ]);
   if (casesRes.error) throw casesRes.error;
   if (partiesRes.error) throw partiesRes.error;
@@ -12523,28 +12168,75 @@ async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
 
   const map = {};
   for (const row of casesRes.data || []) {
-    map[row.stem_id] = { case: serializeDisputeBetaCase(row), parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    map[row.stem_id] = {
+      case: serializeDisputeBetaCase(row),
+      parties: [],
+      actions: [],
+      supplierInstructions: [],
+      events: [],
+      documents: [],
+    };
   }
   const partyById = new Map();
   for (const row of partiesRes.data || []) {
     partyById.set(row.id, row);
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    if (!map[row.stem_id])
+      map[row.stem_id] = {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
     map[row.stem_id].parties.push(serializeDisputeWorkflowParty(row));
   }
   for (const row of instructionsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    if (!map[row.stem_id])
+      map[row.stem_id] = {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
     map[row.stem_id].supplierInstructions.push(serializeDisputeSupplierInstruction(row));
   }
   for (const row of actionsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    if (!map[row.stem_id])
+      map[row.stem_id] = {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
     map[row.stem_id].actions.push(serializeDisputeBetaAction(row, partyById, instructionsRes.data || []));
   }
   for (const row of eventsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    if (!map[row.stem_id])
+      map[row.stem_id] = {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
     map[row.stem_id].events.push(serializeDisputeBetaEvent(row));
   }
   for (const row of documentsRes.data || []) {
-    if (!map[row.stem_id]) map[row.stem_id] = { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+    if (!map[row.stem_id])
+      map[row.stem_id] = {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
     map[row.stem_id].documents.push(serializeDisputeWorkflowDocument(row));
   }
   return map;
@@ -12566,10 +12258,7 @@ async function writeDisputeBetaEvent(client, caseRow, eventType, profile, payloa
 
 function assertSalesforceDisputeIsOpen(stem = {}) {
   if (!isSalesforceDisputeClosed(stem.Dispute_Status__c)) return;
-  throw appError(
-    `This dispute is already ${String(stem.Dispute_Status__c).trim()} in Salesforce. FCOS has locked the workflow; refresh the Dispute Workflow queue to synchronize it.`,
-    409,
-  );
+  throw appError(`This dispute is already ${String(stem.Dispute_Status__c).trim()} in Salesforce. FCOS has locked the workflow; refresh the Dispute Workflow queue to synchronize it.`, 409);
 }
 
 function projectExternallyClosedDisputeWorkflows(stems = [], workflowMap = {}) {
@@ -12581,11 +12270,7 @@ function projectExternallyClosedDisputeWorkflows(stems = [], workflowMap = {}) {
 }
 
 async function loadDisputeWorkflowParties(client, caseId) {
-  const { data, error } = await client
-    .from('dispute_workflow_parties')
-    .select(DISPUTE_WORKFLOW_PARTY_SELECT)
-    .eq('case_id', caseId)
-    .order('created_at', { ascending: true });
+  const { data, error } = await client.from('dispute_workflow_parties').select(DISPUTE_WORKFLOW_PARTY_SELECT).eq('case_id', caseId).order('created_at', { ascending: true });
   if (error) throw error;
   return data || [];
 }
@@ -12595,19 +12280,7 @@ function disputePartyRowMap(partyRows = []) {
 }
 
 async function loadDisputeWorkflowActions(client, caseId) {
-  const [partyRows, actionsResult, instructionsResult] = await Promise.all([
-    loadDisputeWorkflowParties(client, caseId),
-    client
-      .from('dispute_beta_actions')
-      .select(DISPUTE_BETA_ACTION_SELECT)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: true }),
-    client
-      .from('dispute_workflow_supplier_instructions')
-      .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: true }),
-  ]);
+  const [partyRows, actionsResult, instructionsResult] = await Promise.all([loadDisputeWorkflowParties(client, caseId), client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseId).order('created_at', { ascending: true }), client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('case_id', caseId).order('created_at', { ascending: true })]);
   if (actionsResult.error) throw actionsResult.error;
   if (instructionsResult.error) throw instructionsResult.error;
   const instructionRows = instructionsResult.data || [];
@@ -12625,12 +12298,12 @@ function storedSupplierInvoiceAllocations(instructionRows = []) {
   for (const instruction of instructionRows.filter((row) => row.status !== 'Superseded')) {
     const id = instruction.source_supplier_invoice_id;
     if (!id) continue;
-    allocations.set(id, Math.max(
-      Number(allocations.get(id) || 0),
-      Number(instruction.allocated_amount || 0),
-    ));
+    allocations.set(id, Math.max(Number(allocations.get(id) || 0), Number(instruction.allocated_amount || 0)));
   }
-  return [...allocations].map(([supplierInvoiceId, amount]) => ({ supplierInvoiceId, amount }));
+  return [...allocations].map(([supplierInvoiceId, amount]) => ({
+    supplierInvoiceId,
+    amount,
+  }));
 }
 
 function currentSupplierActionAllocation(action, partyRows, instructionRows, currentStem) {
@@ -12639,8 +12312,7 @@ function currentSupplierActionAllocation(action, partyRows, instructionRows, cur
   const accountKey = disputeSalesforceIdKey(party.account_id);
   const actionInstructions = instructionRows.filter((instruction) => instruction.action_id === action.id && instruction.status !== 'Superseded');
   const currencyIsoCode = actionInstructions[0]?.currency_iso_code || 'USD';
-  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || [])
-    .filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
+  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || []).filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
   if (!currentStem?._Supplier_Settlement_Schema?.valid) {
     throw appError(`Supplier payment automation is unavailable: ${(currentStem?._Supplier_Settlement_Schema?.issues || []).join(' ')}`, 409);
   }
@@ -12656,9 +12328,7 @@ function supplierInstructionStateChanged(currentRows = [], allocation = {}) {
   const activeRows = currentRows.filter((row) => row.status !== 'Superseded');
   const currentFingerprint = activeRows.map((row) => row.allocation_fingerprint).find(Boolean);
   if (currentFingerprint) return currentFingerprint !== allocation.fingerprint;
-  const currentShape = activeRows
-    .map((row) => `${row.source_supplier_invoice_id}:${row.instruction_type}:${Number(row.planned_amount || 0).toFixed(2)}`)
-    .sort();
+  const currentShape = activeRows.map((row) => `${row.source_supplier_invoice_id}:${row.instruction_type}:${Number(row.planned_amount || 0).toFixed(2)}`).sort();
   const nextShape = supplierInstructionRows(allocation)
     .map((row) => `${row.source_supplier_invoice_id}:${row.instruction_type}:${Number(row.planned_amount || 0).toFixed(2)}`)
     .sort();
@@ -12708,10 +12378,7 @@ async function reconcileApprovedSupplierInstructions(client, caseRow, partyRows,
     });
   }
   if (!reconciliations.length) {
-    if (
-      caseRow.salesforce_writeback_status === 'failed'
-      && ['Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close'].includes(caseRow.workflow_status)
-    ) {
+    if (caseRow.salesforce_writeback_status === 'failed' && ['Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close'].includes(caseRow.workflow_status)) {
       await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, caseRow.workflow_status);
       return { changed: false, writebackRetried: true, instructionRows };
     }
@@ -12725,33 +12392,23 @@ async function reconcileApprovedSupplierInstructions(client, caseRow, partyRows,
   if (reconciliationError) throw reconciliationError;
   const updatedCase = await getDisputeBetaCase(client, caseRow.id);
   await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, 'Accounting In Progress');
-  const { data, error } = await client
-    .from('dispute_workflow_supplier_instructions')
-    .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
+  const { data, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
   if (error) throw error;
-  return { changed: true, writebackRetried: false, instructionRows: data || [] };
+  return {
+    changed: true,
+    writebackRetried: false,
+    instructionRows: data || [],
+  };
 }
 
 async function loadDisputeWorkflowDocuments(client, caseId) {
-  const { data, error } = await client
-    .from('dispute_workflow_documents')
-    .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
-    .eq('case_id', caseId)
-    .eq('upload_status', 'complete')
-    .order('created_at', { ascending: false });
+  const { data, error } = await client.from('dispute_workflow_documents').select(DISPUTE_WORKFLOW_DOCUMENT_SELECT).eq('case_id', caseId).eq('upload_status', 'complete').order('created_at', { ascending: false });
   if (error) throw error;
   return data || [];
 }
 
 async function loadDisputeWorkflowEvents(client, caseId, limit = 100) {
-  const { data, error } = await client
-    .from('dispute_beta_events')
-    .select(DISPUTE_BETA_EVENT_SELECT)
-    .eq('case_id', caseId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const { data, error } = await client.from('dispute_beta_events').select(DISPUTE_BETA_EVENT_SELECT).eq('case_id', caseId).order('created_at', { ascending: false }).limit(limit);
   if (error) throw error;
   return data || [];
 }
@@ -12784,16 +12441,12 @@ async function patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus)
   if (!currentStem) throw appError('The disputed STEM no longer exists in Salesforce.', 404);
 
   if (isSalesforceDisputeClosed(currentStem.Dispute_Status__c)) {
-    const continuingRecordedClose = isSalesforceDisputeClosed(salesforceStatus)
-      && isSalesforceDisputeClosed(caseRow.current_salesforce_status)
-      && caseRow.salesforce_writeback_status === 'success';
+    const continuingRecordedClose = isSalesforceDisputeClosed(salesforceStatus) && isSalesforceDisputeClosed(caseRow.current_salesforce_status) && caseRow.salesforce_writeback_status === 'success';
     if (continuingRecordedClose) return;
     assertSalesforceDisputeIsOpen(currentStem);
   }
 
-  const ifUnmodifiedSince = currentStem.LastModifiedDate
-    ? new Date(currentStem.LastModifiedDate).toUTCString()
-    : null;
+  const ifUnmodifiedSince = currentStem.LastModifiedDate ? new Date(currentStem.LastModifiedDate).toUTCString() : null;
   try {
     await sfRequest(`/sobjects/stem__c/${encodeURIComponent(caseRow.stem_id)}`, {
       method: 'PATCH',
@@ -12808,14 +12461,7 @@ async function patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus)
   }
 }
 
-async function recordDisputeWorkflowSalesforceWriteback(
-  client,
-  caseRow,
-  profile,
-  salesforceStatus,
-  writebackStatus = 'success',
-  writebackError = null,
-) {
+async function recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, writebackStatus = 'success', writebackError = null) {
   const { data: updatedCase, error } = await client
     .from('dispute_beta_cases')
     .update({
@@ -12829,9 +12475,7 @@ async function recordDisputeWorkflowSalesforceWriteback(
     .single();
   if (error) throw error;
   await writeDisputeBetaEvent(client, updatedCase, 'salesforce_writeback', profile, {
-    note: writebackStatus === 'success'
-      ? `Salesforce dispute status updated to ${salesforceStatus}.`
-      : `Salesforce dispute status update to ${salesforceStatus} failed.`,
+    note: writebackStatus === 'success' ? `Salesforce dispute status updated to ${salesforceStatus}.` : `Salesforce dispute status update to ${salesforceStatus} failed.`,
     metadata: { salesforceStatus, error: writebackError },
   });
   return updatedCase;
@@ -12848,14 +12492,7 @@ async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 
     writebackError = error.message;
     writebackFailure = error;
   }
-  const updatedCase = await recordDisputeWorkflowSalesforceWriteback(
-    client,
-    caseRow,
-    profile,
-    salesforceStatus,
-    writebackStatus,
-    writebackError,
-  );
+  const updatedCase = await recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, writebackStatus, writebackError);
   if (options.required && writebackStatus === 'failed') {
     if (writebackFailure?.status) throw writebackFailure;
     throw appError(`Salesforce dispute status could not be updated: ${writebackError}`, 502);
@@ -12872,11 +12509,7 @@ async function upsertDisputeBetaCase(client, stem, extra = {}) {
   };
   if (extra.workflowStatus) casePayload.workflow_status = normalizeDisputeBetaStatus(extra.workflowStatus, DISPUTE_BETA_WORKFLOW_STATUSES, 'Draft');
   if (extra.approvalStatus) casePayload.approval_status = normalizeDisputeBetaStatus(extra.approvalStatus, DISPUTE_BETA_APPROVAL_STATUSES, 'Draft');
-  const { data, error } = await client
-    .from('dispute_beta_cases')
-    .upsert(casePayload, { onConflict: 'stem_id' })
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
+  const { data, error } = await client.from('dispute_beta_cases').upsert(casePayload, { onConflict: 'stem_id' }).select(DISPUTE_BETA_CASE_SELECT).single();
   if (error) throw error;
   return data;
 }
@@ -12884,12 +12517,8 @@ async function upsertDisputeBetaCase(client, stem, extra = {}) {
 async function getDisputeBetaCase(client, caseIdOrStemId) {
   const value = String(caseIdOrStemId || '').trim();
   if (!value) throw appError('caseId or stemId is required.', 400);
-  const query = client
-    .from('dispute_beta_cases')
-    .select(DISPUTE_BETA_CASE_SELECT);
-  const { data, error } = isSalesforceId(value)
-    ? await query.eq('stem_id', value).maybeSingle()
-    : await query.eq('id', value).maybeSingle();
+  const query = client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT);
+  const { data, error } = isSalesforceId(value) ? await query.eq('stem_id', value).maybeSingle() : await query.eq('id', value).maybeSingle();
   if (error) throw error;
   if (!data) throw appError('Dispute Workflow case not found.', 404);
   return data;
@@ -12936,11 +12565,7 @@ function validateStoredDisputeActions(actions, partyRows, registry) {
 }
 
 function supplierActionsMissingDisputeAmount(actions = []) {
-  return actions.filter((action) => (
-    action.party_side === 'supplier'
-    && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type)
-    && action.amount == null
-  ));
+  return actions.filter((action) => action.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type) && action.amount == null);
 }
 
 function assertSupplierDisputeAmounts(actions = []) {
@@ -12955,7 +12580,7 @@ function assertSupplierDisputeAmounts(actions = []) {
 }
 
 async function disputeBetaList(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const limit = body.limit || 10000;
   const cached = await cachedSalesforceValue({
     namespace: 'salesforce-dispute-queue',
@@ -12965,47 +12590,36 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
     body,
     req,
     accessContext: accessContext || { client, profile },
-    loader: () => salesforceDisputeStems(
-      { limit },
-      null,
-      accessContext || { client, profile },
-    ),
+    loader: () => salesforceDisputeStems({ limit }, null, accessContext || { client, profile }),
   });
   const salesforceData = cached.value;
   const rows = salesforceData.rows || [];
   let [workflowMap, capabilities] = await Promise.all([
-    loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id)),
+    loadDisputeBetaWorkflowMap(
+      client,
+      rows.map((row) => row.Id),
+    ),
     disputeWorkflowCapabilities(client, profile),
   ]);
   let reconciled = false;
   const reconciliationErrors = new Map();
   for (const stem of rows) {
     const workflow = workflowMap[stem.Id];
-    if (
-      workflow?.case?.approvalStatus !== 'Approved'
-      || workflow.case.workflowStatus === 'Closed'
-      || !workflow.actions.some((action) => action.actionType === 'resolve_supplier_dispute')
-      || !stem._Supplier_Settlement_Schema?.valid
-    ) continue;
+    if (workflow?.case?.approvalStatus !== 'Approved' || workflow.case.workflowStatus === 'Closed' || !workflow.actions.some((action) => action.actionType === 'resolve_supplier_dispute') || !stem._Supplier_Settlement_Schema?.valid) continue;
     try {
       const caseRow = await getDisputeBetaCase(client, workflow.case.id);
       const stored = await loadDisputeWorkflowActions(client, caseRow.id);
-      const result = await reconcileApprovedSupplierInstructions(
-        client,
-        caseRow,
-        stored.partyRows,
-        stored.actionRows,
-        stored.instructionRows,
-        stem,
-        profile,
-      );
+      const result = await reconcileApprovedSupplierInstructions(client, caseRow, stored.partyRows, stored.actionRows, stored.instructionRows, stem, profile);
       reconciled = reconciled || result.changed || result.writebackRetried;
     } catch (error) {
       reconciliationErrors.set(stem.Id, error.message || 'Supplier payment reconciliation failed.');
     }
   }
   if (reconciled) {
-    workflowMap = await loadDisputeBetaWorkflowMap(client, rows.map((row) => row.Id));
+    workflowMap = await loadDisputeBetaWorkflowMap(
+      client,
+      rows.map((row) => row.Id),
+    );
   }
   for (const [stemId, error] of reconciliationErrors) {
     if (workflowMap[stemId]) workflowMap[stemId].reconciliationError = error;
@@ -13018,7 +12632,14 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
     requiredSalesforceFieldsMissing: true,
     fieldWarning: 'Disputed Accounts, approval, accounting, documents, and audit state are stored in Supabase. Salesforce receives only the high-level STEM Dispute Status.',
     rows: rows.map((row) => {
-      const workflow = workflowMap[row.Id] || { case: null, parties: [], actions: [], supplierInstructions: [], events: [], documents: [] };
+      const workflow = workflowMap[row.Id] || {
+        case: null,
+        parties: [],
+        actions: [],
+        supplierInstructions: [],
+        events: [],
+        documents: [],
+      };
       if (!workflow.case) workflow.case = legacyClosedDisputeCase(row);
       return {
         ...row,
@@ -13030,18 +12651,11 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
 }
 
 async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const stem = body.stem || {};
   const stemId = stem.Id || body.stemId;
   if (!stemId) throw appError('stemId is required.', 400);
-  const [currentStem, existingCaseResult] = await Promise.all([
-    loadCurrentDisputeStem(stemId, accessContext || { client, profile }),
-    client
-      .from('dispute_beta_cases')
-      .select(DISPUTE_BETA_CASE_SELECT)
-      .eq('stem_id', stemId)
-      .maybeSingle(),
-  ]);
+  const [currentStem, existingCaseResult] = await Promise.all([loadCurrentDisputeStem(stemId, accessContext || { client, profile }), client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT).eq('stem_id', stemId).maybeSingle()]);
   assertSalesforceDisputeIsOpen(currentStem);
   const candidateRegistry = currentStem._Dispute_Parties;
   if (!candidateRegistry?.candidateSchemaValid) {
@@ -13056,22 +12670,11 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const selectedPartyRows = selectedPartyRowsFromAccounts(candidateRegistry, body.selectedPartyAccountIds || []);
   if (existingCase) {
     const selectedAccountKeys = new Set(selectedPartyRows.map((party) => party.account_key));
-    const [storedPartiesResult, storedDocumentsResult] = await Promise.all([
-      client
-        .from('dispute_workflow_parties')
-        .select('id,account_key,account_name')
-        .eq('case_id', existingCase.id),
-      client
-        .from('dispute_workflow_documents')
-        .select('party_id')
-        .eq('case_id', existingCase.id),
-    ]);
+    const [storedPartiesResult, storedDocumentsResult] = await Promise.all([client.from('dispute_workflow_parties').select('id,account_key,account_name').eq('case_id', existingCase.id), client.from('dispute_workflow_documents').select('party_id').eq('case_id', existingCase.id)]);
     if (storedPartiesResult.error) throw storedPartiesResult.error;
     if (storedDocumentsResult.error) throw storedDocumentsResult.error;
     const documentedPartyIds = new Set((storedDocumentsResult.data || []).map((document) => document.party_id).filter(Boolean));
-    const documentedRemovedParties = (storedPartiesResult.data || []).filter((party) => (
-      !selectedAccountKeys.has(party.account_key) && documentedPartyIds.has(party.id)
-    ));
+    const documentedRemovedParties = (storedPartiesResult.data || []).filter((party) => !selectedAccountKeys.has(party.account_key) && documentedPartyIds.has(party.id));
     if (documentedRemovedParties.length) {
       const names = documentedRemovedParties.map((party) => party.account_name || party.account_key).join(', ');
       throw appError(`Keep ${names} selected because dispute documents are already linked to the Account.`, 400);
@@ -13079,10 +12682,15 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   }
   const registry = disputeRegistryWithSelection(candidateRegistry, selectedPartyRows);
   const caseInput = { id: existingCase?.id || null, stem_id: stemId };
-  const normalizedActions = (body.actions || []).map((action) => prepareSupplierSettlementAction({
-    id: String(action.id || '').trim() || null,
-    ...normalizeDisputeBetaAction(action, caseInput, profile, registry),
-  }, currentStem));
+  const normalizedActions = (body.actions || []).map((action) =>
+    prepareSupplierSettlementAction(
+      {
+        id: String(action.id || '').trim() || null,
+        ...normalizeDisputeBetaAction(action, caseInput, profile, registry),
+      },
+      currentStem,
+    ),
+  );
   const seenActionSides = new Set();
   for (const action of normalizedActions) {
     const key = `${action.party_account_key}:${action.party_side}`;
@@ -13121,17 +12729,8 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
   const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
   const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
-  const statusPromise = recordDisputeWorkflowSalesforceWriteback(
-    client,
-    updatedCase,
-    profile,
-    'Open - Trader Review',
-  );
-  const [{ partyRows, actions, supplierInstructions }, documents, statusCase] = await Promise.all([
-    workflowPromise,
-    documentsPromise,
-    statusPromise,
-  ]);
+  const statusPromise = recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Open - Trader Review');
+  const [{ partyRows, actions, supplierInstructions }, documents, statusCase] = await Promise.all([workflowPromise, documentsPromise, statusPromise]);
   const events = await loadDisputeWorkflowEvents(client, updatedCase.id);
   return {
     case: serializeDisputeBetaCase(statusCase),
@@ -13144,7 +12743,7 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
 }
 
 async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
@@ -13176,7 +12775,9 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
     .select(DISPUTE_BETA_CASE_SELECT)
     .single();
   if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'submitted', profile, { note: body.note || 'Submitted for dispute administrator approval.' });
+  await writeDisputeBetaEvent(client, updatedCase, 'submitted', profile, {
+    note: body.note || 'Submitted for dispute administrator approval.',
+  });
   const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Pending Approval');
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
   return {
@@ -13188,7 +12789,7 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
 }
 
 async function disputeBetaApprove(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
@@ -13214,14 +12815,7 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   try {
     await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
   } catch (error) {
-    await recordDisputeWorkflowSalesforceWriteback(
-      client,
-      caseRow,
-      profile,
-      salesforceStatus,
-      'failed',
-      error.message,
-    );
+    await recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, 'failed', error.message);
     throw error;
   }
   const { error: approvalError } = await client.rpc('approve_dispute_workflow_case', {
@@ -13233,12 +12827,7 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   if (approvalError) throw approvalError;
   let updatedCase = await getDisputeBetaCase(client, caseRow.id);
   if (updatedCase.workflow_status !== salesforceStatus) {
-    updatedCase = await writeDisputeWorkflowStatusToSalesforce(
-      client,
-      updatedCase,
-      profile,
-      updatedCase.workflow_status,
-    );
+    updatedCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, updatedCase.workflow_status);
   }
   const accountingState = await loadDisputeWorkflowActions(client, caseRow.id);
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
@@ -13253,7 +12842,7 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
 }
 
 async function disputeBetaReject(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
@@ -13289,7 +12878,7 @@ async function disputeBetaReject(body = {}, req, accessContext = null) {
 }
 
 async function disputeWorkflowDocuments(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
@@ -13297,7 +12886,7 @@ async function disputeWorkflowDocuments(body = {}, req, accessContext = null) {
 }
 
 async function disputeWorkflowUploadDocument(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   requireExternalActionGate('salesforce_write');
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
@@ -13308,31 +12897,15 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   const storedWorkflow = await loadDisputeWorkflowActions(client, caseRow.id);
   validateStoredDisputeActions(storedWorkflow.actionRows, partyRows, registry);
   if (caseRow.approval_status === 'Approved') {
-    const reconciliation = await reconcileApprovedSupplierInstructions(
-      client,
-      caseRow,
-      partyRows,
-      storedWorkflow.actionRows,
-      storedWorkflow.instructionRows,
-      currentStem,
-      profile,
-    );
+    const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, storedWorkflow.actionRows, storedWorkflow.instructionRows, currentStem, profile);
     if (reconciliation.changed) {
       throw appError('Supplier payments changed. FCOS updated the accounting plan; reopen the document upload and link it to the revised instruction.', 409);
     }
   } else {
-    assertSupplierAllocationsCurrent(
-      storedWorkflow.actionRows,
-      partyRows,
-      storedWorkflow.instructionRows,
-      currentStem,
-    );
+    assertSupplierAllocationsCurrent(storedWorkflow.actionRows, partyRows, storedWorkflow.instructionRows, currentStem);
   }
   const canEdit = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
-  const [canApproveDocuments, canAccountDocuments] = await Promise.all([
-    userHasCapability(client, profile, 'disputes_approve'),
-    userHasCapability(client, profile, 'disputes_account'),
-  ]);
+  const [canApproveDocuments, canAccountDocuments] = await Promise.all([userHasCapability(client, profile, 'disputes_approve'), userHasCapability(client, profile, 'disputes_account')]);
   if (!canEdit && !canApproveDocuments && !canAccountDocuments) {
     throw appError('Only accounting or administrators can add documents after trader submission.', 403);
   }
@@ -13341,24 +12914,14 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   const supplierInstructionId = String(body.supplierInstructionId || '').trim() || null;
   let action = null;
   if (actionId) {
-    const { data, error } = await client
-      .from('dispute_beta_actions')
-      .select(DISPUTE_BETA_ACTION_SELECT)
-      .eq('id', actionId)
-      .eq('case_id', caseRow.id)
-      .maybeSingle();
+    const { data, error } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).eq('case_id', caseRow.id).maybeSingle();
     if (error) throw error;
     if (!data) throw appError('The selected workflow action was not found.', 404);
     action = data;
   }
   let supplierInstruction = null;
   if (supplierInstructionId) {
-    const { data, error } = await client
-      .from('dispute_workflow_supplier_instructions')
-      .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-      .eq('id', supplierInstructionId)
-      .eq('case_id', caseRow.id)
-      .maybeSingle();
+    const { data, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', supplierInstructionId).eq('case_id', caseRow.id).maybeSingle();
     if (error) throw error;
     if (!data) throw appError('The selected supplier instruction was not found.', 404);
     supplierInstruction = data;
@@ -13366,12 +12929,7 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
       throw appError('The supplier instruction does not belong to the selected action.', 400);
     }
     if (!action) {
-      const { data: linkedAction, error: linkedActionError } = await client
-        .from('dispute_beta_actions')
-        .select(DISPUTE_BETA_ACTION_SELECT)
-        .eq('id', supplierInstruction.action_id)
-        .eq('case_id', caseRow.id)
-        .maybeSingle();
+      const { data: linkedAction, error: linkedActionError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', supplierInstruction.action_id).eq('case_id', caseRow.id).maybeSingle();
       if (linkedActionError) throw linkedActionError;
       action = linkedAction;
     }
@@ -13379,7 +12937,9 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   const partyId = String(body.partyId || action?.party_id || '').trim();
   const partyRow = partyRows.find((party) => party.id === partyId);
   if (!partyRow) throw appError('Select a saved disputed Account before uploading a document.', 400);
-  const partySide = String(body.partySide || action?.party_side || '').trim().toLowerCase();
+  const partySide = String(body.partySide || action?.party_side || '')
+    .trim()
+    .toLowerCase();
   if (!['buyer', 'supplier'].includes(partySide)) throw appError('Select the buyer or supplier side for this document.', 400);
   const party = findDisputeParty(registry, partySide, partyRow.account_id);
   if (!party || !(registry.selected || []).some((selected) => selected.accountKey === party.accountKey)) {
@@ -13391,12 +12951,16 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
 
   const documentType = String(body.documentType || '').trim();
   if (!DISPUTE_WORKFLOW_DOCUMENT_TYPES.has(documentType)) throw appError('Valid document type is required.', 400);
-  const documentDirection = String(body.documentDirection || '').trim().toLowerCase();
+  const documentDirection = String(body.documentDirection || '')
+    .trim()
+    .toLowerCase();
   if (!DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS.has(documentDirection)) throw appError('Select a valid document direction.', 400);
   if (!documentDirection.endsWith(`_${partySide}`)) throw appError(`Document direction must match the ${partySide} side.`, 400);
   const originalFileName = String(body.originalFileName || '').trim();
   if (!originalFileName) throw appError('Document filename is required.', 400);
-  const rawBase64 = String(body.base64 || '').replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+  const rawBase64 = String(body.base64 || '')
+    .replace(/^data:[^;]+;base64,/, '')
+    .replace(/\s+/g, '');
   if (!rawBase64) throw appError('Document content is required.', 400);
   const buffer = Buffer.from(rawBase64, 'base64');
   if (!buffer.length) throw appError('Document content is empty or invalid.', 400);
@@ -13493,21 +13057,28 @@ async function disputeWorkflowUploadDocument(body = {}, req, accessContext = nul
   await writeDisputeBetaEvent(client, caseRow, 'document_uploaded', profile, {
     actionId,
     note: `${smartFileName} uploaded to Salesforce.`,
-    metadata: { documentId: documentRow.id, documentType, documentDirection, partySide, partyName, partyAccountId: party.accountId, supplierInstructionId, contentVersionId: documentRow.salesforce_content_version_id, linkedRecordIds: [linkedRecordId] },
+    metadata: {
+      documentId: documentRow.id,
+      documentType,
+      documentDirection,
+      partySide,
+      partyName,
+      partyAccountId: party.accountId,
+      supplierInstructionId,
+      contentVersionId: documentRow.salesforce_content_version_id,
+      linkedRecordIds: [linkedRecordId],
+    },
   });
   return { document: serializeDisputeWorkflowDocument(documentRow) };
 }
 
-async function supplierOffsetInvoiceOptions({
-  supplierAccountId,
-  currencyIsoCode,
-  excludeInvoiceIds = [],
-  accessContext = null,
-} = {}) {
+async function supplierOffsetInvoiceOptions({ supplierAccountId, currencyIsoCode, excludeInvoiceIds = [], accessContext = null } = {}) {
   if (!isSalesforceId(supplierAccountId)) throw appError('Valid supplier Account is required.', 400);
   const [invoiceDescribe, paymentDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }),
-    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({
+      fields: [],
+    })),
   ]);
   const invoiceFields = invoiceDescribe.fields || [];
   const invoiceFieldNames = new Set(invoiceFields.map((field) => field.name));
@@ -13519,39 +13090,27 @@ async function supplierOffsetInvoiceOptions({
   if (!schema.valid) {
     throw appError(`Supplier offset options are unavailable: ${schema.issues.join(' ')}`, 409);
   }
-  const relationships = schema.supplierAccountFields
-    .map((field) => invoiceFieldByName[field]?.relationshipName)
-    .filter(Boolean);
-  const selectFields = [
-    'Id',
-    'Name',
-    'CreatedDate',
-    invoiceFieldNames.has('STEM__c') ? 'STEM__c' : null,
-    invoiceFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null,
-    schema.invoiceAmountField,
-    schema.invoicePayableField,
-    ...schema.invoiceDueDateFields,
-    ...schema.invoiceDateFields,
-    ...schema.invoiceStatusFields,
-    ...schema.supplierAccountFields,
-    ...relationships.map((relationship) => `${relationship}.Name`),
-  ].filter(Boolean);
-  const accountCondition = schema.supplierAccountFields
-    .map((field) => `${field} = '${escapeSoql(supplierAccountId)}'`)
-    .join(' OR ');
-  const rows = await queryRows(`
+  const relationships = schema.supplierAccountFields.map((field) => invoiceFieldByName[field]?.relationshipName).filter(Boolean);
+  const selectFields = ['Id', 'Name', 'CreatedDate', invoiceFieldNames.has('STEM__c') ? 'STEM__c' : null, invoiceFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, schema.invoiceAmountField, schema.invoicePayableField, ...schema.invoiceDueDateFields, ...schema.invoiceDateFields, ...schema.invoiceStatusFields, ...schema.supplierAccountFields, ...relationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+  const accountCondition = schema.supplierAccountFields.map((field) => `${field} = '${escapeSoql(supplierAccountId)}'`).join(' OR ');
+  const rows = await queryRows(
+    `
     SELECT ${[...new Set(selectFields)].join(', ')}
     FROM Supplier_Invoice__c
     WHERE (${accountCondition})
     ORDER BY CreatedDate ASC
     LIMIT 2000
-  `, { limit: 2000, softFail: true });
+  `,
+    { limit: 2000, softFail: true },
+  );
   const excluded = new Set(excludeInvoiceIds.map((id) => String(id).slice(0, 15)));
   const options = [];
   for (const invoice of rows) {
     if (excluded.has(String(invoice.Id || '').slice(0, 15))) continue;
     if (invoice.STEM__c) {
-      const allowed = await requireInterofficeStemAccess(invoice.STEM__c, accessContext).then(() => true).catch(() => false);
+      const allowed = await requireInterofficeStemAccess(invoice.STEM__c, accessContext)
+        .then(() => true)
+        .catch(() => false);
       if (!allowed) continue;
     }
     const supplierField = schema.supplierAccountFields.find((field) => invoice[field]);
@@ -13559,7 +13118,9 @@ async function supplierOffsetInvoiceOptions({
     const dueDate = schema.invoiceDueDateFields.map((field) => invoice[field]).find(Boolean) || null;
     const invoiceDate = schema.invoiceDateFields.map((field) => invoice[field]).find(Boolean) || invoice.CreatedDate || null;
     const status = schema.invoiceStatusFields.map((field) => invoice[field]).find(Boolean) || null;
-    const statusToken = String(status || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const statusToken = String(status || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
     if (['closed', 'paid', 'cancelled', 'canceled', 'void', 'rejected'].some((token) => statusToken.includes(token))) continue;
     const exposure = normalizeSupplierInvoiceExposure({
       supplierInvoiceId: invoice.Id,
@@ -13592,14 +13153,10 @@ async function supplierOffsetInvoiceOptions({
 }
 
 async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier offset options.');
   const instructionId = String(body.instructionId || '').trim();
-  const { data: instruction, error } = await client
-    .from('dispute_workflow_supplier_instructions')
-    .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-    .eq('id', instructionId)
-    .maybeSingle();
+  const { data: instruction, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
   if (error) throw error;
   if (!instruction) throw appError('Supplier instruction not found.', 404);
   if (instruction.instruction_type !== 'get_back_paid') throw appError('Only Get back paid amount instructions can use an offset invoice.', 400);
@@ -13614,11 +13171,7 @@ async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContex
     excludeInvoiceIds: [instruction.source_supplier_invoice_id],
     accessContext: accessContext || { client, profile },
   });
-  const { data: reservations, error: reservationError } = await client
-    .from('dispute_workflow_supplier_instructions')
-    .select('id,target_supplier_invoice_id,planned_amount,status,recovery_method')
-    .eq('recovery_method', 'future_invoice_offset')
-    .not('target_supplier_invoice_id', 'is', null);
+  const { data: reservations, error: reservationError } = await client.from('dispute_workflow_supplier_instructions').select('id,target_supplier_invoice_id,planned_amount,status,recovery_method').eq('recovery_method', 'future_invoice_offset').not('target_supplier_invoice_id', 'is', null);
   if (reservationError) throw reservationError;
   const reservedByInvoice = new Map();
   for (const reservation of reservations || []) {
@@ -13640,15 +13193,11 @@ async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContex
 }
 
 async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier instructions.');
   const instructionId = String(body.instructionId || '').trim();
   if (!instructionId) throw appError('instructionId is required.', 400);
-  const { data: originalInstruction, error: lookupError } = await client
-    .from('dispute_workflow_supplier_instructions')
-    .select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT)
-    .eq('id', instructionId)
-    .maybeSingle();
+  const { data: originalInstruction, error: lookupError } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
   if (lookupError) throw lookupError;
   if (!originalInstruction) throw appError('Supplier instruction not found.', 404);
   const caseRow = await getDisputeBetaCase(client, originalInstruction.case_id);
@@ -13659,15 +13208,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   const registry = assertValidDisputeParties(currentStem, workflow.partyRows);
   validateStoredDisputeActions(workflow.actionRows, workflow.partyRows, registry);
   assertSupplierDisputeAmounts(workflow.actionRows);
-  const reconciliation = await reconcileApprovedSupplierInstructions(
-    client,
-    caseRow,
-    workflow.partyRows,
-    workflow.actionRows,
-    workflow.instructionRows,
-    currentStem,
-    profile,
-  );
+  const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, workflow.partyRows, workflow.actionRows, workflow.instructionRows, currentStem, profile);
   if (reconciliation.changed) workflow = await loadDisputeWorkflowActions(client, caseRow.id);
   const instruction = workflow.instructionRows.find((row) => row.id === instructionId);
   if (!instruction || instruction.status === 'Superseded') {
@@ -13693,9 +13234,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   const accountingNote = String(body.accountingNote || '').trim();
   if (instructionDate && !/^\d{4}-\d{2}-\d{2}$/.test(instructionDate)) throw appError('Instruction date is invalid.', 400);
   if (settlementDate && !/^\d{4}-\d{2}-\d{2}$/.test(settlementDate)) throw appError('Settlement date is invalid.', 400);
-  const recoveryMethod = instruction.instruction_type === 'get_back_paid'
-    ? String(body.recoveryMethod || instruction.recovery_method || '').trim() || null
-    : null;
+  const recoveryMethod = instruction.instruction_type === 'get_back_paid' ? String(body.recoveryMethod || instruction.recovery_method || '').trim() || null : null;
   if (instruction.instruction_type === 'get_back_paid' && ['Instruction Issued', 'Settled'].includes(status) && !['cash_refund', 'future_invoice_offset'].includes(recoveryMethod)) {
     throw appError('Choose cash refund or future invoice offset for Get back paid amount.', 400);
   }
@@ -13704,10 +13243,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   }
   if (status === 'Not Required' && !accountingNote) throw appError('Explain why this supplier instruction is not required.', 400);
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  const hasEvidence = documents.some((document) => (
-    document.supplier_instruction_id === instruction.id
-    && ['supplier_credit_note', 'settlement_agreement', 'proof_of_payment'].includes(document.document_type)
-  ));
+  const hasEvidence = documents.some((document) => document.supplier_instruction_id === instruction.id && ['supplier_credit_note', 'settlement_agreement', 'proof_of_payment'].includes(document.document_type));
   if (status === 'Settled' && (!settlementDate || (!settlementReference && !hasEvidence))) {
     throw appError('Settled requires a settlement date and either an uploaded supplier document or a Finance reference.', 400);
   }
@@ -13735,25 +13271,13 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   let matchedPaymentId = null;
   let matchedPayment = null;
   if (recoveryMethod === 'cash_refund' && body.matchedSalesforcePaymentId) {
-    const exposure = (currentStem._Supplier_Invoice_Exposure_Rows || [])
-      .find((row) => row.supplierInvoiceId === instruction.source_supplier_invoice_id);
-    matchedPayment = (exposure?.payments || []).find((row) => (
-      row.id === body.matchedSalesforcePaymentId
-      && Number(row.amount) < 0
-      && Math.abs(Math.abs(Number(row.amount)) - plannedAmount) <= 0.01
-      && (row.currencyIsoCode || 'USD') === instruction.currency_iso_code
-    ));
+    const exposure = (currentStem._Supplier_Invoice_Exposure_Rows || []).find((row) => row.supplierInvoiceId === instruction.source_supplier_invoice_id);
+    matchedPayment = (exposure?.payments || []).find((row) => row.id === body.matchedSalesforcePaymentId && Number(row.amount) < 0 && Math.abs(Math.abs(Number(row.amount)) - plannedAmount) <= 0.01 && (row.currencyIsoCode || 'USD') === instruction.currency_iso_code);
     if (!matchedPayment) throw appError('The selected Salesforce refund no longer matches this supplier invoice, currency, and amount.', 409);
     matchedPaymentId = matchedPayment.id;
   }
 
-  const eventType = status === 'Hold Acknowledged'
-    ? 'supplier_hold_acknowledged'
-    : status === 'Settled'
-      ? 'supplier_recovery_settled'
-      : recoveryMethod && recoveryMethod !== instruction.recovery_method
-        ? 'supplier_recovery_method_selected'
-        : 'accounting_updated';
+  const eventType = status === 'Hold Acknowledged' ? 'supplier_hold_acknowledged' : status === 'Settled' ? 'supplier_recovery_settled' : recoveryMethod && recoveryMethod !== instruction.recovery_method ? 'supplier_recovery_method_selected' : 'accounting_updated';
   const eventNote = `${instruction.instruction_type === 'withhold_unpaid' ? 'Do not pay' : 'Get back paid amount'} updated to ${status}.`;
   const instructionValues = {
     status,
@@ -13813,12 +13337,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
     };
   }
   let updatedCase = await getDisputeBetaCase(client, caseRow.id);
-  updatedCase = await writeDisputeWorkflowStatusToSalesforce(
-    client,
-    updatedCase,
-    profile,
-    updatedCase.workflow_status,
-  );
+  updatedCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, updatedCase.workflow_status);
   const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
   return {
     case: serializeDisputeBetaCase(updatedCase),
@@ -13830,30 +13349,33 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
 }
 
 async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   const actionId = String(body.actionId || '').trim();
   const amount = decimalOrNull(body.disputeAmount ?? body.amount);
   const note = String(body.note || body.description || '').trim();
-  const currencyIsoCode = String(body.currencyIsoCode || 'USD').trim().toUpperCase();
+  const currencyIsoCode = String(body.currencyIsoCode || 'USD')
+    .trim()
+    .toUpperCase();
   if (!actionId) throw appError('actionId is required.', 400);
   if (amount == null || amount < 0) throw appError('Supplier dispute amount must be zero or greater.', 400);
   if (!/^[A-Z]{3}$/.test(currencyIsoCode)) throw appError('Supplier dispute currency must be a three-letter ISO code.', 400);
   if (amount === 0 && !note) throw appError('Explain why no supplier recovery is required.', 400);
-  const { data: action, error: actionError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('id', actionId)
-    .maybeSingle();
+  const { data: action, error: actionError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
   if (actionError) throw actionError;
   if (!action || action.party_side !== 'supplier') throw appError('Supplier action not found.', 404);
   const caseRow = await getDisputeBetaCase(client, action.case_id);
-  const actorEmail = String(profile.email || '').trim().toLowerCase();
-  const responsibleTrader = (
-    action.created_by === profile.id
-    || caseRow.submitted_by === profile.id
-    || [action.created_by_email, caseRow.submitted_by_email]
-      .some((email) => String(email || '').trim().toLowerCase() === actorEmail)
-  );
+  const actorEmail = String(profile.email || '')
+    .trim()
+    .toLowerCase();
+  const responsibleTrader =
+    action.created_by === profile.id ||
+    caseRow.submitted_by === profile.id ||
+    [action.created_by_email, caseRow.submitted_by_email].some(
+      (email) =>
+        String(email || '')
+          .trim()
+          .toLowerCase() === actorEmail,
+    );
   if (profile.user_type !== 'administrator' && !responsibleTrader) {
     throw appError('Only the responsible trader or an administrator can record this supplier dispute amount.', 403);
   }
@@ -13868,18 +13390,8 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
   const existingAmount = decimalOrNull(action.amount);
   const commercialAmountChanged = existingAmount == null || Math.abs(existingAmount - amount) > 0.01;
   const editableStage = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
-  const amendedStage = editableStage
-    ? caseRow.workflow_status
-    : commercialAmountChanged
-      ? 'Revision Requested'
-      : caseRow.approval_status === 'Approved'
-        ? 'Accounting In Progress'
-        : caseRow.workflow_status;
-  const amendedApproval = amendedStage === 'Draft'
-    ? 'Draft'
-    : amendedStage === 'Revision Requested'
-      ? 'Revision Requested'
-      : caseRow.approval_status;
+  const amendedStage = editableStage ? caseRow.workflow_status : commercialAmountChanged ? 'Revision Requested' : caseRow.approval_status === 'Approved' ? 'Accounting In Progress' : caseRow.workflow_status;
+  const amendedApproval = amendedStage === 'Draft' ? 'Draft' : amendedStage === 'Revision Requested' ? 'Revision Requested' : caseRow.approval_status;
   const rpcActions = workflow.actionRows.map((row) => {
     const party = partyById.get(row.party_id);
     const base = {
@@ -13887,17 +13399,20 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
       party_account_key: party?.account_key,
     };
     if (row.id !== action.id) return base;
-    return prepareSupplierSettlementAction({
-      ...base,
-      action_type: 'resolve_supplier_dispute',
-      action_label: DISPUTE_BETA_ACTION_LABELS.resolve_supplier_dispute,
-      amount,
-      special_buy_price: null,
-      description: note || row.description || '',
-      currency_iso_code: currencyIsoCode,
-      invoice_allocations: Array.isArray(body.invoiceAllocations) ? body.invoiceAllocations : [],
-      execution_status: 'Pending Accounting',
-    }, currentStem);
+    return prepareSupplierSettlementAction(
+      {
+        ...base,
+        action_type: 'resolve_supplier_dispute',
+        action_label: DISPUTE_BETA_ACTION_LABELS.resolve_supplier_dispute,
+        amount,
+        special_buy_price: null,
+        description: note || row.description || '',
+        currency_iso_code: currencyIsoCode,
+        invoice_allocations: Array.isArray(body.invoiceAllocations) ? body.invoiceAllocations : [],
+        execution_status: 'Pending Accounting',
+      },
+      currentStem,
+    );
   });
   const financials = calculateDisputeBetaSettlement(rpcActions);
   const salesforceStatus = amendedStage === 'Draft' ? 'Open - Trader Review' : amendedStage;
@@ -13956,15 +13471,11 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
 }
 
 async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for accounting updates.');
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
-  const { data: action, error: actionLookupError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('id', actionId)
-    .maybeSingle();
+  const { data: action, error: actionLookupError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
   if (actionLookupError) throw actionLookupError;
   if (!action) throw appError('Dispute Workflow action not found.', 404);
   if (action.action_type === 'resolve_supplier_dispute') {
@@ -13982,15 +13493,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
   if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
     throw appError('Accounting can update actions only after approval and before closure.', 400);
   }
-  await reconcileApprovedSupplierInstructions(
-    client,
-    caseRow,
-    partyRows,
-    storedWorkflow.actionRows,
-    storedWorkflow.instructionRows,
-    currentStem,
-    profile,
-  );
+  await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, storedWorkflow.actionRows, storedWorkflow.instructionRows, currentStem, profile);
 
   const accountingStatus = normalizeDisputeBetaStatus(body.accountingStatus || body.executionStatus, DISPUTE_BETA_EXECUTION_STATUSES, '');
   if (!accountingStatus) throw appError('Valid accounting status is required.', 400);
@@ -14005,19 +13508,12 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     throw appError('Instruction Issued requires an instruction date and a reference or accounting note.', 400);
   }
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  const hasSettlementDocument = documents.some((document) => document.action_id === actionId && [
-    'settlement_agreement',
-    'buyer_credit_note',
-    'supplier_credit_note',
-    'proof_of_payment',
-  ].includes(document.document_type));
+  const hasSettlementDocument = documents.some((document) => document.action_id === actionId && ['settlement_agreement', 'buyer_credit_note', 'supplier_credit_note', 'proof_of_payment'].includes(document.document_type));
   if (accountingStatus === 'Settled' && (!settlementDate || (!settlementReference && !hasSettlementDocument))) {
     throw appError('Settled requires a settlement date and either a reference or settlement document.', 400);
   }
   const notRequiredEligibility = disputeNotRequiredEligibility(action, partyRows, currentStem);
-  const notRequiredReasonWaived = accountingStatus === 'Not Required'
-    && !accountingNote
-    && notRequiredEligibility.eligible;
+  const notRequiredReasonWaived = accountingStatus === 'Not Required' && !accountingNote && notRequiredEligibility.eligible;
   if (accountingStatus === 'Not Required' && !accountingNote && !notRequiredReasonWaived) {
     if (notRequiredEligibility.balanceType && notRequiredEligibility.balance == null) {
       throw appError(`The current ${notRequiredEligibility.balanceLabel} balance is unavailable. Enter an accounting reason before selecting Not Required.`, 400);
@@ -14028,22 +13524,12 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     throw appError('Explain why accounting is not required.', 400);
   }
 
-  const { data: currentActionRows, error: currentActionsError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
+  const { data: currentActionRows, error: currentActionsError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
   if (currentActionsError) throw currentActionsError;
-  const projectedActions = (currentActionRows || []).map((row) => (
-    row.id === actionId ? { ...row, execution_status: accountingStatus } : row
-  ));
+  const projectedActions = (currentActionRows || []).map((row) => (row.id === actionId ? { ...row, execution_status: accountingStatus } : row));
   const allSettled = projectedActions.length > 0 && projectedActions.every((row) => row.execution_status === 'Settled' || row.execution_status === 'Not Required');
   const hasAccountingProgress = projectedActions.some((row) => row.execution_status !== 'Pending Accounting');
-  const workflowStatus = allSettled
-    ? 'Settled - Ready to Close'
-    : hasAccountingProgress
-      ? 'Accounting In Progress'
-      : 'Approved - Pending Accounting';
+  const workflowStatus = allSettled ? 'Settled - Ready to Close' : hasAccountingProgress ? 'Accounting In Progress' : 'Approved - Pending Accounting';
   await patchDisputeWorkflowStatusInSalesforce(caseRow, workflowStatus);
 
   const nowIso = new Date().toISOString();
@@ -14088,19 +13574,10 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
       partyAccountId: notRequiredReasonWaived ? notRequiredEligibility.partyAccountId : null,
     },
   });
-  const { data: actionRows, error: actionsError } = await client
-    .from('dispute_beta_actions')
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .eq('case_id', caseRow.id)
-    .order('created_at', { ascending: true });
+  const { data: actionRows, error: actionsError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
   if (actionsError) throw actionsError;
   const actions = actionRows || [];
-  const { data: statusCase, error: caseError } = await client
-    .from('dispute_beta_cases')
-    .update({ workflow_status: workflowStatus, updated_at: nowIso })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
+  const { data: statusCase, error: caseError } = await client.from('dispute_beta_cases').update({ workflow_status: workflowStatus, updated_at: nowIso }).eq('id', caseRow.id).select(DISPUTE_BETA_CASE_SELECT).single();
   if (caseError) throw caseError;
   const salesforceCase = await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
   const partyMap = disputePartyRowMap(partyRows);
@@ -14114,17 +13591,21 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
 }
 
 async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
-  return disputeWorkflowAccountingUpdate({
-    ...body,
-    accountingStatus: 'Settled',
-    settlementDate: body.settlementDate || new Date().toISOString().slice(0, 10),
-    settlementReference: body.settlementReference || body.note,
-    accountingNote: body.accountingNote || body.note,
-  }, req, accessContext);
+  return disputeWorkflowAccountingUpdate(
+    {
+      ...body,
+      accountingStatus: 'Settled',
+      settlementDate: body.settlementDate || new Date().toISOString().slice(0, 10),
+      settlementReference: body.settlementReference || body.note,
+      accountingNote: body.accountingNote || body.note,
+    },
+    req,
+    accessContext,
+  );
 }
 
 async function disputeBetaClose(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || await requireActiveUser(req);
+  const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required to close a dispute.');
   const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
   await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
@@ -14132,15 +13613,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   if (!hasRecordedFcosClosureWriteback(caseRow)) assertSalesforceDisputeIsOpen(currentStem);
   let { partyRows, actionRows, instructionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
   const registry = assertValidDisputeParties(currentStem, partyRows);
-  const reconciliation = await reconcileApprovedSupplierInstructions(
-    client,
-    caseRow,
-    partyRows,
-    actionRows,
-    instructionRows,
-    currentStem,
-    profile,
-  );
+  const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, actionRows, instructionRows, currentStem, profile);
   if (reconciliation.changed) {
     const reloaded = await loadDisputeWorkflowActions(client, caseRow.id);
     partyRows = reloaded.partyRows;
@@ -14181,7 +13654,9 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
     .select(DISPUTE_BETA_CASE_SELECT)
     .single();
   if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, { note: finalNote });
+  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, {
+    note: finalNote,
+  });
   const partyMap = disputePartyRowMap(partyRows);
   return {
     case: serializeDisputeBetaCase(updatedCase),
@@ -14204,10 +13679,16 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   await requireInterofficeStemAccess(actualStemId, accessContext);
 
   if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, { method: 'PATCH', body: childUpdates });
+    await sfRequest(`/sobjects/${childObject}/${childId}`, {
+      method: 'PATCH',
+      body: childUpdates,
+    });
   }
   if (updates && Object.keys(updates).length > 0) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, { method: 'PATCH', body: updates });
+    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
+      method: 'PATCH',
+      body: updates,
+    });
   }
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers] = await Promise.all([
@@ -14216,10 +13697,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
     queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
   ]);
-  const supplierInvoiceIds = [...new Set([
-    ...lineItems.map((item) => item.Supplier_Invoice__c),
-    ...extraCosts.map((item) => item.Supplier_Invoice__c),
-  ].filter(isSalesforceId))];
+  const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
   const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
   const supplierInvoiceSupplierNameMap = {};
   for (const item of [...lineItems, ...extraCosts]) {
@@ -14228,11 +13706,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     }
   }
 
-  const brokerAccountIds = [...new Set([
-    ...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean),
-    ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
-    ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean),
-  ])];
+  const brokerAccountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
   const brokerAccountMap = await namesByIds('Account', brokerAccountIds);
   for (const [id, name] of Object.entries(brokerAccountMap)) brokerAccountMap[String(id).slice(0, 15)] = name;
   const brokerCommissionGroupsByStem = buildBrokerCommissionGroups({
@@ -14243,60 +13717,40 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   });
   const brokerCommissionGroups = brokerCommissionGroupsByStem[actualStemId] || [];
   const stemHasDelivery = !!recordRaw.Delivery_Date__c;
-  const payableAmountCandidates = stemPayableAmountCandidates({ stem: recordRaw, lineItems, extraCosts });
+  const payableAmountCandidates = stemPayableAmountCandidates({
+    stem: recordRaw,
+    lineItems,
+    extraCosts,
+  });
 
   let supplierInvoicePayments = [];
   let buyerInvoicePayments = [];
   const brokerCommissionPaymentMap = new Map();
-  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] }));
+  const paymentDescribe = await salesforceObjectFields({
+    objectName: 'Payment__c',
+  }).catch(() => ({ fields: [] }));
   const paymentFields = paymentDescribe.fields || [];
   const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  const paymentAmountField = [
-    'Amount__c',
-    'Payment_Amount__c',
-    'Paid_Amount__c',
-    'Received_Amount__c',
-    'Total_Amount__c',
-    'Amount_Paid__c',
-    'Payment_Value__c',
-    'Actual_Amount__c',
-  ].find((field) => paymentFieldNames.has(field));
+  const paymentAmountField = ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c'].find((field) => paymentFieldNames.has(field));
   const paymentDateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
   const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
   const paymentReferenceFields = incomingPaymentReferenceFields(paymentFields);
   const paymentDirectionFields = incomingPaymentDirectionFields(paymentFields);
   const paymentStatusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
   const paymentTypeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
-  const paymentSelectFields = [
-    'Id',
-    paymentFieldNames.has('Name') ? 'Name' : null,
-    paymentFieldNames.has('RecordTypeId') ? 'RecordTypeId' : null,
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null,
-    paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null,
-    paymentFieldNames.has('STEM__c') ? 'STEM__c' : null,
-    paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null,
-    paymentDateField,
-    ...supplierInvoiceLookupFields,
-    paymentAmountField,
-    ...paymentReferenceFields,
-    ...paymentStatusFields,
-    ...paymentTypeFields,
-    ...paymentDirectionFields,
-  ].filter(Boolean);
+  const paymentSelectFields = ['Id', paymentFieldNames.has('Name') ? 'Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordTypeId' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, paymentFieldNames.has('STEM__c') ? 'STEM__c' : null, paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null, paymentDateField, ...supplierInvoiceLookupFields, paymentAmountField, ...paymentReferenceFields, ...paymentStatusFields, ...paymentTypeFields, ...paymentDirectionFields].filter(Boolean);
   const paymentOrder = paymentDateField ? `${paymentDateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
   if (paymentSelectFields.length > 1) {
     const selectedPaymentFields = [...new Set(paymentSelectFields)];
     const paymentDateValue = (payment) => (paymentDateField ? payment[paymentDateField] : null) || payment.Date__c || payment.CreatedDate || null;
     const sortPaymentRows = (rows) => rows.sort((a, b) => String(paymentDateValue(b) || '').localeCompare(String(paymentDateValue(a) || '')));
     const decoratePayment = (payment, supplierInvoiceId = null) => ({
-        ...payment,
-        Date__c: paymentDateValue(payment),
-        _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
-        _Payment_Amount_Field: paymentAmountField || null,
-        _Supplier_Invoice_Name: supplierInvoiceId
-          ? supplierInvoiceNameMap[supplierInvoiceId] || supplierInvoiceId
-          : null,
-      });
+      ...payment,
+      Date__c: paymentDateValue(payment),
+      _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
+      _Payment_Amount_Field: paymentAmountField || null,
+      _Supplier_Invoice_Name: supplierInvoiceId ? supplierInvoiceNameMap[supplierInvoiceId] || supplierInvoiceId : null,
+    });
     const supplierPaymentMap = new Map();
     const buyerPaymentMap = new Map();
     const addBrokerCommissionPayment = (payment, brokerMatch) => {
@@ -14316,12 +13770,8 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
       const invoiceId = supplierInvoiceId || incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
       supplierPaymentMap.set(payment.Id, {
         ...decoratePayment(payment, invoiceId),
-        _Supplier_Invoice_Name: invoiceId
-          ? supplierInvoiceNameMap[invoiceId] || invoiceId
-          : 'Supplier payment',
-        _Supplier_Name: invoiceId
-          ? supplierInvoiceSupplierNameMap[invoiceId] || supplierInvoiceNameMap[invoiceId] || invoiceId
-          : 'Supplier payment',
+        _Supplier_Invoice_Name: invoiceId ? supplierInvoiceNameMap[invoiceId] || invoiceId : 'Supplier payment',
+        _Supplier_Name: invoiceId ? supplierInvoiceSupplierNameMap[invoiceId] || supplierInvoiceNameMap[invoiceId] || invoiceId : 'Supplier payment',
       });
     };
     const addBuyerPayment = (payment) => {
@@ -14330,28 +13780,39 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     };
 
     if (supplierInvoiceIds.length && supplierInvoiceLookupFields.length) {
-      await Promise.all(supplierInvoiceLookupFields.map(async (field) => {
-        const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return { soql: `
+      await Promise.all(
+        supplierInvoiceLookupFields.map(async (field) => {
+          const paymentChunks = await compositeQueryRows(
+            chunkIds(supplierInvoiceIds).map((chunk) => {
+              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+              return {
+                soql: `
             SELECT ${selectedPaymentFields.join(', ')}
             FROM Payment__c
             WHERE ${field} IN (${inList})
             ORDER BY ${paymentOrder}
             LIMIT 2000
-          `, limit: 2000, softFail: true };
-        }));
-        for (const payment of paymentChunks.flat()) addSupplierPayment(payment, payment[field]);
-      }));
+          `,
+                limit: 2000,
+                softFail: true,
+              };
+            }),
+          );
+          for (const payment of paymentChunks.flat()) addSupplierPayment(payment, payment[field]);
+        }),
+      );
     }
     if (paymentFieldNames.has('STEM__c')) {
-      const stemPayments = await queryRows(`
+      const stemPayments = await queryRows(
+        `
         SELECT ${selectedPaymentFields.join(', ')}
         FROM Payment__c
         WHERE STEM__c = '${escapeSoql(actualStemId)}'
         ORDER BY ${paymentOrder}
         LIMIT 2000
-      `, { limit: 2000, softFail: true });
+      `,
+        { limit: 2000, softFail: true },
+      );
       for (const payment of stemPayments) {
         if (incomingPaymentIsReceivableRemittance(payment, [...paymentReferenceFields, ...paymentDirectionFields, ...paymentTypeFields, ...paymentStatusFields])) continue;
         const amount = paymentAmountField ? incomingPaymentNumber(payment[paymentAmountField]) : null;
@@ -14375,15 +13836,17 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
         });
         if (supplierSide) {
           addSupplierPayment(payment);
-        } else if (incomingPaymentLooksStemPayableCalculation(payment, {
-          amount,
-          payableAmounts: payableAmountCandidates,
-          referenceFields: paymentReferenceFields,
-          directionFields: paymentDirectionFields,
-          typeFields: paymentTypeFields,
-          statusFields: paymentStatusFields,
-          allowBlankSignal: !stemHasDelivery,
-        })) {
+        } else if (
+          incomingPaymentLooksStemPayableCalculation(payment, {
+            amount,
+            payableAmounts: payableAmountCandidates,
+            referenceFields: paymentReferenceFields,
+            directionFields: paymentDirectionFields,
+            typeFields: paymentTypeFields,
+            statusFields: paymentStatusFields,
+            allowBlankSignal: !stemHasDelivery,
+          })
+        ) {
           continue;
         } else if (amount == null || amount >= 0) {
           addBuyerPayment(payment);
@@ -14394,27 +13857,22 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     buyerInvoicePayments = sortPaymentRows([...buyerPaymentMap.values()]);
   }
 
-  const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([
-    recordRaw.Vessel__c ? resolveViaQuery('Vessel__c', recordRaw.Vessel__c, 'Name') : Promise.resolve(null),
-    recordRaw.Port__c ? resolveViaQuery('Port__c', recordRaw.Port__c, 'Name') : Promise.resolve(null),
-    recordRaw.Agent__c ? resolveViaQuery('Account', recordRaw.Agent__c, 'Name') : Promise.resolve(null),
-    recordRaw.Account__c ? resolveViaQuery('Account', recordRaw.Account__c, 'Name') : Promise.resolve(null),
-    recordRaw.Buyer_Broker__c ? resolveViaQuery('Account', recordRaw.Buyer_Broker__c, 'Name') : Promise.resolve(null),
-    recordRaw.Factoring_Invoice__c ? resolveViaQuery('Invoice__c', recordRaw.Factoring_Invoice__c, 'Name') : Promise.resolve(null),
-  ]);
+  const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([recordRaw.Vessel__c ? resolveViaQuery('Vessel__c', recordRaw.Vessel__c, 'Name') : Promise.resolve(null), recordRaw.Port__c ? resolveViaQuery('Port__c', recordRaw.Port__c, 'Name') : Promise.resolve(null), recordRaw.Agent__c ? resolveViaQuery('Account', recordRaw.Agent__c, 'Name') : Promise.resolve(null), recordRaw.Account__c ? resolveViaQuery('Account', recordRaw.Account__c, 'Name') : Promise.resolve(null), recordRaw.Buyer_Broker__c ? resolveViaQuery('Account', recordRaw.Buyer_Broker__c, 'Name') : Promise.resolve(null), recordRaw.Factoring_Invoice__c ? resolveViaQuery('Invoice__c', recordRaw.Factoring_Invoice__c, 'Name') : Promise.resolve(null)]);
 
   const buyerBrokersWithNames = await Promise.all(
     buyerBrokers.map(async (bb) => ({
       ...bb,
-      _Buyer_Broker_Name: bb.Buyer_Broker__c ? brokerAccountMap[bb.Buyer_Broker__c] || brokerAccountMap[String(bb.Buyer_Broker__c).slice(0, 15)] || await resolveViaQuery('Account', bb.Buyer_Broker__c, 'Name') : null,
-    }))
+      _Buyer_Broker_Name: bb.Buyer_Broker__c ? brokerAccountMap[bb.Buyer_Broker__c] || brokerAccountMap[String(bb.Buyer_Broker__c).slice(0, 15)] || (await resolveViaQuery('Account', bb.Buyer_Broker__c, 'Name')) : null,
+    })),
   );
 
   const supplierBrokerIds = [...new Set(lineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
   const supplierBrokerNameMap = {};
-  await Promise.all(supplierBrokerIds.map(async (id) => {
-    supplierBrokerNameMap[id] = brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || await resolveViaQuery('Account', id, 'Name');
-  }));
+  await Promise.all(
+    supplierBrokerIds.map(async (id) => {
+      supplierBrokerNameMap[id] = brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || (await resolveViaQuery('Account', id, 'Name'));
+    }),
+  );
 
   const lineItemsWithNames = lineItems.map((li) => {
     const calculatedQuantity = financialQuantity(li, stemHasDelivery);
@@ -14424,10 +13882,12 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
       ...li,
       _Financial_Quantity: calculatedQuantity,
       _Financial_Quantity_Unit: 'MT',
-      ...(!stemHasDelivery ? {
-        Total_Price__c: calculatedSell,
-        Total_Cost__c: calculatedBuy,
-      } : {}),
+      ...(!stemHasDelivery
+        ? {
+            Total_Price__c: calculatedSell,
+            Total_Cost__c: calculatedBuy,
+          }
+        : {}),
       _Product_Name: li['Product__r']?.Name ?? null,
       _Supplier_Broker_Name: li.Supplier_Broker__c ? supplierBrokerNameMap[li.Supplier_Broker__c] : null,
     };
@@ -14440,10 +13900,12 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
       ...ec,
       _Financial_Quantity: calculatedQuantity,
       _Financial_Quantity_Unit: 'MT',
-      ...(!stemHasDelivery ? {
-        Line_Total__c: calculatedSell,
-        Line_Total_Buy__c: calculatedBuy,
-      } : {}),
+      ...(!stemHasDelivery
+        ? {
+            Line_Total__c: calculatedSell,
+            Line_Total_Buy__c: calculatedBuy,
+          }
+        : {}),
       _Product_Name: ec['Product2Id__r']?.Name ?? null,
     };
   });
@@ -14456,18 +13918,13 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     return sum + extraSellAmount(ec, stemHasDelivery);
   }, 0);
   const calculatedUndatedBuyerInvoice = calculatedLineItemSell + calculatedExtraCostSell;
-  const shouldUseCalculatedBuyerInvoice = !recordRaw.Delivery_Date__c
-    && calculatedUndatedBuyerInvoice > 0;
+  const shouldUseCalculatedBuyerInvoice = !recordRaw.Delivery_Date__c && calculatedUndatedBuyerInvoice > 0;
   const calculatedSupplierInvoice = payableAmountCandidates[0] ?? 0;
   const record = {
     ...recordRaw,
-    Total_Invoice_Amount__c: shouldUseCalculatedBuyerInvoice
-      ? calculatedUndatedBuyerInvoice
-      : recordRaw.Total_Invoice_Amount__c,
+    Total_Invoice_Amount__c: shouldUseCalculatedBuyerInvoice ? calculatedUndatedBuyerInvoice : recordRaw.Total_Invoice_Amount__c,
     _Supplier_Invoice_Amount: calculatedSupplierInvoice,
-    _Buyer_Pay_Term_Date: calculatedBuyerPayTermDate(recordRaw)
-      || recordRaw.Invoice_Due_Date__c
-      || recordRaw.Buyer_Pay_Term_Date__c,
+    _Buyer_Pay_Term_Date: calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c,
     _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
     _Vessel_Name: vesselName,
     _Port_Name: portName,
@@ -14492,10 +13949,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 }
 
 async function salesforceStemDetailFull(body, req = null, accessContext = null) {
-  const hasWrite = Boolean(
-    body?.updates && Object.keys(body.updates).length
-    || body?.childUpdates && Object.keys(body.childUpdates).length,
-  );
+  const hasWrite = Boolean((body?.updates && Object.keys(body.updates).length) || (body?.childUpdates && Object.keys(body.childUpdates).length));
   if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
@@ -14623,22 +14077,27 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
   const limit = Math.min(Number(body.limit) || 2000, 3000);
   const interofficeCondition = await interofficeStemAccessCondition(accessContext);
   const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
-  const stems = await queryRows(`
+  const stems = await queryRows(
+    `
     SELECT Id, Name, Delivery_Date__c, Payment_Date__c, Buyer_Pay_Term_Date__c
     FROM stem__c
     ${whereClause}
     ORDER BY Delivery_Date__c DESC NULLS LAST
     LIMIT ${limit}
-  `, { limit });
+  `,
+    { limit },
+  );
   const stemMap = Object.fromEntries(stems.map((stem) => [stem.Id, stem]));
   const stemIds = stems.map((stem) => stem.Id);
   if (!stemIds.length) return { rows: [] };
 
   const stemChunks = chunkIds(stemIds);
   const [lineItemChunks, buyerBrokerChunks, buyerPaymentChunks, buyerInvoiceChunks] = await Promise.all([
-    compositeQueryRows(stemChunks.map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return { soql: `
+    compositeQueryRows(
+      stemChunks.map((chunk) => {
+        const ids = chunk.map((id) => `'${id}'`).join(',');
+        return {
+          soql: `
         SELECT Id, Name, STEM__c, Product__r.Name, Product__r.Family, Supplier_Invoice__c,
                Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
                Quantity_Delivered_Per_BDN__c, Quantity__c, Quantity_in_MT__c, Commission_Cost__c, Cancelled__c,
@@ -14647,55 +14106,74 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
         FROM STEM_Line_Item__c
         WHERE STEM__c IN (${ids})
         LIMIT 5000
-      `, limit: 5000 };
-    })),
-    compositeQueryRows(stemChunks.map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return { soql: `
+      `,
+          limit: 5000,
+        };
+      }),
+    ),
+    compositeQueryRows(
+      stemChunks.map((chunk) => {
+        const ids = chunk.map((id) => `'${id}'`).join(',');
+        return {
+          soql: `
         SELECT Id, Name, STEM__c, Buyer_Broker__c
         FROM STEM_Buyer_Broker__c
         WHERE STEM__c IN (${ids})
         LIMIT 5000
-      `, limit: 5000 };
-    })),
-    compositeQueryRows(stemChunks.map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return { soql: `
+      `,
+          limit: 5000,
+        };
+      }),
+    ),
+    compositeQueryRows(
+      stemChunks.map((chunk) => {
+        const ids = chunk.map((id) => `'${id}'`).join(',');
+        return {
+          soql: `
         SELECT STEM__c, Date__c
         FROM Payment__c
         WHERE STEM__c IN (${ids}) AND Supplier_Invoice__c = null
         ORDER BY Date__c DESC
         LIMIT 5000
-      `, limit: 5000 };
-    })),
-    compositeQueryRows(stemChunks.map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return { soql: `
+      `,
+          limit: 5000,
+        };
+      }),
+    ),
+    compositeQueryRows(
+      stemChunks.map((chunk) => {
+        const ids = chunk.map((id) => `'${id}'`).join(',');
+        return {
+          soql: `
         SELECT STEM__c, Invoice_Due_Date__c
         FROM Invoice__c
         WHERE STEM__c IN (${ids})
         ORDER BY Invoice_Due_Date__c DESC
         LIMIT 5000
-      `, limit: 5000 };
-    })),
+      `,
+          limit: 5000,
+        };
+      }),
+    ),
   ]);
 
   const lineItems = lineItemChunks.flat();
   const buyerBrokers = buyerBrokerChunks.flat();
   const buyerPayments = buyerPaymentChunks.flat();
   const buyerInvoices = buyerInvoiceChunks.flat();
-  const accountIds = [...new Set([
-    ...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean),
-    ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean),
-    ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean),
-  ])];
+  const accountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
 
-  const accountChunks = await compositeQueryRows(chunkIds(accountIds).map((chunk) => {
-    const ids = chunk.map((id) => `'${id}'`).join(',');
-    return ids
-      ? { soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids})`, softFail: true }
-      : null;
-  }));
+  const accountChunks = await compositeQueryRows(
+    chunkIds(accountIds).map((chunk) => {
+      const ids = chunk.map((id) => `'${id}'`).join(',');
+      return ids
+        ? {
+            soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids})`,
+            softFail: true,
+          }
+        : null;
+    }),
+  );
   const accountMap = {};
   const accountFlagMap = {};
   for (const account of accountChunks.flat()) {
@@ -14711,12 +14189,17 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
 
   const supplierInvoiceIds = [...new Set(lineItems.map((item) => item.Supplier_Invoice__c).filter(Boolean))];
   const paymentDateByInvoice = {};
-  const paymentChunks = await compositeQueryRows(chunkIds(supplierInvoiceIds).map((chunk) => {
-    const ids = chunk.map((id) => `'${id}'`).join(',');
-    return ids
-      ? { soql: `SELECT Supplier_Invoice__c, Date__c FROM Payment__c WHERE Supplier_Invoice__c IN (${ids}) ORDER BY Date__c DESC`, softFail: true }
-      : null;
-  }));
+  const paymentChunks = await compositeQueryRows(
+    chunkIds(supplierInvoiceIds).map((chunk) => {
+      const ids = chunk.map((id) => `'${id}'`).join(',');
+      return ids
+        ? {
+            soql: `SELECT Supplier_Invoice__c, Date__c FROM Payment__c WHERE Supplier_Invoice__c IN (${ids}) ORDER BY Date__c DESC`,
+            softFail: true,
+          }
+        : null;
+    }),
+  );
   for (const payment of paymentChunks.flat()) {
     if (payment.Supplier_Invoice__c && !paymentDateByInvoice[payment.Supplier_Invoice__c]) paymentDateByInvoice[payment.Supplier_Invoice__c] = payment.Date__c;
   }
@@ -14855,6 +14338,13 @@ const handlers = {
   collaborationDetail,
   collaborationCreate,
   collaborationUpdate,
+  collaborationBulkUpdate,
+  collaborationFollowerToggle,
+  collaborationDependencySave,
+  collaborationDependencyRemove,
+  collaborationMilestoneSave,
+  collaborationTemplateList,
+  collaborationTemplateSave,
   collaborationArchive,
   collaborationCommentSave,
   collaborationCommentDelete,
@@ -14867,15 +14357,20 @@ const handlers = {
   collaborationDailyCron,
   workNotificationsList,
   workNotificationsRead,
+  workNotificationsState,
+  workCommitmentsList,
   growthReportingLinesList,
   growthReportingLineSave,
   growthCoachingBootstrap,
   growthPlanSave,
+  growthPlanCloseout,
   growthGoalSave,
   growthGoalSubmit,
   growthGoalDecision,
   growthGoalProgressSave,
   growthGoalCompletion,
+  growthGoalEvidenceOptions,
+  growthGoalEvidenceSave,
   coachingRelationshipInvite,
   coachingRelationshipRespond,
   coachingRelationshipEnd,
@@ -14885,6 +14380,7 @@ const handlers = {
   coachingSessionCancel,
   coachingActionSave,
   coachingActionPublish,
+  coachingActionProposalRespond,
   growthAttachmentPrepare,
   growthAttachmentComplete,
   growthAttachmentUrl,
@@ -14996,31 +14492,38 @@ const handlers = {
 export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
-  return runWithRequestTelemetry({
-    handler: name,
-    requestId: requestIdFrom(req),
-  }, async () => {
-    try {
-      if (name === 'salesforceDocumentDownload') {
-        await requireHandlerAccess(name, req);
-        return await salesforceDocumentDownload(req, res);
+  return runWithRequestTelemetry(
+    {
+      handler: name,
+      requestId: requestIdFrom(req),
+    },
+    async () => {
+      try {
+        if (name === 'salesforceDocumentDownload') {
+          await requireHandlerAccess(name, req);
+          return await salesforceDocumentDownload(req, res);
+        }
+        const fn = handlers[name];
+        if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
+        const accessContext = await requireHandlerAccess(name, req);
+        const body = await readBody(req);
+        const data = await fn(body, req, accessContext);
+        return sendJson(res, data);
+      } catch (error) {
+        const status = error.status || error.statusCode || 500;
+        recordRequestFailure(error, status);
+        return sendJson(
+          res,
+          {
+            error: error.message,
+            ...(error.details !== undefined ? { details: error.details } : {}),
+            ...(error.details?.current !== undefined ? { current: error.details.current } : {}),
+          },
+          status,
+        );
+      } finally {
+        logRequestTelemetry(res.statusCode || 500);
       }
-      const fn = handlers[name];
-      if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-      const accessContext = await requireHandlerAccess(name, req);
-      const body = await readBody(req);
-      const data = await fn(body, req, accessContext);
-      return sendJson(res, data);
-    } catch (error) {
-      const status = error.status || error.statusCode || 500;
-      recordRequestFailure(error, status);
-      return sendJson(res, {
-        error: error.message,
-        ...(error.details !== undefined ? { details: error.details } : {}),
-        ...(error.details?.current !== undefined ? { current: error.details.current } : {}),
-      }, status);
-    } finally {
-      logRequestTelemetry(res.statusCode || 500);
-    }
-  });
+    },
+  );
 }

@@ -19,6 +19,7 @@ import {
   TrendingUp,
   UsersRound,
   WalletCards,
+  UserRoundCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
@@ -32,6 +33,7 @@ const navGroups = [
   {
     label: 'Daily Work',
     items: [
+      { to: '/my-commitments', label: 'My Commitments', icon: UserRoundCheck },
       { to: '/growth-coaching', label: 'Growth & Coaching', icon: Sprout },
       { to: '/projects-tasks', label: 'Projects & Tasks', icon: ListTodo },
       { to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },

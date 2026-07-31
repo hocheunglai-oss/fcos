@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.57';
+export const APP_VERSION = '2.0.58';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.58',
+    releasedAt: '2026-07-31',
+    title: 'Coordinated work and development workflows',
+    changes: [
+      'Added My Commitments and actionable notification states across Projects & Tasks and Growth & Coaching.',
+      'Added project followers, blocker links, blocked reasons, health updates, milestones, reusable checklists, and controlled bulk updates.',
+      'Added goal-quality guidance, manager review filters, plan closeout and carry-forward, and private completed-task evidence links.',
+      'Added staged coaching sessions, agenda carry-forward, action acceptance proposals, and on-demand loading of confidential session content.',
+    ],
+  },
   {
     version: '2.0.57',
     releasedAt: '2026-07-31',
