@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
 import {
   createSmtpTransport,
+  isSmtpSendAsDenied,
   sendWithSmtp,
   smtpAddressParts,
 } from './_smtp.js';
@@ -18,6 +19,13 @@ const REASON_MIN_LENGTH = 8;
 const REASON_MAX_LENGTH = 255;
 const INTERRUPTED_DELIVERY_MINUTES = 15;
 const UPDATE_TABLE_PATTERN = /fcos_update_(settings|items|batches|batch_items|batch_recipients|deliveries|events)/i;
+
+export const FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE =
+  'Microsoft 365 rejected the configured FCOS Updates sender. Verify the authenticated mailbox has Send As permission, then wait for Exchange permission propagation and SMTP throttling to clear before retrying.';
+
+export function fcosUpdateSenderFailureMessage(error) {
+  return isSmtpSendAsDenied(error) ? FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE : '';
+}
 
 function updateError(message, status = 400, code = 'FCOS_UPDATE_ERROR', details = undefined) {
   const error = new Error(message);
@@ -1100,6 +1108,74 @@ async function processFcosUpdateDeliveries({
   if (eligibleError) throwUpdateSchemaError(eligibleError);
   let remaining = Number(eligibleCount || 0);
 
+  const deliverOne = async (delivery) => {
+    let result;
+    try {
+      result = await sendWithSmtp({
+        transporter,
+        from,
+        to: [delivery.recipient_email],
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
+      if (!Array.isArray(result.accepted) || result.accepted.length !== 1) {
+        throw new Error('The SMTP provider did not accept this recipient.');
+      }
+    } catch (error) {
+      const senderFailure = fcosUpdateSenderFailureMessage(error);
+      const { error: updateErrorValue } = await client
+        .from('fcos_update_deliveries')
+        .update({
+          status: 'Failed',
+          last_error: senderFailure || redactError(error?.message || error),
+        })
+        .eq('id', delivery.id)
+        .eq('status', 'Sending');
+      if (updateErrorValue) throwUpdateSchemaError(updateErrorValue);
+      return { senderFailure };
+    }
+
+    const { data: confirmed, error: sentError } = await client
+      .from('fcos_update_deliveries')
+      .update({
+        status: 'Sent',
+        email_message_id: result.id || null,
+        provider_result: {
+          acceptedCount: result.accepted.length,
+          rejectedCount: Array.isArray(result.rejected) ? result.rejected.length : 0,
+        },
+        sent_at: new Date().toISOString(),
+        last_error: null,
+      })
+      .eq('id', delivery.id)
+      .eq('status', 'Sending')
+      .select('id')
+      .maybeSingle();
+    if (!sentError && confirmed) return { senderFailure: '' };
+
+    const { error: uncertainError } = await client
+      .from('fcos_update_deliveries')
+      .update({
+        status: 'Uncertain',
+        last_error: 'SMTP accepted the message, but FCOS could not confirm the delivery record.',
+      })
+      .eq('id', delivery.id)
+      .eq('status', 'Sending');
+    if (uncertainError) throwUpdateSchemaError(uncertainError);
+    return { senderFailure: '' };
+  };
+
+  const stopForSenderFailure = async (message) => {
+    const { error } = await client
+      .from('fcos_update_deliveries')
+      .update({ status: 'Failed', last_error: message })
+      .eq('batch_id', batch.id)
+      .eq('status', 'Sending');
+    if (error) throwUpdateSchemaError(error);
+    return updateBatchDeliverySummary(client, batch.id, profile);
+  };
+
   while (remaining > 0) {
     const { data: claimed, error: claimError } = await client.rpc('claim_fcos_update_deliveries', {
       p_batch_id: batch.id,
@@ -1110,63 +1186,18 @@ async function processFcosUpdateDeliveries({
     if (!claimed?.length) break;
     remaining -= claimed.length;
 
-    for (let index = 0; index < claimed.length; index += 3) {
+    // Probe one delivery first so a sender-wide Microsoft 365 rejection cannot
+    // fan out across the whole recipient list and trigger SMTP AUTH throttling.
+    const firstOutcome = await deliverOne(claimed[0]);
+    if (firstOutcome.senderFailure) {
+      return stopForSenderFailure(firstOutcome.senderFailure);
+    }
+
+    for (let index = 1; index < claimed.length; index += 3) {
       const group = claimed.slice(index, index + 3);
-      await Promise.all(group.map(async (delivery) => {
-        let result;
-        try {
-          result = await sendWithSmtp({
-            transporter,
-            from,
-            to: [delivery.recipient_email],
-            subject: message.subject,
-            html: message.html,
-            text: message.text,
-          });
-          if (!Array.isArray(result.accepted) || result.accepted.length !== 1) {
-            throw new Error('The SMTP provider did not accept this recipient.');
-          }
-        } catch (error) {
-          const { error: updateErrorValue } = await client
-            .from('fcos_update_deliveries')
-            .update({
-              status: 'Failed',
-              last_error: redactError(error?.message || error),
-            })
-            .eq('id', delivery.id)
-            .eq('status', 'Sending');
-          if (updateErrorValue) throwUpdateSchemaError(updateErrorValue);
-          return;
-        }
-
-        const { data: confirmed, error: sentError } = await client
-          .from('fcos_update_deliveries')
-          .update({
-            status: 'Sent',
-            email_message_id: result.id || null,
-            provider_result: {
-              acceptedCount: result.accepted.length,
-              rejectedCount: Array.isArray(result.rejected) ? result.rejected.length : 0,
-            },
-            sent_at: new Date().toISOString(),
-            last_error: null,
-          })
-          .eq('id', delivery.id)
-          .eq('status', 'Sending')
-          .select('id')
-          .maybeSingle();
-        if (!sentError && confirmed) return;
-
-        const { error: uncertainError } = await client
-          .from('fcos_update_deliveries')
-          .update({
-            status: 'Uncertain',
-            last_error: 'SMTP accepted the message, but FCOS could not confirm the delivery record.',
-          })
-          .eq('id', delivery.id)
-          .eq('status', 'Sending');
-        if (uncertainError) throwUpdateSchemaError(uncertainError);
-      }));
+      const outcomes = await Promise.all(group.map(deliverOne));
+      const senderFailure = outcomes.find((outcome) => outcome.senderFailure)?.senderFailure;
+      if (senderFailure) return stopForSenderFailure(senderFailure);
     }
   }
 

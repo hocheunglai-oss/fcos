@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.54';
+export const APP_VERSION = '2.0.55';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.55',
+    releasedAt: '2026-07-31',
+    title: 'FCOS Updates delivery protection',
+    changes: [
+      'Stopped an FCOS update email batch after the first Microsoft 365 sender-wide rejection, preventing repeated Send As failures from extending SMTP throttling and showing Administrators a clear recovery message.',
+    ],
+  },
   {
     version: '2.0.54',
     releasedAt: '2026-07-31',

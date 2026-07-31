@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildFcosUpdateEmail,
+  FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE,
   fcosUpdateMailConfig,
+  fcosUpdateSenderFailureMessage,
   fcosUpdateSourceCandidates,
   inferFcosUpdateCategory,
 } from '../api/_fcosUpdates.js';
@@ -102,6 +104,15 @@ test('FCOS Updates can authenticate through dedicated SMTP credentials', () => {
   assert.equal(config.requiresSendAs, false);
   assert.equal(config.smtp.user, 'vincent@example.com');
   assert.equal(config.smtp.password, 'vincent-secret');
+});
+
+test('FCOS Updates treats Microsoft Send As rejection as a sender-wide failure', () => {
+  assert.equal(
+    fcosUpdateSenderFailureMessage(new Error('554 5.2.252 SendAsDenied; MapiExceptionSendAsDenied')),
+    FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE,
+  );
+  assert.equal(fcosUpdateSenderFailureMessage(new Error('550 recipient rejected')), '');
+  assert.doesNotMatch(FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE, /@/);
 });
 
 test('FCOS update migration creates service-only workflow and General Manager controls', async () => {
