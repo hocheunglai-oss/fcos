@@ -1,6 +1,26 @@
-export const APP_VERSION = '2.0.48';
+export const APP_VERSION = '2.0.50';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.50',
+    releasedAt: '2026-07-31',
+    title: 'Buyer report recipient persistence',
+    changes: [
+      'Corrected Louisa email address in the Outstanding Buyer Invoices report defaults and stored settings.',
+      'Prevented Payment Reminder template saves from replacing unrelated scheduled report recipients.',
+      'Made external reminder and scheduled report sending fail closed when shared settings storage is unavailable.',
+    ],
+  },
+  {
+    version: '2.0.49',
+    releasedAt: '2026-07-31',
+    title: 'Dashboard AI usage costs',
+    changes: [
+      'Added official standard USD token rates for every available Dashboard interpretation model.',
+      'Added current-month and all-time estimated OpenAI API spend, interpretation counts, and last-use details to AI Search settings.',
+      'Recorded successful OpenAI responses in a service-only usage ledger without storing search prompts or Salesforce data.',
+    ],
+  },
   {
     version: '2.0.48',
     releasedAt: '2026-07-31',

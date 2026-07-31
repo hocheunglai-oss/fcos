@@ -145,6 +145,39 @@ function formatHealthDate(value) {
   }).format(date);
 }
 
+function formatAiUsd(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return '$0.00';
+  if (amount < 0.01) {
+    return `$${amount.toLocaleString('en-US', {
+      minimumFractionDigits: 6,
+      maximumFractionDigits: 6,
+    })}`;
+  }
+  return amount.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
+}
+
+function formatAiRate(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return amount.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3,
+  });
+}
+
+function formatAiCalls(value) {
+  const calls = Number(value);
+  return `${Number.isFinite(calls) ? calls.toLocaleString('en-US') : '0'} interpretation${calls === 1 ? '' : 's'}`;
+}
+
 function StatusBadge({ status }) {
   const meta = STATUS_META[status] || STATUS_META.not_configured;
   const Icon = meta.icon;
@@ -534,6 +567,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState(() => validSettingsTab(localStorage.getItem(SETTINGS_TAB_KEY)));
   const [aiSettings, setAiSettings] = useState(null);
   const [aiModels, setAiModels] = useState([]);
+  const [aiUsage, setAiUsage] = useState(null);
   const [baseAiModelId, setBaseAiModelId] = useState(null);
   const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
   const [aiSettingsError, setAiSettingsError] = useState(null);
@@ -559,6 +593,7 @@ export default function SettingsPage() {
     } else {
       setAiSettings(response.data.settings || null);
       setAiModels(response.data.models || []);
+      setAiUsage(response.data.usage || null);
       setBaseAiModelId(response.data.settings?.modelId || null);
     }
     setAiSettingsLoading(false);
@@ -598,6 +633,7 @@ export default function SettingsPage() {
         if (response.data?.error) throw new Error(response.data.error);
         setAiSettings(response.data.settings);
         setAiModels(response.data.models || aiModels);
+        setAiUsage(response.data.usage || aiUsage);
         setBaseAiModelId(response.data.settings?.modelId || aiSettings.modelId);
       }
       saveExchangeRateSettings(exchangeRateSettings);
@@ -811,6 +847,88 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </div>
+                </div>
+
+                <div className="border-t border-border pt-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">Model pricing and API usage</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Estimated USD cost from OpenAI-reported tokens for uncached interpretation requests completed by OpenAI.
+                      </p>
+                    </div>
+                    <a
+                      href={aiModels.find((model) => model.pricing?.sourceUrl)?.pricing?.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                    >
+                      OpenAI pricing
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+
+                  {aiUsage && !aiUsage.available && (
+                    <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      Usage tracking is unavailable. Model rates remain visible, but spend totals cannot be confirmed.
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="w-full min-w-[860px] text-left text-xs">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2.5 font-semibold">Interpretation model</th>
+                          <th className="px-3 py-2.5 font-semibold">Standard USD per 1M tokens</th>
+                          <th className="px-3 py-2.5 font-semibold">{aiUsage?.monthLabel || 'Current month'}</th>
+                          <th className="px-3 py-2.5 font-semibold">All tracked usage</th>
+                          <th className="px-3 py-2.5 font-semibold">Last used</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {aiModels.map((model) => {
+                          const usage = aiUsage?.models?.find((item) => item.modelId === model.id);
+                          const selected = model.id === aiSettings.modelId;
+                          return (
+                            <tr key={model.id} className={selected ? 'bg-primary/5' : 'bg-background'}>
+                              <td className="px-3 py-3 align-top">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-foreground">{model.label}</span>
+                                  {selected && <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">Selected</Badge>}
+                                </div>
+                                <p className="mt-1 text-[11px] text-muted-foreground">{model.costTier} cost</p>
+                              </td>
+                              <td className="px-3 py-3 align-top text-muted-foreground">
+                                <div><span className="font-medium text-foreground">Input</span> {formatAiRate(model.pricing?.inputPerMillion)}</div>
+                                <div><span className="font-medium text-foreground">Cached</span> {formatAiRate(model.pricing?.cachedInputPerMillion)}</div>
+                                {model.pricing?.cacheWritePerMillion !== null && model.pricing?.cacheWritePerMillion !== undefined && (
+                                  <div><span className="font-medium text-foreground">Cache write</span> {formatAiRate(model.pricing.cacheWritePerMillion)}</div>
+                                )}
+                                <div><span className="font-medium text-foreground">Output</span> {formatAiRate(model.pricing?.outputPerMillion)}</div>
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <div className="font-semibold tabular-nums text-foreground">{formatAiUsd(usage?.monthCostUsd)}</div>
+                                <div className="mt-1 text-[11px] text-muted-foreground">{formatAiCalls(usage?.monthCalls)}</div>
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <div className="font-semibold tabular-nums text-foreground">{formatAiUsd(usage?.allTimeCostUsd)}</div>
+                                <div className="mt-1 text-[11px] text-muted-foreground">{formatAiCalls(usage?.allTimeCalls)}</div>
+                              </td>
+                              <td className="px-3 py-3 align-top text-muted-foreground">
+                                {usage?.lastUsedAt ? formatHealthDate(usage.lastUsedAt) : 'Not used'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
+                    Estimates use standard short-context pricing as of {aiModels.find((model) => model.pricing?.asOf)?.pricing?.asOf || 'the displayed pricing date'}.
+                    Tracking starts with this release and is not retroactive. FCOS interpretation cache hits make no OpenAI API call and add $0. OpenAI billing remains authoritative.
+                  </p>
                 </div>
 
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">

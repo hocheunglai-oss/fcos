@@ -25,6 +25,10 @@ import {
 } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
+import {
+  buyerInvoiceEmailSettingsPatch,
+  canonicalizeBuyerInvoiceEmail,
+} from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import {
   dashboardLineItemVolume,
@@ -3111,13 +3115,105 @@ async function loadDashboardAiSettings(client = safeSupabaseAdminClient()) {
   return serializeDashboardAiSettings(data, true);
 }
 
-async function dashboardAiSettingsGet(body, req, accessContext = null) {
-  const { profile } = accessContext || await requireActiveUser(req);
+function emptyDashboardAiUsage(modelId) {
   return {
-    settings: await loadDashboardAiSettings(),
+    modelId,
+    monthCalls: 0,
+    monthCostUsd: 0,
+    monthInputTokens: 0,
+    monthOutputTokens: 0,
+    allTimeCalls: 0,
+    allTimeCostUsd: 0,
+    allTimeInputTokens: 0,
+    allTimeOutputTokens: 0,
+    lastUsedAt: null,
+  };
+}
+
+function dashboardAiUsageNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+async function loadDashboardAiUsage(client = safeSupabaseAdminClient()) {
+  const today = dateOnly(new Date());
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const monthLabel = new Intl.DateTimeFormat('en-GB', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Asia/Hong_Kong',
+  }).format(new Date(`${monthStart}T00:00:00+08:00`));
+  const fallback = {
+    available: false,
+    currency: 'USD',
+    monthStart,
+    monthLabel,
+    models: DASHBOARD_AI_MODELS.map((model) => emptyDashboardAiUsage(model.id)),
+  };
+  if (!client) return fallback;
+  const { data, error } = await client.rpc('dashboard_ai_usage_summary', {
+    p_month_start: monthStart,
+  });
+  if (error || !Array.isArray(data)) return fallback;
+  const byModel = new Map(data.map((row) => [row.model_id, row]));
+  return {
+    ...fallback,
+    available: true,
+    models: DASHBOARD_AI_MODELS.map((model) => {
+      const row = byModel.get(model.id);
+      if (!row) return emptyDashboardAiUsage(model.id);
+      return {
+        modelId: model.id,
+        monthCalls: dashboardAiUsageNumber(row.month_calls),
+        monthCostUsd: dashboardAiUsageNumber(row.month_cost_usd),
+        monthInputTokens: dashboardAiUsageNumber(row.month_input_tokens),
+        monthOutputTokens: dashboardAiUsageNumber(row.month_output_tokens),
+        allTimeCalls: dashboardAiUsageNumber(row.all_time_calls),
+        allTimeCostUsd: dashboardAiUsageNumber(row.all_time_cost_usd),
+        allTimeInputTokens: dashboardAiUsageNumber(row.all_time_input_tokens),
+        allTimeOutputTokens: dashboardAiUsageNumber(row.all_time_output_tokens),
+        lastUsedAt: row.last_used_at || null,
+      };
+    }),
+  };
+}
+
+async function recordDashboardAiUsage(client, profile, usage) {
+  if (!client || !usage?.openAiResponseId || !isAllowedDashboardAiModel(usage.modelId)) return;
+  const { error } = await client
+    .from('dashboard_ai_usage_events')
+    .upsert({
+      openai_response_id: usage.openAiResponseId,
+      model_id: usage.modelId,
+      service_tier: usage.serviceTier,
+      input_tokens: usage.inputTokens,
+      cached_input_tokens: usage.cachedInputTokens,
+      cache_write_input_tokens: usage.cacheWriteInputTokens,
+      output_tokens: usage.outputTokens,
+      reasoning_tokens: usage.reasoningTokens,
+      total_tokens: usage.totalTokens,
+      estimated_cost_usd: usage.estimatedCostUsd,
+      pricing_as_of: usage.pricingAsOf,
+      actor_id: profile?.id || null,
+    }, {
+      onConflict: 'openai_response_id',
+      ignoreDuplicates: true,
+    });
+  if (error) throw error;
+}
+
+async function dashboardAiSettingsGet(body, req, accessContext = null) {
+  const context = accessContext || await requireActiveUser(req);
+  const [settings, usage] = await Promise.all([
+    loadDashboardAiSettings(context.client),
+    loadDashboardAiUsage(context.client),
+  ]);
+  return {
+    settings,
     models: DASHBOARD_AI_MODELS,
+    usage,
     capabilities: {
-      canManageSettings: profile.user_type === 'administrator',
+      canManageSettings: context.profile.user_type === 'administrator',
     },
   };
 }
@@ -3180,6 +3276,7 @@ async function dashboardAiSettingsSave(body, req) {
   return {
     settings: serializeDashboardAiSettings(data, true),
     models: DASHBOARD_AI_MODELS,
+    usage: await loadDashboardAiUsage(client),
     capabilities: { canManageSettings: true },
   };
 }
@@ -3242,6 +3339,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
       today: dateOnly(new Date()),
       safetyIdentifier,
       signal: AbortSignal.timeout(15_000),
+      onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
     }),
   });
   const interpretation = interpretationResult.value;
@@ -3785,7 +3883,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: ['bt@cosulich.com.hk'],
-  cc: ['lousia@cosulich.com.hk', 'laureen@cosulich.com.hk'],
+  cc: ['louisa@cosulich.com.hk', 'laureen@cosulich.com.hk'],
   daysAhead: 7,
   subject: 'Outstanding Buyer Invoices Report',
   intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
@@ -4778,9 +4876,9 @@ function formatStemName(stem) {
 }
 
 function parseEmailList(value, fallback = []) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (Array.isArray(value)) return value.map(canonicalizeBuyerInvoiceEmail).filter(Boolean);
   if (typeof value !== 'string') return fallback;
-  const parsed = value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+  const parsed = value.split(/[,\n;]/).map(canonicalizeBuyerInvoiceEmail).filter(Boolean);
   return parsed.length ? parsed : fallback;
 }
 
@@ -9985,11 +10083,12 @@ function buyerInvoiceEmailSettings(input = {}) {
   };
 }
 
-function serializeBuyerInvoiceEmailSettingsRow(row, fallbackSettings = null) {
+function serializeBuyerInvoiceEmailSettingsRow(row, fallbackSettings = null, storageAvailable = true) {
   const settings = normalizeBuyerInvoiceEmailSettings(row?.settings || fallbackSettings || {});
   return {
     settings,
     meta: {
+      storageAvailable,
       lastPreviewAt: row?.last_preview_at || null,
       lastPreviewRowCount: row?.last_preview_row_count ?? null,
       lastSentAt: row?.last_sent_at || null,
@@ -10004,7 +10103,7 @@ function serializeBuyerInvoiceEmailSettingsRow(row, fallbackSettings = null) {
 
 async function loadStoredBuyerInvoiceEmailSettings() {
   const client = safeSupabaseAdminClient();
-  if (!client) return serializeBuyerInvoiceEmailSettingsRow(null);
+  if (!client) return serializeBuyerInvoiceEmailSettingsRow(null, null, false);
   try {
     const { data, error } = await client
       .from('buyer_invoice_email_settings')
@@ -10015,24 +10114,26 @@ async function loadStoredBuyerInvoiceEmailSettings() {
     return serializeBuyerInvoiceEmailSettingsRow(data);
   } catch (error) {
     console.error('Failed to load buyer invoice email settings', error.message);
-    return serializeBuyerInvoiceEmailSettingsRow(null);
+    return serializeBuyerInvoiceEmailSettingsRow(null, null, false);
   }
 }
 
 async function saveStoredBuyerInvoiceEmailSettings(settings, profile = null) {
   const client = supabaseAdminClient();
-  const normalized = normalizeBuyerInvoiceEmailSettings(settings);
-  const nowIso = new Date().toISOString();
+  const inputPatch = buyerInvoiceEmailSettingsPatch(settings);
+  const normalized = normalizeBuyerInvoiceEmailSettings(inputPatch);
+  const settingsPatch = Object.fromEntries(
+    Object.keys(inputPatch).map((key) => [key, normalized[key]]),
+  );
+  if (!Object.keys(settingsPatch).length) {
+    throw appError('No recognized buyer invoice email settings were supplied.', 400);
+  }
   const { data, error } = await client
-    .from('buyer_invoice_email_settings')
-    .upsert({
-      id: 'default',
-      settings: normalized,
-      updated_by: profile?.id || null,
-      updated_by_email: profile?.email || null,
-      updated_at: nowIso,
-    }, { onConflict: 'id' })
-    .select('id,settings,last_preview_at,last_preview_row_count,last_sent_at,last_sent_row_count,last_error,updated_by_email,updated_at')
+    .rpc('merge_buyer_invoice_email_settings', {
+      p_settings_patch: settingsPatch,
+      p_actor_id: profile?.id || null,
+      p_actor_email: profile?.email || null,
+    })
     .single();
   if (error) throw error;
   return serializeBuyerInvoiceEmailSettingsRow(data);
@@ -10043,7 +10144,7 @@ async function updateBuyerInvoiceEmailSettingsMeta(patch = {}) {
   if (!client) return;
   const { error } = await client
     .from('buyer_invoice_email_settings')
-    .upsert({ id: 'default', ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+    .upsert({ id: 'default', ...patch }, { onConflict: 'id' });
   if (error) console.error('Failed to update buyer invoice email settings metadata', error.message);
 }
 
@@ -10555,6 +10656,9 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
 
 async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext = null) {
   const stored = await loadStoredBuyerInvoiceEmailSettings();
+  if (stored.meta.storageAvailable !== true) {
+    throw appError('Buyer Invoice email settings are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
+  }
   const settings = {
     ...buyerInvoiceEmailSettings(stored.settings),
     hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
@@ -10886,6 +10990,9 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
   const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl']
     .some((key) => Object.prototype.hasOwnProperty.call(body, key));
   const stored = hasExplicitSettings ? null : await loadStoredBuyerInvoiceEmailSettings();
+  if (stored && stored.meta.storageAvailable !== true) {
+    throw appError('Buyer Invoice email settings are temporarily unavailable. Report sending is disabled until storage is restored.', 503);
+  }
   const explicitSettings = hasExplicitSettings ? buyerInvoiceEmailSettings(body.settings || body) : null;
   if (explicitSettings && (body.settings || body).hasBuyerTraderFilter === false) explicitSettings.hasBuyerTraderFilter = false;
   const settings = hasExplicitSettings
@@ -10971,6 +11078,9 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
     };
   }
   const stored = await loadStoredBuyerInvoiceEmailSettings();
+  if (stored.meta.storageAvailable !== true) {
+    throw appError('Buyer Invoice email settings are temporarily unavailable. Scheduled report sending is disabled until storage is restored.', 503);
+  }
   const settings = {
     ...buyerInvoiceEmailSettings(stored.settings),
     hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,

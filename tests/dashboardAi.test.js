@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   DASHBOARD_AI_MODELS,
   DEFAULT_DASHBOARD_AI_MODEL,
   buildSelectedDashboardDateWhere,
   compileDashboardAiWhere,
   dashboardAiModel,
+  dashboardAiUsageFromResponse,
   interpretDashboardAiSearch,
   isAllowedDashboardAiModel,
   normalizeDashboardAiPrompt,
@@ -80,6 +82,11 @@ const schema = {
   },
 };
 
+const usageMigrationUrl = new URL(
+  '../supabase/migrations/20260730190759_dashboard_ai_usage_tracking.sql',
+  import.meta.url,
+);
+
 function readyInterpretation(overrides = {}) {
   return {
     version: 1,
@@ -114,7 +121,47 @@ test('uses GPT-5 mini as the allowed default while keeping the model list server
   assert.equal(dashboardAiModel(DEFAULT_DASHBOARD_AI_MODEL).recommended, true);
   assert.equal(isAllowedDashboardAiModel(DEFAULT_DASHBOARD_AI_MODEL), true);
   assert.equal(isAllowedDashboardAiModel('gpt-5-mini; DROP TABLE'), false);
-  assert.ok(DASHBOARD_AI_MODELS.every((model) => model.id && model.label && model.costTier));
+  assert.ok(DASHBOARD_AI_MODELS.every((model) => (
+    model.id
+    && model.label
+    && model.costTier
+    && model.pricing?.currency === 'USD'
+    && model.pricing?.unitTokens === 1_000_000
+  )));
+});
+
+test('calculates standard API cost from OpenAI token usage by interpretation model', () => {
+  const usage = dashboardAiUsageFromResponse({
+    id: 'resp_usage_1',
+    service_tier: 'default',
+    usage: {
+      input_tokens: 1000,
+      input_tokens_details: {
+        cached_tokens: 200,
+        cache_write_tokens: 100,
+      },
+      output_tokens: 100,
+      output_tokens_details: {
+        reasoning_tokens: 40,
+      },
+      total_tokens: 1100,
+    },
+  }, 'gpt-5.6-luna');
+
+  assert.deepEqual(usage, {
+    openAiResponseId: 'resp_usage_1',
+    modelId: 'gpt-5.6-luna',
+    serviceTier: 'default',
+    inputTokens: 1000,
+    cachedInputTokens: 200,
+    cacheWriteInputTokens: 100,
+    uncachedInputTokens: 700,
+    outputTokens: 100,
+    reasoningTokens: 40,
+    totalTokens: 1100,
+    estimatedCostUsd: 0.000289,
+    pricingAsOf: '2026-07-31',
+  });
 });
 
 test('normalizes bounded prompts and rejects empty or oversized input', () => {
@@ -249,6 +296,7 @@ test('validates clarification output before Salesforce can be queried', () => {
 test('calls Responses API with structured output and sends no Salesforce record payload', async () => {
   const output = readyInterpretation();
   let requestBody;
+  let recordedUsage;
   const fetchImpl = async (url, options) => {
     assert.equal(url, 'https://api.openai.com/v1/responses');
     requestBody = JSON.parse(options.body);
@@ -256,6 +304,15 @@ test('calls Responses API with structured output and sends no Salesforce record 
       ok: true,
       async json() {
         return {
+          id: 'resp_interpretation_1',
+          service_tier: 'default',
+          usage: {
+            input_tokens: 500,
+            input_tokens_details: { cached_tokens: 100 },
+            output_tokens: 50,
+            output_tokens_details: { reasoning_tokens: 10 },
+            total_tokens: 550,
+          },
           output: [{
             type: 'message',
             content: [{ type: 'output_text', text: JSON.stringify(output) }],
@@ -273,11 +330,15 @@ test('calls Responses API with structured output and sends no Salesforce record 
     safetyIdentifier: 'safe-user-hash',
     apiKey: 'sk-test-key',
     fetchImpl,
+    onUsage: async (usage) => {
+      recordedUsage = usage;
+    },
   });
 
   assert.equal(interpreted.status, 'ready');
   assert.equal(requestBody.model, DEFAULT_DASHBOARD_AI_MODEL);
   assert.equal(requestBody.store, false);
+  assert.equal(requestBody.service_tier, 'default');
   assert.deepEqual(requestBody.reasoning, { effort: 'minimal' });
   assert.equal(requestBody.text.format.type, 'json_schema');
   assert.equal(requestBody.text.format.strict, true);
@@ -286,6 +347,12 @@ test('calls Responses API with structured output and sends no Salesforce record 
   assert.match(requestBody.input[0].content[0].text, /all history controls only dateScope\.mode=all_time/i);
   assert.match(requestBody.input[0].content[0].text, /Generic words such as stem, stems, record, and records identify the dataset/);
   assert.doesNotMatch(JSON.stringify(requestBody), /0012x|Salesforce record payload|Total_Invoice_Amount__c/);
+  assert.equal(recordedUsage.openAiResponseId, 'resp_interpretation_1');
+  assert.equal(recordedUsage.modelId, DEFAULT_DASHBOARD_AI_MODEL);
+  assert.equal(recordedUsage.inputTokens, 500);
+  assert.equal(recordedUsage.cachedInputTokens, 100);
+  assert.equal(recordedUsage.outputTokens, 50);
+  assert.equal(recordedUsage.estimatedCostUsd, 0.0002025);
 });
 
 test('rejects malformed structured output and upstream unavailability', async () => {
@@ -305,4 +372,27 @@ test('rejects malformed structured output and upstream unavailability', async ()
     apiKey: 'sk-test-key',
     fetchImpl: async () => ({ ok: false }),
   }), /temporarily unavailable/);
+});
+
+test('keeps Dashboard AI usage storage service-only and exposes an invoker summary', async () => {
+  const sql = await readFile(usageMigrationUrl, 'utf8');
+  assert.match(sql, /create table if not exists public\.dashboard_ai_usage_events/i);
+  assert.match(sql, /openai_response_id text not null unique/i);
+  assert.match(sql, /actor_id uuid references public\.user_profiles\(id\) on delete set null/i);
+  assert.match(sql, /alter table public\.dashboard_ai_usage_events enable row level security/i);
+  assert.match(
+    sql,
+    /revoke all on table public\.dashboard_ai_usage_events from public, anon, authenticated/i,
+  );
+  assert.match(sql, /grant all on table public\.dashboard_ai_usage_events to service_role/i);
+  assert.match(sql, /create or replace function public\.dashboard_ai_usage_summary/i);
+  assert.match(sql, /security invoker/i);
+  assert.match(
+    sql,
+    /revoke all on function public\.dashboard_ai_usage_summary\(date\) from public, anon, authenticated/i,
+  );
+  assert.match(
+    sql,
+    /grant execute on function public\.dashboard_ai_usage_summary\(date\) to service_role/i,
+  );
 });

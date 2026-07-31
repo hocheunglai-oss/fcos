@@ -40,6 +40,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
+import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
@@ -55,7 +56,7 @@ const DEFAULT_EMAIL_SETTINGS = {
   enabled: true,
   from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: 'bt@cosulich.com.hk',
-  cc: 'lousia@cosulich.com.hk, laureen@cosulich.com.hk',
+  cc: 'louisa@cosulich.com.hk, laureen@cosulich.com.hk',
   daysAhead: 7,
   subject: 'Outstanding Buyer Invoices Report',
   intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
@@ -404,13 +405,13 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
     .replace(/To\s+\{\{\s*buyerName\s*\}\}/i, 'To {{primaryRecipientName}}');
   return {
     ...merged,
-    to: arrayToInput(merged.to),
-    cc: arrayToInput(merged.cc),
+    to: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.to)),
+    cc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.cc)),
     sendTimes: arrayToInput(merged.sendTimes),
     weekdays: Array.isArray(merged.weekdays) ? merged.weekdays : WEEKDAYS,
     intro: richTemplateValue(merged.intro, DEFAULT_EMAIL_SETTINGS.intro),
-    paymentReminderCc: arrayToInput(merged.paymentReminderCc),
-    paymentReminderBcc: arrayToInput(merged.paymentReminderBcc),
+    paymentReminderCc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.paymentReminderCc)),
+    paymentReminderBcc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.paymentReminderBcc)),
     paymentReminderBody: richTemplateValue(paymentReminderBody),
   };
 }
@@ -1605,17 +1606,16 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     setError(null);
     const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', {
       settings: {
-        ...(data?.settings || {}),
-	        paymentReminderSubject: form.subject,
-	        paymentReminderCc: form.templateCc || '',
-	        paymentReminderBcc: form.templateBcc || '',
-	        paymentReminderBody: form.body,
-	      },
-	    });
+        paymentReminderSubject: form.subject,
+        paymentReminderCc: form.templateCc || '',
+        paymentReminderBcc: form.templateBcc || '',
+        paymentReminderBody: form.body,
+      },
+    });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
-	      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
+      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
       clearDraft(draftKey);
       setTemplateMessage('Payment reminder template saved.');
       setTemplateEditing(false);

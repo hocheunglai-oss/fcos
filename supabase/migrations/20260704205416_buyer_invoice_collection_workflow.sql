@@ -95,7 +95,7 @@ values (
     "enabled": true,
     "from": "Fratelli Cosulich <info@cosulich.com.hk>",
     "to": ["bt@cosulich.com.hk"],
-    "cc": ["lousia@cosulich.com.hk", "laureen@cosulich.com.hk"],
+    "cc": ["louisa@cosulich.com.hk", "laureen@cosulich.com.hk"],
     "daysAhead": 7,
     "subject": "Outstanding Buyer Invoices Report",
     "intro": "Outstanding Buyer Invoices\n\nPlease find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.\n\nReport window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.",

@@ -1,6 +1,23 @@
 import { z } from 'zod';
 
 export const DEFAULT_DASHBOARD_AI_MODEL = 'gpt-5-mini-2025-08-07';
+export const DASHBOARD_AI_PRICING_AS_OF = '2026-07-31';
+export const DASHBOARD_AI_PRICING_SOURCE = 'https://developers.openai.com/api/docs/pricing';
+
+function pricing(inputPerMillion, cachedInputPerMillion, outputPerMillion, cacheWritePerMillion = null) {
+  return Object.freeze({
+    currency: 'USD',
+    unitTokens: 1_000_000,
+    serviceTier: 'standard',
+    context: 'short',
+    inputPerMillion,
+    cachedInputPerMillion,
+    cacheWritePerMillion,
+    outputPerMillion,
+    asOf: DASHBOARD_AI_PRICING_AS_OF,
+    sourceUrl: DASHBOARD_AI_PRICING_SOURCE,
+  });
+}
 
 export const DASHBOARD_AI_MODELS = Object.freeze([
   {
@@ -8,6 +25,7 @@ export const DASHBOARD_AI_MODELS = Object.freeze([
     label: 'GPT-4o mini',
     description: 'Lowest cost. Suitable for straightforward searches.',
     costTier: 'Lowest',
+    pricing: pricing(0.15, 0.075, 0.60),
   },
   {
     id: DEFAULT_DASHBOARD_AI_MODEL,
@@ -15,24 +33,28 @@ export const DASHBOARD_AI_MODELS = Object.freeze([
     description: 'Recommended balance of interpretation accuracy, speed, and cost.',
     costTier: 'Low',
     recommended: true,
+    pricing: pricing(0.25, 0.025, 2.00),
   },
   {
     id: 'gpt-5.6-luna',
     label: 'GPT-5.6 Luna',
     description: 'Stronger interpretation for complex business searches.',
     costTier: 'Medium',
+    pricing: pricing(0.20, 0.02, 1.20, 0.25),
   },
   {
     id: 'gpt-5.6-terra',
     label: 'GPT-5.6 Terra',
     description: 'Higher accuracy for difficult multi-condition searches.',
     costTier: 'High',
+    pricing: pricing(2.00, 0.20, 12.00, 2.50),
   },
   {
     id: 'gpt-5.6-sol',
     label: 'GPT-5.6 Sol',
     description: 'Highest capability and cost. Usually unnecessary for record search.',
     costTier: 'Highest',
+    pricing: pricing(5.00, 0.50, 30.00, 6.25),
   },
 ]);
 
@@ -274,6 +296,57 @@ function sqlDate(value) {
 export function dashboardAiModel(modelId) {
   return DASHBOARD_AI_MODELS.find((model) => model.id === modelId)
     || DASHBOARD_AI_MODELS.find((model) => model.id === DEFAULT_DASHBOARD_AI_MODEL);
+}
+
+function nonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function roundUsd(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 1e12) / 1e12;
+}
+
+export function dashboardAiUsageFromResponse(response, requestedModelId = DEFAULT_DASHBOARD_AI_MODEL) {
+  const model = dashboardAiModel(requestedModelId);
+  const inputTokens = nonNegativeInteger(response?.usage?.input_tokens);
+  const reportedCachedTokens = nonNegativeInteger(response?.usage?.input_tokens_details?.cached_tokens);
+  const reportedCacheWriteTokens = nonNegativeInteger(response?.usage?.input_tokens_details?.cache_write_tokens);
+  const cachedInputTokens = Math.min(inputTokens, reportedCachedTokens);
+  const cacheWriteInputTokens = Math.min(
+    Math.max(0, inputTokens - cachedInputTokens),
+    reportedCacheWriteTokens,
+  );
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens);
+  const outputTokens = nonNegativeInteger(response?.usage?.output_tokens);
+  const reasoningTokens = Math.min(
+    outputTokens,
+    nonNegativeInteger(response?.usage?.output_tokens_details?.reasoning_tokens),
+  );
+  const totalTokens = nonNegativeInteger(response?.usage?.total_tokens) || inputTokens + outputTokens;
+  const unit = model.pricing.unitTokens;
+  const cacheWriteRate = model.pricing.cacheWritePerMillion ?? model.pricing.inputPerMillion;
+  const estimatedCostUsd = roundUsd(
+    (uncachedInputTokens * model.pricing.inputPerMillion
+      + cachedInputTokens * model.pricing.cachedInputPerMillion
+      + cacheWriteInputTokens * cacheWriteRate
+      + outputTokens * model.pricing.outputPerMillion) / unit,
+  );
+
+  return {
+    openAiResponseId: String(response?.id || '').trim().slice(0, 255) || null,
+    modelId: model.id,
+    serviceTier: String(response?.service_tier || 'default').trim().slice(0, 32) || 'default',
+    inputTokens,
+    cachedInputTokens,
+    cacheWriteInputTokens,
+    uncachedInputTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens,
+    estimatedCostUsd,
+    pricingAsOf: model.pricing.asOf,
+  };
 }
 
 export function isAllowedDashboardAiModel(modelId) {
@@ -704,6 +777,7 @@ export async function interpretDashboardAiSearch({
   apiKey = process.env.OPENAI_API_KEY,
   fetchImpl = fetch,
   signal,
+  onUsage,
 } = {}) {
   const normalizedPrompt = normalizeDashboardAiPrompt(prompt);
   if (!isAllowedDashboardAiModel(modelId)) {
@@ -727,6 +801,7 @@ export async function interpretDashboardAiSearch({
       body: JSON.stringify({
         model: modelId,
         store: false,
+        service_tier: 'default',
         max_output_tokens: 1500,
         ...(modelId === DEFAULT_DASHBOARD_AI_MODEL
           ? { reasoning: { effort: 'minimal' } }
@@ -765,6 +840,13 @@ export async function interpretDashboardAiSearch({
     throw dashboardAiError('AI interpretation is temporarily unavailable.', 503, 'DASHBOARD_AI_UNAVAILABLE');
   }
   const payload = await response.json().catch(() => null);
+  if (payload && typeof onUsage === 'function') {
+    try {
+      await onUsage(dashboardAiUsageFromResponse(payload, modelId));
+    } catch {
+      console.warn('[dashboard-ai] Usage tracking is temporarily unavailable.');
+    }
+  }
   const text = extractOpenAiResponseText(payload);
   if (!text) {
     throw dashboardAiError('The AI search did not return an interpretation.', 502, 'DASHBOARD_AI_RESPONSE_INVALID');
