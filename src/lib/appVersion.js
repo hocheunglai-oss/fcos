@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.53';
+export const APP_VERSION = '2.0.54';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.54',
+    releasedAt: '2026-07-31',
+    title: 'FCOS Updates sender identity',
+    changes: [
+      'Changed FCOS update announcements to use Vincent Lee <vincent@cosulich.com.hk> as their dedicated From identity without changing other FCOS email workflows.',
+    ],
+  },
   {
     version: '2.0.53',
     releasedAt: '2026-07-31',

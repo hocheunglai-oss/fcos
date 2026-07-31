@@ -3,7 +3,7 @@ import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
 import {
   createSmtpTransport,
   sendWithSmtp,
-  smtpAuthenticatedFromAddress,
+  smtpAddressParts,
 } from './_smtp.js';
 
 export const FCOS_UPDATE_CATEGORIES = Object.freeze([
@@ -46,6 +46,32 @@ function throwUpdateSchemaError(error) {
 
 function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength);
+}
+
+export function fcosUpdateMailConfig(env = process.env) {
+  const smtp = {
+    host: env.FCOS_UPDATE_SMTP_HOST || env.SMTP_HOST,
+    port: env.FCOS_UPDATE_SMTP_PORT || env.SMTP_PORT,
+    user: env.FCOS_UPDATE_SMTP_USER || env.SMTP_USER,
+    password: env.FCOS_UPDATE_SMTP_PASSWORD || env.SMTP_PASSWORD,
+    secure: env.FCOS_UPDATE_SMTP_SECURE ?? env.SMTP_SECURE,
+  };
+  const authenticatedAddress = smtpAddressParts(smtp.user).email.toLowerCase();
+  const senderAddress = smtpAddressParts(env.FCOS_UPDATE_FROM_EMAIL || smtp.user).email.toLowerCase();
+  const senderName = cleanText(env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100);
+
+  return {
+    smtp,
+    senderName,
+    senderAddress,
+    authenticatedAddress,
+    from: senderAddress ? `${senderName} <${senderAddress}>` : '',
+    requiresSendAs: Boolean(
+      authenticatedAddress
+      && senderAddress
+      && authenticatedAddress !== senderAddress
+    ),
+  };
 }
 
 function validateRequiredText(value, label, minLength, maxLength) {
@@ -447,6 +473,7 @@ const BATCH_SELECT = [
 ].join(',');
 
 export async function listFcosUpdates({ client, profile, sync = true }) {
+  const mailConfig = fcosUpdateMailConfig();
   let syncResult = null;
   if (sync) syncResult = await syncFcosUpdateItems({ client, profile });
   await recoverInterruptedFcosUpdateDeliveries(client, profile);
@@ -498,8 +525,9 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     })),
     activeRecipientCount: Number(recipientsResult.data?.length || 0),
     sender: {
-      name: cleanText(process.env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100),
-      address: String(process.env.SMTP_USER || '').trim().toLowerCase(),
+      name: mailConfig.senderName,
+      address: mailConfig.senderAddress,
+      requiresSendAs: mailConfig.requiresSendAs,
     },
     authority: {
       canPrepare: profile.user_type === 'administrator',
@@ -1048,18 +1076,21 @@ async function processFcosUpdateDeliveries({
   profile,
   batch,
   transporter,
+  mailConfig,
   statuses,
 }) {
   const publicUrl = String(process.env.FCOS_PUBLIC_URL || '').trim();
   if (!publicUrl) {
     throw updateError('FCOS_PUBLIC_URL is required before update emails can be sent.', 503, 'FCOS_PUBLIC_URL_MISSING');
   }
-  const senderName = cleanText(process.env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100);
-  const from = smtpAuthenticatedFromAddress(
-    { user: process.env.SMTP_USER },
-    `${senderName} <${process.env.SMTP_USER || ''}>`,
-  );
-  if (!from) throw updateError('SMTP_USER is required before update emails can be sent.', 503, 'SMTP_SENDER_MISSING');
+  const from = mailConfig?.from;
+  if (!from) {
+    throw updateError(
+      'FCOS_UPDATE_FROM_EMAIL or an authenticated FCOS Updates SMTP user is required before update emails can be sent.',
+      503,
+      'SMTP_SENDER_MISSING',
+    );
+  }
   const message = buildFcosUpdateEmail(batch, publicUrl);
   const { count: eligibleCount, error: eligibleError } = await client
     .from('fcos_update_deliveries')
@@ -1160,7 +1191,8 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       'RECIPIENT_COUNT_CHANGED',
     );
   }
-  const transporter = await createSmtpTransport({}, { pool: true, maxConnections: 3, maxMessages: 100 });
+  const mailConfig = fcosUpdateMailConfig();
+  const transporter = await createSmtpTransport(mailConfig.smtp, { pool: true, maxConnections: 3, maxMessages: 100 });
   let sendingStarted = false;
   try {
     const { error } = await client.rpc('start_fcos_update_saved_delivery', {
@@ -1185,6 +1217,7 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       profile,
       batch: sendingBatch,
       transporter,
+      mailConfig,
       statuses: ['Pending'],
     });
     return { batch: serializeBatch(await loadBatch(client, batch.id)), deliverySummary: summary };
@@ -1211,7 +1244,8 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
   const eligible = (batch.fcos_update_deliveries || []).filter((delivery) => statuses.includes(delivery.status));
   if (!eligible.length) throw updateError('No eligible failed deliveries remain.');
 
-  const transporter = await createSmtpTransport({}, { pool: true, maxConnections: 3, maxMessages: 100 });
+  const mailConfig = fcosUpdateMailConfig();
+  const transporter = await createSmtpTransport(mailConfig.smtp, { pool: true, maxConnections: 3, maxMessages: 100 });
   let retryStarted = false;
   try {
     const { data: retryingBatch, error: batchError } = await client
@@ -1234,6 +1268,7 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
       profile,
       batch,
       transporter,
+      mailConfig,
       statuses,
     });
     await writeEvent(client, {

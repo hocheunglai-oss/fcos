@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildFcosUpdateEmail,
+  fcosUpdateMailConfig,
   fcosUpdateSourceCandidates,
   inferFcosUpdateCategory,
 } from '../api/_fcosUpdates.js';
@@ -71,6 +72,38 @@ test('shared SMTP sender always resolves to the authenticated mailbox', () => {
   );
 });
 
+test('FCOS Updates supports a strict module-specific From address', () => {
+  const config = fcosUpdateMailConfig({
+    SMTP_HOST: 'smtp.office365.com',
+    SMTP_USER: 'louisa@example.com',
+    SMTP_PASSWORD: 'shared-secret',
+    FCOS_UPDATE_SENDER_NAME: 'Vincent Lee',
+    FCOS_UPDATE_FROM_EMAIL: 'vincent@example.com',
+  });
+
+  assert.equal(config.from, 'Vincent Lee <vincent@example.com>');
+  assert.equal(config.senderAddress, 'vincent@example.com');
+  assert.equal(config.authenticatedAddress, 'louisa@example.com');
+  assert.equal(config.requiresSendAs, true);
+  assert.equal(config.smtp.user, 'louisa@example.com');
+  assert.equal(config.smtp.password, 'shared-secret');
+});
+
+test('FCOS Updates can authenticate through dedicated SMTP credentials', () => {
+  const config = fcosUpdateMailConfig({
+    SMTP_USER: 'louisa@example.com',
+    SMTP_PASSWORD: 'shared-secret',
+    FCOS_UPDATE_SMTP_USER: 'vincent@example.com',
+    FCOS_UPDATE_SMTP_PASSWORD: 'vincent-secret',
+    FCOS_UPDATE_SENDER_NAME: 'Vincent Lee',
+  });
+
+  assert.equal(config.from, 'Vincent Lee <vincent@example.com>');
+  assert.equal(config.requiresSendAs, false);
+  assert.equal(config.smtp.user, 'vincent@example.com');
+  assert.equal(config.smtp.password, 'vincent-secret');
+});
+
 test('FCOS update migration creates service-only workflow and General Manager controls', async () => {
   const sql = await readFile(
     new URL('../supabase/migrations/20260731044413_admin_controlled_fcos_update_emails.sql', import.meta.url),
@@ -119,7 +152,9 @@ test('FCOS update workflow protects reviewed revisions and interrupted delivery'
   assert.match(server, /rpc\('finalize_fcos_update_delivery'/);
   assert.match(server, /const statuses = includeUncertain \? \['Uncertain'\] : \['Failed'\]/);
   assert.match(server, /result\.accepted\.length !== 1/);
-  assert.match(server, /sender:[\s\S]*FCOS_UPDATE_SENDER_NAME[\s\S]*SMTP_USER/);
+  assert.match(server, /sender:[\s\S]*mailConfig\.senderName[\s\S]*mailConfig\.senderAddress/);
+  assert.match(server, /FCOS_UPDATE_FROM_EMAIL/);
+  assert.match(server, /createSmtpTransport\(mailConfig\.smtp/);
 
   assert.match(panel, /const batchIsDirty = useMemo/);
   assert.match(panel, /!batchDraft\.id \|\| batchIsDirty \? await saveBatch\(\) : batchDraft/);
