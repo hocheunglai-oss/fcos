@@ -572,7 +572,7 @@ export default function FcosUpdatesPanel() {
               Review release notes from {formatDate(model.settings?.backfillStart)} onward and email active FCOS users.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <Badge variant="outline" className={canControl
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-slate-200 bg-slate-50 text-slate-600'}
@@ -612,8 +612,8 @@ export default function FcosUpdatesPanel() {
             </ViewButton>
           ))}
         </div>
-        <div className="flex flex-1 justify-end gap-2">
-          <div className="relative w-full max-w-sm">
+        <div className="flex min-w-0 w-full flex-wrap justify-end gap-2 lg:w-auto lg:flex-1">
+          <div className="relative min-w-[180px] flex-1 lg:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               value={keyword}
@@ -623,7 +623,7 @@ export default function FcosUpdatesPanel() {
             />
           </div>
           {view === 'pending' && (
-            <Button size="sm" disabled={!selectedIds.length} onClick={openNewBatch}>
+            <Button size="sm" className="shrink-0" disabled={!selectedIds.length} onClick={openNewBatch}>
               <Megaphone className="h-4 w-4" />
               Create email ({selectedIds.length})
             </Button>

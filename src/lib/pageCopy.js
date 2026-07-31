@@ -67,7 +67,7 @@ const PAGE_COPY = {
   'Admin Control': {
     eyebrow: 'Access',
     title: 'Admin Control',
-    description: 'Manage users, roles, and page access.',
+    description: 'Manage users, access rights, and controlled FCOS update communications.',
   },
 };
 

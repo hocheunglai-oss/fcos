@@ -848,18 +848,16 @@ export default function AdminControl() {
 
         <div className="min-h-[calc(100vh-260px)]">
           <aside className="min-h-0">
-            <div className="flex h-12 items-center justify-between border-b border-border px-4">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
-                <p className="text-xs text-muted-foreground">
-                  {activeSection === 'users'
-                    ? `${users.length} accounts`
-                    : activeSection === 'types'
-                      ? `${userTypes.length} types`
-                      : 'Release email review and delivery'}
-                </p>
+            {activeSection !== 'updates' && (
+              <div className="flex h-12 items-center justify-between border-b border-border px-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {activeSection === 'users' ? `${users.length} accounts` : `${userTypes.length} types`}
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
 
             {activeSection === 'updates' ? (
               <FcosUpdatesPanel />
