@@ -6,6 +6,7 @@ import {
   sendWithSmtp,
   smtpAddressParts,
 } from './_smtp.js';
+import { createMicrosoftGraphMailTransport } from './_microsoftGraphMail.js';
 
 export const FCOS_UPDATE_CATEGORIES = Object.freeze([
   { id: 'new_feature', label: 'New Feature' },
@@ -24,6 +25,7 @@ export const FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE =
   'Microsoft 365 rejected the configured FCOS Updates sender. Verify the authenticated mailbox has Send As permission, then wait for Exchange permission propagation and SMTP throttling to clear before retrying.';
 
 export function fcosUpdateSenderFailureMessage(error) {
+  if (error?.fcosUpdateGlobal) return cleanText(error.message, 500);
   return isSmtpSendAsDenied(error) ? FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE : '';
 }
 
@@ -64,18 +66,46 @@ export function fcosUpdateMailConfig(env = process.env) {
     password: env.FCOS_UPDATE_SMTP_PASSWORD || env.SMTP_PASSWORD,
     secure: env.FCOS_UPDATE_SMTP_SECURE ?? env.SMTP_SECURE,
   };
-  const authenticatedAddress = smtpAddressParts(smtp.user).email.toLowerCase();
-  const senderAddress = smtpAddressParts(env.FCOS_UPDATE_FROM_EMAIL || smtp.user).email.toLowerCase();
+  const graph = {
+    tenantId: String(env.FCOS_UPDATE_MICROSOFT_TENANT_ID || '').trim(),
+    clientId: String(env.FCOS_UPDATE_MICROSOFT_CLIENT_ID || '').trim(),
+    mailbox: smtpAddressParts(env.FCOS_UPDATE_MICROSOFT_MAILBOX).email.toLowerCase(),
+  };
+  const requestedTransport = String(env.FCOS_UPDATE_TRANSPORT || '').trim().toLowerCase();
+  const hasGraphValue = Boolean(graph.tenantId || graph.clientId || graph.mailbox);
+  const useGraph = requestedTransport
+    ? requestedTransport === 'microsoft_graph'
+    : hasGraphValue;
+  const graphConfigured = Boolean(graph.tenantId && graph.clientId && graph.mailbox);
+  const deliveryMethod = useGraph ? 'microsoft_graph_oidc' : 'smtp';
+  const authenticatedAddress = useGraph
+    ? graph.mailbox
+    : smtpAddressParts(smtp.user).email.toLowerCase();
+  const senderAddress = smtpAddressParts(
+    env.FCOS_UPDATE_FROM_EMAIL || (useGraph ? graph.mailbox : smtp.user),
+  ).email.toLowerCase();
   const senderName = cleanText(env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100);
+  let configurationIssue = '';
+  if (requestedTransport && !['microsoft_graph', 'smtp'].includes(requestedTransport)) {
+    configurationIssue = 'FCOS_UPDATE_TRANSPORT must be microsoft_graph or smtp.';
+  } else if (useGraph && !graphConfigured) {
+    configurationIssue = 'Complete the FCOS Updates Microsoft tenant, client, and mailbox configuration.';
+  } else if (useGraph && senderAddress !== graph.mailbox) {
+    configurationIssue = 'The FCOS Updates From address must match its Microsoft sender mailbox.';
+  }
 
   return {
     smtp,
+    graph,
+    deliveryMethod,
+    configurationIssue,
     senderName,
     senderAddress,
     authenticatedAddress,
     from: senderAddress ? `${senderName} <${senderAddress}>` : '',
     requiresSendAs: Boolean(
-      authenticatedAddress
+      deliveryMethod === 'smtp'
+      && authenticatedAddress
       && senderAddress
       && authenticatedAddress !== senderAddress
     ),
@@ -535,6 +565,9 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     sender: {
       name: mailConfig.senderName,
       address: mailConfig.senderAddress,
+      authenticatedAddress: mailConfig.authenticatedAddress,
+      deliveryMethod: mailConfig.deliveryMethod,
+      configurationIssue: mailConfig.configurationIssue,
       requiresSendAs: mailConfig.requiresSendAs,
     },
     authority: {
@@ -1083,7 +1116,7 @@ async function processFcosUpdateDeliveries({
   client,
   profile,
   batch,
-  transporter,
+  mailTransport,
   mailConfig,
   statuses,
 }) {
@@ -1111,8 +1144,7 @@ async function processFcosUpdateDeliveries({
   const deliverOne = async (delivery) => {
     let result;
     try {
-      result = await sendWithSmtp({
-        transporter,
+      result = await mailTransport.sendMail({
         from,
         to: [delivery.recipient_email],
         subject: message.subject,
@@ -1120,14 +1152,15 @@ async function processFcosUpdateDeliveries({
         text: message.text,
       });
       if (!Array.isArray(result.accepted) || result.accepted.length !== 1) {
-        throw new Error('The SMTP provider did not accept this recipient.');
+        throw new Error('The email provider did not accept this recipient.');
       }
     } catch (error) {
       const senderFailure = fcosUpdateSenderFailureMessage(error);
+      const uncertain = error?.fcosUpdateUncertain === true;
       const { error: updateErrorValue } = await client
         .from('fcos_update_deliveries')
         .update({
-          status: 'Failed',
+          status: uncertain ? 'Uncertain' : 'Failed',
           last_error: senderFailure || redactError(error?.message || error),
         })
         .eq('id', delivery.id)
@@ -1158,7 +1191,7 @@ async function processFcosUpdateDeliveries({
       .from('fcos_update_deliveries')
       .update({
         status: 'Uncertain',
-        last_error: 'SMTP accepted the message, but FCOS could not confirm the delivery record.',
+        last_error: 'The email provider accepted the message, but FCOS could not confirm the delivery record.',
       })
       .eq('id', delivery.id)
       .eq('status', 'Sending');
@@ -1204,6 +1237,26 @@ async function processFcosUpdateDeliveries({
   return updateBatchDeliverySummary(client, batch.id, profile);
 }
 
+async function createFcosUpdateMailTransport(mailConfig) {
+  if (mailConfig.configurationIssue) {
+    throw updateError(mailConfig.configurationIssue, 503, 'FCOS_UPDATE_MAIL_CONFIG_INVALID');
+  }
+  if (mailConfig.deliveryMethod === 'microsoft_graph_oidc') {
+    return createMicrosoftGraphMailTransport(mailConfig.graph);
+  }
+  const transporter = await createSmtpTransport(mailConfig.smtp, {
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+  });
+  return {
+    method: 'smtp',
+    authenticatedAddress: mailConfig.authenticatedAddress,
+    sendMail: (message) => sendWithSmtp({ ...message, transporter }),
+    close: () => transporter.close?.(),
+  };
+}
+
 export async function sendFcosUpdateBatch({ client, profile, body }) {
   await requireGeneralManager(client, profile);
   const batch = await loadBatch(client, body.batchId);
@@ -1223,7 +1276,7 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
     );
   }
   const mailConfig = fcosUpdateMailConfig();
-  const transporter = await createSmtpTransport(mailConfig.smtp, { pool: true, maxConnections: 3, maxMessages: 100 });
+  const mailTransport = await createFcosUpdateMailTransport(mailConfig);
   let sendingStarted = false;
   try {
     const { error } = await client.rpc('start_fcos_update_saved_delivery', {
@@ -1247,7 +1300,7 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       client,
       profile,
       batch: sendingBatch,
-      transporter,
+      mailTransport,
       mailConfig,
       statuses: ['Pending'],
     });
@@ -1258,7 +1311,7 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
     }
     throw error;
   } finally {
-    if (typeof transporter.close === 'function') transporter.close();
+    mailTransport.close?.();
   }
 }
 
@@ -1276,7 +1329,7 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
   if (!eligible.length) throw updateError('No eligible failed deliveries remain.');
 
   const mailConfig = fcosUpdateMailConfig();
-  const transporter = await createSmtpTransport(mailConfig.smtp, { pool: true, maxConnections: 3, maxMessages: 100 });
+  const mailTransport = await createFcosUpdateMailTransport(mailConfig);
   let retryStarted = false;
   try {
     const { data: retryingBatch, error: batchError } = await client
@@ -1298,7 +1351,7 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
       client,
       profile,
       batch,
-      transporter,
+      mailTransport,
       mailConfig,
       statuses,
     });
@@ -1320,6 +1373,6 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
     }
     throw error;
   } finally {
-    if (typeof transporter.close === 'function') transporter.close();
+    mailTransport.close?.();
   }
 }

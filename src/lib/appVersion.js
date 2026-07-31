@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.55';
+export const APP_VERSION = '2.0.56';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.56',
+    releasedAt: '2026-07-31',
+    title: 'Direct Microsoft 365 update sender',
+    changes: [
+      'Changed FCOS Updates from delegated SMTP sending to passwordless Microsoft 365 OAuth, authenticated by the FCOS production workload and restricted to Vincent Lee\'s mailbox.',
+    ],
+  },
   {
     version: '2.0.55',
     releasedAt: '2026-07-31',

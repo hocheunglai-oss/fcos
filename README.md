@@ -30,6 +30,21 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
+### FCOS Updates Microsoft 365 sender
+
+FCOS Updates should use Microsoft Graph with a mailbox-scoped Exchange application role. Vercel authenticates through its short-lived production OIDC identity, so no mailbox password or application secret is stored:
+
+```bash
+FCOS_UPDATE_TRANSPORT=microsoft_graph
+FCOS_UPDATE_MICROSOFT_TENANT_ID=your_tenant_id
+FCOS_UPDATE_MICROSOFT_CLIENT_ID=your_application_client_id
+FCOS_UPDATE_MICROSOFT_MAILBOX=vincent@cosulich.com.hk
+FCOS_UPDATE_FROM_EMAIL=vincent@cosulich.com.hk
+FCOS_UPDATE_SENDER_NAME="Vincent Lee"
+```
+
+The Entra federated credential must match the Vercel production issuer, subject, and audience exactly. In Exchange Online, assign `Application Mail.Send` to that service principal through a custom recipient scope that matches only the configured mailbox. Do not also grant an unscoped Entra `Mail.Send` application permission because Entra and Exchange grants are additive.
+
 ### Universal application portal
 
 FCOS is the login and entitlement authority for registered applications. The

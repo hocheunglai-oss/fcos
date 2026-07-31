@@ -106,6 +106,41 @@ test('FCOS Updates can authenticate through dedicated SMTP credentials', () => {
   assert.equal(config.smtp.password, 'vincent-secret');
 });
 
+test('FCOS Updates uses mailbox-matched Microsoft Graph OIDC without Send As delegation', () => {
+  const config = fcosUpdateMailConfig({
+    FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
+    FCOS_UPDATE_MICROSOFT_TENANT_ID: 'tenant-id',
+    FCOS_UPDATE_MICROSOFT_CLIENT_ID: 'client-id',
+    FCOS_UPDATE_MICROSOFT_MAILBOX: 'vincent@example.com',
+    FCOS_UPDATE_FROM_EMAIL: 'vincent@example.com',
+    FCOS_UPDATE_SENDER_NAME: 'Vincent Lee',
+    SMTP_USER: 'louisa@example.com',
+  });
+
+  assert.equal(config.deliveryMethod, 'microsoft_graph_oidc');
+  assert.equal(config.authenticatedAddress, 'vincent@example.com');
+  assert.equal(config.senderAddress, 'vincent@example.com');
+  assert.equal(config.requiresSendAs, false);
+  assert.equal(config.configurationIssue, '');
+});
+
+test('FCOS Updates fails closed on partial or mismatched Microsoft Graph configuration', () => {
+  const partial = fcosUpdateMailConfig({
+    FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
+    FCOS_UPDATE_MICROSOFT_TENANT_ID: 'tenant-id',
+  });
+  assert.match(partial.configurationIssue, /Complete the FCOS Updates Microsoft/);
+
+  const mismatched = fcosUpdateMailConfig({
+    FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
+    FCOS_UPDATE_MICROSOFT_TENANT_ID: 'tenant-id',
+    FCOS_UPDATE_MICROSOFT_CLIENT_ID: 'client-id',
+    FCOS_UPDATE_MICROSOFT_MAILBOX: 'vincent@example.com',
+    FCOS_UPDATE_FROM_EMAIL: 'louisa@example.com',
+  });
+  assert.match(mismatched.configurationIssue, /must match its Microsoft sender mailbox/);
+});
+
 test('FCOS Updates treats Microsoft Send As rejection as a sender-wide failure', () => {
   assert.equal(
     fcosUpdateSenderFailureMessage(new Error('554 5.2.252 SendAsDenied; MapiExceptionSendAsDenied')),
