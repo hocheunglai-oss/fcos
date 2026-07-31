@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.56';
+export const APP_VERSION = '2.0.57';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.57',
+    releasedAt: '2026-07-31',
+    title: 'Simplified FCOS update email workflow',
+    changes: [
+      'Removed the separate submit, approval, and return steps so Administrators save drafts and only Vincent Lee can send the current saved revision.',
+    ],
+  },
   {
     version: '2.0.56',
     releasedAt: '2026-07-31',

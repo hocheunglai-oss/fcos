@@ -851,7 +851,7 @@ export default function AdminControl() {
                 ? 'Sorted alphabetically.'
                 : activeSection === 'reporting'
                   ? 'Primary-manager links define the formal management chain.'
-                  : 'Administrator-prepared, General Manager-controlled.'}
+                  : 'Administrators save drafts. Only Vincent sends.'}
           </div>
         </div>
 

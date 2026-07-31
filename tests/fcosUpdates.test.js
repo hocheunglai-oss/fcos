@@ -184,11 +184,13 @@ test('FCOS update migration creates service-only workflow and General Manager co
   assert.match(sql, /'Uncertain'/);
 });
 
-test('FCOS update workflow protects reviewed revisions and interrupted delivery', async () => {
-  const [server, panel, recipientMigration] = await Promise.all([
+test('FCOS update workflow protects saved revisions and interrupted delivery', async () => {
+  const [server, handlers, panel, recipientMigration, simplifiedMigration] = await Promise.all([
     readFile(new URL('../api/_fcosUpdates.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/admin/FcosUpdatesPanel.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../supabase/migrations/20260731083127_fcos_update_saved_recipients.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260731132551_simplify_fcos_update_email_sending.sql', import.meta.url), 'utf8'),
   ]);
 
   assert.match(server, /function requireExpectedBatchRevision/);
@@ -201,16 +203,21 @@ test('FCOS update workflow protects reviewed revisions and interrupted delivery'
   assert.match(server, /sender:[\s\S]*mailConfig\.senderName[\s\S]*mailConfig\.senderAddress/);
   assert.match(server, /FCOS_UPDATE_FROM_EMAIL/);
   assert.match(server, /createSmtpTransport\(mailConfig\.smtp/);
+  assert.match(server, /batch\.status !== 'Draft'/);
+  assert.match(server, /item\.revision[\s\S]*batchItem\.item_revision_snapshot/);
+  assert.doesNotMatch(server, /export async function (submit|approve|return)FcosUpdateBatch/);
+  assert.doesNotMatch(handlers, /adminFcosUpdateBatch(Submit|Approve|Return)/);
 
   assert.match(panel, /const batchIsDirty = useMemo/);
-  assert.match(panel, /!batchDraft\.id \|\| batchIsDirty \? await saveBatch\(\) : batchDraft/);
   assert.match(panel, /recipients: batchDraft\.recipients/);
-  assert.match(panel, /Saving recipient changes returns an approved email to Draft/);
+  assert.match(panel, /Save all recipient changes before Vincent sends/);
   assert.match(panel, /Sender: \{model\.sender\?\.name/);
   assert.match(panel, /expectedRevision: sendConfirmation\.revision/);
   assert.match(panel, /expectedRecipientCount: sendConfirmation\.recipientCount/);
+  assert.match(panel, /current\.status !== 'Draft'/);
   assert.match(panel, /disabled=\{Boolean\(working\) \|\| batchIsDirty\}/);
   assert.match(panel, /Discard unsaved changes\?/);
+  assert.doesNotMatch(panel, />\s*(Submit|Approve|Return)\s*</);
 
   assert.match(recipientMigration, /create table if not exists public\.fcos_update_batch_recipients/);
   assert.match(recipientMigration, /function public\.save_fcos_update_batch_with_recipients[\s\S]*security invoker/);
@@ -219,4 +226,13 @@ test('FCOS update workflow protects reviewed revisions and interrupted delivery'
   assert.match(recipientMigration, /revoke all on table public\.fcos_update_batch_recipients from public, anon, authenticated/);
   assert.match(recipientMigration, /grant all on table public\.fcos_update_batch_recipients to service_role/);
   assert.doesNotMatch(recipientMigration, /security definer/i);
+
+  assert.match(simplifiedMigration, /where status in \('Pending Approval', 'Revision Requested', 'Approved'\)/);
+  assert.match(simplifiedMigration, /check \(status in \([\s\S]*'Draft'[\s\S]*'Sending'[\s\S]*'Sent'[\s\S]*'Partial Failure'[\s\S]*'Cancelled'/);
+  assert.match(simplifiedMigration, /v_batch\.status <> 'Draft'/);
+  assert.match(simplifiedMigration, /item\.assigned_batch_id is distinct from p_batch_id/);
+  assert.match(simplifiedMigration, /item\.revision is distinct from batch_item\.item_revision_snapshot/);
+  assert.match(simplifiedMigration, /fcos_update_is_general_manager\(p_actor_id\)/);
+  assert.match(simplifiedMigration, /revoke all on function public\.start_fcos_update_delivery[\s\S]*from service_role/);
+  assert.doesNotMatch(simplifiedMigration, /security definer/i);
 });

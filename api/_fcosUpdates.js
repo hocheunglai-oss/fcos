@@ -15,7 +15,7 @@ export const FCOS_UPDATE_CATEGORIES = Object.freeze([
 ]);
 
 const CATEGORY_IDS = new Set(FCOS_UPDATE_CATEGORIES.map((category) => category.id));
-const EDITABLE_BATCH_STATUSES = new Set(['Draft', 'Revision Requested', 'Pending Approval', 'Approved']);
+const EDITABLE_BATCH_STATUSES = new Set(['Draft']);
 const REASON_MIN_LENGTH = 8;
 const REASON_MAX_LENGTH = 255;
 const INTERRUPTED_DELIVERY_MINUTES = 15;
@@ -747,116 +747,6 @@ function requireExpectedBatchRevision(batch, body) {
   return expectedRevision;
 }
 
-async function updateBatchWithRevision(client, batch, patch) {
-  const nextRevision = Number(batch.revision || 0) + 1;
-  const { data, error } = await client
-    .from('fcos_update_batches')
-    .update({ ...patch, revision: nextRevision })
-    .eq('id', batch.id)
-    .eq('revision', batch.revision)
-    .select(BATCH_SELECT)
-    .maybeSingle();
-  if (error) throwUpdateSchemaError(error);
-  if (!data) throw updateError('This FCOS update email changed before the action completed.', 409, 'REVISION_CONFLICT');
-  return data;
-}
-
-export async function submitFcosUpdateBatch({ client, profile, body }) {
-  const batch = await loadBatch(client, body.batchId);
-  requireExpectedBatchRevision(batch, body);
-  if (!['Draft', 'Revision Requested'].includes(batch.status)) {
-    throw updateError('Only a Draft or Revision Requested email can be submitted.');
-  }
-  if (!batch.fcos_update_batch_items?.length) throw updateError('Select at least one FCOS update.');
-  if (!batch.fcos_update_batch_recipients?.length) throw updateError('Select at least one FCOS recipient.');
-  const updated = await updateBatchWithRevision(client, batch, {
-    status: 'Pending Approval',
-    submitted_by: profile.id,
-    submitted_by_email: profile.email,
-    submitted_at: new Date().toISOString(),
-    approved_revision: null,
-    updated_by: profile.id,
-    updated_by_email: profile.email,
-  });
-  await writeEvent(client, {
-    batchId: batch.id,
-    type: 'batch_submitted',
-    actor: profile,
-    summary: 'FCOS update email submitted for General Manager approval.',
-    metadata: { itemCount: batch.fcos_update_batch_items.length, revision: updated.revision },
-  });
-  return { batch: serializeBatch(updated) };
-}
-
-export async function approveFcosUpdateBatch({ client, profile, body }) {
-  await requireGeneralManager(client, profile);
-  const batch = await loadBatch(client, body.batchId);
-  requireExpectedBatchRevision(batch, body);
-  if (batch.status !== 'Pending Approval') throw updateError('Only a Pending Approval email can be approved.');
-  if (!batch.fcos_update_batch_items?.length) throw updateError('Select at least one FCOS update.');
-  if (!batch.fcos_update_batch_recipients?.length) throw updateError('Select at least one FCOS recipient.');
-
-  for (const batchItem of batch.fcos_update_batch_items) {
-    const item = batchItem.fcos_update_items;
-    if (!item || item.status !== 'Pending' || item.assigned_batch_id !== batch.id) {
-      throw updateError('A selected update is no longer available. Return the email for revision.', 409);
-    }
-    if (Number(item.revision) !== Number(batchItem.item_revision_snapshot)) {
-      throw updateError('A selected update changed after submission. Return the email for revision.', 409);
-    }
-  }
-
-  const nextRevision = Number(batch.revision) + 1;
-  const updated = await updateBatchWithRevision(client, batch, {
-    status: 'Approved',
-    approved_revision: nextRevision,
-    approved_by: profile.id,
-    approved_by_email: profile.email,
-    approved_at: new Date().toISOString(),
-    updated_by: profile.id,
-    updated_by_email: profile.email,
-  });
-  await writeEvent(client, {
-    batchId: batch.id,
-    type: 'batch_approved',
-    actor: profile,
-    summary: 'FCOS update email approved.',
-    metadata: { itemCount: batch.fcos_update_batch_items.length, revision: updated.revision },
-  });
-  return { batch: serializeBatch(updated) };
-}
-
-export async function returnFcosUpdateBatch({ client, profile, body }) {
-  await requireGeneralManager(client, profile);
-  const reason = validateReason(body.reason, 'Return reason');
-  const batch = await loadBatch(client, body.batchId);
-  requireExpectedBatchRevision(batch, body);
-  if (!['Pending Approval', 'Approved'].includes(batch.status)) {
-    throw updateError('Only a pending or approved unsent email can be returned for revision.');
-  }
-  const updated = await updateBatchWithRevision(client, batch, {
-    status: 'Revision Requested',
-    approved_revision: null,
-    approved_by: null,
-    approved_by_email: null,
-    approved_at: null,
-    returned_by: profile.id,
-    returned_by_email: profile.email,
-    returned_at: new Date().toISOString(),
-    return_reason: reason,
-    updated_by: profile.id,
-    updated_by_email: profile.email,
-  });
-  await writeEvent(client, {
-    batchId: batch.id,
-    type: 'batch_returned',
-    actor: profile,
-    summary: 'FCOS update email returned for revision.',
-    metadata: { reason, revision: updated.revision },
-  });
-  return { batch: serializeBatch(updated) };
-}
-
 export async function cancelFcosUpdateBatch({ client, profile, body }) {
   const reason = validateReason(body.reason, 'Cancellation reason');
   const batch = await loadBatch(client, body.batchId);
@@ -864,10 +754,6 @@ export async function cancelFcosUpdateBatch({ client, profile, body }) {
   if (!EDITABLE_BATCH_STATUSES.has(batch.status)) {
     throw updateError('This FCOS update email can no longer be cancelled.');
   }
-  if (['Pending Approval', 'Approved'].includes(batch.status)) {
-    await requireGeneralManager(client, profile);
-  }
-
   const { data, error } = await client.rpc('cancel_fcos_update_batch', {
     p_batch_id: batch.id,
     p_expected_revision: expectedRevision,
@@ -1261,8 +1147,19 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
   await requireGeneralManager(client, profile);
   const batch = await loadBatch(client, body.batchId);
   const expectedRevision = requireExpectedBatchRevision(batch, body);
-  if (batch.status !== 'Approved' || Number(batch.approved_revision) !== Number(batch.revision)) {
-    throw updateError('Only the current approved revision can be sent.');
+  if (batch.status !== 'Draft') {
+    throw updateError('Only the current saved Draft can be sent.');
+  }
+  if (!batch.fcos_update_batch_items?.length) throw updateError('Select at least one FCOS update.');
+  if (!batch.fcos_update_batch_recipients?.length) throw updateError('Select at least one FCOS recipient.');
+  for (const batchItem of batch.fcos_update_batch_items) {
+    const item = batchItem.fcos_update_items;
+    if (!item || item.status !== 'Pending' || item.assigned_batch_id !== batch.id) {
+      throw updateError('A selected update is no longer available. Review and save the draft again.', 409);
+    }
+    if (Number(item.revision) !== Number(batchItem.item_revision_snapshot)) {
+      throw updateError('A selected update changed after the draft was saved. Review and save the draft again.', 409);
+    }
   }
   const expectedRecipientCount = Number(body.expectedRecipientCount);
   if (!Number.isInteger(expectedRecipientCount) || expectedRecipientCount < 1) {

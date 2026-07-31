@@ -177,17 +177,14 @@ import {
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
 import {
-  approveFcosUpdateBatch as approveFcosUpdateBatchService,
   cancelFcosUpdateBatch as cancelFcosUpdateBatchService,
   listFcosUpdates as listFcosUpdatesService,
   restoreFcosUpdateItem as restoreFcosUpdateItemService,
   retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService,
-  returnFcosUpdateBatch as returnFcosUpdateBatchService,
   saveFcosUpdateBatch as saveFcosUpdateBatchService,
   saveFcosUpdateItem as saveFcosUpdateItemService,
   sendFcosUpdateBatch as sendFcosUpdateBatchService,
   skipFcosUpdateItem as skipFcosUpdateItemService,
-  submitFcosUpdateBatch as submitFcosUpdateBatchService,
   syncFcosUpdateItems as syncFcosUpdateItemsService,
 } from '../_fcosUpdates.js';
 
@@ -918,9 +915,6 @@ const HANDLER_MODULE_ACCESS = {
   adminFcosUpdatesSync: ['admin'],
   adminFcosUpdateItemSave: ['admin'],
   adminFcosUpdateBatchSave: ['admin'],
-  adminFcosUpdateBatchSubmit: ['admin'],
-  adminFcosUpdateBatchApprove: ['admin'],
-  adminFcosUpdateBatchReturn: ['admin'],
   adminFcosUpdateBatchCancel: ['admin'],
   adminFcosUpdateItemSkip: ['admin'],
   adminFcosUpdateItemRestore: ['admin'],
@@ -1588,21 +1582,6 @@ async function adminFcosUpdateItemSave(body, req) {
 async function adminFcosUpdateBatchSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   return saveFcosUpdateBatchService({ client, profile, body });
-}
-
-async function adminFcosUpdateBatchSubmit(body, req) {
-  const { client, profile } = await requireAdministrator(req);
-  return submitFcosUpdateBatchService({ client, profile, body });
-}
-
-async function adminFcosUpdateBatchApprove(body, req) {
-  const { client, profile } = await requireAdministrator(req);
-  return approveFcosUpdateBatchService({ client, profile, body });
-}
-
-async function adminFcosUpdateBatchReturn(body, req) {
-  const { client, profile } = await requireAdministrator(req);
-  return returnFcosUpdateBatchService({ client, profile, body });
 }
 
 async function adminFcosUpdateBatchCancel(body, req) {
@@ -15005,9 +14984,6 @@ const handlers = {
   adminFcosUpdatesSync,
   adminFcosUpdateItemSave,
   adminFcosUpdateBatchSave,
-  adminFcosUpdateBatchSubmit,
-  adminFcosUpdateBatchApprove,
-  adminFcosUpdateBatchReturn,
   adminFcosUpdateBatchCancel,
   adminFcosUpdateItemSkip,
   adminFcosUpdateItemRestore,

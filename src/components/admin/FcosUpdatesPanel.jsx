@@ -17,7 +17,6 @@ import {
   Send,
   SkipForward,
   Trash2,
-  Undo2,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -59,9 +58,6 @@ const CATEGORY_STYLES = {
 
 const STATUS_STYLES = {
   Draft: 'border-slate-200 bg-slate-50 text-slate-700',
-  'Pending Approval': 'border-amber-200 bg-amber-50 text-amber-800',
-  'Revision Requested': 'border-orange-200 bg-orange-50 text-orange-800',
-  Approved: 'border-blue-200 bg-blue-50 text-blue-700',
   Sending: 'border-blue-200 bg-blue-50 text-blue-700',
   Sent: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   'Partial Failure': 'border-red-200 bg-red-50 text-red-700',
@@ -258,7 +254,7 @@ export default function FcosUpdatesPanel() {
     batch.subject,
     batch.status,
     batch.createdByEmail,
-    batch.approvedByEmail,
+    batch.updatedByEmail,
     ...(batch.items || []).flatMap((item) => [item.emailTitle, item.emailBody, item.source?.sourceVersion]),
   ], keyword)), [keyword, model.batches]);
   const storedBatch = useMemo(
@@ -320,7 +316,7 @@ export default function FcosUpdatesPanel() {
     const draft = batchFromRecord(batch);
     if (
       !draft.recipients.length
-      && ['Draft', 'Revision Requested', 'Pending Approval', 'Approved'].includes(draft.status)
+      && draft.status === 'Draft'
     ) {
       draft.recipients = (model.activeRecipients || []).map((recipient) => ({
         userId: recipient.userId,
@@ -439,44 +435,6 @@ export default function FcosUpdatesPanel() {
     if (saved) setBatchOpen(false);
   };
 
-  const submitBatch = async () => {
-    setWorking('batch:submit');
-    clearFeedback();
-    const saved = !batchDraft.id || batchIsDirty ? await saveBatch() : batchDraft;
-    if (!saved) {
-      setWorking('');
-      return;
-    }
-    const currentId = saved.id;
-    if (!currentId) {
-      setError('Save the draft before submitting it.');
-      setWorking('');
-      return;
-    }
-    const response = await appClient.functions.invoke('adminFcosUpdateBatchSubmit', {
-      batchId: currentId,
-      expectedRevision: saved.revision,
-    });
-    setWorking('');
-    if (response.data?.error) {
-      setError(response.data.error);
-      return;
-    }
-    setMessage('Email submitted for Vincent Lee’s approval.');
-    setBatchOpen(false);
-    await load({ force: true, sync: false });
-  };
-
-  const approveBatch = async () => {
-    const succeeded = await runAction(
-      'batch:approve',
-      'adminFcosUpdateBatchApprove',
-      { batchId: batchDraft.id, expectedRevision: batchDraft.revision },
-      'Email approved. Sending still requires a separate confirmation.',
-    );
-    if (succeeded) setBatchOpen(false);
-  };
-
   const openReasonAction = (type, target) => {
     setReason('');
     setReasonAction({ type, target });
@@ -503,15 +461,6 @@ export default function FcosUpdatesPanel() {
         },
         message: 'Update restored to Pending.',
       },
-      return: {
-        name: 'adminFcosUpdateBatchReturn',
-        payload: {
-          batchId: reasonAction.target.id,
-          expectedRevision: reasonAction.target.revision,
-          reason,
-        },
-        message: 'Email returned for revision.',
-      },
       cancel: {
         name: 'adminFcosUpdateBatchCancel',
         payload: {
@@ -533,7 +482,7 @@ export default function FcosUpdatesPanel() {
     if (succeeded) {
       setReasonAction(null);
       setReason('');
-      if (['return', 'cancel'].includes(reasonAction.type)) setBatchOpen(false);
+      if (reasonAction.type === 'cancel') setBatchOpen(false);
     }
   };
 
@@ -576,7 +525,7 @@ export default function FcosUpdatesPanel() {
 
   const openSendConfirmation = async () => {
     if (batchIsDirty) {
-      setError('Save these changes and obtain approval again before sending.');
+      setError('Save these changes before sending.');
       return;
     }
     setWorking('batch:preflight');
@@ -593,8 +542,8 @@ export default function FcosUpdatesPanel() {
     }
     setModel(response.data || {});
     const current = (response.data?.batches || []).find((batch) => batch.id === batchDraft.id);
-    if (!current || current.status !== 'Approved' || current.revision !== batchDraft.revision) {
-      setError('This email changed after it was opened. Review the current approved revision before sending.');
+    if (!current || current.status !== 'Draft' || current.revision !== batchDraft.revision) {
+      setError('This draft changed after it was opened. Review and save the current revision before sending.');
       return;
     }
     setSendConfirmation({
@@ -641,7 +590,7 @@ export default function FcosUpdatesPanel() {
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-slate-200 bg-slate-50 text-slate-600'}
             >
-              {canControl ? 'Vincent control enabled' : 'Draft preparation only'}
+              {canControl ? 'Draft and send' : 'Draft preparation'}
             </Badge>
             <Button
               size="sm"
@@ -722,9 +671,9 @@ export default function FcosUpdatesPanel() {
                     ? `${batch.failedCount} failed · ${batch.uncertainCount} uncertain`
                     : batch.status === 'Sent'
                       ? `${batch.sentCount} sent`
-                      : batch.approvedByEmail
-                        ? `Approved by ${batch.approvedByEmail}`
-                        : batch.createdByEmail}
+                    : batch.updatedByEmail
+                      ? `Saved by ${batch.updatedByEmail}`
+                      : batch.createdByEmail}
                 </div>
               </button>
             ))}
@@ -876,11 +825,6 @@ export default function FcosUpdatesPanel() {
                 ? `${batchDraft.status} · Revision ${batchDraft.revision}`
                 : 'Review and arrange the selected updates before saving the draft.'}
             </DialogDescription>
-            {batchIsDirty && ['Pending Approval', 'Approved'].includes(batchDraft.status) && (
-              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Saving these changes returns the email to Draft and removes its current approval or submission.
-              </div>
-            )}
           </DialogHeader>
           <div className="max-h-[calc(94vh-150px)] overflow-auto px-5 py-4">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
@@ -911,7 +855,7 @@ export default function FcosUpdatesPanel() {
                     <div>
                       <Label>Recipients</Label>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Each recipient receives a separate private email. Saving recipient changes returns an approved email to Draft.
+                        Each recipient receives a separate private email. Save all recipient changes before Vincent sends.
                       </p>
                     </div>
                     <span className="text-xs font-semibold text-muted-foreground">
@@ -1117,16 +1061,10 @@ export default function FcosUpdatesPanel() {
             <div className="flex flex-wrap gap-2">
               {batchDraft.id
                 && !['Sending', 'Sent', 'Partial Failure', 'Cancelled'].includes(batchDraft.status)
-                && (canControl || ['Draft', 'Revision Requested'].includes(batchDraft.status)) && (
+                && batchDraft.status === 'Draft' && (
                 <Button variant="outline" onClick={() => openReasonAction('cancel', batchDraft)}>
                   <Trash2 className="h-4 w-4" />
                   Cancel batch
-                </Button>
-              )}
-              {canControl && ['Pending Approval', 'Approved'].includes(batchDraft.status) && (
-                <Button variant="outline" onClick={() => openReasonAction('return', batchDraft)}>
-                  <Undo2 className="h-4 w-4" />
-                  Return
                 </Button>
               )}
               {batchDraft.status === 'Partial Failure' && canControl && batchDraft.failedCount > 0 && (
@@ -1154,19 +1092,7 @@ export default function FcosUpdatesPanel() {
                   Save draft
                 </Button>
               )}
-              {['Draft', 'Revision Requested'].includes(batchDraft.status) && (
-                <Button onClick={submitBatch} disabled={!batchDraft.items.length || !batchDraft.recipients.length || Boolean(working)}>
-                  <Send className="h-4 w-4" />
-                  Submit
-                </Button>
-              )}
-              {batchDraft.status === 'Pending Approval' && canControl && (
-                <Button onClick={approveBatch} disabled={Boolean(working) || batchIsDirty}>
-                  <Check className="h-4 w-4" />
-                  Approve
-                </Button>
-              )}
-              {batchDraft.status === 'Approved' && canControl && (
+              {batchDraft.status === 'Draft' && canControl && Boolean(batchDraft.id) && (
                 <Button onClick={openSendConfirmation} disabled={Boolean(working) || batchIsDirty}>
                   {working === 'batch:preflight' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}
                   Send now
@@ -1206,7 +1132,6 @@ export default function FcosUpdatesPanel() {
             <DialogTitle>
               {reasonAction?.type === 'skip' && 'Skip FCOS update'}
               {reasonAction?.type === 'restore' && 'Restore FCOS update'}
-              {reasonAction?.type === 'return' && 'Return email for revision'}
               {reasonAction?.type === 'cancel' && 'Cancel email batch'}
             </DialogTitle>
             <DialogDescription>
@@ -1241,7 +1166,7 @@ export default function FcosUpdatesPanel() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <MailWarning className="h-5 w-5 text-amber-600" />
-              Send approved FCOS update?
+              Send FCOS update?
             </DialogTitle>
             <DialogDescription>
               This sends one individual email to each saved recipient. It cannot be recalled.
