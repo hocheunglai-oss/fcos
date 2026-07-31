@@ -15,6 +15,10 @@
     {
       "path": "/api/functions/collaborationDailyCron",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/functions/growthCoachingDailyCron",
+      "schedule": "30 0 * * 1-5"
     }
   ],
   "rewrites": [

@@ -6,9 +6,13 @@ import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
   const gates = externalActionGates({});
-  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false]);
+  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false]);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'TRUE' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'yes' }), true);
+  assert.equal(isExternalActionEnabled('outlook_calendar', {}), false);
+  assert.equal(isExternalActionEnabled('outlook_calendar', { FCOS_ENABLE_OUTLOOK_CALENDAR: 'true' }), true);
+  assert.equal(isExternalActionEnabled('growth_coaching_email', {}), false);
+  assert.equal(isExternalActionEnabled('growth_coaching_email', { FCOS_ENABLE_GROWTH_COACHING_EMAIL: 'true' }), true);
   assert.equal(isExternalActionEnabled('bank_execution', { FCOS_ENABLE_BANK_EXECUTION: 'TRUE' }), true);
 });
 
@@ -55,5 +59,6 @@ test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', 
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 6 * * 1-5' },
     { path: '/api/functions/portalEntitlementSyncCron', schedule: '30 18 * * *' },
     { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
+    { path: '/api/functions/growthCoachingDailyCron', schedule: '30 0 * * 1-5' },
   ]);
 });

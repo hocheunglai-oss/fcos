@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   ListTodo,
   LogOut,
+  Sprout,
   ReceiptText,
   RefreshCw,
   Settings,
@@ -25,12 +26,13 @@ import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import AppSelector from '@/components/AppSelector';
-import CollaborationNotifications from '@/components/CollaborationNotifications';
+import WorkNotifications from '@/components/WorkNotifications';
 
 const navGroups = [
   {
     label: 'Daily Work',
     items: [
+      { to: '/growth-coaching', label: 'Growth & Coaching', icon: Sprout },
       { to: '/projects-tasks', label: 'Projects & Tasks', icon: ListTodo },
       { to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
       { to: '/buyer-invoices', label: 'Buyer Invoices', moduleId: 'buyer_invoices', icon: ReceiptText },
@@ -198,7 +200,7 @@ export default function Layout() {
               <div className="text-sm font-semibold text-slate-950">FCOS</div>
               <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
             </div>
-            <CollaborationNotifications />
+            <WorkNotifications />
           </div>
         </div>
 

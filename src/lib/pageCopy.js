@@ -1,4 +1,9 @@
 const PAGE_COPY = {
+  'Growth & Coaching': {
+    eyebrow: 'Development',
+    title: 'Growth & Coaching',
+    description: 'Set measurable development goals and hold private, equal-participant coaching conversations.',
+  },
   'Projects & Tasks': {
     eyebrow: 'Collaboration',
     title: 'Projects & Tasks',

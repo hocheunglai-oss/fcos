@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   ExternalLink,
+  GitBranch,
   KeyRound,
   Loader2,
   Mail,
@@ -33,6 +34,7 @@ import {
 } from '@/components/ui/dialog';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import FcosUpdatesPanel from '@/components/admin/FcosUpdatesPanel';
+import ReportingLinesPanel from '@/components/admin/ReportingLinesPanel';
 
 const emptyUserForm = {
   id: null,
@@ -765,7 +767,9 @@ export default function AdminControl() {
     ? 'Users'
     : activeSection === 'types'
       ? 'User Types'
-      : 'FCOS Updates';
+      : activeSection === 'reporting'
+        ? 'Reporting Lines'
+        : 'FCOS Updates';
   const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
   const discardUserDraft = () => {
     clearDraft(activeUserDraftKey);
@@ -784,8 +788,8 @@ export default function AdminControl() {
         icon={ShieldCheck}
         eyebrow="Administration"
         title="Admin Control"
-        description="Manage users, access rights, and controlled FCOS update communications."
-        actions={activeSection === 'updates' ? null : (
+        description="Manage users, access rights, reporting lines, and controlled FCOS update communications."
+        actions={['updates', 'reporting'].includes(activeSection) ? null : (
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -833,6 +837,9 @@ export default function AdminControl() {
             <SegmentButton active={activeSection === 'types'} icon={UserCog} onClick={() => setActiveSection('types')}>
               User Types <span className="font-normal opacity-80">({userTypes.length})</span>
             </SegmentButton>
+            <SegmentButton active={activeSection === 'reporting'} icon={GitBranch} onClick={() => setActiveSection('reporting')}>
+              Reporting Lines
+            </SegmentButton>
             <SegmentButton active={activeSection === 'updates'} icon={Megaphone} onClick={() => setActiveSection('updates')}>
               FCOS Updates
             </SegmentButton>
@@ -842,13 +849,15 @@ export default function AdminControl() {
               ? 'Sorted by name.'
               : activeSection === 'types'
                 ? 'Sorted alphabetically.'
-                : 'Administrator-prepared, General Manager-controlled.'}
+                : activeSection === 'reporting'
+                  ? 'Primary-manager links define the formal management chain.'
+                  : 'Administrator-prepared, General Manager-controlled.'}
           </div>
         </div>
 
         <div className="min-h-[calc(100vh-260px)]">
           <aside className="min-h-0">
-            {activeSection !== 'updates' && (
+            {!['updates', 'reporting'].includes(activeSection) && (
               <div className="flex h-12 items-center justify-between border-b border-border px-4">
                 <div>
                   <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
@@ -861,6 +870,10 @@ export default function AdminControl() {
 
             {activeSection === 'updates' ? (
               <FcosUpdatesPanel />
+            ) : activeSection === 'reporting' ? (
+              <div className="p-4 lg:p-5">
+                <ReportingLinesPanel />
+              </div>
             ) : activeSection === 'users' ? (
               loading ? (
                 <StateBlock icon={Loader2} title="Loading users..." description="Fetching access-control users." />

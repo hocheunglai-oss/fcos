@@ -156,7 +156,7 @@ test("Projects & Tasks is a universal FCOS route with daily notification mainten
     layoutSource,
     /to: '\/projects-tasks', label: 'Projects & Tasks'/,
   );
-  assert.match(layoutSource, /<CollaborationNotifications \/>/);
+  assert.match(layoutSource, /<WorkNotifications \/>/);
   assert.match(
     vercelSource,
     /"path": "\/api\/functions\/collaborationDailyCron"/,

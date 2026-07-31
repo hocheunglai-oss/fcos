@@ -144,6 +144,38 @@ import {
   sendWithSmtpSendAsFallback,
   smtpAuthenticatedFromAddress,
 } from '../_smtp.js';
+import { growthCalendarHealth } from '../_growthOutlook.js';
+import {
+  workNotificationsList as workNotificationsListService,
+  workNotificationsRead as workNotificationsReadService,
+} from '../_workNotifications.js';
+import {
+  coachingActionPublish as coachingActionPublishService,
+  coachingActionSave as coachingActionSaveService,
+  coachingCalendarResolve as coachingCalendarResolveService,
+  coachingCalendarRetry as coachingCalendarRetryService,
+  coachingRelationshipEnd as coachingRelationshipEndService,
+  coachingRelationshipInvite as coachingRelationshipInviteService,
+  coachingRelationshipRespond as coachingRelationshipRespondService,
+  coachingSessionConfirm as coachingSessionConfirmService,
+  coachingSessionCancel as coachingSessionCancelService,
+  coachingSessionContentSave as coachingSessionContentSaveService,
+  coachingSessionSave as coachingSessionSaveService,
+  growthAttachmentComplete as growthAttachmentCompleteService,
+  growthAttachmentPrepare as growthAttachmentPrepareService,
+  growthAttachmentUrl as growthAttachmentUrlService,
+  growthCoachingBootstrap as growthCoachingBootstrapService,
+  growthCoachingDailyMaintenance,
+  growthEmailPreferencesSave as growthEmailPreferencesSaveService,
+  growthGoalCompletion as growthGoalCompletionService,
+  growthGoalDecision as growthGoalDecisionService,
+  growthGoalProgressSave as growthGoalProgressSaveService,
+  growthGoalSave as growthGoalSaveService,
+  growthGoalSubmit as growthGoalSubmitService,
+  growthPlanSave as growthPlanSaveService,
+  growthReportingLineSave as growthReportingLineSaveService,
+  growthReportingLinesList as growthReportingLinesListService,
+} from '../_growthCoachingService.js';
 import {
   approveFcosUpdateBatch as approveFcosUpdateBatchService,
   cancelFcosUpdateBatch as cancelFcosUpdateBatchService,
@@ -535,6 +567,124 @@ async function collaborationNotificationsRead(body = {}, req = null, accessConte
   return collaborationNotificationsReadService(body, accessContext || await requireActiveUser(req));
 }
 
+function requireAdministratorContext(accessContext) {
+  if (accessContext?.profile?.user_type !== 'administrator') {
+    throw appError('Administrator access required.', 403);
+  }
+  return accessContext;
+}
+
+async function workNotificationsList(body = {}, req = null, accessContext = null) {
+  return workNotificationsListService(body, accessContext || await requireActiveUser(req));
+}
+
+async function workNotificationsRead(body = {}, req = null, accessContext = null) {
+  return workNotificationsReadService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthReportingLinesList(body = {}, req = null, accessContext = null) {
+  const context = accessContext || await requireAdministrator(req);
+  return growthReportingLinesListService(body, requireAdministratorContext(context));
+}
+
+async function growthReportingLineSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || await requireAdministrator(req);
+  return growthReportingLineSaveService(body, requireAdministratorContext(context));
+}
+
+async function growthCoachingBootstrap(body = {}, req = null, accessContext = null) {
+  return growthCoachingBootstrapService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthPlanSave(body = {}, req = null, accessContext = null) {
+  return growthPlanSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthGoalSave(body = {}, req = null, accessContext = null) {
+  return growthGoalSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthGoalSubmit(body = {}, req = null, accessContext = null) {
+  return growthGoalSubmitService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthGoalDecision(body = {}, req = null, accessContext = null) {
+  return growthGoalDecisionService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthGoalProgressSave(body = {}, req = null, accessContext = null) {
+  return growthGoalProgressSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthGoalCompletion(body = {}, req = null, accessContext = null) {
+  return growthGoalCompletionService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingRelationshipInvite(body = {}, req = null, accessContext = null) {
+  return coachingRelationshipInviteService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingRelationshipRespond(body = {}, req = null, accessContext = null) {
+  return coachingRelationshipRespondService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingRelationshipEnd(body = {}, req = null, accessContext = null) {
+  return coachingRelationshipEndService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingSessionSave(body = {}, req = null, accessContext = null) {
+  return coachingSessionSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingSessionContentSave(body = {}, req = null, accessContext = null) {
+  return coachingSessionContentSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingSessionConfirm(body = {}, req = null, accessContext = null) {
+  return coachingSessionConfirmService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingSessionCancel(body = {}, req = null, accessContext = null) {
+  return coachingSessionCancelService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingActionSave(body = {}, req = null, accessContext = null) {
+  return coachingActionSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingActionPublish(body = {}, req = null, accessContext = null) {
+  return coachingActionPublishService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthAttachmentPrepare(body = {}, req = null, accessContext = null) {
+  return growthAttachmentPrepareService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthAttachmentComplete(body = {}, req = null, accessContext = null) {
+  return growthAttachmentCompleteService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthAttachmentUrl(body = {}, req = null, accessContext = null) {
+  return growthAttachmentUrlService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthEmailPreferencesSave(body = {}, req = null, accessContext = null) {
+  return growthEmailPreferencesSaveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingCalendarResolve(body = {}, req = null, accessContext = null) {
+  return coachingCalendarResolveService(body, accessContext || await requireActiveUser(req));
+}
+
+async function coachingCalendarRetry(body = {}, req = null, accessContext = null) {
+  return coachingCalendarRetryService(body, accessContext || await requireActiveUser(req));
+}
+
+async function growthCoachingDailyCron(body = {}, req = null) {
+  requireCronAuthorization(req);
+  return growthCoachingDailyMaintenance(supabaseAdminClient());
+}
+
 function normalizePermissions(userType, permissions = {}) {
   if (userType === 'administrator') return ADMIN_FULL_ACCESS;
   const normalized = {};
@@ -629,6 +779,7 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   'outstandingBuyerInvoicesEmailCron',
   'portalEntitlementSyncCron',
   'collaborationDailyCron',
+  'growthCoachingDailyCron',
 ]);
 
 const HANDLER_MODULE_ACCESS = {
@@ -649,6 +800,32 @@ const HANDLER_MODULE_ACCESS = {
   collaborationAttachmentDelete: [],
   collaborationNotificationsList: [],
   collaborationNotificationsRead: [],
+  workNotificationsList: [],
+  workNotificationsRead: [],
+  growthReportingLinesList: [],
+  growthReportingLineSave: [],
+  growthCoachingBootstrap: [],
+  growthPlanSave: [],
+  growthGoalSave: [],
+  growthGoalSubmit: [],
+  growthGoalDecision: [],
+  growthGoalProgressSave: [],
+  growthGoalCompletion: [],
+  coachingRelationshipInvite: [],
+  coachingRelationshipRespond: [],
+  coachingRelationshipEnd: [],
+  coachingSessionSave: [],
+  coachingSessionContentSave: [],
+  coachingSessionConfirm: [],
+  coachingSessionCancel: [],
+  coachingActionSave: [],
+  coachingActionPublish: [],
+  growthAttachmentPrepare: [],
+  growthAttachmentComplete: [],
+  growthAttachmentUrl: [],
+  growthEmailPreferencesSave: [],
+  coachingCalendarResolve: [],
+  coachingCalendarRetry: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
   salesforceTopBuyers: ['dashboard'],
@@ -1481,7 +1658,7 @@ async function universalAuditTrail(body, req) {
   const keyword = String(body.keyword || '').trim().toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows] = await Promise.all([
+  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows] = await Promise.all([
     safeAuditRows(
       client
         .from('admin_audit_logs')
@@ -1659,6 +1836,28 @@ async function universalAuditTrail(body, req) {
           hasDelivery: Boolean(row.delivery_id),
         },
       })),
+    safeAuditRows(
+      client
+        .from('growth_events')
+        .select('id,subject_type,subject_id,event_type,actor_email,target_user_id,summary,metadata,created_at')
+        .order('created_at', { ascending: false })
+        .limit(queryLimit),
+      (row) => ({
+        id: `growth:${row.id}`,
+        source: 'Growth & Coaching',
+        module: 'Growth & Coaching',
+        action: normalizedAuditAction(row.event_type),
+        createdAt: row.created_at,
+        actor: row.actor_email || 'System',
+        target: row.subject_type || 'Growth & Coaching',
+        summary: row.summary || 'Growth & Coaching workflow event.',
+        metadata: {
+          ...(row.metadata || {}),
+          subjectType: row.subject_type,
+          hasSubject: Boolean(row.subject_id),
+          hasTargetUser: Boolean(row.target_user_id),
+        },
+      })),
   ]);
 
   let rows = [
@@ -1671,6 +1870,7 @@ async function universalAuditTrail(body, req) {
     ...disputeRows,
     ...internalEmailRows,
     ...fcosUpdateRows,
+    ...growthRows,
   ].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
@@ -4539,7 +4739,7 @@ function externalActionGateHealthRow() {
     ])),
     notes: unexpected.length
       ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`]
-      : ['Existing Salesforce, Google Drive, and email functions are live. New bank and payment-promotion actions remain UAT gated.'],
+      : ['Existing Salesforce, Google Drive, and shared SMTP functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
   };
 }
 
@@ -4634,6 +4834,36 @@ async function smtpHealthRow() {
     tokenExpiry: 'Not applicable.',
     details: { deliveryGateEnabled: isExternalActionEnabled('email_delivery') },
     notes: ['This check verifies login only; it does not send an email. The emergency delivery control is reported separately.'],
+  }, result);
+}
+
+async function outlookCalendarHealthRow() {
+  const required = ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'];
+  const configured = missingEnv(required).length === 0;
+  const result = configured ? await timedCheck(async () => {
+    const health = await growthCalendarHealth();
+    if (health.status !== 'Online') throw new Error(health.error || 'Microsoft Graph calendar authentication failed.');
+    return {
+      permission: 'Application Calendars.ReadWrite',
+      mailboxScope: 'Exchange Online Application RBAC',
+      calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
+    };
+  }) : null;
+  return healthRow({
+    id: 'outlook-growth-calendar',
+    name: 'Outlook Coaching Calendar',
+    category: 'Growth & Coaching',
+    purpose: 'Creates and updates private 1:1 coaching invitations without placing agendas or notes in Outlook.',
+    scope: 'server',
+    provider: 'Microsoft Graph',
+    endpoint: 'https://graph.microsoft.com/v1.0',
+    authType: 'OAuth client credentials with Exchange Application RBAC',
+    configured,
+    configuredEnv: configuredEnv(required),
+    missingEnv: missingEnv(required),
+    tokenExpiry: 'Short-lived Microsoft Graph tokens are refreshed server-side.',
+    details: { calendarGateEnabled: isExternalActionEnabled('outlook_calendar') },
+    notes: ['This check validates credentials only and never creates a calendar event.'],
   }, result);
 }
 
@@ -4769,6 +4999,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('frankfurter', 30 * 60, force, frankfurterHealthRow),
     cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
     cachedHealthCheck('smtp', 5 * 60, force, smtpHealthRow),
+    cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
   const summary = rows.reduce((acc, row) => {
@@ -14655,6 +14886,33 @@ const handlers = {
   collaborationNotificationsList,
   collaborationNotificationsRead,
   collaborationDailyCron,
+  workNotificationsList,
+  workNotificationsRead,
+  growthReportingLinesList,
+  growthReportingLineSave,
+  growthCoachingBootstrap,
+  growthPlanSave,
+  growthGoalSave,
+  growthGoalSubmit,
+  growthGoalDecision,
+  growthGoalProgressSave,
+  growthGoalCompletion,
+  coachingRelationshipInvite,
+  coachingRelationshipRespond,
+  coachingRelationshipEnd,
+  coachingSessionSave,
+  coachingSessionContentSave,
+  coachingSessionConfirm,
+  coachingSessionCancel,
+  coachingActionSave,
+  coachingActionPublish,
+  growthAttachmentPrepare,
+  growthAttachmentComplete,
+  growthAttachmentUrl,
+  growthEmailPreferencesSave,
+  coachingCalendarResolve,
+  coachingCalendarRetry,
+  growthCoachingDailyCron,
   salesforceSchema,
   salesforceObjectFields,
   salesforceQuery,
@@ -14783,6 +15041,7 @@ export default async function handler(req, res) {
       return sendJson(res, {
         error: error.message,
         ...(error.details !== undefined ? { details: error.details } : {}),
+        ...(error.details?.current !== undefined ? { current: error.details.current } : {}),
       }, status);
     } finally {
       logRequestTelemetry(res.statusCode || 500);

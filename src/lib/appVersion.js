@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.51';
+export const APP_VERSION = '2.0.52';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.52',
+    releasedAt: '2026-07-31',
+    title: 'Growth and coaching',
+    changes: [
+      'Added employee-authored measurable development goals with checkpoints, reporting-line approval, progress evidence, and completion review.',
+      'Added confidential equal-participant coaching with mutual invitations, private preparation, shared session confirmation, actions, and private files.',
+      'Added unified work notifications, controlled reminder emails, Outlook calendar synchronization states, and Administrator reporting-line setup.',
+    ],
+  },
   {
     version: '2.0.51',
     releasedAt: '2026-07-31',
