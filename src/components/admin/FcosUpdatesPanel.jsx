@@ -18,6 +18,7 @@ import {
   SkipForward,
   Trash2,
   Undo2,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
@@ -75,6 +76,7 @@ const EMPTY_BATCH = {
   introduction: 'The following FCOS updates are now available.',
   closing: 'Please sign in to FCOS to review the latest changes.',
   items: [],
+  recipients: [],
   deliveries: [],
 };
 
@@ -123,6 +125,11 @@ function batchFromRecord(batch) {
       sourceVersion: item.source?.sourceVersion || '',
       sourceReleaseDate: item.source?.sourceReleaseDate || '',
     })),
+    recipients: (batch.recipients || []).map((recipient) => ({
+      userId: recipient.userId,
+      name: recipient.name,
+      email: recipient.email,
+    })),
   };
 }
 
@@ -137,6 +144,11 @@ function comparableBatch(batch) {
       emailTitle: item.emailTitle,
       emailBody: item.emailBody,
       expectedRevision: item.expectedRevision,
+    })),
+    recipients: (batch?.recipients || []).map((recipient) => ({
+      userId: recipient.userId,
+      name: recipient.name,
+      email: recipient.email,
     })),
   });
 }
@@ -199,6 +211,7 @@ export default function FcosUpdatesPanel() {
   const [reason, setReason] = useState('');
   const [sendConfirmation, setSendConfirmation] = useState(null);
   const [discardConfirmation, setDiscardConfirmation] = useState(false);
+  const [addRecipientId, setAddRecipientId] = useState('');
 
   const load = async ({ force = false, sync = true } = {}) => {
     setLoading(true);
@@ -293,12 +306,30 @@ export default function FcosUpdatesPanel() {
         ? `FCOS Update: ${selected[0].emailTitle || selected[0].sourceTitle}`
         : `FCOS Updates: ${selected.length} changes`,
       items: selected.map(itemBatchDraft),
+      recipients: (model.activeRecipients || []).map((recipient) => ({
+        userId: recipient.userId,
+        name: recipient.name,
+        email: recipient.email,
+      })),
     });
+    setAddRecipientId('');
     setBatchOpen(true);
   };
 
   const openBatch = (batch) => {
-    setBatchDraft(batchFromRecord(batch));
+    const draft = batchFromRecord(batch);
+    if (
+      !draft.recipients.length
+      && ['Draft', 'Revision Requested', 'Pending Approval', 'Approved'].includes(draft.status)
+    ) {
+      draft.recipients = (model.activeRecipients || []).map((recipient) => ({
+        userId: recipient.userId,
+        name: recipient.name,
+        email: recipient.email,
+      }));
+    }
+    setBatchDraft(draft);
+    setAddRecipientId('');
     setBatchOpen(true);
   };
 
@@ -343,6 +374,35 @@ export default function FcosUpdatesPanel() {
     }));
   };
 
+  const updateRecipient = (index, patch) => {
+    setBatchDraft((current) => ({
+      ...current,
+      recipients: current.recipients.map((recipient, recipientIndex) => (
+        recipientIndex === index ? { ...recipient, ...patch } : recipient
+      )),
+    }));
+  };
+
+  const removeRecipient = (index) => {
+    setBatchDraft((current) => ({
+      ...current,
+      recipients: current.recipients.filter((_, recipientIndex) => recipientIndex !== index),
+    }));
+  };
+
+  const addRecipient = () => {
+    const recipient = (model.activeRecipients || []).find((item) => item.userId === addRecipientId);
+    if (!recipient || batchDraft.recipients.some((item) => item.userId === recipient.userId)) return;
+    setBatchDraft((current) => ({
+      ...current,
+      recipients: [
+        ...current.recipients,
+        { userId: recipient.userId, name: recipient.name, email: recipient.email },
+      ],
+    }));
+    setAddRecipientId('');
+  };
+
   const saveBatch = async () => {
     const response = await appClient.functions.invoke('adminFcosUpdateBatchSave', {
       batchId: batchDraft.id,
@@ -351,6 +411,7 @@ export default function FcosUpdatesPanel() {
       introduction: batchDraft.introduction,
       closing: batchDraft.closing,
       items: batchDraft.items,
+      recipients: batchDraft.recipients,
     });
     if (response.data?.error) {
       setError(response.data.error);
@@ -538,7 +599,7 @@ export default function FcosUpdatesPanel() {
     }
     setSendConfirmation({
       ...current,
-      recipientCount: Number(response.data?.activeRecipientCount || 0),
+      recipientCount: Number(current.recipients?.length || 0),
     });
   };
 
@@ -558,6 +619,9 @@ export default function FcosUpdatesPanel() {
   };
   const batchReadOnly = ['Sending', 'Sent', 'Partial Failure', 'Cancelled'].includes(batchDraft.status);
   const canControl = model.authority?.canControl === true;
+  const availableRecipients = (model.activeRecipients || []).filter((recipient) => (
+    !batchDraft.recipients.some((selected) => selected.userId === recipient.userId)
+  ));
 
   return (
     <div className="min-h-[calc(100vh-322px)]">
@@ -651,7 +715,7 @@ export default function FcosUpdatesPanel() {
                 </div>
                 <Badge variant="outline" className={cn('w-fit self-center', STATUS_STYLES[batch.status])}>{batch.status}</Badge>
                 <div className="self-center text-xs text-muted-foreground">
-                  {batch.recipientCount || model.activeRecipientCount} recipients
+                  {batch.recipientCount || batch.recipients?.length || 0} recipients
                 </div>
                 <div className="self-center text-xs text-muted-foreground">
                   {batch.status === 'Partial Failure'
@@ -842,6 +906,81 @@ export default function FcosUpdatesPanel() {
                   />
                 </div>
 
+                <div>
+                  <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <Label>Recipients</Label>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Each recipient receives a separate private email. Saving recipient changes returns an approved email to Draft.
+                      </p>
+                    </div>
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {batchDraft.recipients.length} selected
+                    </span>
+                  </div>
+                  {!batchReadOnly && availableRecipients.length > 0 && (
+                    <div className="mb-2 flex min-w-0 gap-2">
+                      <select
+                        value={addRecipientId}
+                        onChange={(event) => setAddRecipientId(event.target.value)}
+                        className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                        aria-label="Add active FCOS recipient"
+                      >
+                        <option value="">Add an active FCOS user...</option>
+                        {availableRecipients.map((recipient) => (
+                          <option key={recipient.userId} value={recipient.userId}>
+                            {recipient.name} · {recipient.email}
+                          </option>
+                        ))}
+                      </select>
+                      <Button type="button" variant="outline" onClick={addRecipient} disabled={!addRecipientId}>
+                        <UserPlus className="h-4 w-4" />
+                        Add
+                      </Button>
+                    </div>
+                  )}
+                  <div className="max-h-72 overflow-auto border-y border-border">
+                    {batchDraft.recipients.map((recipient, index) => (
+                      <div
+                        key={recipient.userId}
+                        className="grid gap-2 border-b border-border py-2 last:border-b-0 sm:grid-cols-[minmax(140px,0.8fr)_minmax(220px,1.2fr)_36px]"
+                      >
+                        <Input
+                          maxLength={255}
+                          disabled={batchReadOnly}
+                          value={recipient.name}
+                          aria-label={`Recipient ${index + 1} name`}
+                          onChange={(event) => updateRecipient(index, { name: event.target.value })}
+                        />
+                        <Input
+                          type="email"
+                          maxLength={320}
+                          disabled={batchReadOnly}
+                          value={recipient.email}
+                          aria-label={`Recipient ${index + 1} email`}
+                          onChange={(event) => updateRecipient(index, { email: event.target.value })}
+                        />
+                        {!batchReadOnly && (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            title="Remove recipient"
+                            onClick={() => removeRecipient(index)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    {!batchDraft.recipients.length && (
+                      <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                        Add at least one active FCOS recipient before saving.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="border-y border-border">
                   {batchDraft.items.map((item, index) => (
                     <div key={item.itemId} className="space-y-3 border-b border-border py-4 last:border-b-0">
@@ -937,10 +1076,13 @@ export default function FcosUpdatesPanel() {
                       <Eye className="h-4 w-4" />
                       Email preview
                     </div>
-                    <span className="text-xs text-muted-foreground">{model.activeRecipientCount} active users</span>
+                    <span className="text-xs text-muted-foreground">{batchDraft.recipients.length} recipients</span>
                   </div>
                   <div className="border-y border-border bg-slate-50 px-4 py-5">
                     <div className="text-xs font-bold text-blue-700">FCOS</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      From: {model.sender?.name || 'FCOS Updates'} &lt;{model.sender?.address || 'Sender not configured'}&gt;
+                    </div>
                     <div className="mt-1 text-xl font-semibold text-slate-950">System updates</div>
                     {batchDraft.introduction && (
                       <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">{batchDraft.introduction}</p>
@@ -1001,14 +1143,14 @@ export default function FcosUpdatesPanel() {
                 <Button
                   variant="outline"
                   onClick={saveAndCloseBatch}
-                  disabled={!batchDraft.items.length || (Boolean(batchDraft.id) && !batchIsDirty) || working === 'batch:save'}
+                  disabled={!batchDraft.items.length || !batchDraft.recipients.length || (Boolean(batchDraft.id) && !batchIsDirty) || working === 'batch:save'}
                 >
                   {working === 'batch:save' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                   Save draft
                 </Button>
               )}
               {['Draft', 'Revision Requested'].includes(batchDraft.status) && (
-                <Button onClick={submitBatch} disabled={!batchDraft.items.length || Boolean(working)}>
+                <Button onClick={submitBatch} disabled={!batchDraft.items.length || !batchDraft.recipients.length || Boolean(working)}>
                   <Send className="h-4 w-4" />
                   Submit
                 </Button>
@@ -1097,20 +1239,31 @@ export default function FcosUpdatesPanel() {
               Send approved FCOS update?
             </DialogTitle>
             <DialogDescription>
-              This sends one individual email to each currently active FCOS user. It cannot be recalled.
+              This sends one individual email to each saved recipient. It cannot be recalled.
             </DialogDescription>
           </DialogHeader>
           <div className="border-y border-border py-4">
             <div className="text-sm font-semibold text-foreground">{sendConfirmation?.subject}</div>
             <div className="mt-1 text-sm text-muted-foreground">
-              {sendConfirmation?.items?.length || 0} update{sendConfirmation?.items?.length === 1 ? '' : 's'} · {sendConfirmation?.recipientCount || 0} active recipients
+              {sendConfirmation?.items?.length || 0} update{sendConfirmation?.items?.length === 1 ? '' : 's'} · {sendConfirmation?.recipientCount || 0} saved recipients
+            </div>
+            <div className="mt-3 max-h-52 overflow-auto border-y border-border">
+              {(sendConfirmation?.recipients || []).map((recipient) => (
+                <div key={recipient.userId} className="border-b border-border px-2 py-2 text-xs last:border-b-0">
+                  <div className="font-semibold text-foreground">{recipient.name}</div>
+                  <div className="text-muted-foreground">{recipient.email}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 text-xs text-muted-foreground">
+              Sender: {model.sender?.name || 'FCOS Updates'} &lt;{model.sender?.address || 'Not configured'}&gt;
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendConfirmation(null)}>Cancel</Button>
             <Button onClick={sendBatch} disabled={working === 'batch:send'}>
               {working === 'batch:send' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Send to all active users
+              Send to saved recipients
             </Button>
           </DialogFooter>
         </DialogContent>

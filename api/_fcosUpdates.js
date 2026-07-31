@@ -17,7 +17,7 @@ const EDITABLE_BATCH_STATUSES = new Set(['Draft', 'Revision Requested', 'Pending
 const REASON_MIN_LENGTH = 8;
 const REASON_MAX_LENGTH = 255;
 const INTERRUPTED_DELIVERY_MINUTES = 15;
-const UPDATE_TABLE_PATTERN = /fcos_update_(settings|items|batches|batch_items|deliveries|events)/i;
+const UPDATE_TABLE_PATTERN = /fcos_update_(settings|items|batches|batch_items|batch_recipients|deliveries|events)/i;
 
 function updateError(message, status = 400, code = 'FCOS_UPDATE_ERROR', details = undefined) {
   const error = new Error(message);
@@ -167,6 +167,19 @@ function serializeDelivery(row = {}) {
   };
 }
 
+function serializeRecipient(row = {}) {
+  return {
+    id: row.id,
+    batchId: row.batch_id,
+    userId: row.user_id,
+    name: row.recipient_name || '',
+    email: row.recipient_email || '',
+    sortOrder: Number(row.sort_order || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function serializeBatchItem(row = {}) {
   const source = row.fcos_update_items || row.item || null;
   return {
@@ -212,6 +225,9 @@ function serializeBatch(row = {}) {
     completedAt: row.completed_at || null,
     items: (row.fcos_update_batch_items || row.items || [])
       .map(serializeBatchItem)
+      .sort((left, right) => left.sortOrder - right.sortOrder),
+    recipients: (row.fcos_update_batch_recipients || row.recipients || [])
+      .map(serializeRecipient)
       .sort((left, right) => left.sortOrder - right.sortOrder),
     deliveries: (row.fcos_update_deliveries || row.deliveries || [])
       .map(serializeDelivery)
@@ -426,6 +442,7 @@ const BATCH_SELECT = [
     id,batch_id,item_id,sort_order,category,email_title,email_body,item_revision_snapshot,
     fcos_update_items(${ITEM_SELECT})
   )`,
+  'fcos_update_batch_recipients(id,batch_id,user_id,recipient_name,recipient_email,sort_order,created_at,updated_at)',
   'fcos_update_deliveries(id,batch_id,user_id,recipient_name,recipient_email,status,attempt_count,email_message_id,last_error,last_attempt_at,sent_at,created_at,updated_at)',
 ].join(',');
 
@@ -448,8 +465,10 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
       .limit(200),
     client
       .from('user_profiles')
-      .select('id', { count: 'exact', head: true })
-      .eq('active', true),
+      .select('id,email,full_name')
+      .eq('active', true)
+      .order('full_name', { ascending: true })
+      .order('email', { ascending: true }),
     loadSettings(client),
     isGeneralManager(client, profile),
   ]);
@@ -471,7 +490,17 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     items,
     batches,
     counters,
-    activeRecipientCount: Number(recipientsResult.count || 0),
+    activeRecipients: (recipientsResult.data || []).map((recipient, index) => ({
+      userId: recipient.id,
+      name: recipient.full_name || recipient.email,
+      email: String(recipient.email || '').trim().toLowerCase(),
+      sortOrder: index,
+    })),
+    activeRecipientCount: Number(recipientsResult.data?.length || 0),
+    sender: {
+      name: cleanText(process.env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100),
+      address: String(process.env.SMTP_USER || '').trim().toLowerCase(),
+    },
     authority: {
       canPrepare: profile.user_type === 'administrator',
       canControl: generalManager,
@@ -561,6 +590,37 @@ function normalizeBatchItems(value) {
   });
 }
 
+function normalizeBatchRecipients(value) {
+  if (!Array.isArray(value) || !value.length) {
+    throw updateError('Select at least one active FCOS recipient.');
+  }
+  const userIds = new Set();
+  const emails = new Set();
+  return value.map((recipient, index) => {
+    const userId = String(recipient?.userId || '').trim();
+    const name = validateRequiredText(recipient?.name, 'Recipient name', 1, 255);
+    const email = String(recipient?.email || '').trim().toLowerCase();
+    if (!userId || userIds.has(userId)) {
+      throw updateError('Each recipient must be a unique active FCOS user.');
+    }
+    if (
+      email.length > 320
+      || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      || emails.has(email)
+    ) {
+      throw updateError('Enter one unique valid email address for every recipient.');
+    }
+    userIds.add(userId);
+    emails.add(email);
+    return {
+      userId,
+      name,
+      email,
+      sortOrder: index,
+    };
+  });
+}
+
 export async function saveFcosUpdateBatch({ client, profile, body }) {
   const batchId = body.batchId ? String(body.batchId).trim() : null;
   const expectedRevision = batchId ? Number(body.expectedRevision) : 0;
@@ -571,14 +631,16 @@ export async function saveFcosUpdateBatch({ client, profile, body }) {
   if (items.some((item) => !Number.isInteger(item.expectedRevision) || item.expectedRevision < 1)) {
     throw updateError('Every update must include its current revision.');
   }
+  const recipients = normalizeBatchRecipients(body.recipients);
 
-  const { data, error } = await client.rpc('save_fcos_update_batch', {
+  const { data, error } = await client.rpc('save_fcos_update_batch_with_recipients', {
     p_batch_id: batchId,
     p_expected_revision: expectedRevision,
     p_subject: validateRequiredText(body.subject, 'Email subject', 1, 200),
     p_introduction: validateOptionalText(body.introduction, 'Email introduction', 2000),
     p_closing: validateOptionalText(body.closing, 'Email closing', 1000),
     p_items: items,
+    p_recipients: recipients,
     p_actor_id: profile.id,
     p_actor_email: profile.email,
   });
@@ -637,6 +699,7 @@ export async function submitFcosUpdateBatch({ client, profile, body }) {
     throw updateError('Only a Draft or Revision Requested email can be submitted.');
   }
   if (!batch.fcos_update_batch_items?.length) throw updateError('Select at least one FCOS update.');
+  if (!batch.fcos_update_batch_recipients?.length) throw updateError('Select at least one FCOS recipient.');
   const updated = await updateBatchWithRevision(client, batch, {
     status: 'Pending Approval',
     submitted_by: profile.id,
@@ -662,6 +725,7 @@ export async function approveFcosUpdateBatch({ client, profile, body }) {
   requireExpectedBatchRevision(batch, body);
   if (batch.status !== 'Pending Approval') throw updateError('Only a Pending Approval email can be approved.');
   if (!batch.fcos_update_batch_items?.length) throw updateError('Select at least one FCOS update.');
+  if (!batch.fcos_update_batch_recipients?.length) throw updateError('Select at least one FCOS recipient.');
 
   for (const batchItem of batch.fcos_update_batch_items) {
     const item = batchItem.fcos_update_items;
@@ -1078,18 +1142,6 @@ async function processFcosUpdateDeliveries({
   return updateBatchDeliverySummary(client, batch.id, profile);
 }
 
-async function activeRecipientRows(client) {
-  const { data, error } = await client
-    .from('user_profiles')
-    .select('id,email,full_name')
-    .eq('active', true)
-    .order('full_name', { ascending: true })
-    .order('email', { ascending: true });
-  if (error) throw error;
-  if (!data?.length) throw updateError('There are no active FCOS users to receive this update.');
-  return data;
-}
-
 export async function sendFcosUpdateBatch({ client, profile, body }) {
   await requireGeneralManager(client, profile);
   const batch = await loadBatch(client, body.batchId);
@@ -1097,14 +1149,13 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
   if (batch.status !== 'Approved' || Number(batch.approved_revision) !== Number(batch.revision)) {
     throw updateError('Only the current approved revision can be sent.');
   }
-  const recipients = await activeRecipientRows(client);
   const expectedRecipientCount = Number(body.expectedRecipientCount);
   if (!Number.isInteger(expectedRecipientCount) || expectedRecipientCount < 1) {
-    throw updateError('Refresh the active-recipient count before sending.', 409, 'RECIPIENT_PREFLIGHT_REQUIRED');
+    throw updateError('Review the saved recipient list before sending.', 409, 'RECIPIENT_PREFLIGHT_REQUIRED');
   }
-  if (expectedRecipientCount !== recipients.length) {
+  if (expectedRecipientCount !== batch.fcos_update_batch_recipients?.length) {
     throw updateError(
-      `The active-recipient count changed from ${expectedRecipientCount} to ${recipients.length}. Review the updated count before sending.`,
+      'The saved recipient list changed. Review it again before sending.',
       409,
       'RECIPIENT_COUNT_CHANGED',
     );
@@ -1112,15 +1163,10 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
   const transporter = await createSmtpTransport({}, { pool: true, maxConnections: 3, maxMessages: 100 });
   let sendingStarted = false;
   try {
-    const { error } = await client.rpc('start_fcos_update_delivery', {
+    const { error } = await client.rpc('start_fcos_update_saved_delivery', {
       p_batch_id: batch.id,
       p_expected_revision: expectedRevision,
       p_expected_recipient_count: expectedRecipientCount,
-      p_recipients: recipients.map((recipient) => ({
-        userId: recipient.id,
-        name: recipient.full_name || recipient.email,
-        email: String(recipient.email || '').trim().toLowerCase(),
-      })),
       p_actor_id: profile.id,
       p_actor_email: profile.email,
     });

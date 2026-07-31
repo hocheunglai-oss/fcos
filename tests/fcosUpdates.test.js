@@ -106,22 +106,36 @@ test('FCOS update migration creates service-only workflow and General Manager co
 });
 
 test('FCOS update workflow protects reviewed revisions and interrupted delivery', async () => {
-  const [server, panel] = await Promise.all([
+  const [server, panel, recipientMigration] = await Promise.all([
     readFile(new URL('../api/_fcosUpdates.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/admin/FcosUpdatesPanel.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260731083127_fcos_update_saved_recipients.sql', import.meta.url), 'utf8'),
   ]);
 
   assert.match(server, /function requireExpectedBatchRevision/);
   assert.match(server, /recoverInterruptedFcosUpdateDeliveries/);
-  assert.match(server, /rpc\('start_fcos_update_delivery'/);
+  assert.match(server, /rpc\('save_fcos_update_batch_with_recipients'/);
+  assert.match(server, /rpc\('start_fcos_update_saved_delivery'/);
   assert.match(server, /rpc\('finalize_fcos_update_delivery'/);
   assert.match(server, /const statuses = includeUncertain \? \['Uncertain'\] : \['Failed'\]/);
   assert.match(server, /result\.accepted\.length !== 1/);
+  assert.match(server, /sender:[\s\S]*FCOS_UPDATE_SENDER_NAME[\s\S]*SMTP_USER/);
 
   assert.match(panel, /const batchIsDirty = useMemo/);
   assert.match(panel, /!batchDraft\.id \|\| batchIsDirty \? await saveBatch\(\) : batchDraft/);
+  assert.match(panel, /recipients: batchDraft\.recipients/);
+  assert.match(panel, /Saving recipient changes returns an approved email to Draft/);
+  assert.match(panel, /Sender: \{model\.sender\?\.name/);
   assert.match(panel, /expectedRevision: sendConfirmation\.revision/);
   assert.match(panel, /expectedRecipientCount: sendConfirmation\.recipientCount/);
   assert.match(panel, /disabled=\{Boolean\(working\) \|\| batchIsDirty\}/);
   assert.match(panel, /Discard unsaved changes\?/);
+
+  assert.match(recipientMigration, /create table if not exists public\.fcos_update_batch_recipients/);
+  assert.match(recipientMigration, /function public\.save_fcos_update_batch_with_recipients[\s\S]*security invoker/);
+  assert.match(recipientMigration, /function public\.start_fcos_update_saved_delivery[\s\S]*security invoker/);
+  assert.match(recipientMigration, /alter table public\.fcos_update_batch_recipients enable row level security/);
+  assert.match(recipientMigration, /revoke all on table public\.fcos_update_batch_recipients from public, anon, authenticated/);
+  assert.match(recipientMigration, /grant all on table public\.fcos_update_batch_recipients to service_role/);
+  assert.doesNotMatch(recipientMigration, /security definer/i);
 });

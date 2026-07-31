@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.52';
+export const APP_VERSION = '2.0.53';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.53',
+    releasedAt: '2026-07-31',
+    title: 'FCOS update email recipients',
+    changes: [
+      'Added a saved, editable recipient list and visible authenticated sender to the FCOS update email review workflow.',
+    ],
+  },
   {
     version: '2.0.52',
     releasedAt: '2026-07-31',
