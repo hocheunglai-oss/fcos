@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.69';
+export const APP_VERSION = '2.0.70';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.70',
+    releasedAt: '2026-08-01',
+    title: 'Email sender separation',
+    changes: [
+      'Separated the shared operational SMTP mailbox from the dedicated FCOS Updates sender throughout Settings.',
+      'Added independent non-sending health checks for the operational SMTP and FCOS Updates delivery channels.',
+      'Clarified that General Manager sending authority does not determine or change the FCOS Updates sender mailbox.',
+    ],
+  },
   {
     version: '2.0.69',
     releasedAt: '2026-08-01',

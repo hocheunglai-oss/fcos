@@ -48,6 +48,8 @@ import {
 } from '../_collaborationService.js';
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { sendWithSmtp, sendWithSmtpSendAsFallback, smtpAuthenticatedFromAddress } from '../_smtp.js';
+import { verifyMicrosoftGraphMailAuthentication } from '../_microsoftGraphMail.js';
+import { emailSenderStatus } from '../_emailSenderStatus.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
@@ -83,7 +85,7 @@ import {
   growthReportingLinesSaveBatch as growthReportingLinesSaveBatchService,
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
-import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
+import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, fcosUpdateMailConfig, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
 import {
   agreedCompensationClaimsForAccount,
   createUnofficialCompensationClaim as createUnofficialCompensationClaimService,
@@ -1051,6 +1053,7 @@ const HANDLER_MODULE_ACCESS = {
   accountManagersSave: ['buyers_administrator'],
   accountManagersSaveNote: ['buyers_administrator'],
   accountManagersRetrySync: ['buyers_administrator'],
+  emailSenderStatus: ['settings'],
   systemHealth: ['settings'],
   dashboardAiSettingsGet: ['settings'],
   dashboardAiSettingsSave: ['settings'],
@@ -5530,6 +5533,125 @@ async function smtpHealthRow() {
   );
 }
 
+async function fcosUpdatesMailHealthRow() {
+  const mailConfig = fcosUpdateMailConfig();
+  const usesGraph = mailConfig.deliveryMethod === 'microsoft_graph_oidc';
+  const deliveryGateEnabled = isExternalActionEnabled('email_delivery');
+  const requiredGraphEnv = [
+    'FCOS_UPDATE_MICROSOFT_TENANT_ID',
+    'FCOS_UPDATE_MICROSOFT_CLIENT_ID',
+    'FCOS_UPDATE_MICROSOFT_MAILBOX',
+  ];
+  const missingGraphEnv = usesGraph ? missingEnv(requiredGraphEnv) : [];
+  const transportConfigured = usesGraph
+    ? missingGraphEnv.length === 0
+    : Boolean(mailConfig.smtp.host && mailConfig.smtp.user && mailConfig.smtp.password);
+  const senderConfigured = Boolean(mailConfig.senderAddress && mailConfig.authenticatedAddress);
+  const configured = transportConfigured && senderConfigured && !mailConfig.configurationIssue;
+  const hasPartialConfiguration = Boolean(
+    mailConfig.configurationIssue
+    || (usesGraph && requiredGraphEnv.some((name) => process.env[name]))
+    || (!usesGraph && (mailConfig.smtp.host || mailConfig.smtp.user || mailConfig.smtp.password))
+  );
+
+  const result = configured || hasPartialConfiguration
+    ? await timedCheck(async () => {
+        if (mailConfig.configurationIssue) throw new Error(mailConfig.configurationIssue);
+        let details;
+        if (usesGraph) {
+          details = await verifyMicrosoftGraphMailAuthentication(mailConfig.graph);
+        } else {
+          const nodemailer = await import('nodemailer');
+          const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
+          if (!createTransport) throw new Error('SMTP email library failed to load.');
+          const port = Number(mailConfig.smtp.port || 587);
+          const transporter = createTransport({
+            host: mailConfig.smtp.host,
+            port,
+            secure: mailConfig.smtp.secure != null
+              ? mailConfig.smtp.secure === true || mailConfig.smtp.secure === 'true'
+              : port === 465,
+            connectionTimeout: 7000,
+            greetingTimeout: 7000,
+            socketTimeout: 10000,
+            auth: {
+              user: mailConfig.smtp.user,
+              pass: mailConfig.smtp.password,
+            },
+          });
+          try {
+            await transporter.verify();
+          } finally {
+            transporter.close?.();
+          }
+          details = {
+            method: 'smtp',
+            authenticatedAddress: mailConfig.authenticatedAddress,
+          };
+        }
+        return {
+          ...details,
+          senderAddress: mailConfig.senderAddress,
+          senderName: mailConfig.senderName,
+          deliveryGateEnabled,
+          mailboxSendAuthorization: usesGraph ? 'Validated during an actual FCOS Updates send' : 'SMTP authentication verified',
+        };
+      })
+    : null;
+
+  if (result?.ok) {
+    result.status = !deliveryGateEnabled
+      ? 'disabled'
+      : mailConfig.requiresSendAs
+        ? 'warning'
+        : 'online';
+  }
+
+  return healthRow(
+    {
+      id: 'fcos-updates-mail',
+      name: usesGraph ? 'FCOS Updates Microsoft 365 Sender' : 'FCOS Updates SMTP Sender',
+      category: 'Email',
+      purpose: 'Dedicated sender identity for administrator-controlled FCOS Updates email batches.',
+      scope: 'server',
+      provider: usesGraph ? 'Microsoft Graph' : 'SMTP',
+      endpoint: usesGraph ? 'https://login.microsoftonline.com' : mailConfig.smtp.host || null,
+      authType: usesGraph ? 'Vercel OIDC to Microsoft OAuth' : 'SMTP username/password',
+      configured: configured || hasPartialConfiguration,
+      configuredEnv: configuredEnv(usesGraph ? [
+        'FCOS_UPDATE_TRANSPORT',
+        ...requiredGraphEnv,
+        'FCOS_UPDATE_FROM_EMAIL',
+        'FCOS_UPDATE_SENDER_NAME',
+      ] : [
+        'FCOS_UPDATE_SMTP_HOST',
+        'FCOS_UPDATE_SMTP_PORT',
+        'FCOS_UPDATE_SMTP_USER',
+        'FCOS_UPDATE_SMTP_PASSWORD',
+        'FCOS_UPDATE_SMTP_SECURE',
+        'FCOS_UPDATE_FROM_EMAIL',
+        'FCOS_UPDATE_SENDER_NAME',
+      ]),
+      missingEnv: usesGraph ? missingGraphEnv : [],
+      tokenExpiry: usesGraph ? null : 'Not applicable.',
+      details: {
+        senderAddress: mailConfig.senderAddress || null,
+        authenticatedAddress: mailConfig.authenticatedAddress || null,
+        deliveryMethod: mailConfig.deliveryMethod,
+        deliveryGateEnabled,
+        requiresSendAs: mailConfig.requiresSendAs,
+      },
+      notes: [
+        usesGraph
+          ? 'This check verifies Vercel OIDC and Microsoft token exchange without sending email. Mailbox-scoped send authorization is confirmed only during an actual update send.'
+          : 'This check verifies SMTP login without sending email.',
+        'General Manager authority and the configured sender mailbox are independent.',
+      ],
+    },
+    result,
+  );
+}
+
 async function outlookCalendarHealthRow() {
   const required = ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'];
   const configured = missingEnv(required).length === 0;
@@ -5697,6 +5819,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('frankfurter', 30 * 60, force, frankfurterHealthRow),
     cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
     cachedHealthCheck('smtp', 5 * 60, force, smtpHealthRow),
+    cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
@@ -15412,6 +15535,7 @@ const handlers = {
   accountManagersSave,
   accountManagersSaveNote,
   accountManagersRetrySync,
+  emailSenderStatus,
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,

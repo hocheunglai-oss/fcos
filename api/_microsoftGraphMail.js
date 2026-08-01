@@ -26,8 +26,7 @@ function requiredConfigValue(value, label) {
   return normalized;
 }
 
-export async function createMicrosoftGraphMailTransport(config, dependencies = {}) {
-  requireExternalActionGate('email_delivery', dependencies.env || process.env);
+async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
   const tenantId = requiredConfigValue(config?.tenantId, 'Microsoft tenant ID');
   const clientId = requiredConfigValue(config?.clientId, 'Microsoft application client ID');
   const mailbox = requiredConfigValue(config?.mailbox, 'Microsoft sender mailbox').toLowerCase();
@@ -84,6 +83,31 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
       status: 503,
     });
   }
+
+  const expiresIn = Number(tokenPayload?.expires_in);
+  return {
+    accessToken,
+    mailbox,
+    accessTokenExpiresAt: Number.isFinite(expiresIn) && expiresIn > 0
+      ? new Date(Date.now() + (expiresIn * 1000)).toISOString()
+      : null,
+  };
+}
+
+export async function verifyMicrosoftGraphMailAuthentication(config, dependencies = {}) {
+  const authentication = await acquireMicrosoftGraphMailToken(config, dependencies);
+  return {
+    method: 'microsoft_graph_oidc',
+    authenticatedAddress: authentication.mailbox,
+    accessTokenExpiresAt: authentication.accessTokenExpiresAt,
+  };
+}
+
+export async function createMicrosoftGraphMailTransport(config, dependencies = {}) {
+  requireExternalActionGate('email_delivery', dependencies.env || process.env);
+  const authentication = await acquireMicrosoftGraphMailToken(config, dependencies);
+  const { accessToken, mailbox } = authentication;
+  const fetchImpl = dependencies.fetchImpl || fetch;
 
   return {
     method: 'microsoft_graph_oidc',

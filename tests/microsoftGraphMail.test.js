@@ -1,12 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMicrosoftGraphMailTransport } from '../api/_microsoftGraphMail.js';
+import { createMicrosoftGraphMailTransport, verifyMicrosoftGraphMailAuthentication } from '../api/_microsoftGraphMail.js';
 
 const config = {
   tenantId: 'tenant-id',
   clientId: 'client-id',
   mailbox: 'vincent@example.com',
 };
+
+test('Microsoft Graph health authentication exchanges a token without sending email', async () => {
+  const requests = [];
+  const result = await verifyMicrosoftGraphMailAuthentication(config, {
+    oidcTokenProvider: async () => 'vercel-oidc-assertion',
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ access_token: 'graph-token', expires_in: 3600 }),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /\/oauth2\/v2\.0\/token$/);
+  assert.equal(requests[0].options.method, 'POST');
+  assert.equal(result.method, 'microsoft_graph_oidc');
+  assert.equal(result.authenticatedAddress, 'vincent@example.com');
+  assert.ok(result.accessTokenExpiresAt);
+});
 
 test('Microsoft Graph mail exchanges Vercel OIDC and sends through the configured mailbox', async () => {
   const requests = [];

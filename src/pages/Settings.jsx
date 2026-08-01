@@ -129,6 +129,62 @@ const STATUS_META = {
   },
 };
 
+function SenderChannelBand({ title, description, channel, deliveryGateEnabled }) {
+  const status = !channel
+    ? 'unavailable'
+    : !channel.configured
+      ? 'not_configured'
+      : deliveryGateEnabled
+        ? 'configured'
+        : 'disabled';
+  const sender = channel?.senderAddress
+    ? channel.senderName
+      ? `${channel.senderName} <${channel.senderAddress}>`
+      : channel.senderAddress
+    : 'Not configured';
+
+  return (
+    <section className="min-w-0 px-1 py-4 first:pt-0 last:pb-0 lg:px-5 lg:py-0 lg:first:pl-0 lg:last:pr-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+        <div>
+          <dt className="font-semibold uppercase text-muted-foreground">Sender</dt>
+          <dd className="mt-1 break-words text-foreground">{sender}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-muted-foreground">Transport</dt>
+          <dd className="mt-1 text-foreground">{channel?.transportLabel || 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-muted-foreground">Authenticated mailbox</dt>
+          <dd className="mt-1 break-words text-foreground">{channel?.authenticatedAddress || 'Not configured'}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-muted-foreground">Display name</dt>
+          <dd className="mt-1 text-foreground">
+            {channel?.displayNameMode === 'workflow_specific'
+              ? 'Set by each workflow'
+              : channel?.senderName || 'Not configured'}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-muted-foreground">Delivery gate</dt>
+          <dd className="mt-1 text-foreground">{deliveryGateEnabled ? 'Enabled' : 'Disabled'}</dd>
+        </div>
+      </dl>
+      {channel?.configurationIssue && (
+        <p className="mt-3 text-xs text-amber-700">{channel.configurationIssue}</p>
+      )}
+    </section>
+  );
+}
+
 function formatHealthDate(value) {
   if (!value) return '—';
   if (typeof value === 'string' && !/^\d{4}-\d{2}-\d{2}T/.test(value)) return value;
@@ -406,7 +462,7 @@ function SystemHealthPanel() {
     <SettingsPanel
       icon={Activity}
       title="System Health"
-      description="Live status of server-side APIs, the shared email sender, external tools, and token expiry notes."
+      description="Live status of server-side APIs, both email sender channels, external tools, and token expiry notes."
       meta={health?.generatedAt ? `Last checked ${formatHealthDate(health.generatedAt)}` : null}
     >
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -571,6 +627,9 @@ export default function SettingsPage({ methodologyAction = null }) {
   const [baseAiModelId, setBaseAiModelId] = useState(null);
   const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
   const [aiSettingsError, setAiSettingsError] = useState(null);
+  const [emailSenders, setEmailSenders] = useState(null);
+  const [emailSendersLoading, setEmailSendersLoading] = useState(true);
+  const [emailSendersError, setEmailSendersError] = useState('');
 
   useEffect(() => {
     const base = settingsSnapshot();
@@ -602,6 +661,23 @@ export default function SettingsPage({ methodologyAction = null }) {
   useEffect(() => {
     loadAiSettings();
   }, [loadAiSettings]);
+
+  const loadEmailSenders = useCallback(async () => {
+    setEmailSendersLoading(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderStatus', {}, { cache: false });
+    if (response.data?.error) {
+      setEmailSenders(null);
+      setEmailSendersError(response.data.error);
+    } else {
+      setEmailSenders(response.data || null);
+    }
+    setEmailSendersLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadEmailSenders();
+  }, [loadEmailSenders]);
 
   const settingsDraftValue = useMemo(() => ({
     exchangeRateSettings,
@@ -721,15 +797,49 @@ export default function SettingsPage({ methodologyAction = null }) {
         <TabsContent value="email" className="mt-0">
           <SettingsPanel
             icon={Mail}
-            title="Shared Email Sender"
-            description="All internal reports, late-interest requests, and external payment reminders use one centrally managed server mailbox."
+            title="Email Sender Channels"
+            description="Routine FCOS email and FCOS Updates use separately configured delivery channels and sender identities."
+            meta={emailSendersLoading ? 'Loading sender configuration' : null}
           >
-            <div className="flex items-start gap-3 py-2">
-              <Server className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+            {emailSendersError && (
+              <div className="mb-4 flex items-start gap-2 border-y border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p>{emailSendersError}</p>
+                  <Button type="button" variant="outline" size="sm" onClick={loadEmailSenders} className="mt-2 gap-2">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retry
+                  </Button>
+                </div>
+              </div>
+            )}
+            {emailSendersLoading && !emailSenders ? (
+              <StateBlock
+                icon={Loader2}
+                title="Loading sender channels"
+                description="Reading the protected operational and FCOS Updates sender configuration."
+              />
+            ) : (
+              <div className="grid divide-y divide-border border-y border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+                <SenderChannelBand
+                  title="Operational Email Sender"
+                  description="Payment reminders, reports, notifications, and other routine FCOS email authenticate through the shared SMTP mailbox. A workflow may set its display name, but FCOS enforces the authenticated mailbox address."
+                  channel={emailSenders?.operational}
+                  deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
+                />
+                <SenderChannelBand
+                  title="FCOS Updates Sender"
+                  description="Administrator-controlled FCOS Updates batches use their dedicated mailbox and transport instead of the operational SMTP identity."
+                  channel={emailSenders?.fcosUpdates}
+                  deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
+                />
+              </div>
+            )}
+            <div className="mt-4 flex items-start gap-3 text-xs leading-5 text-muted-foreground">
+              <Server className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <h3 className="text-sm font-semibold text-foreground">Central SMTP sender</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Every user sends through the same mailbox and sender identity.</p>
-                <p className="mt-1 text-xs text-muted-foreground">Credentials are stored only in Vercel. Connection status is available in System Health.</p>
+                <p>Credentials and Microsoft application settings are stored only in Vercel. Each channel has a separate connection check in System Health.</p>
+                <p className="mt-1">{emailSenders?.authorityNote || 'General Manager sending authority and the configured FCOS Updates mailbox are independent.'}</p>
               </div>
             </div>
           </SettingsPanel>

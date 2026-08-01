@@ -9,6 +9,7 @@ import {
   fcosUpdateSourceCandidates,
   inferFcosUpdateCategory,
 } from '../api/_fcosUpdates.js';
+import { emailSenderStatus } from '../api/_emailSenderStatus.js';
 import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
 import {
   smtpAddressParts,
@@ -124,6 +125,30 @@ test('FCOS Updates uses mailbox-matched Microsoft Graph OIDC without Send As del
   assert.equal(config.configurationIssue, '');
 });
 
+test('sender status keeps operational SMTP and FCOS Updates identities separate without exposing secrets', () => {
+  const status = emailSenderStatus({
+    FCOS_ENABLE_EMAIL_DELIVERY: 'true',
+    SMTP_HOST: 'smtp.office365.com',
+    SMTP_USER: 'louisa@example.com',
+    SMTP_PASSWORD: 'operational-secret',
+    FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
+    FCOS_UPDATE_MICROSOFT_TENANT_ID: 'tenant-id',
+    FCOS_UPDATE_MICROSOFT_CLIENT_ID: 'client-id',
+    FCOS_UPDATE_MICROSOFT_MAILBOX: 'vincent@example.com',
+    FCOS_UPDATE_FROM_EMAIL: 'vincent@example.com',
+    FCOS_UPDATE_SENDER_NAME: 'Vincent Lee',
+  });
+
+  assert.equal(status.deliveryGateEnabled, true);
+  assert.equal(status.operational.senderAddress, 'louisa@example.com');
+  assert.equal(status.operational.displayNameMode, 'workflow_specific');
+  assert.equal(status.fcosUpdates.senderAddress, 'vincent@example.com');
+  assert.equal(status.fcosUpdates.senderName, 'Vincent Lee');
+  assert.equal(status.fcosUpdates.deliveryMethod, 'microsoft_graph_oidc');
+  assert.notEqual(status.operational.senderAddress, status.fcosUpdates.senderAddress);
+  assert.doesNotMatch(JSON.stringify(status), /operational-secret|tenant-id|client-id/);
+});
+
 test('FCOS Updates fails closed on partial or mismatched Microsoft Graph configuration', () => {
   const partial = fcosUpdateMailConfig({
     FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
@@ -148,6 +173,24 @@ test('FCOS Updates treats Microsoft Send As rejection as a sender-wide failure',
   );
   assert.equal(fcosUpdateSenderFailureMessage(new Error('550 recipient rejected')), '');
   assert.doesNotMatch(FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE, /@/);
+});
+
+test('Settings separates operational email from the FCOS Updates sender and health check', async () => {
+  const [settingsSource, handlerSource, methodologySource] = await Promise.all([
+    readFile(new URL('../src/pages/Settings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/pageMethodologies.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(settingsSource, /Operational Email Sender/);
+  assert.match(settingsSource, /FCOS Updates Sender/);
+  assert.match(settingsSource, /emailSenderStatus/);
+  assert.doesNotMatch(settingsSource, /Every user sends through the same mailbox and sender identity/);
+  assert.match(handlerSource, /emailSenderStatus: \['settings'\]/);
+  assert.match(handlerSource, /cachedHealthCheck\('fcos-updates-mail', 5 \* 60/);
+  assert.match(handlerSource, /verifyMicrosoftGraphMailAuthentication/);
+  assert.match(handlerSource, /without sending email/);
+  assert.match(methodologySource, /FCOS Updates use their separately configured/);
 });
 
 test('FCOS update migration creates service-only workflow and General Manager controls', async () => {
