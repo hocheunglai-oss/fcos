@@ -1,0 +1,82 @@
+const PLATTS_HOLIDAY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/holiday";
+const PLATTS_METHODOLOGY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/methodology-specifications/refined-products";
+
+export const PAGE_METHODOLOGIES = {
+  "Position control": {
+    summary: "Portfolio control combines live physical exposure, linked paper hedges, clearing cash, initial margin, and current MOPS-based valuation.",
+    steps: [
+      "Net exposure is physical quantity less active hedge quantity for each counterparty and product.",
+      "Paper mark-to-market uses the applicable monthly MOPS average; forward months use the latest actual MOPS plus the saved forward adjustment.",
+      "Account equity is clearing cash plus unrealized hedge mark-to-market. Buying power deducts usable initial margin from that equity.",
+      "Attention items are generated from material unhedged positions, pending clearing records, stale MOPS data, and open settlement months.",
+    ],
+  },
+  "Physical trades": {
+    summary: "Physical positions are valued from their buy and sell pricing legs, premiums, quantities, pricing months, and any linked paper hedges.",
+    steps: [
+      "Fixed legs use the entered fixed price. MOPS legs use the selected monthly or balance-month average plus the entered premium.",
+      "SGO quantities are normalized with the configured barrel-per-metric-ton conversion when required.",
+      "Physical P&L is sell value less buy value. Combined P&L adds mark-to-market from linked active hedges.",
+      "Open and closed status follows the trade close flag and retained settlement history.",
+    ],
+  },
+  Hedges: {
+    summary: "Hedge valuation uses product quantity, direction, trade price, pricing month, venue fees, and MOPS-derived market prices.",
+    steps: [
+      "A buy hedge gains when market exceeds trade price; a sell hedge gains when trade price exceeds market.",
+      "Monthly, balance-today, and balance-tomorrow averages use only the applicable Platts publication dates.",
+      "Spread trades value the buy and sell legs independently before combining their results.",
+      "Estimated net P&L deducts configured broker, exchange, clearing, settlement, venue, and commission charges.",
+    ],
+  },
+  "MOPS market": {
+    summary: "The MOPS workspace combines recorded Singapore assessments, the Platts publication calendar, projected monthly averages, and forward MOC indications.",
+    steps: [
+      "Projected monthly averages use recorded actual or estimated values and carry the latest available price through each remaining publication day.",
+      "The publication ledger includes every weekday in the selected month except Singapore Platts holidays, alongside any saved source and record type.",
+      "Forward prices equal the latest actual spot MOPS plus the saved product adjustment. Positive adjustments indicate contango; negative adjustments indicate backwardation.",
+      "Assisted capture parses published MOPS bulletins. Market-indication capture creates an editable estimate for today and can derive the nearest future MOC adjustment.",
+    ],
+    sources: [
+      { label: "S&P Global Platts holiday publication schedule", url: PLATTS_HOLIDAY_URL },
+      { label: "S&P Global refined products assessment methodology", url: PLATTS_METHODOLOGY_URL },
+    ],
+  },
+  Settlement: {
+    summary: "Monthly settlement consolidates hedge P&L, counterparty balances, broker and venue charges, clearing postings, and invoice records.",
+    steps: [
+      "Each hedge is valued for the selected settlement month using its applicable MOPS average and direction.",
+      "Counterparty net settlement combines hedge P&L and configured charges, then determines debit or credit direction.",
+      "Broker and ICE summaries aggregate fees from qualifying trades and avoid duplicating automatically posted records.",
+      "Closing a month records its control state; generated invoices preserve the month, counterparty, amount, PDF, and delivery status.",
+    ],
+  },
+  Counterparties: {
+    summary: "Counterparty records are the controlled source for legal identity, invoice delivery, address, attention, and payment instructions.",
+    steps: [
+      "Short names link counterparties to physical trades, hedges, settlement groups, and invoices.",
+      "Legal name, address, and attention fields populate settlement documents.",
+      "Recipient fields are used as defaults during invoice composition and remain editable before delivery.",
+      "Banking text is retained as controlled settlement-document content and is not used to initiate payments.",
+    ],
+  },
+  Settings: {
+    summary: "Settings are shared AppConfig records that control desk lists, calculation rates, authorised access, integrations, and communications.",
+    steps: [
+      "Saved list and rate changes apply to all users after live data refresh.",
+      "Risk calculations use the configured SGO conversion, usable margin ratio, fee rates, and ICE margin schedule.",
+      "Integrations combines server-verified access with cached quick checks and deeper permission or data-path tests.",
+      "Connection history records latency plus the last successful and failed checks for operational follow-up.",
+      "Connection secrets remain server-side; the interface reports configuration and live service status without exposing secret values.",
+    ],
+  },
+  "Audit history": {
+    summary: "Audit history records user-facing creates, updates, deletes, approvals, and undo operations performed through the trading workspace.",
+    steps: [
+      "Each action records its entity, record ID, label, user, timestamp, and available before-and-after values.",
+      "Filters operate on record type, action, date range, and searchable activity text.",
+      "Undo creates a compensating live-data operation and a corresponding audit record rather than removing history.",
+      "System jobs or changes outside the application may not appear unless they explicitly create an audit entry.",
+    ],
+  },
+};

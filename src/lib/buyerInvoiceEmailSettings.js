@@ -1,6 +1,5 @@
 export const BUYER_INVOICE_EMAIL_SETTING_KEYS = Object.freeze([
   'enabled',
-  'from',
   'to',
   'cc',
   'daysAhead',

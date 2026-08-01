@@ -39,6 +39,27 @@ function graphRecipientRows(addresses) {
   return addresses.map((address) => ({ emailAddress: { address } }));
 }
 
+function graphAttachments(value) {
+  const attachments = Array.isArray(value) ? value : [];
+  return attachments.map((attachment) => {
+    const name = String(attachment?.filename || attachment?.name || '').trim();
+    const contentBytes = String(attachment?.contentBase64 || attachment?.content || '').replace(/^data:[^,]+,/, '');
+    const contentType = String(attachment?.contentType || 'application/octet-stream').trim();
+    if (!name || !contentBytes) {
+      throw graphMailError('Every email attachment requires a filename and file content.', { status: 400 });
+    }
+    if (Buffer.byteLength(contentBytes, 'base64') > 3 * 1024 * 1024) {
+      throw graphMailError('Microsoft Graph email attachments must not exceed 3 MB each.', { status: 400 });
+    }
+    return {
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: name.slice(0, 255),
+      contentType,
+      contentBytes,
+    };
+  });
+}
+
 async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
   const tenantId = requiredConfigValue(config?.tenantId, 'Microsoft tenant ID');
   const clientId = requiredConfigValue(config?.clientId, 'Microsoft application client ID');
@@ -126,7 +147,7 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
     method: 'microsoft_graph_oidc',
     authenticatedAddress: mailbox,
     accessTokenExpiresAt: authentication.accessTokenExpiresAt,
-    async sendMail({ to, cc, bcc, subject, html, text }) {
+    async sendMail({ to, cc, bcc, subject, html, text, attachments }) {
       const toRecipients = graphRecipients(to);
       const ccRecipients = graphRecipients(cc);
       const bccRecipients = graphRecipients(bcc);
@@ -155,6 +176,7 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
                 toRecipients: graphRecipientRows(toRecipients),
                 ccRecipients: graphRecipientRows(ccRecipients),
                 bccRecipients: graphRecipientRows(bccRecipients),
+                attachments: graphAttachments(attachments),
               },
               saveToSentItems: true,
             }),

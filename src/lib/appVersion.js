@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.73';
+export const APP_VERSION = '2.0.74';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.74',
+    releasedAt: '2026-08-02',
+    title: 'Native Hedge Desk and Graph-only email routing',
+    changes: [
+      'Added Hedge Desk to FCOS with physical trades, paper hedges, market prices, settlement, counterparties, month close, protected documents, and administration.',
+      'Migrated and reconciled the existing Hedge Desk book, normalized relationships, settlement history, approved reports, and source audit attribution without recalculating closed history.',
+      'Moved every FCOS email purpose to an administrator-managed Microsoft Graph mailbox route using Vercel OIDC, with no SMTP transport or automatic sender fallback.',
+      'Added Hedge Desk maintenance, Salesforce integration controls, protected Trading Assistant model selection, System Health coverage, and idempotent delivery safeguards.',
+    ],
+  },
   {
     version: '2.0.73',
     releasedAt: '2026-08-02',

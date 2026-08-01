@@ -1028,9 +1028,7 @@ export default function FcosUpdatesPanel() {
                       From: {model.sender?.name || 'FCOS Updates'} &lt;{model.sender?.address || 'Sender not configured'}&gt;
                     </div>
                     <div className="mt-1 text-[11px] text-slate-500">
-                      {model.sender?.deliveryMethod === 'microsoft_graph_oidc'
-                        ? `Microsoft 365 OAuth · ${model.sender?.authenticatedAddress || 'Mailbox not configured'}`
-                        : `Authenticated SMTP · ${model.sender?.authenticatedAddress || 'Mailbox not configured'}`}
+                      Microsoft Graph with Vercel OIDC · {model.sender?.authenticatedAddress || 'Mailbox not configured'}
                     </div>
                     <div className="mt-1 text-xl font-semibold text-slate-950">System updates</div>
                     {batchDraft.introduction && (
@@ -1189,9 +1187,7 @@ export default function FcosUpdatesPanel() {
               Sender: {model.sender?.name || 'FCOS Updates'} &lt;{model.sender?.address || 'Not configured'}&gt;
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {model.sender?.deliveryMethod === 'microsoft_graph_oidc'
-                ? `Authenticated directly through Microsoft 365 OAuth as ${model.sender?.authenticatedAddress || 'an unconfigured mailbox'}`
-                : `Authenticated through SMTP as ${model.sender?.authenticatedAddress || 'an unconfigured mailbox'}`}
+              Microsoft Graph with Vercel OIDC · {model.sender?.authenticatedAddress || 'an unconfigured mailbox'}
             </div>
           </div>
           <DialogFooter>

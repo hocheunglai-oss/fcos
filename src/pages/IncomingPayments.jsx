@@ -47,7 +47,6 @@ const QUILL_MODULES = {
   ],
 };
 const DEFAULT_EMAIL_SETTINGS = {
-  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: 'bt@cosulich.com.hk',
   cc: '',
   bcc: '',
@@ -197,6 +196,7 @@ function readEmailSettings() {
   try {
     const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
     const settings = raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
+    delete settings.from;
     return {
       ...settings,
       intro: richTemplateValue(
@@ -210,7 +210,9 @@ function readEmailSettings() {
 }
 
 function saveEmailSettings(settings) {
-  localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_EMAIL_SETTINGS, ...settings }));
+  const normalized = { ...DEFAULT_EMAIL_SETTINGS, ...settings };
+  delete normalized.from;
+  localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(normalized));
 }
 
 function readInterestEmailSettings() {
@@ -550,7 +552,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         invoiceAmount: row.invoiceAmount,
         currency: row.currency,
         receivableBalance: row.receivableBalance,
-        from: emailSettings.from || DEFAULT_EMAIL_SETTINGS.from,
         template: readInterestEmailSettings(),
         appUrl: window.location.origin,
         force: forceResend,
@@ -562,7 +563,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
       markInterestInvoiceRequested(paymentId, res.data?.notification || null);
       toast({
         title: res.data?.resent ? 'Interest invoice request sent again' : 'Interest invoice request sent',
-        description: res.data?.trackingWarning || 'Louisa and your email have been notified through the shared server sender.',
+        description: res.data?.trackingWarning || 'Louisa and your email have been notified through the assigned Microsoft Graph mailbox.',
       });
     } catch (error) {
       toast({
@@ -963,7 +964,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         setEmailMessage(`Preview ready: ${res.data.report?.receivableRows ?? 0} receivable payments and ${res.data.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
       } else {
         setEmailPreview(res.data.email || null);
-        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to} through the shared server sender.`);
+        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to} through the assigned Microsoft Graph mailbox.`);
         toast({ title: 'Incoming Payment report sent', description: `Sent to ${res.data.to?.join(', ') || emailSettings.to}.` });
       }
     } catch (error) {
@@ -1324,10 +1325,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                     <p className="text-xs text-slate-500">Only the addresses shown here will be used for this send.</p>
                   </div>
                   <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-2">
-                    <div className="space-y-1.5 md:col-span-2">
-                      <Label className="text-xs text-slate-500">From</Label>
-                      <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} />
-                    </div>
                     <div className="space-y-1.5 md:col-span-2">
                       <Label className="text-xs text-slate-500">To</Label>
                       <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} placeholder="email@example.com" className={cn(!String(emailSettings.to || '').trim() && 'border-red-300 focus-visible:ring-red-400')} />

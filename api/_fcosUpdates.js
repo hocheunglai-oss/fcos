@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
 import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
 import {
-  createSmtpTransport,
-  isSmtpSendAsDenied,
-  sendWithSmtp,
-  smtpAddressParts,
-} from './_smtp.js';
-import { createMicrosoftGraphMailTransport } from './_microsoftGraphMail.js';
+  graphEmailApplicationConfig,
+  resolveGraphEmailSender,
+  sendGraphPurposeMail,
+} from './_graphEmail.js';
 
 export const FCOS_UPDATE_CATEGORIES = Object.freeze([
   { id: 'new_feature', label: 'New Feature' },
@@ -22,11 +20,11 @@ const INTERRUPTED_DELIVERY_MINUTES = 15;
 const UPDATE_TABLE_PATTERN = /fcos_update_(settings|items|batches|batch_items|batch_recipients|deliveries|events)/i;
 
 export const FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE =
-  'Microsoft 365 rejected the configured FCOS Updates sender. Verify the authenticated mailbox has Send As permission, then wait for Exchange permission propagation and SMTP throttling to clear before retrying.';
+  'Microsoft 365 rejected the assigned FCOS Updates mailbox. Verify its mailbox-scoped Application Mail.Send authorization before retrying.';
 
 export function fcosUpdateSenderFailureMessage(error) {
   if (error?.fcosUpdateGlobal) return cleanText(error.message, 500);
-  return isSmtpSendAsDenied(error) ? FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE : '';
+  return error?.mailDeliveryGlobal ? cleanText(error.message || FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE, 500) : '';
 }
 
 function updateError(message, status = 400, code = 'FCOS_UPDATE_ERROR', details = undefined) {
@@ -59,56 +57,15 @@ function cleanText(value, maxLength) {
 }
 
 export function fcosUpdateMailConfig(env = process.env) {
-  const smtp = {
-    host: env.FCOS_UPDATE_SMTP_HOST || env.SMTP_HOST,
-    port: env.FCOS_UPDATE_SMTP_PORT || env.SMTP_PORT,
-    user: env.FCOS_UPDATE_SMTP_USER || env.SMTP_USER,
-    password: env.FCOS_UPDATE_SMTP_PASSWORD || env.SMTP_PASSWORD,
-    secure: env.FCOS_UPDATE_SMTP_SECURE ?? env.SMTP_SECURE,
-  };
-  const graph = {
-    tenantId: String(env.FCOS_UPDATE_MICROSOFT_TENANT_ID || '').trim(),
-    clientId: String(env.FCOS_UPDATE_MICROSOFT_CLIENT_ID || '').trim(),
-    mailbox: smtpAddressParts(env.FCOS_UPDATE_MICROSOFT_MAILBOX).email.toLowerCase(),
-  };
-  const requestedTransport = String(env.FCOS_UPDATE_TRANSPORT || '').trim().toLowerCase();
-  const hasGraphValue = Boolean(graph.tenantId || graph.clientId || graph.mailbox);
-  const useGraph = requestedTransport
-    ? requestedTransport === 'microsoft_graph'
-    : hasGraphValue;
-  const graphConfigured = Boolean(graph.tenantId && graph.clientId && graph.mailbox);
-  const deliveryMethod = useGraph ? 'microsoft_graph_oidc' : 'smtp';
-  const authenticatedAddress = useGraph
-    ? graph.mailbox
-    : smtpAddressParts(smtp.user).email.toLowerCase();
-  const senderAddress = smtpAddressParts(
-    env.FCOS_UPDATE_FROM_EMAIL || (useGraph ? graph.mailbox : smtp.user),
-  ).email.toLowerCase();
-  const senderName = cleanText(env.FCOS_UPDATE_SENDER_NAME || 'FCOS Updates', 100);
-  let configurationIssue = '';
-  if (requestedTransport && !['microsoft_graph', 'smtp'].includes(requestedTransport)) {
-    configurationIssue = 'FCOS_UPDATE_TRANSPORT must be microsoft_graph or smtp.';
-  } else if (useGraph && !graphConfigured) {
-    configurationIssue = 'Complete the FCOS Updates Microsoft tenant, client, and mailbox configuration.';
-  } else if (useGraph && senderAddress !== graph.mailbox) {
-    configurationIssue = 'The FCOS Updates From address must match its Microsoft sender mailbox.';
-  }
-
+  const graph = graphEmailApplicationConfig(env);
   return {
-    smtp,
     graph,
-    deliveryMethod,
-    configurationIssue,
-    senderName,
-    senderAddress,
-    authenticatedAddress,
-    from: senderAddress ? `${senderName} <${senderAddress}>` : '',
-    requiresSendAs: Boolean(
-      deliveryMethod === 'smtp'
-      && authenticatedAddress
-      && senderAddress
-      && authenticatedAddress !== senderAddress
-    ),
+    deliveryMethod: 'microsoft_graph_oidc',
+    configurationIssue: graph.configured ? '' : 'Complete the Microsoft Graph tenant and application configuration.',
+    senderName: null,
+    senderAddress: null,
+    authenticatedAddress: null,
+    requiresSendAs: false,
   };
 }
 
@@ -507,11 +464,11 @@ const BATCH_SELECT = [
     fcos_update_items(${ITEM_SELECT})
   )`,
   'fcos_update_batch_recipients(id,batch_id,user_id,recipient_name,recipient_email,sort_order,created_at,updated_at)',
-  'fcos_update_deliveries(id,batch_id,user_id,recipient_name,recipient_email,status,attempt_count,email_message_id,last_error,last_attempt_at,sent_at,created_at,updated_at)',
+  'fcos_update_deliveries(id,batch_id,user_id,recipient_name,recipient_email,status,attempt_count,email_message_id,last_error,last_attempt_at,sent_at,sender_mailbox_id,sender_mailbox_snapshot,created_at,updated_at)',
 ].join(',');
 
 export async function listFcosUpdates({ client, profile, sync = true }) {
-  const mailConfig = fcosUpdateMailConfig();
+  const senderResult = await resolveGraphEmailSender(client, 'fcos_updates').catch((error) => ({ error }));
   let syncResult = null;
   if (sync) syncResult = await syncFcosUpdateItems({ client, profile });
   await recoverInterruptedFcosUpdateDeliveries(client, profile);
@@ -563,12 +520,13 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     })),
     activeRecipientCount: Number(recipientsResult.data?.length || 0),
     sender: {
-      name: mailConfig.senderName,
-      address: mailConfig.senderAddress,
-      authenticatedAddress: mailConfig.authenticatedAddress,
-      deliveryMethod: mailConfig.deliveryMethod,
-      configurationIssue: mailConfig.configurationIssue,
-      requiresSendAs: mailConfig.requiresSendAs,
+      name: null,
+      address: senderResult.emailAddress || null,
+      authenticatedAddress: senderResult.emailAddress || null,
+      mailboxId: senderResult.mailboxId || null,
+      deliveryMethod: 'microsoft_graph_oidc',
+      configurationIssue: senderResult.error?.message || null,
+      requiresSendAs: false,
     },
     authority: {
       canPrepare: ['administrator', 'general_manager'].includes(profile.user_type),
@@ -954,7 +912,7 @@ async function markInterruptedFcosUpdateDeliveries(client, batchId, actor) {
     .from('fcos_update_deliveries')
     .update({
       status: 'Uncertain',
-      last_error: 'Delivery started, but FCOS could not confirm whether SMTP completed. Confirm before retrying.',
+      last_error: 'Delivery started, but FCOS could not confirm whether Microsoft Graph completed. Confirm before retrying.',
       last_attempt_at: now,
     })
     .eq('batch_id', batchId)
@@ -965,7 +923,7 @@ async function markInterruptedFcosUpdateDeliveries(client, batchId, actor) {
     .from('fcos_update_deliveries')
     .update({
       status: 'Failed',
-      last_error: 'Delivery stopped before SMTP submission. Manual retry is required.',
+      last_error: 'Delivery stopped before Microsoft Graph submission. Manual retry is required.',
       last_attempt_at: now,
     })
     .eq('batch_id', batchId)
@@ -1002,21 +960,12 @@ async function processFcosUpdateDeliveries({
   client,
   profile,
   batch,
-  mailTransport,
-  mailConfig,
   statuses,
+  defaultSenderSnapshot = null,
 }) {
   const publicUrl = String(process.env.FCOS_PUBLIC_URL || '').trim();
   if (!publicUrl) {
     throw updateError('FCOS_PUBLIC_URL is required before update emails can be sent.', 503, 'FCOS_PUBLIC_URL_MISSING');
-  }
-  const from = mailConfig?.from;
-  if (!from) {
-    throw updateError(
-      'FCOS_UPDATE_FROM_EMAIL or an authenticated FCOS Updates SMTP user is required before update emails can be sent.',
-      503,
-      'SMTP_SENDER_MISSING',
-    );
   }
   const message = buildFcosUpdateEmail(batch, publicUrl);
   const { count: eligibleCount, error: eligibleError } = await client
@@ -1030,12 +979,19 @@ async function processFcosUpdateDeliveries({
   const deliverOne = async (delivery) => {
     let result;
     try {
-      result = await mailTransport.sendMail({
-        from,
-        to: [delivery.recipient_email],
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
+      const senderSnapshot = delivery.sender_mailbox_snapshot
+        ? { id: delivery.sender_mailbox_id || null, emailAddress: delivery.sender_mailbox_snapshot }
+        : defaultSenderSnapshot;
+      result = await sendGraphPurposeMail({
+        client,
+        purposeKey: 'fcos_updates',
+        mailboxSnapshot: senderSnapshot,
+        message: {
+          to: [delivery.recipient_email],
+          subject: message.subject,
+          html: message.html,
+          text: message.text,
+        },
       });
       if (!Array.isArray(result.accepted) || result.accepted.length !== 1) {
         throw new Error('The email provider did not accept this recipient.');
@@ -1105,8 +1061,8 @@ async function processFcosUpdateDeliveries({
     if (!claimed?.length) break;
     remaining -= claimed.length;
 
-    // Probe one delivery first so a sender-wide Microsoft 365 rejection cannot
-    // fan out across the whole recipient list and trigger SMTP AUTH throttling.
+    // Probe one delivery first so a mailbox-wide Microsoft 365 rejection does
+    // not fan out across the whole recipient list.
     const firstOutcome = await deliverOne(claimed[0]);
     if (firstOutcome.senderFailure) {
       return stopForSenderFailure(firstOutcome.senderFailure);
@@ -1121,26 +1077,6 @@ async function processFcosUpdateDeliveries({
   }
 
   return updateBatchDeliverySummary(client, batch.id, profile);
-}
-
-async function createFcosUpdateMailTransport(mailConfig) {
-  if (mailConfig.configurationIssue) {
-    throw updateError(mailConfig.configurationIssue, 503, 'FCOS_UPDATE_MAIL_CONFIG_INVALID');
-  }
-  if (mailConfig.deliveryMethod === 'microsoft_graph_oidc') {
-    return createMicrosoftGraphMailTransport(mailConfig.graph);
-  }
-  const transporter = await createSmtpTransport(mailConfig.smtp, {
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 100,
-  });
-  return {
-    method: 'smtp',
-    authenticatedAddress: mailConfig.authenticatedAddress,
-    sendMail: (message) => sendWithSmtp({ ...message, transporter }),
-    close: () => transporter.close?.(),
-  };
 }
 
 export async function sendFcosUpdateBatch({ client, profile, body }) {
@@ -1172,8 +1108,8 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       'RECIPIENT_COUNT_CHANGED',
     );
   }
-  const mailConfig = fcosUpdateMailConfig();
-  const mailTransport = await createFcosUpdateMailTransport(mailConfig);
+  const sender = await resolveGraphEmailSender(client, 'fcos_updates');
+  const senderSnapshot = { id: sender.mailboxId, emailAddress: sender.emailAddress };
   let sendingStarted = false;
   try {
     const { error } = await client.rpc('start_fcos_update_saved_delivery', {
@@ -1190,6 +1126,15 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
     }
     if (error?.code === '42501') throw updateError(error.message, 403, 'GENERAL_MANAGER_REQUIRED');
     if (error) throwUpdateSchemaError(error);
+    const { error: senderSnapshotError } = await client
+      .from('fcos_update_deliveries')
+      .update({
+        sender_mailbox_id: sender.mailboxId,
+        sender_mailbox_snapshot: sender.emailAddress,
+      })
+      .eq('batch_id', batch.id)
+      .eq('status', 'Pending');
+    if (senderSnapshotError) throwUpdateSchemaError(senderSnapshotError);
     const sendingBatch = await loadBatch(client, batch.id);
     sendingStarted = true;
 
@@ -1197,9 +1142,8 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       client,
       profile,
       batch: sendingBatch,
-      mailTransport,
-      mailConfig,
       statuses: ['Pending'],
+      defaultSenderSnapshot: senderSnapshot,
     });
     return { batch: serializeBatch(await loadBatch(client, batch.id)), deliverySummary: summary };
   } catch (error) {
@@ -1207,8 +1151,6 @@ export async function sendFcosUpdateBatch({ client, profile, body }) {
       await markInterruptedFcosUpdateDeliveries(client, batch.id, profile).catch(() => {});
     }
     throw error;
-  } finally {
-    mailTransport.close?.();
   }
 }
 
@@ -1225,8 +1167,6 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
   const eligible = (batch.fcos_update_deliveries || []).filter((delivery) => statuses.includes(delivery.status));
   if (!eligible.length) throw updateError('No eligible failed deliveries remain.');
 
-  const mailConfig = fcosUpdateMailConfig();
-  const mailTransport = await createFcosUpdateMailTransport(mailConfig);
   let retryStarted = false;
   try {
     const { data: retryingBatch, error: batchError } = await client
@@ -1248,8 +1188,6 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
       client,
       profile,
       batch,
-      mailTransport,
-      mailConfig,
       statuses,
     });
     await writeEvent(client, {
@@ -1269,7 +1207,5 @@ export async function retryFcosUpdateDeliveries({ client, profile, body }) {
       await markInterruptedFcosUpdateDeliveries(client, batch.id, profile).catch(() => {});
     }
     throw error;
-  } finally {
-    mailTransport.close?.();
   }
 }

@@ -10,7 +10,6 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
 import ModuleGateAny from '@/components/ModuleGateAny';
 import Layout from '@/components/Layout';
-import { clearLegacyPaymentReminderSmtpSettings } from '@/lib/smtpSettings';
 
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
@@ -27,6 +26,7 @@ const AppPortal = lazy(() => import('@/pages/AppPortal'));
 const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
 const GrowthCoaching = lazy(() => import('@/pages/GrowthCoaching'));
 const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
+const HedgeDesk = lazy(() => import('@/pages/HedgeDesk'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -59,9 +59,6 @@ const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, isAuthenticated } = useAuth();
   const loginRedirectState = location.pathname === '/' ? undefined : { from: location };
 
-  useEffect(() => {
-    clearLegacyPaymentReminderSmtpSettings();
-  }, []);
 
   if (isLoadingPublicSettings || (isLoadingAuth && !isAuthenticated)) {
     return (
@@ -106,6 +103,7 @@ const AuthenticatedApp = () => {
             <Route path="/brokers" element={<ModuleGateAny moduleIds={['brokers', 'report_archive']}><BrokerWorkspace /></ModuleGateAny>} />
             <Route path="/report-archive" element={<RedirectWithTab path="/brokers" tab="archive" />} />
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
+            <Route path="/hedge-desk" element={<ModuleGate moduleId="hedge_desk"><HedgeDesk /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
             <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />
             <Route path="/admin" element={<RedirectWithSection section="users" />} />

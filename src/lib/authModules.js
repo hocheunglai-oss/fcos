@@ -24,6 +24,7 @@ export const APP_MODULES = [
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/brokers?tab=archive', sortOrder: 75 },
   { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
+  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 87 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
@@ -35,6 +36,10 @@ export const APP_CAPABILITIES = [
   { id: 'disputes_account', label: 'Settle disputes', description: 'Record accounting settlement and close disputes.' },
   { id: 'buyer_invoices_manage', label: 'Manage invoice email settings', description: 'Change buyer invoice templates and schedules.' },
   { id: 'cashflow_forecast_manage', label: 'Manage cashflow settings', description: 'Change forecast settings and manual overrides.' },
+  { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain trades, hedges, markets, and counterparties.' },
+  { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage settlement, invoices, and clearing entries.' },
+  { id: 'hedge_close_approve', label: 'Approve Hedge Close', description: 'Close or reopen months and approve SFS reports.' },
+  { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
 ];
 
 export const FULL_CAPABILITIES = Object.fromEntries(APP_CAPABILITIES.map((capability) => [capability.id, true]));

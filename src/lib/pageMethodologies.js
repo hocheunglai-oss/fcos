@@ -310,7 +310,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Email and external actions',
-        body: 'Routine reports, reminders, and notifications use the operational Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. FCOS Updates use a separately configured Microsoft 365 sender. A temporary SMTP fallback, when enabled, is used only after a definite operational Graph authentication or authorization failure and is shown in Email Senders. Templates, recipients, schedules, and sender identities remain subject to the external-action safety gate. Saving a setting does not send an email.',
+        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. There is no SMTP fallback, and saving a setting does not send an email.',
       },
       {
         title: 'AI configuration',

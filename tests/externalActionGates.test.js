@@ -42,14 +42,12 @@ test('an emergency Salesforce pause rejects mutations before authentication or n
 
 test('retained live paths include emergency controls at their server boundary', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
-  const smtpSource = await readFile(new URL('../api/_smtp.js', import.meta.url), 'utf8');
   const graphSource = await readFile(new URL('../api/_microsoftGraphMail.js', import.meta.url), 'utf8');
   const operationalSource = await readFile(new URL('../api/_operationalMail.js', import.meta.url), 'utf8');
   assert.match(source, /async function googleDriveAccessToken\(\) \{\s*requireExternalActionGate\('google_drive'\)/);
   assert.match(source, /from '\.\.\/_operationalMail\.js'/);
-  assert.match(operationalSource, /sendWithSmtp/);
-  assert.match(operationalSource, /createMicrosoftGraphMailTransport/);
-  assert.match(smtpSource, /export async function sendWithSmtp\([^)]*\) \{\s*requireExternalActionGate\('email_delivery'\)/);
+  assert.match(operationalSource, /sendGraphPurposeMail/);
+  assert.doesNotMatch(operationalSource, /smtp/i);
   assert.match(graphSource, /export async function createMicrosoftGraphMailTransport[\s\S]*requireExternalActionGate\('email_delivery'/);
   assert.match(source, /async function outstandingBuyerInvoicesEmailCron[\s\S]*isExternalActionEnabled\('email_delivery'\)/);
   assert.match(source, /async function disputeWorkflowUploadDocument[\s\S]*requireExternalActionGate\('salesforce_write'\)/);
@@ -66,5 +64,6 @@ test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', 
     { path: '/api/functions/portalEntitlementSyncCron', schedule: '30 18 * * *' },
     { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
     { path: '/api/functions/growthCoachingDailyCron', schedule: '30 0 * * 1-5' },
+    { path: '/api/functions/hedgeDeskMaintenanceCron', schedule: '30 0 * * *' },
   ]);
 });

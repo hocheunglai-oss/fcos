@@ -1,44 +1,10 @@
-import { isExternalActionEnabled } from './_externalActionGates.js';
-import { fcosUpdateMailConfig } from './_fcosUpdates.js';
-import { operationalMailStatus } from './_operationalMail.js';
+import { listGraphEmailRegistry } from './_graphEmail.js';
 
-export function emailSenderStatus(env = process.env) {
-  const deliveryGateEnabled = isExternalActionEnabled('email_delivery', env);
-  const operational = operationalMailStatus(env);
-  const updateConfig = fcosUpdateMailConfig(env);
-  const updateConfigured = updateConfig.deliveryMethod === 'microsoft_graph_oidc'
-    ? Boolean(
-        updateConfig.graph.tenantId
-        && updateConfig.graph.clientId
-        && updateConfig.graph.mailbox
-        && updateConfig.senderAddress
-        && !updateConfig.configurationIssue
-      )
-    : Boolean(
-        updateConfig.smtp.host
-        && updateConfig.smtp.user
-        && updateConfig.smtp.password
-        && updateConfig.senderAddress
-        && !updateConfig.configurationIssue
-      );
-
-  return {
-    deliveryGateEnabled,
-    operational,
-    fcosUpdates: {
-      id: 'fcos-updates-email',
-      senderName: updateConfig.senderName || null,
-      senderAddress: updateConfig.senderAddress || null,
-      authenticatedAddress: updateConfig.authenticatedAddress || null,
-      displayNameMode: 'fixed',
-      deliveryMethod: updateConfig.deliveryMethod,
-      transportLabel: updateConfig.deliveryMethod === 'microsoft_graph_oidc'
-        ? 'Microsoft Graph with Vercel OIDC'
-        : 'Authenticated SMTP',
-      configured: updateConfigured,
-      configurationIssue: updateConfig.configurationIssue || (updateConfigured ? null : 'The FCOS Updates sender is not fully configured.'),
-      requiresSendAs: updateConfig.requiresSendAs,
-    },
-    authorityNote: 'The General Manager controls FCOS Updates sending authority. The sender mailbox is configured separately in Vercel and does not change when the General Manager changes.',
-  };
+export async function emailSenderStatus(client, env = process.env) {
+  if (!client) {
+    const error = new Error('Email sender status requires an authenticated server database client.');
+    error.status = 500;
+    throw error;
+  }
+  return listGraphEmailRegistry(client, env);
 }

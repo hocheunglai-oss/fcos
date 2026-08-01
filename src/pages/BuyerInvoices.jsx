@@ -56,7 +56,6 @@ const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
 const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
 const DEFAULT_EMAIL_SETTINGS = {
   enabled: true,
-  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: 'bt@cosulich.com.hk',
   cc: 'louisa@cosulich.com.hk, laureen@cosulich.com.hk',
   daysAhead: 7,
@@ -418,7 +417,7 @@ function insertTokenIntoQuill(editor, token) {
 
 function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
   const merged = { ...DEFAULT_EMAIL_SETTINGS, ...settings };
-  if (String(merged.from || '').includes('admin@fcuno.com')) merged.from = DEFAULT_EMAIL_SETTINGS.from;
+  delete merged.from;
   if (!merged.intro || merged.intro === OLD_DEFAULT_EMAIL_INTRO) merged.intro = DEFAULT_EMAIL_SETTINGS.intro;
   const paymentReminderBody = textValue(merged.paymentReminderBody, DEFAULT_EMAIL_SETTINGS.paymentReminderBody)
     .replace(/Dear\s+\{\{\s*buyerName\s*\}\}/i, 'Dear {{primaryRecipientName}}')
@@ -2932,10 +2931,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-1.5 md:col-span-2">
-                    <Label className="text-xs text-muted-foreground">From</Label>
-                    <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} disabled={!internalEmailEditing} />
-                  </div>
-                  <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">To</Label>
                     <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} disabled={!internalEmailEditing} />
                   </div>
@@ -3008,7 +3003,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                 </div>
 
                 <div className="rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
-                  Send Now and scheduled reports use the same shared server sender. Template and schedule changes are restricted to authorized managers.
+                  Send Now and scheduled reports use the Microsoft Graph mailbox assigned to Outstanding Invoice Reports in Settings. Template and schedule changes are restricted to authorized managers.
                 </div>
 
                 {emailMessage && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{emailMessage}</div>}

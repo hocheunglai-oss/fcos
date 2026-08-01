@@ -1,0 +1,367 @@
+import React, { useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  CloudUpload,
+  Copy,
+  Download,
+  Edit3,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import { PhysicalTrade } from "@/hedge/api/entities";
+import { pushHedgeToSalesforce } from "@/hedge/api/backendFunctions";
+import {
+  calcPhysicalPnl,
+  calcSwapFees,
+  calcSwapMtm,
+  downloadCsv,
+  formatDate,
+  formatMonth,
+  formatQuantity,
+  hktThisMonth,
+  hktToday,
+  roundMoney,
+  swapShareForPhysical,
+} from "../lib/domain";
+import { useActions } from "../data/ActionsContext";
+import {
+  Button,
+  ConfirmDialog,
+  Drawer,
+  EmptyState,
+  Field,
+  IconButton,
+  InlineError,
+  Money,
+  PageHeader,
+  ProductBadge,
+  SearchInput,
+  SegmentedControl,
+  Select,
+  StatusBadge,
+  TableFrame,
+} from "../components/ui";
+
+const BLANK_PHYSICAL = {
+  trade_date: hktToday(),
+  product: "",
+  counterparty: "",
+  qty_min: "",
+  qty_max: "",
+  unit: "MT",
+  vessel_name: "",
+  delivery_date_from: "",
+  delivery_date_to: "",
+  sell_price_type: "MOPS WMA",
+  sell_price: "",
+  sell_premium: "",
+  sell_pricing_month: hktThisMonth(),
+  sell_pricing_basis: "WMA",
+  sell_bal_date: "",
+  buy_price_type: "MOPS WMA",
+  buy_price: "",
+  buy_premium: "",
+  buy_pricing_month: hktThisMonth(),
+  buy_pricing_basis: "WMA",
+  buy_bal_date: "",
+  notes: "",
+  stem_number: "",
+  sf_record_id: "",
+  is_closed: false,
+};
+
+function physicalStatus(record) {
+  return record.is_closed ? "closed" : "open";
+}
+
+function normalizePhysical(form) {
+  const minimum = Number(form.qty_min) || 0;
+  return {
+    ...form,
+    qty_min: minimum,
+    qty_max: form.qty_max === "" || form.qty_max == null ? minimum : Number(form.qty_max) || minimum,
+    sell_price: form.sell_price === "" ? null : Number(form.sell_price),
+    sell_premium: form.sell_premium === "" ? null : Number(form.sell_premium),
+    buy_price: form.buy_price === "" ? null : Number(form.buy_price),
+    buy_premium: form.buy_premium === "" ? null : Number(form.buy_premium),
+    is_closed: Boolean(form.is_closed),
+  };
+}
+
+function PricingLeg({ side, form, setField }) {
+  const prefix = side.toLowerCase();
+  const type = form[`${prefix}_price_type`];
+  return (
+    <section className={`app-form-section app-form-section--${prefix}`}>
+      <div className="app-form-section__title">{side} leg</div>
+      <div className="app-form-grid app-form-grid--2">
+        <Field label="Price type">
+          <Select value={type} onChange={(event) => setField(`${prefix}_price_type`, event.target.value)}>
+            <option value="MOPS WMA">MOPS WMA</option>
+            <option value="Fixed">Fixed</option>
+          </Select>
+        </Field>
+        <Field label={type === "Fixed" ? "Fixed price (USD)" : "Premium / discount (USD)"}>
+          <input
+            className="app-input"
+            type="number"
+            step="any"
+            value={form[type === "Fixed" ? `${prefix}_price` : `${prefix}_premium`] ?? ""}
+            onChange={(event) => setField(type === "Fixed" ? `${prefix}_price` : `${prefix}_premium`, event.target.value)}
+          />
+        </Field>
+        <Field label="Pricing month">
+          <input className="app-input" type="month" value={form[`${prefix}_pricing_month`] || ""} onChange={(event) => setField(`${prefix}_pricing_month`, event.target.value)} />
+        </Field>
+        <Field label="Pricing basis">
+          <Select value={form[`${prefix}_pricing_basis`] || "WMA"} onChange={(event) => setField(`${prefix}_pricing_basis`, event.target.value)}>
+            <option value="WMA">Full month WMA</option>
+            <option value="BAL_TODAY">Balance from today</option>
+            <option value="BAL_TOMORROW">Balance from tomorrow</option>
+          </Select>
+        </Field>
+        {form[`${prefix}_pricing_basis`] !== "WMA" && (
+          <Field label="Balance start date" className="app-field--span-2">
+            <input className="app-input" type="date" value={form[`${prefix}_bal_date`] || ""} onChange={(event) => setField(`${prefix}_bal_date`, event.target.value)} />
+          </Field>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly = false }) {
+  const actions = useActions();
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("open");
+  const [month, setMonth] = useState("all");
+  const [drawer, setDrawer] = useState(null);
+  const [form, setForm] = useState(BLANK_PHYSICAL);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [sfPushing, setSfPushing] = useState(null);
+
+  React.useEffect(() => {
+    if (quickCreateSignal) {
+      setForm({ ...BLANK_PHYSICAL, trade_date: hktToday(), sell_pricing_month: hktThisMonth(), buy_pricing_month: hktThisMonth() });
+      setDrawer({ mode: "create" });
+    }
+  }, [quickCreateSignal]);
+
+  const months = useMemo(() => [...new Set(data.physicals.map((record) => String(record.trade_date || record.sell_pricing_month || "").slice(0, 7)).filter(Boolean))].sort().reverse(), [data.physicals]);
+  const rows = useMemo(() => data.physicals
+    .filter((record) => status === "all" || physicalStatus(record) === status)
+    .filter((record) => month === "all" || [record.trade_date, record.sell_pricing_month, record.buy_pricing_month].some((value) => String(value || "").startsWith(month)))
+    .filter((record) => {
+      const value = `${record.product || ""} ${record.counterparty || ""} ${record.vessel_name || ""} ${record.stem_number || ""} ${record.notes || ""}`.toLowerCase();
+      return value.includes(search.toLowerCase());
+    })
+    .sort((left, right) => String(right.trade_date || "").localeCompare(String(left.trade_date || ""))), [data.physicals, month, search, status]);
+
+  const openCreate = () => {
+    setForm({ ...BLANK_PHYSICAL, trade_date: hktToday(), sell_pricing_month: hktThisMonth(), buy_pricing_month: hktThisMonth() });
+    setFormError(null);
+    setDrawer({ mode: "create" });
+  };
+  const openEdit = (record) => {
+    setForm({ ...BLANK_PHYSICAL, ...record });
+    setFormError(null);
+    setDrawer({ mode: "edit", record });
+  };
+  const duplicate = (record) => {
+    const { id, created_date, updated_date, sf_record_id, ...copy } = record;
+    setForm({ ...BLANK_PHYSICAL, ...copy, trade_date: hktToday(), sf_record_id: "" });
+    setFormError(null);
+    setDrawer({ mode: "create", source: record });
+  };
+  const setField = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const save = async () => {
+    if (!form.trade_date || !form.product || !form.qty_min) {
+      setFormError(new Error("Trade date, product, and quantity are required."));
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      const payload = normalizePhysical(form);
+      const label = `${payload.counterparty || "Physical"} ${payload.vessel_name || "trade"} ${payload.product} ${payload.qty_min}${payload.unit}`.trim();
+      if (drawer?.mode === "edit") {
+        await actions.update({ entity: PhysicalTrade, entityName: "PhysicalTrade", id: drawer.record.id, payload, before: drawer.record, label });
+      } else {
+        await actions.create({ entity: PhysicalTrade, entityName: "PhysicalTrade", payload, label });
+      }
+      setDrawer(null);
+    } catch (error) {
+      setFormError(error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!deleteTarget) return;
+    setSaving(true);
+    try {
+      await actions.remove({
+        entity: PhysicalTrade,
+        entityName: "PhysicalTrade",
+        record: deleteTarget,
+        label: `${deleteTarget.product || "Physical"} ${deleteTarget.counterparty || "trade"} ${deleteTarget.trade_date || ""}`.trim(),
+      });
+      setDeleteTarget(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportRows = () => downloadCsv(
+    `physical_trades_${hktToday()}.csv`,
+    ["Trade date", "Product", "Counterparty", "Qty min", "Qty max", "Unit", "Vessel", "Delivery from", "Delivery to", "Sell type", "Sell price", "Sell premium", "Buy type", "Buy price", "Buy premium", "Stem", "Closed"],
+    rows.map((record) => [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, record.stem_number, record.is_closed ? "Yes" : "No"]),
+  );
+
+  const pushSalesforce = async (record) => {
+    if (!record.stem_number) return;
+    setSfPushing(record.id);
+    try {
+      const linked = data.swaps.filter((swap) => (swap.physical_trade_ids || []).includes(record.id));
+      let iceMtm = 0;
+      let iceFees = 0;
+      let fcbsMtm = 0;
+      let fcbsFees = 0;
+      linked.forEach((swap) => {
+        const share = swapShareForPhysical(swap, record.id, data.physicals, settings.general.sgo_bbl_per_mt);
+        const mtm = (swap.is_expired && swap.current_margin != null ? Number(swap.current_margin) : calcSwapMtm(swap, data.mops, settings.general.sgo_bbl_per_mt)?.value || 0) * share;
+        const fees = calcSwapFees(swap, settings.rates);
+        if (swap.venue === "FCBS") {
+          fcbsMtm += mtm;
+          fcbsFees += fees.fcbsVenueFee * share;
+        } else {
+          iceMtm += mtm;
+          iceFees += (fees.broker + fees.ice + fees.iceClearing + fees.sfsCommission) * share;
+        }
+      });
+      const sign = String(record.counterparty || "").trim().toUpperCase() === "HSIN MING" ? 1 : -1;
+      const result = await pushHedgeToSalesforce({
+        action: "sf_push",
+        idempotencyKey: `salesforce:${record.id}:${record.updated_date || record.sf_record_id || "new"}`,
+        physicalTradeId: record.id,
+        expectedRevision: record.revision,
+        stem_number: record.stem_number,
+        lumpsum_ice: linked.some((swap) => swap.venue !== "FCBS") ? roundMoney(sign * (iceMtm - iceFees)) : null,
+        lumpsum_fcbs: linked.some((swap) => swap.venue === "FCBS") ? roundMoney(sign * (fcbsMtm - fcbsFees)) : null,
+        existing_sf_record_id: record.sf_record_id || null,
+      });
+      if (!result?.success) throw new Error(result?.error || result?.details || "Salesforce sync failed");
+      await PhysicalTrade.update(record.id, { sf_record_id: result.sf_record_id }, record.revision);
+      await data.reload({ silent: true });
+      actions.notify({ message: `${record.stem_number} synced to Salesforce` });
+    } catch (error) {
+      actions.notify({ message: error.message || "Salesforce sync failed" });
+    } finally {
+      setSfPushing(null);
+    }
+  };
+
+  return (
+    <div className="app-page">
+      <PageHeader
+        eyebrow="Trade capture"
+        title="Physical trades"
+        description="Manage cargo exposure, pricing legs, delivery windows, linked paper hedges, and Salesforce stems."
+        actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>New physical</Button> : null}
+      />
+
+      <div className="app-toolbar">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search vessel, counterparty, stem..." />
+        <SegmentedControl
+          value={status}
+          onChange={setStatus}
+          label="Physical trade status"
+          options={[
+            { value: "open", label: "Open", count: data.physicals.filter((record) => physicalStatus(record) === "open").length },
+            { value: "closed", label: "Closed", count: data.physicals.filter((record) => physicalStatus(record) === "closed").length },
+            { value: "all", label: "All" },
+          ]}
+        />
+        <Select value={month} onChange={(event) => setMonth(event.target.value)} className="app-toolbar__select">
+          <option value="all">All months</option>
+          {months.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}
+        </Select>
+        <IconButton label="Export filtered physical trades" icon={Download} onClick={exportRows} />
+      </div>
+
+      <TableFrame>
+        {rows.length ? (
+          <table className="app-table app-table--physical">
+            <thead>
+              <tr>
+                <th>Status</th><th>Trade</th><th>Product</th><th>Counterparty</th><th>Quantity</th><th>Vessel / delivery</th><th>Pricing</th><th>P&amp;L</th><th aria-label="Actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((record) => {
+                const pnl = calcPhysicalPnl(record, data.mops, settings.general.sgo_bbl_per_mt)?.value;
+                const closed = physicalStatus(record) === "closed";
+                return (
+                  <tr key={record.id}>
+                    <td><StatusBadge tone={closed ? "neutral" : "positive"}>{closed ? "Closed" : "Open"}</StatusBadge></td>
+                    <td><strong>{formatDate(record.trade_date)}</strong><small>{record.stem_number || "No stem"}</small></td>
+                    <td><ProductBadge product={record.product} /></td>
+                    <td><strong>{record.counterparty || "Unassigned"}</strong></td>
+                    <td><strong>{formatQuantity(record.qty_min, record.unit)}</strong>{record.qty_max && Number(record.qty_max) !== Number(record.qty_min) && <small>to {formatQuantity(record.qty_max, record.unit)}</small>}</td>
+                    <td><strong>{record.vessel_name || "No vessel"}</strong><small>{record.delivery_date_from ? `${formatDate(record.delivery_date_from)}${record.delivery_date_to ? ` to ${formatDate(record.delivery_date_to)}` : ""}` : "No delivery window"}</small></td>
+                    <td><strong>{formatMonth(record.sell_pricing_month || record.buy_pricing_month)}</strong><small>{record.sell_price_type || "-"} / {record.buy_price_type || "-"}</small></td>
+                    <td><Money value={pnl} strong /></td>
+                    <td>
+                      <div className="app-row-actions">
+                        {!readOnly && <>{record.stem_number && closed && <IconButton label={record.sf_record_id ? "Update Salesforce" : "Send to Salesforce"} icon={record.sf_record_id ? CheckCircle2 : CloudUpload} variant="quiet" disabled={sfPushing === record.id} onClick={() => pushSalesforce(record)} />}<IconButton label="Duplicate physical trade" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit physical trade" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete physical trade" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <EmptyState title="No physical trades match" description="Adjust the filters or create a new physical trade." action={<Button variant="primary" icon={Plus} onClick={openCreate}>New physical</Button>} />
+        )}
+      </TableFrame>
+
+      <Drawer
+        open={Boolean(drawer)}
+        onClose={() => setDrawer(null)}
+        title={drawer?.mode === "edit" ? "Edit physical trade" : "New physical trade"}
+        description="Capture the cargo first, then define each pricing leg."
+        footer={<><Button onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button><Button variant="primary" onClick={save} disabled={saving}>{saving ? "Saving..." : drawer?.mode === "edit" ? "Save changes" : "Create trade"}</Button></>}
+      >
+        {formError && <InlineError error={formError} />}
+        <section className="app-form-section">
+          <div className="app-form-section__title">Trade details</div>
+          <div className="app-form-grid app-form-grid--2">
+            <Field label="Trade date" required><input className="app-input" type="date" value={form.trade_date || ""} onChange={(event) => setField("trade_date", event.target.value)} /></Field>
+            <Field label="Product" required><Select value={form.product || ""} onChange={(event) => { setField("product", event.target.value); if (event.target.value === "SGO") setField("unit", "BBL"); }}><option value="">Select product</option>{settings.lists.products.map((value) => <option key={value}>{value}</option>)}</Select></Field>
+            <Field label="Counterparty"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Unassigned</option>{settings.lists.counterparts.map((value) => <option key={value}>{value}</option>)}</Select></Field>
+            <Field label="Vessel name"><input className="app-input" value={form.vessel_name || ""} onChange={(event) => setField("vessel_name", event.target.value)} /></Field>
+            <Field label="Minimum quantity" required><input className="app-input" type="number" step="any" value={form.qty_min ?? ""} onChange={(event) => setField("qty_min", event.target.value)} /></Field>
+            <Field label="Maximum quantity" hint="Defaults to minimum"><input className="app-input" type="number" step="any" value={form.qty_max ?? ""} onChange={(event) => setField("qty_max", event.target.value)} /></Field>
+            <Field label="Unit"><Select value={form.unit || "MT"} onChange={(event) => setField("unit", event.target.value)}><option value="MT">MT</option><option value="BBL">BBL</option></Select></Field>
+            <Field label="Stem number"><input className="app-input" placeholder="HK2626360T" value={form.stem_number || ""} onChange={(event) => setField("stem_number", event.target.value)} /></Field>
+            <Field label="Delivery from"><input className="app-input" type="date" value={form.delivery_date_from || ""} onChange={(event) => setField("delivery_date_from", event.target.value)} /></Field>
+            <Field label="Delivery to"><input className="app-input" type="date" value={form.delivery_date_to || ""} onChange={(event) => setField("delivery_date_to", event.target.value)} /></Field>
+          </div>
+        </section>
+        <div className="app-form-split"><PricingLeg side="Sell" form={form} setField={setField} /><PricingLeg side="Buy" form={form} setField={setField} /></div>
+        <section className="app-form-section">
+          <div className="app-form-section__title">Control</div>
+          <Field label="Notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field>
+          <label className="app-check"><input type="checkbox" checked={Boolean(form.is_closed)} onChange={(event) => setField("is_closed", event.target.checked)} /><span>Mark this physical trade as closed</span></label>
+        </section>
+      </Drawer>
+
+      <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete physical trade?" description={deleteTarget ? `${deleteTarget.product || "Physical"} for ${deleteTarget.counterparty || "unassigned counterparty"} on ${formatDate(deleteTarget.trade_date)}` : ""} />
+    </div>
+  );
+}

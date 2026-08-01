@@ -11,6 +11,7 @@ import {
   GripVertical,
   History,
   HandCoins,
+  ChartNoAxesCombined,
   LayoutDashboard,
   ListTodo,
   LogOut,
@@ -53,6 +54,7 @@ const navGroups = [
     items: [
       { id: 'dashboard', to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
       { id: 'buyers_administrator', to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
+      { id: 'hedge_desk', to: '/hedge-desk', label: 'Hedge Desk', moduleId: 'hedge_desk', icon: ChartNoAxesCombined },
     ],
   },
   {

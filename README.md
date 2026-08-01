@@ -30,39 +30,25 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
-### Operational Microsoft 365 sender
+### Microsoft Graph email routing
 
-Routine FCOS email should use Microsoft Graph with the operational mailbox. The
-operational channel can reuse the FCOS Updates Entra application and Vercel OIDC
-trust, while Exchange recipient scope must include the operational mailbox:
-
-```bash
-FCOS_OPERATIONAL_TRANSPORT=microsoft_graph_oidc
-FCOS_OPERATIONAL_MICROSOFT_MAILBOX=louisa@cosulich.com.hk
-FCOS_OPERATIONAL_SENDER_NAME="FCOS"
-FCOS_OPERATIONAL_SMTP_FALLBACK=true
-```
-
-`FCOS_OPERATIONAL_MICROSOFT_TENANT_ID` and
-`FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID` may be set independently. When absent,
-FCOS reuses the corresponding `FCOS_UPDATE_*` values. The SMTP fallback is a
-temporary continuity control: it runs only after a definite Graph authentication
-or mailbox-authorization failure and never retries an uncertain Graph send.
-
-### FCOS Updates Microsoft 365 sender
-
-FCOS Updates should use Microsoft Graph with a mailbox-scoped Exchange application role. Vercel authenticates through its short-lived production OIDC identity, so no mailbox password or application secret is stored:
+Every FCOS email purpose uses Microsoft Graph and an approved Microsoft 365
+mailbox. One protected Entra application and Vercel OIDC trust provide the
+application identity:
 
 ```bash
-FCOS_UPDATE_TRANSPORT=microsoft_graph
-FCOS_UPDATE_MICROSOFT_TENANT_ID=your_tenant_id
-FCOS_UPDATE_MICROSOFT_CLIENT_ID=your_application_client_id
-FCOS_UPDATE_MICROSOFT_MAILBOX=vincent@cosulich.com.hk
-FCOS_UPDATE_FROM_EMAIL=vincent@cosulich.com.hk
-FCOS_UPDATE_SENDER_NAME="Vincent Lee"
+FCOS_MICROSOFT_TENANT_ID=your_tenant_id
+FCOS_MICROSOFT_CLIENT_ID=your_application_client_id
 ```
 
-The Entra federated credential must match the Vercel production issuer, subject, and audience exactly. In Exchange Online, assign `Application Mail.Send` to that service principal through a custom recipient scope that matches only the configured mailbox. Do not also grant an unscoped Entra `Mail.Send` application permission because Entra and Exchange grants are additive.
+Administrators and the active General Manager register mailbox addresses and
+assign one mailbox to each email purpose in Settings. These assignments are
+non-secret Supabase configuration. The Entra federated credential must match
+the Vercel production issuer, subject, and audience exactly. In Exchange Online,
+assign `Application Mail.Send` to the service principal through a recipient scope
+covering every approved mailbox. Do not also grant an unscoped Entra `Mail.Send`
+application permission because Entra and Exchange grants are additive. FCOS has
+no SMTP transport, mailbox password, Send As path, or automatic fallback.
 
 ### Universal application portal
 

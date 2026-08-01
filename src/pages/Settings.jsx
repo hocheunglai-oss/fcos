@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock,
+  ChartNoAxesCombined,
   ExternalLink,
   FileText,
   Loader2,
@@ -21,10 +22,12 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
@@ -33,6 +36,8 @@ import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettin
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { useAuth } from '@/lib/AuthContext';
+import { useSearchParams } from 'react-router-dom';
+import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SETTINGS_TAB_KEY = 'settings:active-tab';
@@ -45,6 +50,7 @@ const SETTINGS_TABS = [
   { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
   { id: 'documents', label: 'STEM Documents', icon: FileText },
   { id: 'ai', label: 'AI Search', icon: Sparkles },
+  { id: 'hedge-desk', label: 'Hedge Desk', icon: ChartNoAxesCombined },
   { id: 'health', label: 'System Health', icon: Activity },
 ];
 
@@ -129,72 +135,12 @@ const STATUS_META = {
   },
 };
 
-function SenderChannelBand({ title, description, channel, deliveryGateEnabled }) {
-  const status = !channel
-    ? 'unavailable'
-    : !channel.configured
-      ? 'not_configured'
-      : deliveryGateEnabled
-        ? 'configured'
-        : 'disabled';
-  const sender = channel?.senderAddress
-    ? channel.senderName
-      ? `${channel.senderName} <${channel.senderAddress}>`
-      : channel.senderAddress
-    : 'Not configured';
-
-  return (
-    <section className="min-w-0 px-1 py-4 first:pt-0 last:pb-0 lg:px-5 lg:py-0 lg:first:pl-0 lg:last:pr-0">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-        </div>
-        <StatusBadge status={status} />
-      </div>
-      <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-        <div>
-          <dt className="font-semibold uppercase text-muted-foreground">Sender</dt>
-          <dd className="mt-1 break-words text-foreground">{sender}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-muted-foreground">Transport</dt>
-          <dd className="mt-1 text-foreground">{channel?.transportLabel || 'Unavailable'}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-muted-foreground">Authenticated mailbox</dt>
-          <dd className="mt-1 break-words text-foreground">{channel?.authenticatedAddress || 'Not configured'}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-muted-foreground">Display name</dt>
-          <dd className="mt-1 text-foreground">
-            {channel?.displayNameMode === 'workflow_specific'
-              ? 'Set by each workflow'
-              : channel?.displayNameMode === 'mailbox_managed'
-                ? 'Managed by Microsoft 365 mailbox'
-              : channel?.senderName || 'Not configured'}
-          </dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-muted-foreground">Delivery gate</dt>
-          <dd className="mt-1 text-foreground">{deliveryGateEnabled ? 'Enabled' : 'Disabled'}</dd>
-        </div>
-        {channel?.fallbackEnabled && (
-          <div>
-            <dt className="font-semibold uppercase text-muted-foreground">Temporary fallback</dt>
-            <dd className="mt-1 break-words text-foreground">
-              {channel.fallbackConfigured
-                ? `${channel.fallbackTransportLabel || 'SMTP'} · ${channel.fallbackAddress || 'Configured'}`
-                : 'Enabled but not configured'}
-            </dd>
-          </div>
-        )}
-      </dl>
-      {channel?.configurationIssue && (
-        <p className="mt-3 text-xs text-amber-700">{channel.configurationIssue}</p>
-      )}
-    </section>
-  );
+function MailboxVerificationBadge({ mailbox }) {
+  if (!mailbox) return <StatusBadge status="not_configured" />;
+  if (!mailbox.active) return <StatusBadge status="disabled" />;
+  if (mailbox.verificationState === 'verified') return <StatusBadge status="online" />;
+  if (mailbox.verificationState === 'failed') return <StatusBadge status="warning" />;
+  return <StatusBadge status="configured" />;
 }
 
 function formatHealthDate(value) {
@@ -626,13 +572,14 @@ function SystemHealthPanel() {
 
 export default function SettingsPage({ methodologyAction = null }) {
   const { isAdministrator } = useAuth();
+  const [searchParams] = useSearchParams();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
   const [baseSettings, setBaseSettings] = useState(settingsSnapshot);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
-  const [activeTab, setActiveTab] = useState(() => validSettingsTab(localStorage.getItem(SETTINGS_TAB_KEY)));
+  const [activeTab, setActiveTab] = useState(() => validSettingsTab(searchParams.get('panel') || localStorage.getItem(SETTINGS_TAB_KEY)));
   const [aiSettings, setAiSettings] = useState(null);
   const [aiModels, setAiModels] = useState([]);
   const [aiUsage, setAiUsage] = useState(null);
@@ -642,6 +589,10 @@ export default function SettingsPage({ methodologyAction = null }) {
   const [emailSenders, setEmailSenders] = useState(null);
   const [emailSendersLoading, setEmailSendersLoading] = useState(true);
   const [emailSendersError, setEmailSendersError] = useState('');
+  const [emailSenderBusy, setEmailSenderBusy] = useState(false);
+  const [mailboxEditorOpen, setMailboxEditorOpen] = useState(false);
+  const [mailboxForm, setMailboxForm] = useState({ mailboxId: null, emailAddress: '', label: '', active: true, expectedRevision: null, reason: '' });
+  const [routeDrafts, setRouteDrafts] = useState({});
 
   useEffect(() => {
     const base = settingsSnapshot();
@@ -683,6 +634,11 @@ export default function SettingsPage({ methodologyAction = null }) {
       setEmailSendersError(response.data.error);
     } else {
       setEmailSenders(response.data || null);
+      setRouteDrafts(Object.fromEntries((response.data?.purposes || []).map((purpose) => [purpose.key, {
+        mailboxId: purpose.mailbox?.id || '',
+        reason: '',
+        expectedRevision: purpose.revision,
+      }])));
     }
     setEmailSendersLoading(false);
   }, []);
@@ -690,6 +646,56 @@ export default function SettingsPage({ methodologyAction = null }) {
   useEffect(() => {
     loadEmailSenders();
   }, [loadEmailSenders]);
+
+  const openMailboxEditor = (mailbox = null) => {
+    setMailboxForm({
+      mailboxId: mailbox?.id || null,
+      emailAddress: mailbox?.emailAddress || '',
+      label: mailbox?.label || '',
+      active: mailbox?.active !== false,
+      expectedRevision: mailbox?.revision ?? null,
+      reason: '',
+    });
+    setMailboxEditorOpen(true);
+  };
+
+  const saveMailbox = async () => {
+    setEmailSenderBusy(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderMailboxSave', mailboxForm);
+    if (response.data?.error) {
+      setEmailSendersError(response.data.error);
+    } else {
+      setEmailSenders(response.data.registry);
+      setMailboxEditorOpen(false);
+      await loadEmailSenders();
+    }
+    setEmailSenderBusy(false);
+  };
+
+  const saveSenderRoute = async (purpose) => {
+    const draft = routeDrafts[purpose.key];
+    setEmailSenderBusy(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderRouteSave', {
+      purposeKey: purpose.key,
+      mailboxId: draft?.mailboxId || null,
+      reason: draft?.reason || '',
+      expectedRevision: draft?.expectedRevision,
+    });
+    if (response.data?.error) setEmailSendersError(response.data.error);
+    else await loadEmailSenders();
+    setEmailSenderBusy(false);
+  };
+
+  const bootstrapEmailSenders = async () => {
+    setEmailSenderBusy(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderRegistryBootstrap');
+    if (response.data?.error) setEmailSendersError(response.data.error);
+    else await loadEmailSenders();
+    setEmailSenderBusy(false);
+  };
 
   const settingsDraftValue = useMemo(() => ({
     exchangeRateSettings,
@@ -766,7 +772,7 @@ export default function SettingsPage({ methodologyAction = null }) {
         icon={Settings}
         eyebrow="Admin"
         title="Settings"
-        description="Configure email senders, exchange rates, STEM documents, and Dashboard AI Search."
+        description="Configure email senders, exchange rates, STEM documents, AI, Hedge Desk, and service health."
         actions={(
           <>
             {methodologyAction}
@@ -809,8 +815,8 @@ export default function SettingsPage({ methodologyAction = null }) {
         <TabsContent value="email" className="mt-0">
           <SettingsPanel
             icon={Mail}
-            title="Email Sender Channels"
-            description="Routine FCOS email and FCOS Updates use separately configured delivery channels and sender identities."
+            title="Microsoft Graph Email Senders"
+            description="Assign an approved Microsoft 365 mailbox to each FCOS email purpose. Microsoft 365 controls the visible sender identity."
             meta={emailSendersLoading ? 'Loading sender configuration' : null}
           >
             {emailSendersError && (
@@ -828,33 +834,168 @@ export default function SettingsPage({ methodologyAction = null }) {
             {emailSendersLoading && !emailSenders ? (
               <StateBlock
                 icon={Loader2}
-                title="Loading sender channels"
-                description="Reading the protected operational and FCOS Updates sender configuration."
+                title="Loading Graph sender routes"
+                description="Reading protected mailbox assignments and delivery status."
               />
             ) : (
-              <div className="grid divide-y divide-border border-y border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-                <SenderChannelBand
-                  title="Operational Email Sender"
-                  description="Payment reminders, reports, notifications, and other routine FCOS email use the operational Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Any temporary SMTP fallback is shown explicitly below."
-                  channel={emailSenders?.operational}
-                  deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
-                />
-                <SenderChannelBand
-                  title="FCOS Updates Sender"
-                  description="Administrator-controlled FCOS Updates batches use their dedicated Microsoft 365 mailbox and remain independent from the operational sender identity."
-                  channel={emailSenders?.fcosUpdates}
-                  deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
-                />
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-3">
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-semibold text-foreground">Microsoft Graph · Vercel OIDC</span>
+                    {' · '}{emailSenders?.deliveryGateEnabled ? 'Delivery enabled' : 'Delivery disabled'}
+                    {' · '}{emailSenders?.applicationConfigured ? 'Application configured' : 'Application not configured'}
+                  </div>
+                  {isAdministrator && (
+                    <div className="flex gap-2">
+                      {!emailSenders?.mailboxes?.length && (
+                        <Button type="button" variant="outline" size="sm" onClick={bootstrapEmailSenders} disabled={emailSenderBusy}>
+                          Import current routes
+                        </Button>
+                      )}
+                      <Button type="button" size="sm" onClick={() => openMailboxEditor()} disabled={emailSenderBusy}>
+                        Add mailbox
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Approved mailboxes</h3>
+                  <div className="mt-2 overflow-x-auto border-y border-border">
+                    <table className="w-full min-w-[720px] text-left text-xs">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Mailbox</th>
+                          <th className="px-3 py-2 font-semibold">Microsoft 365 address</th>
+                          <th className="px-3 py-2 font-semibold">Verification</th>
+                          <th className="px-3 py-2 font-semibold">Last successful delivery</th>
+                          <th className="px-3 py-2 text-right font-semibold">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {(emailSenders?.mailboxes || []).map((mailbox) => (
+                          <tr key={mailbox.id}>
+                            <td className="px-3 py-3 font-medium text-foreground">{mailbox.label}</td>
+                            <td className="px-3 py-3 text-foreground">{mailbox.emailAddress}</td>
+                            <td className="px-3 py-3"><MailboxVerificationBadge mailbox={mailbox} /></td>
+                            <td className="px-3 py-3 text-muted-foreground">{formatHealthDate(mailbox.lastSuccessAt)}</td>
+                            <td className="px-3 py-3 text-right">
+                              {isAdministrator && <Button type="button" variant="ghost" size="sm" onClick={() => openMailboxEditor(mailbox)}>Edit</Button>}
+                            </td>
+                          </tr>
+                        ))}
+                        {!emailSenders?.mailboxes?.length && (
+                          <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No Microsoft Graph mailbox has been registered.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Purpose assignments</h3>
+                  <div className="mt-2 divide-y divide-border border-y border-border">
+                    {(emailSenders?.purposes || []).map((purpose) => {
+                      const draft = routeDrafts[purpose.key] || {};
+                      const dirty = String(draft.mailboxId || '') !== String(purpose.mailbox?.id || '');
+                      return (
+                        <div key={purpose.key} className="grid gap-3 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(240px,0.8fr)_minmax(240px,0.8fr)_auto] lg:items-end">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{purpose.label}</span>
+                              <MailboxVerificationBadge mailbox={purpose.mailbox} />
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">{purpose.description}</p>
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Assigned mailbox</Label>
+                            <Select
+                              value={draft.mailboxId || '__none__'}
+                              onValueChange={(mailboxId) => setRouteDrafts((current) => ({ ...current, [purpose.key]: { ...draft, mailboxId: mailboxId === '__none__' ? '' : mailboxId } }))}
+                              disabled={!isAdministrator || emailSenderBusy}
+                            >
+                              <SelectTrigger><SelectValue placeholder="Not assigned" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">Not assigned</SelectItem>
+                                {(emailSenders?.mailboxes || []).filter((mailbox) => mailbox.active).map((mailbox) => (
+                                  <SelectItem key={mailbox.id} value={mailbox.id}>{mailbox.label} · {mailbox.emailAddress}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {isAdministrator && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Audit reason</Label>
+                              <Input
+                                value={draft.reason || ''}
+                                onChange={(event) => setRouteDrafts((current) => ({ ...current, [purpose.key]: { ...draft, reason: event.target.value } }))}
+                                placeholder="Why is this sender changing?"
+                                maxLength={255}
+                                disabled={!dirty || emailSenderBusy}
+                              />
+                            </div>
+                          )}
+                          {isAdministrator && (
+                            <Button type="button" size="sm" onClick={() => saveSenderRoute(purpose)} disabled={!dirty || (draft.reason || '').trim().length < 8 || emailSenderBusy}>
+                              Save route
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             )}
             <div className="mt-4 flex items-start gap-3 text-xs leading-5 text-muted-foreground">
               <Server className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <p>Credentials and Microsoft application settings are stored only in Vercel. Each channel has a separate connection check in System Health.</p>
-                <p className="mt-1">{emailSenders?.authorityNote || 'General Manager sending authority and the configured FCOS Updates mailbox are independent.'}</p>
+                <p>Microsoft application configuration remains protected in Vercel. Mailbox addresses and purpose assignments contain no credentials and are stored server-side in Supabase.</p>
+                <p className="mt-1">SMTP and automatic transport fallback are not available. A failed Graph delivery remains failed or uncertain for controlled review.</p>
               </div>
             </div>
           </SettingsPanel>
+
+          <Dialog open={mailboxEditorOpen} onOpenChange={setMailboxEditorOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{mailboxForm.mailboxId ? 'Edit Microsoft 365 mailbox' : 'Add Microsoft 365 mailbox'}</DialogTitle>
+                <DialogDescription>The mailbox must already be included in the Exchange Application RBAC scope for FCOS.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Mailbox label</Label>
+                  <Input value={mailboxForm.label} onChange={(event) => setMailboxForm((current) => ({ ...current, label: event.target.value }))} maxLength={100} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Microsoft 365 email address</Label>
+                  <Input type="email" value={mailboxForm.emailAddress} onChange={(event) => setMailboxForm((current) => ({ ...current, emailAddress: event.target.value }))} />
+                </div>
+                {mailboxForm.mailboxId && (
+                  <div className="space-y-1.5">
+                    <Label>Status</Label>
+                    <Select value={mailboxForm.active ? 'active' : 'disabled'} onValueChange={(value) => setMailboxForm((current) => ({ ...current, active: value === 'active' }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <Label>Audit reason</Label>
+                  <Input value={mailboxForm.reason} onChange={(event) => setMailboxForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Reason for this mailbox change" maxLength={255} />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setMailboxEditorOpen(false)} disabled={emailSenderBusy}>Cancel</Button>
+                <Button type="button" onClick={saveMailbox} disabled={emailSenderBusy || !mailboxForm.label.trim() || !mailboxForm.emailAddress.trim() || mailboxForm.reason.trim().length < 8}>
+                  {emailSenderBusy ? 'Saving…' : 'Save mailbox'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="exchange" className="mt-0">
@@ -1084,6 +1225,16 @@ export default function SettingsPage({ methodologyAction = null }) {
 
         <TabsContent value="health" className="mt-0">
           <SystemHealthPanel />
+        </TabsContent>
+
+        <TabsContent value="hedge-desk" className="mt-0">
+          <SettingsPanel
+            icon={ChartNoAxesCombined}
+            title="Hedge Desk"
+            description="Shared valuation, settlement, Salesforce, communication, and Trading Assistant configuration for the native FCOS module."
+          >
+            <HedgeSettingsPanel />
+          </SettingsPanel>
         </TabsContent>
       </Tabs>
 

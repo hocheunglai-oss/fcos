@@ -5,6 +5,7 @@ import { COLLABORATION_ALLOWED_ATTACHMENTS, collaborationAvailableDisplayFilenam
 import { growthCalendarCancel, growthCalendarConfigured, growthCalendarCreate, growthCalendarEventPayload, growthCalendarGet, growthCalendarUpdate } from "./_growthOutlook.js";
 import { isExternalActionEnabled } from "./_externalActionGates.js";
 import { sendOperationalMail } from "./_operationalMail.js";
+import { resolveGraphEmailSender } from "./_graphEmail.js";
 
 const BUCKET = "growth-coaching-files";
 const PUBLIC_PATH = "/growth-coaching";
@@ -258,6 +259,22 @@ function publicUrl() {
   return String(process.env.FCOS_PUBLIC_URL || "").replace(/\/$/, "");
 }
 
+async function reserveGrowthEmailSender(client, deliveryId) {
+  const sender = await resolveGraphEmailSender(client, "growth_coaching");
+  const snapshot = { id: sender.mailboxId, emailAddress: sender.emailAddress };
+  const { error } = await client
+    .from("growth_email_deliveries")
+    .update({
+      sender_mailbox_id: snapshot.id,
+      sender_mailbox_snapshot: snapshot.emailAddress,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", deliveryId)
+    .eq("status", "reserved");
+  if (error) throw rpcError(error);
+  return snapshot;
+}
+
 async function sendNotificationEmail(client, { user, eventId, category, dedupeKey, title, dueDate = null, progress = null }) {
   const { data: preferences } = await client.from("growth_email_preferences").select("*").eq("user_id", user.id).maybeSingle();
   if (preferences?.[category] === false || !isExternalActionEnabled("email_delivery") || !isExternalActionEnabled("growth_coaching_email")) return;
@@ -279,14 +296,13 @@ async function sendNotificationEmail(client, { user, eventId, category, dedupeKe
   const details = ["FCOS Growth & Coaching", safeTitle, dueDate ? `Date: ${dueDate}` : "", progress != null ? `Progress: ${progress}%` : "", url ? `Open FCOS: ${url}${PUBLIC_PATH}` : ""].filter(Boolean);
   const html = details.map((line, index) => (index === 0 ? `<h2>${line}</h2>` : `<p>${line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`)).join("");
   try {
-    const senderName = text(process.env.FCOS_GROWTH_SENDER_NAME || "FCOS", 100);
+    const mailboxSnapshot = await reserveGrowthEmailSender(client, reserved.id);
     await sendOperationalMail({
-      from: senderName,
       to: user.email,
       subject: `FCOS: ${safeTitle}`,
       text: details.join("\n"),
       html,
-    });
+    }, { client, purposeKey: 'growth_coaching', mailboxSnapshot });
     await client
       .from("growth_email_deliveries")
       .update({
@@ -300,7 +316,7 @@ async function sendNotificationEmail(client, { user, eventId, category, dedupeKe
     await client
       .from("growth_email_deliveries")
       .update({
-        status: "failed",
+        status: error?.mailDeliveryUncertain ? "uncertain" : "failed",
         attempt_count: 1,
         last_error: text(error?.message || "Delivery failed.", 500),
         updated_at: new Date().toISOString(),
@@ -400,13 +416,13 @@ async function sendRoutineDigests(client, today) {
     const url = publicUrl();
     const lines = ["FCOS Growth & Coaching reminder digest", `Date: ${today}`, ...items.map((row) => `- ${text(row.message || row.title, 255)}`), url ? `Open FCOS: ${url}${PUBLIC_PATH}` : ""].filter(Boolean);
     try {
+      const mailboxSnapshot = await reserveGrowthEmailSender(client, delivery.id);
       await sendOperationalMail({
-        from: text(process.env.FCOS_GROWTH_SENDER_NAME || "FCOS", 100),
         to: user.email,
         subject: `FCOS Growth & Coaching reminders - ${today}`,
         text: lines.join("\n"),
         html: lines.map((line, index) => (index === 0 ? `<h2>${line}</h2>` : `<p>${line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`)).join(""),
-      });
+      }, { client, purposeKey: 'growth_coaching', mailboxSnapshot });
       await client
         .from("growth_email_deliveries")
         .update({
@@ -421,7 +437,7 @@ async function sendRoutineDigests(client, today) {
       await client
         .from("growth_email_deliveries")
         .update({
-          status: "failed",
+          status: sendError?.mailDeliveryUncertain ? "uncertain" : "failed",
           attempt_count: 1,
           last_error: text(sendError?.message || "Delivery failed.", 500),
           updated_at: new Date().toISOString(),

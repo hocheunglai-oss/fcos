@@ -48,8 +48,16 @@ import {
 } from '../_collaborationService.js';
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
-import { verifyMicrosoftGraphMailAuthentication } from '../_microsoftGraphMail.js';
 import { emailSenderStatus as configuredEmailSenderStatus } from '../_emailSenderStatus.js';
+import {
+  bootstrapGraphEmailRegistry,
+  graphEmailApplicationConfig,
+  listGraphEmailRegistry,
+  resolveGraphEmailSender,
+  saveGraphEmailMailbox,
+  saveGraphEmailRoute,
+  verifyGraphEmailApplication,
+} from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
@@ -85,7 +93,7 @@ import {
   growthReportingLinesSaveBatch as growthReportingLinesSaveBatchService,
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
-import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, fcosUpdateMailConfig, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
+import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
 import {
   agreedCompensationClaimsForAccount,
   createUnofficialCompensationClaim as createUnofficialCompensationClaimService,
@@ -98,6 +106,13 @@ import {
   validateAgreedCompensationClaimLink,
 } from '../_unofficialCompensationService.js';
 import { canManageUnofficialCompensationStatus } from '../_unofficialCompensation.js';
+import { handleHedgeDeskEntity } from '../_hedgeDeskService.js';
+import { parseMopsText } from '../_hedgeMops.js';
+import { generateHedgeInvoicePdf, saveHedgeInvoicePdf, sendHedgeInvoiceEmailIdempotent } from '../_hedgeDocuments.js';
+import { approveAndSendHedgeSfsReport, getHedgeSfsFile, getHedgeSfsMonthReport, hedgeSfsHealth } from '../_hedgeSfsService.js';
+import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js';
+import { pushHedgeSalesforce } from '../_hedgeSalesforce.js';
+import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -168,6 +183,7 @@ const ADMIN_APP_MODULES = [
     path: '/account-managers',
     sortOrder: 85,
   },
+  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 87 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
@@ -219,6 +235,10 @@ const ADMIN_CAPABILITIES = [
     label: 'Manage Cashflow Settings',
     description: 'Change forecast assumptions and blocked dates.',
   },
+  { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain physical trades, paper hedges, markets, and counterparties.' },
+  { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage clearing entries, settlement invoices, and settlement notices.' },
+  { id: 'hedge_close_approve', label: 'Approve Hedge Close and Reports', description: 'Close or reopen months and approve SFS reports.' },
+  { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration, integrations, and Trading Assistant model.' },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
@@ -290,6 +310,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: true,
     buyers_administrator: false,
+    hedge_desk: true,
     settings: true,
     admin: false,
   },
@@ -305,6 +326,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: true,
     buyers_administrator: false,
+    hedge_desk: true,
     settings: false,
     admin: false,
   },
@@ -320,6 +342,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: false,
     report_archive: false,
     buyers_administrator: false,
+    hedge_desk: false,
     settings: false,
     admin: false,
   },
@@ -335,6 +358,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: false,
     buyers_administrator: false,
+    hedge_desk: false,
     settings: false,
     admin: false,
   },
@@ -350,6 +374,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: false,
     report_archive: false,
     buyers_administrator: false,
+    hedge_desk: false,
     settings: false,
     admin: false,
   },
@@ -362,30 +387,50 @@ const FALLBACK_TYPE_CAPABILITIES = {
     disputes_account: false,
     buyer_invoices_manage: true,
     cashflow_forecast_manage: true,
+    hedge_book_manage: true,
+    hedge_settlement_manage: false,
+    hedge_close_approve: false,
+    hedge_admin: false,
   },
   finance: {
     disputes_approve: false,
     disputes_account: true,
     buyer_invoices_manage: true,
     cashflow_forecast_manage: true,
+    hedge_book_manage: false,
+    hedge_settlement_manage: true,
+    hedge_close_approve: false,
+    hedge_admin: false,
   },
   operations: {
     disputes_approve: false,
     disputes_account: false,
     buyer_invoices_manage: false,
     cashflow_forecast_manage: false,
+    hedge_book_manage: false,
+    hedge_settlement_manage: false,
+    hedge_close_approve: false,
+    hedge_admin: false,
   },
   interoffice: {
     disputes_approve: false,
     disputes_account: false,
     buyer_invoices_manage: false,
     cashflow_forecast_manage: false,
+    hedge_book_manage: false,
+    hedge_settlement_manage: false,
+    hedge_close_approve: false,
+    hedge_admin: false,
   },
   viewer: {
     disputes_approve: false,
     disputes_account: false,
     buyer_invoices_manage: false,
     cashflow_forecast_manage: false,
+    hedge_book_manage: false,
+    hedge_settlement_manage: false,
+    hedge_close_approve: false,
+    hedge_admin: false,
   },
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
@@ -914,7 +959,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -948,6 +993,18 @@ const HANDLER_MODULE_ACCESS = {
   navigationPreferencesGet: [],
   navigationPreferencesSave: [],
   navigationPreferencesReset: [],
+  hedgeDeskEntity: ['hedge_desk'],
+  hedgeDeskParseMops: ['hedge_desk'],
+  hedgeDeskGenerateInvoice: ['hedge_desk'],
+  hedgeDeskSaveInvoicePdf: ['hedge_desk'],
+  hedgeDeskSendInvoiceEmail: ['hedge_desk'],
+  hedgeDeskSfsReport: ['hedge_desk'],
+  hedgeDeskSfsFile: ['hedge_desk'],
+  hedgeDeskSfsSend: ['hedge_desk'],
+  hedgeDeskSalesforcePush: ['hedge_desk'],
+  hedgeDeskAssistant: ['hedge_desk'],
+  hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
+  hedgeDeskMaintenanceCron: [],
   paymentCollectionsReconcileCron: [],
   growthReportingLinesList: [],
   growthReportingLineSave: [],
@@ -1055,6 +1112,9 @@ const HANDLER_MODULE_ACCESS = {
   accountManagersSaveNote: ['buyers_administrator'],
   accountManagersRetrySync: ['buyers_administrator'],
   emailSenderStatus: ['settings'],
+  emailSenderMailboxSave: ['admin'],
+  emailSenderRouteSave: ['admin'],
+  emailSenderRegistryBootstrap: ['admin'],
   systemHealth: ['settings'],
   dashboardAiSettingsGet: ['settings'],
   dashboardAiSettingsSave: ['settings'],
@@ -1884,7 +1944,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows] = await Promise.all([
+  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, hedgeRows, emailSenderRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2035,9 +2095,36 @@ async function universalAuditTrail(body, req) {
         errorCode: row.error_code,
       },
     })),
+    safeAuditRows(client.from('hedge_events').select('id,event_type,entity_type,entity_legacy_id,label,metadata,actor_email,source,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `hedge:${row.id}`,
+      source: 'Hedge Desk',
+      module: 'Hedge Desk',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.label || row.entity_type || 'Hedge Desk',
+      summary: compactAuditSummary([row.label, row.entity_type, row.source === 'fc-hedge-desk' ? 'Migrated history' : 'FCOS']),
+      metadata: {
+        eventSource: row.source,
+        entityType: row.entity_type,
+        hasLegacyReference: Boolean(row.entity_legacy_id),
+        ...(row.metadata || {}),
+      },
+    })),
+    safeAuditRows(client.from('email_sender_events').select('id,event_type,purpose_key,reason,metadata,actor_email,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `email-sender:${row.id}`,
+      source: 'Email Senders',
+      module: 'Settings',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.purpose_key || 'Microsoft Graph mailbox registry',
+      summary: compactAuditSummary([normalizedAuditAction(row.purpose_key), row.reason]),
+      metadata: row.metadata || {},
+    })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...hedgeRows, ...emailSenderRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -4957,7 +5044,6 @@ const CASHFLOW_FORECAST_START_DATE = '2026-01-01';
 const INVOICE_TABLE_TOKEN_PATTERN = /\{\{\s*invoiceTable\s*\}\}/i;
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
-  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: ['bt@cosulich.com.hk'],
   cc: ['louisa@cosulich.com.hk', 'laureen@cosulich.com.hk'],
   daysAhead: 7,
@@ -5059,14 +5145,31 @@ function serverEmailDeliveryStatus() {
     configured: mailConfig.configured,
     enabled,
     provider: mailConfig.configured ? mailConfig.deliveryMethod : 'none',
-    sender: mailConfig.senderAddress ? maskValue(mailConfig.senderAddress) : null,
+    sender: null,
     scope: mailConfig.configured ? 'operational_server' : 'none',
-    fallbackEnabled: mailConfig.fallback.enabled && mailConfig.fallback.configured,
   };
 }
 
-function emailSenderStatus() {
-  return configuredEmailSenderStatus(process.env);
+async function emailSenderStatus(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return configuredEmailSenderStatus(context.client, process.env);
+}
+
+async function emailSenderMailboxSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const mailbox = await saveGraphEmailMailbox(context.client, context.profile, body);
+  return { mailbox, registry: await listGraphEmailRegistry(context.client) };
+}
+
+async function emailSenderRouteSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const route = await saveGraphEmailRoute(context.client, context.profile, body);
+  return { route, registry: await listGraphEmailRegistry(context.client) };
+}
+
+async function emailSenderRegistryBootstrap(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return bootstrapGraphEmailRegistry(context.client, context.profile, process.env);
 }
 
 function maskValue(value, visibleStart = 3, visibleEnd = 3) {
@@ -5497,103 +5600,56 @@ async function nagerHealthRow() {
 }
 
 async function operationalMailHealthRow() {
-  const mailConfig = operationalMailConfig();
-  const usesGraph = mailConfig.deliveryMethod === 'microsoft_graph_oidc';
+  const graphConfig = graphEmailApplicationConfig();
   const deliveryGateEnabled = isExternalActionEnabled('email_delivery');
-  const missingGraphEnv = usesGraph
-    ? [
-        ...(!mailConfig.graph.tenantId ? ['FCOS_OPERATIONAL_MICROSOFT_TENANT_ID or FCOS_UPDATE_MICROSOFT_TENANT_ID'] : []),
-        ...(!mailConfig.graph.clientId ? ['FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID or FCOS_UPDATE_MICROSOFT_CLIENT_ID'] : []),
-        ...(!mailConfig.graph.mailbox ? ['FCOS_OPERATIONAL_MICROSOFT_MAILBOX'] : []),
-      ]
-    : [];
-  let result = mailConfig.configured
+  let result = graphConfig.configured
     ? await timedCheck(async () => {
-        if (usesGraph) {
-          return {
-            ...await verifyMicrosoftGraphMailAuthentication(mailConfig.graph),
-            senderAddress: mailConfig.senderAddress,
-            deliveryGateEnabled,
-          };
-        }
-        const nodemailer = await import('nodemailer');
-        const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
-        if (!createTransport) throw new Error('SMTP email library failed to load.');
-        const port = Number(mailConfig.smtp.port || 587);
-        const transporter = createTransport({
-          host: mailConfig.smtp.host,
-          port,
-          secure: mailConfig.smtp.secure,
-          connectionTimeout: 7000,
-          greetingTimeout: 7000,
-          socketTimeout: 10000,
-          auth: {
-            user: mailConfig.smtp.user,
-            pass: mailConfig.smtp.password,
-          },
-        });
-        try {
-          await transporter.verify();
-          return {
-            host: mailConfig.smtp.host,
-            port,
-            authenticatedAddress: mailConfig.senderAddress,
-            deliveryGateEnabled,
-          };
-        } finally {
-          transporter.close?.();
-        }
+        const registry = await listGraphEmailRegistry(supabaseAdminClient());
+        const token = await verifyGraphEmailApplication();
+        return {
+          method: token.method,
+          accessTokenExpiresAt: token.accessTokenExpiresAt,
+          mailboxCount: registry.mailboxes.length,
+          purposeCount: registry.purposes.length,
+          unassignedPurposes: registry.purposes.filter((purpose) => purpose.enabled && !purpose.mailbox?.active).map((purpose) => purpose.label),
+          deliveryGateEnabled,
+        };
       })
     : null;
   if (result?.ok && !deliveryGateEnabled) result.status = 'disabled';
-  if (result && !result.ok && mailConfig.fallback.enabled && mailConfig.fallback.configured) {
+  if (result?.ok && result.details?.unassignedPurposes?.length) {
     result.status = 'warning';
-    result.details = {
-      fallbackAvailable: true,
-      fallbackAddress: mailConfig.fallback.authenticatedAddress,
-    };
   }
   return healthRow(
     {
-      id: 'operational-mail',
-      name: usesGraph ? 'Operational Microsoft 365 Sender' : 'Operational SMTP Sender',
+      id: 'microsoft-graph-email',
+      name: 'Microsoft Graph Email Routing',
       category: 'Email',
-      purpose: 'Operational sender for payment reminders, reports, notifications, and other routine FCOS email.',
+      purpose: 'Graph-only delivery for every FCOS email purpose using administrator-assigned Microsoft 365 mailboxes.',
       scope: 'server',
-      provider: usesGraph ? 'Microsoft Graph' : 'SMTP',
-      endpoint: usesGraph ? 'https://login.microsoftonline.com' : mailConfig.smtp.host || null,
-      authType: usesGraph ? 'Vercel OIDC to Microsoft OAuth' : 'SMTP username/password',
-      configured: mailConfig.configured,
+      provider: 'Microsoft Graph',
+      endpoint: 'https://graph.microsoft.com/v1.0',
+      authType: 'Vercel OIDC to Microsoft OAuth',
+      configured: graphConfig.configured,
       configuredEnv: configuredEnv([
-        'FCOS_OPERATIONAL_TRANSPORT',
-        'FCOS_OPERATIONAL_MICROSOFT_TENANT_ID',
-        'FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID',
-        'FCOS_OPERATIONAL_MICROSOFT_MAILBOX',
-        'FCOS_OPERATIONAL_SMTP_FALLBACK',
-        'SMTP_HOST',
-        'SMTP_PORT',
-        'SMTP_USER',
-        'SMTP_PASSWORD',
-        'SMTP_SECURE',
+        'FCOS_MICROSOFT_TENANT_ID',
+        'FCOS_MICROSOFT_CLIENT_ID',
+        'FCOS_UPDATE_MICROSOFT_TENANT_ID',
+        'FCOS_UPDATE_MICROSOFT_CLIENT_ID',
       ]),
-      missingEnv: usesGraph ? missingGraphEnv : missingEnv(['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD']),
-      tokenExpiry: usesGraph ? null : 'Not applicable.',
+      missingEnv: [
+        ...(!graphConfig.tenantId ? ['FCOS_MICROSOFT_TENANT_ID'] : []),
+        ...(!graphConfig.clientId ? ['FCOS_MICROSOFT_CLIENT_ID'] : []),
+      ],
+      tokenExpiry: null,
       details: {
-        senderAddress: mailConfig.senderAddress || null,
-        authenticatedAddress: mailConfig.authenticatedAddress || null,
-        deliveryMethod: mailConfig.deliveryMethod,
+        deliveryMethod: 'microsoft_graph_oidc',
         deliveryGateEnabled,
-        smtpFallbackEnabled: mailConfig.fallback.enabled,
-        smtpFallbackConfigured: mailConfig.fallback.configured,
-        smtpFallbackAddress: mailConfig.fallback.enabled ? mailConfig.fallback.authenticatedAddress : null,
       },
       notes: [
-        usesGraph
-          ? 'This check verifies Vercel OIDC and Microsoft token exchange without sending email. Mailbox-scoped send authorization is confirmed only during an actual operational email send.'
-          : 'This check verifies SMTP login without sending email.',
-        mailConfig.fallback.enabled
-          ? 'Authenticated SMTP remains a temporary fallback only for definite Graph authentication or authorization failures; uncertain Graph sends are never retried automatically.'
-          : 'No automatic transport fallback is enabled.',
+        'This check verifies Vercel OIDC, Microsoft token exchange, and configured purpose routes without sending email.',
+        'Mailbox-scoped Mail.Send authorization is confirmed only by an actual controlled delivery.',
+        'No SMTP transport or automatic fallback exists.',
       ],
     },
     result,
@@ -5601,122 +5657,84 @@ async function operationalMailHealthRow() {
 }
 
 async function fcosUpdatesMailHealthRow() {
-  const mailConfig = fcosUpdateMailConfig();
-  const usesGraph = mailConfig.deliveryMethod === 'microsoft_graph_oidc';
-  const deliveryGateEnabled = isExternalActionEnabled('email_delivery');
-  const requiredGraphEnv = [
-    'FCOS_UPDATE_MICROSOFT_TENANT_ID',
-    'FCOS_UPDATE_MICROSOFT_CLIENT_ID',
-    'FCOS_UPDATE_MICROSOFT_MAILBOX',
-  ];
-  const missingGraphEnv = usesGraph ? missingEnv(requiredGraphEnv) : [];
-  const transportConfigured = usesGraph
-    ? missingGraphEnv.length === 0
-    : Boolean(mailConfig.smtp.host && mailConfig.smtp.user && mailConfig.smtp.password);
-  const senderConfigured = Boolean(mailConfig.senderAddress && mailConfig.authenticatedAddress);
-  const configured = transportConfigured && senderConfigured && !mailConfig.configurationIssue;
-  const hasPartialConfiguration = Boolean(
-    mailConfig.configurationIssue
-    || (usesGraph && requiredGraphEnv.some((name) => process.env[name]))
-    || (!usesGraph && (mailConfig.smtp.host || mailConfig.smtp.user || mailConfig.smtp.password))
-  );
-
-  const result = configured || hasPartialConfiguration
-    ? await timedCheck(async () => {
-        if (mailConfig.configurationIssue) throw new Error(mailConfig.configurationIssue);
-        let details;
-        if (usesGraph) {
-          details = await verifyMicrosoftGraphMailAuthentication(mailConfig.graph);
-        } else {
-          const nodemailer = await import('nodemailer');
-          const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
-          if (!createTransport) throw new Error('SMTP email library failed to load.');
-          const port = Number(mailConfig.smtp.port || 587);
-          const transporter = createTransport({
-            host: mailConfig.smtp.host,
-            port,
-            secure: mailConfig.smtp.secure != null
-              ? mailConfig.smtp.secure === true || mailConfig.smtp.secure === 'true'
-              : port === 465,
-            connectionTimeout: 7000,
-            greetingTimeout: 7000,
-            socketTimeout: 10000,
-            auth: {
-              user: mailConfig.smtp.user,
-              pass: mailConfig.smtp.password,
-            },
-          });
-          try {
-            await transporter.verify();
-          } finally {
-            transporter.close?.();
-          }
-          details = {
-            method: 'smtp',
-            authenticatedAddress: mailConfig.authenticatedAddress,
-          };
-        }
-        return {
-          ...details,
-          senderAddress: mailConfig.senderAddress,
-          senderName: mailConfig.senderName,
-          deliveryGateEnabled,
-          mailboxSendAuthorization: usesGraph ? 'Validated during an actual FCOS Updates send' : 'SMTP authentication verified',
-        };
-      })
+  const registry = await listGraphEmailRegistry(supabaseAdminClient()).catch(() => null);
+  const purpose = registry?.purposes?.find((item) => item.key === 'fcos_updates');
+  const configured = Boolean(purpose?.mailbox?.active);
+  const result = configured
+    ? { ok: true, status: purpose.mailbox.verificationState === 'failed' ? 'warning' : 'online', durationMs: null, details: { senderAddress: purpose.mailbox.emailAddress, verificationState: purpose.mailbox.verificationState } }
     : null;
-
-  if (result?.ok) {
-    result.status = !deliveryGateEnabled
-      ? 'disabled'
-      : mailConfig.requiresSendAs
-        ? 'warning'
-        : 'online';
-  }
 
   return healthRow(
     {
       id: 'fcos-updates-mail',
-      name: usesGraph ? 'FCOS Updates Microsoft 365 Sender' : 'FCOS Updates SMTP Sender',
+      name: 'FCOS Updates Graph Sender Route',
       category: 'Email',
-      purpose: 'Dedicated sender identity for administrator-controlled FCOS Updates email batches.',
+      purpose: 'The configurable Microsoft Graph mailbox assigned to FCOS Updates.',
       scope: 'server',
-      provider: usesGraph ? 'Microsoft Graph' : 'SMTP',
-      endpoint: usesGraph ? 'https://login.microsoftonline.com' : mailConfig.smtp.host || null,
-      authType: usesGraph ? 'Vercel OIDC to Microsoft OAuth' : 'SMTP username/password',
-      configured: configured || hasPartialConfiguration,
-      configuredEnv: configuredEnv(usesGraph ? [
-        'FCOS_UPDATE_TRANSPORT',
-        ...requiredGraphEnv,
-        'FCOS_UPDATE_FROM_EMAIL',
-        'FCOS_UPDATE_SENDER_NAME',
-      ] : [
-        'FCOS_UPDATE_SMTP_HOST',
-        'FCOS_UPDATE_SMTP_PORT',
-        'FCOS_UPDATE_SMTP_USER',
-        'FCOS_UPDATE_SMTP_PASSWORD',
-        'FCOS_UPDATE_SMTP_SECURE',
-        'FCOS_UPDATE_FROM_EMAIL',
-        'FCOS_UPDATE_SENDER_NAME',
-      ]),
-      missingEnv: usesGraph ? missingGraphEnv : [],
-      tokenExpiry: usesGraph ? null : 'Not applicable.',
+      provider: 'Microsoft Graph',
+      endpoint: 'https://graph.microsoft.com/v1.0',
+      authType: 'Vercel OIDC to Microsoft OAuth',
+      configured,
+      configuredEnv: {},
+      missingEnv: configured ? [] : ['FCOS Updates mailbox assignment in Settings'],
+      tokenExpiry: null,
       details: {
-        senderAddress: mailConfig.senderAddress || null,
-        authenticatedAddress: mailConfig.authenticatedAddress || null,
-        deliveryMethod: mailConfig.deliveryMethod,
-        deliveryGateEnabled,
-        requiresSendAs: mailConfig.requiresSendAs,
+        senderAddress: purpose?.mailbox?.emailAddress || null,
+        deliveryMethod: 'microsoft_graph_oidc',
+        verificationState: purpose?.mailbox?.verificationState || 'unverified',
       },
       notes: [
-        usesGraph
-          ? 'This check verifies Vercel OIDC and Microsoft token exchange without sending email. Mailbox-scoped send authorization is confirmed only during an actual update send.'
-          : 'This check verifies SMTP login without sending email.',
+        'The sender is assigned in Settings and its display identity is controlled by Microsoft 365.',
         'General Manager authority and the configured sender mailbox are independent.',
       ],
     },
     result,
   );
+}
+
+async function hedgeDeskHealthRow() {
+  const client = supabaseAdminClient();
+  const result = await timedCheck(async () => {
+    const [physical, hedge, market, settlement, sfs, assistant, registry] = await Promise.all([
+      client.from('hedge_physical_trades').select('id', { count: 'exact', head: true }),
+      client.from('hedge_swap_hedges').select('id', { count: 'exact', head: true }),
+      client.from('hedge_market_prices').select('id', { count: 'exact', head: true }),
+      client.from('hedge_invoices').select('id', { count: 'exact', head: true }),
+      hedgeSfsHealth(client),
+      hedgeAssistantSettings(client).catch((error) => ({ error: error.message })),
+      listGraphEmailRegistry(client),
+    ]);
+    const databaseError = physical.error || hedge.error || market.error || settlement.error;
+    if (databaseError) throw databaseError;
+    const purposeKeys = ['hedge_settlement', 'hedge_sfs_reports'];
+    const emailRoutes = purposeKeys.map((key) => registry.purposes.find((purpose) => purpose.key === key));
+    const missingRoutes = emailRoutes.filter((route) => !route?.mailbox?.active).map((route, index) => route?.label || purposeKeys[index]);
+    return {
+      physicalTrades: physical.count || 0,
+      paperHedges: hedge.count || 0,
+      marketPrices: market.count || 0,
+      settlementInvoices: settlement.count || 0,
+      sfs,
+      assistantModel: assistant.modelId || null,
+      assistantApiConfigured: assistant.apiConfigured === true,
+      missingEmailRoutes: missingRoutes,
+      healthStatus: missingRoutes.length || sfs.status === 'Warning' ? 'warning' : 'online',
+    };
+  });
+  return healthRow({
+    id: 'hedge-desk',
+    name: 'Hedge Desk Services',
+    category: 'Trading',
+    purpose: 'Native physical trades, paper hedges, markets, settlement, SFS reporting, Salesforce synchronization, private documents, and Trading Assistant.',
+    scope: 'server',
+    provider: 'FCOS',
+    endpoint: '/api/functions/hedgeDeskEntity',
+    authType: 'FCOS authenticated service handlers',
+    configured: true,
+    configuredEnv: { OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY) },
+    missingEnv: [],
+    notes: ['Hedge settlement and SFS email routes are independently assigned in Email Senders.', 'Salesforce writes and email delivery remain protected by external-action gates.'],
+  }, result);
 }
 
 async function outlookCalendarHealthRow() {
@@ -5887,6 +5905,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
     cachedHealthCheck('operational-mail', 5 * 60, force, operationalMailHealthRow),
     cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
+    cachedHealthCheck('hedge-desk', 60, force, hedgeDeskHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
@@ -6499,14 +6518,15 @@ function normalizeCollectionUpdates(updates = {}, profile = {}) {
 }
 
 function normalizeBuyerInvoiceEmailSettings(input = {}, defaults = DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS) {
+  const safeInput = { ...input };
+  delete safeInput.from;
   const reminderBody = String(input.paymentReminderBody ?? defaults.paymentReminderBody)
     .replace(/Dear\s+\{\{\s*buyerName\s*\}\}/i, 'Dear {{primaryRecipientName}}')
     .replace(/To\s+\{\{\s*buyerName\s*\}\}/i, 'To {{primaryRecipientName}}');
   return {
     ...defaults,
-    ...input,
+    ...safeInput,
     enabled: input.enabled ?? defaults.enabled,
-    from: String(input.from ?? defaults.from),
     to: parseEmailList(input.to, defaults.to),
     cc: parseEmailList(input.cc, defaults.cc),
     daysAhead: Math.max(0, Math.min(Number(input.daysAhead ?? defaults.daysAhead) || defaults.daysAhead, 365)),
@@ -10101,7 +10121,7 @@ async function incomingPaymentAllocationConfirm(body, req) {
 }
 
 const INCOMING_PAYMENT_INTEREST_RECIPIENT = 'louisa@cosulich.com.hk';
-const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = ['id', 'payment_id', 'payment_name', 'stem_id', 'stem_name', 'buyer_name', 'buyer_group_name', 'received_date', 'payment_created_date', 'delay_days', 'amount', 'currency', 'receivable_balance', 'recipient_email', 'email_subject', 'email_message_id', 'email_provider', 'actor_user_id', 'actor_email', 'actor_name', 'metadata', 'delivery_status', 'last_attempt_at', 'last_error', 'sent_at', 'created_at', 'updated_at'].join(',');
+const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = ['id', 'payment_id', 'payment_name', 'stem_id', 'stem_name', 'buyer_name', 'buyer_group_name', 'received_date', 'payment_created_date', 'delay_days', 'amount', 'currency', 'receivable_balance', 'recipient_email', 'email_subject', 'email_message_id', 'email_provider', 'actor_user_id', 'actor_email', 'actor_name', 'metadata', 'delivery_status', 'last_attempt_at', 'last_error', 'sender_mailbox_id', 'sender_mailbox_snapshot', 'sent_at', 'created_at', 'updated_at'].join(',');
 
 function incomingPaymentDbNumber(value) {
   const number = Number(value);
@@ -10141,6 +10161,8 @@ function serializeIncomingPaymentInterestNotification(row = null) {
     deliveryStatus: row.delivery_status || 'sent',
     lastAttemptAt: row.last_attempt_at || null,
     lastError: row.last_error || null,
+    senderMailboxId: row.sender_mailbox_id || null,
+    senderMailboxSnapshot: row.sender_mailbox_snapshot || null,
     sentAt: row.sent_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
@@ -10611,7 +10633,6 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
 
   const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId }, accessContext);
   const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile, calculation);
-  const from = String(body.from || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from);
   if (!operationalMailDeliveryAvailable()) {
     throw appError('The operational email sender is unavailable. Ask an administrator to check Settings > System Health.', 400);
   }
@@ -10620,6 +10641,12 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   if (!recipients.length) {
     throw appError('Late payment interest request recipient is not configured. Add at least one To recipient in the template.', 400);
   }
+  const senderSnapshot = existing?.senderMailboxSnapshot
+    ? { id: existing.senderMailboxId || null, emailAddress: existing.senderMailboxSnapshot }
+    : await resolveGraphEmailSender(client, 'incoming_payment_reports').then((sender) => ({
+        id: sender.mailboxId,
+        emailAddress: sender.emailAddress,
+      }));
   const attemptAt = new Date().toISOString();
   const payload = {
     payment_id: paymentId,
@@ -10642,6 +10669,8 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
     actor_email: profile.email,
     actor_name: profile.full_name || profile.email || null,
     delivery_status: 'sending',
+    sender_mailbox_id: senderSnapshot.id,
+    sender_mailbox_snapshot: senderSnapshot.emailAddress,
     last_attempt_at: attemptAt,
     last_error: null,
     sent_at: null,
@@ -10681,14 +10710,13 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   let result;
   try {
     result = await sendOperationalMail({
-      from,
       to: recipients,
       cc: email.cc,
       bcc: email.bcc,
       subject: email.subject,
       html: email.html,
       text: email.text,
-    });
+    }, { client, purposeKey: 'incoming_payment_reports', mailboxSnapshot: senderSnapshot });
   } catch (error) {
     await client
       .from('incoming_payment_interest_notifications')
@@ -10747,7 +10775,6 @@ const INCOMING_PAYMENT_RECEIVABLE_TABLE_TOKEN_PATTERN = /\{\{\s*receivablePaymen
 const INCOMING_PAYMENT_BUYER_CIA_TABLE_TOKEN_PATTERN = /\{\{\s*buyerCiaInvoicesTable\s*\}\}/i;
 const INCOMING_PAYMENT_LATE_INTEREST_LINK_TOKEN_PATTERNS = [/\{\{\s*requestLatePaymentInterestInvoiceLink\s*\}\}/i, /\{\{\s*latePaymentInterestLink\s*\}\}/i];
 const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
-  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
   to: ['bt@cosulich.com.hk'],
   cc: [],
   bcc: [],
@@ -10759,17 +10786,17 @@ const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
 };
 
 function incomingPaymentEmailSettings(input = {}) {
+  const safeInput = { ...input };
+  delete safeInput.from;
   const defaults = {
     ...DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS,
-    from: process.env.INCOMING_PAYMENT_REPORT_FROM || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from,
     to: parseEmailList(process.env.INCOMING_PAYMENT_REPORT_TO, DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.to),
     cc: parseEmailList(process.env.INCOMING_PAYMENT_REPORT_CC, DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.cc),
     bcc: parseEmailList(process.env.INCOMING_PAYMENT_REPORT_BCC, DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.bcc),
   };
   return {
     ...defaults,
-    ...input,
-    from: String(input.from ?? defaults.from),
+    ...safeInput,
     to: parseEmailList(input.to, defaults.to),
     cc: parseEmailList(input.cc, defaults.cc),
     bcc: parseEmailList(input.bcc, defaults.bcc),
@@ -11047,14 +11074,13 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
   }
   if (!settings.to.length) throw appError('At least one To recipient is required before sending the Incoming Payment report.', 400);
   const result = await sendOperationalMail({
-    from: settings.from,
     to: settings.to,
     cc: settings.cc,
     bcc: settings.bcc,
     subject: email.subject,
     html: email.html,
     text: email.text,
-  });
+  }, { client, purposeKey: 'incoming_payment_reports' });
   return {
     sent: true,
     id: result.id,
@@ -11078,7 +11104,6 @@ function buyerInvoiceEmailSettings(input = {}) {
   const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(input, 'buyerTraders');
   const defaults = {
     ...DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS,
-    from: process.env.BUYER_INVOICE_REPORT_FROM || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.from,
     to: parseEmailList(process.env.BUYER_INVOICE_REPORT_TO, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.to),
     cc: parseEmailList(process.env.BUYER_INVOICE_REPORT_CC, DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.cc),
     appUrl: buyerInvoiceAppUrl(),
@@ -11765,7 +11790,6 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
     settings: {
       paymentReminderToSource: 'Buyer account/trader/payment handler plus buyer broker Account.Email by Invoice Format',
       emailDelivery: serverEmailDeliveryStatus(),
-      from: settings.from,
       daysAhead: report.daysAhead,
       paymentReminderCc: settings.paymentReminderCc,
       paymentReminderBcc: settings.paymentReminderBcc,
@@ -11805,7 +11829,6 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
   }
   const reviewedRecipientBatches = new Map(body.recipientBatches.filter((batch) => batch?.key).map((batch) => [batch.key, batch]));
-  const configuredFrom = process.env.PAYMENT_REMINDER_FROM || settings.from;
   const sendResults = [];
   const collectionResults = [];
   const collectionWarnings = [];
@@ -11834,14 +11857,13 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     let result;
     try {
       result = await sendOperationalMail({
-        from: configuredFrom,
         to,
         cc,
         bcc,
         subject: email.subject,
         html: email.html,
         text: email.text,
-      });
+      }, { client, purposeKey: 'payment_reminders' });
     } catch (error) {
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         message: error.message,
@@ -11959,7 +11981,7 @@ function requireCronAuthorization(req) {
 
 async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
   if (!body.scheduled) await requireActiveUser(req);
-  const hasExplicitSettings = Boolean(body.settings) || ['from', 'to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+  const hasExplicitSettings = Boolean(body.settings) || ['to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
   const stored = hasExplicitSettings ? null : await loadStoredBuyerInvoiceEmailSettings();
   if (stored && stored.meta.storageAvailable !== true) {
     throw appError('Buyer Invoice email settings are temporarily unavailable. Report sending is disabled until storage is restored.', 503);
@@ -12019,13 +12041,12 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
   let result;
   try {
     result = await sendOperationalMail({
-      from: settings.from,
       to: settings.to,
       cc: settings.cc,
       subject: email.subject,
       html: email.html,
       text: email.text,
-    });
+    }, { client, purposeKey: 'outstanding_invoice_reports' });
   } catch (error) {
     await updateBuyerInvoiceEmailSettingsMeta({ last_error: error.message });
     throw error;
@@ -15446,6 +15467,93 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
   return cached.value;
 }
 
+async function hedgeCapabilities(context) {
+  const entries = await Promise.all([
+    'hedge_book_manage',
+    'hedge_settlement_manage',
+    'hedge_close_approve',
+    'hedge_admin',
+  ].map(async (capability) => [capability, await userHasCapability(context.client, context.profile, capability)]));
+  return Object.fromEntries(entries);
+}
+
+async function hedgeDeskEntity(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return {
+    data: await handleHedgeDeskEntity(body, context.profile, {
+      client: context.client,
+      capabilities: await hedgeCapabilities(context),
+    }),
+  };
+}
+
+async function hedgeDeskParseMops(body = {}) {
+  return { ok: true, ...parseMopsText(body.raw_input || body.text || body.input || '') };
+}
+
+async function hedgeDeskGenerateInvoice(body = {}) {
+  const generated = generateHedgeInvoicePdf(body);
+  return {
+    ok: true,
+    base64: generated.buffer.toString('base64'),
+    mimeType: 'application/pdf',
+    filename: generated.filename,
+  };
+}
+
+async function hedgeDeskSaveInvoicePdf(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to store invoice documents.');
+  return saveHedgeInvoicePdf(context.client, context.profile, body);
+}
+
+async function hedgeDeskSendInvoiceEmail(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to send settlement invoices.');
+  return sendHedgeInvoiceEmailIdempotent(context.client, context.profile, body);
+}
+
+async function hedgeDeskSfsReport(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return getHedgeSfsMonthReport(context.client, body.month);
+}
+
+async function hedgeDeskSfsFile(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return getHedgeSfsFile(context.client, body);
+}
+
+async function hedgeDeskSfsSend(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_close_approve', 'Hedge month-close approval permission is required to send SFS reports.');
+  return approveAndSendHedgeSfsReport(context.client, context.profile, body);
+}
+
+async function hedgeDeskSalesforcePush(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required for Salesforce synchronization.');
+  return pushHedgeSalesforce(context.client, context.profile, body);
+}
+
+async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return runHedgeAssistant(context.client, context.profile, body);
+}
+
+async function hedgeDeskAssistantSettings(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const capabilities = await hedgeCapabilities(context);
+  return { ...(await hedgeAssistantSettings(context.client)), canManage: capabilities.hedge_admin === true };
+}
+
+async function hedgeDeskMaintenanceCron(body = {}, req = null) {
+  requireCronAuthorization(req);
+  return runHedgeMaintenance(supabaseAdminClient(), {
+    forceIce: body.forceIce === true,
+    dryRun: body.dryRun === true,
+  });
+}
+
 const handlers = {
   authContext,
   portalApplicationsList,
@@ -15480,6 +15588,18 @@ const handlers = {
   navigationPreferencesGet,
   navigationPreferencesSave,
   navigationPreferencesReset,
+  hedgeDeskEntity,
+  hedgeDeskParseMops,
+  hedgeDeskGenerateInvoice,
+  hedgeDeskSaveInvoicePdf,
+  hedgeDeskSendInvoiceEmail,
+  hedgeDeskSfsReport,
+  hedgeDeskSfsFile,
+  hedgeDeskSfsSend,
+  hedgeDeskSalesforcePush,
+  hedgeDeskAssistant,
+  hedgeDeskAssistantSettings,
+  hedgeDeskMaintenanceCron,
   growthReportingLinesList,
   growthReportingLineSave,
   growthReportingLinesSaveBatch,
@@ -15596,6 +15716,9 @@ const handlers = {
   accountManagersSaveNote,
   accountManagersRetrySync,
   emailSenderStatus,
+  emailSenderMailboxSave,
+  emailSenderRouteSave,
+  emailSenderRegistryBootstrap,
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,
