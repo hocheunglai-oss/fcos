@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
+import PageMethodology from '@/components/common/PageMethodology';
+import { APP_PORTAL_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const APPLICATION_ICONS = {
   fcos: LayoutDashboard,
@@ -161,6 +163,7 @@ export default function AppPortal() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <PageMethodology {...APP_PORTAL_METHODOLOGY} size="sm" />
             <Button type="button" variant="outline" size="icon" onClick={refresh} disabled={refreshing} title="Refresh applications">
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
               <span className="sr-only">Refresh applications</span>

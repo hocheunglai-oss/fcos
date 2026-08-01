@@ -57,6 +57,7 @@ test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', 
   assert.deepEqual(vercel.crons, [
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 0 * * 1-5' },
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 6 * * 1-5' },
+    { path: '/api/functions/paymentCollectionsReconcileCron', schedule: '30 23 * * 0-4' },
     { path: '/api/functions/portalEntitlementSyncCron', schedule: '30 18 * * *' },
     { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
     { path: '/api/functions/growthCoachingDailyCron', schedule: '30 0 * * 1-5' },

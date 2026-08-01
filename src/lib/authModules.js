@@ -11,15 +11,16 @@ export const APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },
   { id: 'review', label: 'Exception Review', path: '/review', sortOrder: 20 },
   { id: 'disputes', label: 'Dispute Workflow', path: '/disputes', sortOrder: 30 },
-  { id: 'buyer_invoices', label: 'Outstanding Buyer Invoices', path: '/buyer-invoices', sortOrder: 40 },
-  { id: 'incoming_payments', label: 'Incoming Payment', path: '/incoming-payments', sortOrder: 45 },
+  { id: 'buyer_invoices', label: 'Payment Collections', path: '/payment-collections?tab=collections', sortOrder: 40 },
+  { id: 'unofficial_compensation', label: 'Unofficial Compensation', path: '/unofficial-compensation', sortOrder: 42 },
+  { id: 'incoming_payments', label: 'Incoming Payments (Payment Collections)', path: '/payment-collections?tab=incoming', sortOrder: 45 },
   { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
   { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
-  { id: 'report_archive', label: 'Reports Archive', path: '/report-archive', sortOrder: 75 },
+  { id: 'report_archive', label: 'Reports Archive', path: '/brokers?tab=archive', sortOrder: 75 },
   { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
-  { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
+  { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
 
 export const FULL_ACCESS = Object.fromEntries(APP_MODULES.map((module) => [module.id, true]));

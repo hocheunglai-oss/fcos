@@ -9,6 +9,10 @@
       "schedule": "0 6 * * 1-5"
     },
     {
+      "path": "/api/functions/paymentCollectionsReconcileCron",
+      "schedule": "30 23 * * 0-4"
+    },
+    {
       "path": "/api/functions/portalEntitlementSyncCron",
       "schedule": "30 18 * * *"
     },
@@ -23,7 +27,7 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!api/.*).*)",
+      "source": "/((?!api/|src/|@vite/|@react-refresh|@fs/|@id/|node_modules/|assets/|favicon\\.svg$|manifest\\.json$|app-version\\.json$).*)",
       "destination": "/index.html"
     }
   ]

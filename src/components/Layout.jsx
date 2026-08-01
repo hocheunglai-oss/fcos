@@ -1,28 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  Banknote,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
   DollarSign,
+  Eye,
+  EyeOff,
   FileCheck2,
+  GripVertical,
   History,
+  HandCoins,
   LayoutDashboard,
   ListTodo,
   LogOut,
+  Pencil,
+  RotateCcw,
+  Save,
   Sprout,
   ReceiptText,
   RefreshCw,
   Settings,
-  ShieldCheck,
   TrendingUp,
   UsersRound,
   WalletCards,
   UserRoundCheck,
+  X,
 } from 'lucide-react';
+import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
+import { appClient } from '@/api/appClient';
 import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -31,41 +39,75 @@ import WorkNotifications from '@/components/WorkNotifications';
 
 const navGroups = [
   {
-    label: 'Daily Work',
+    id: 'personal',
+    label: 'Personal',
     items: [
-      { to: '/my-commitments', label: 'My Commitments', icon: UserRoundCheck },
-      { to: '/growth-coaching', label: 'Growth & Coaching', icon: Sprout },
-      { to: '/projects-tasks', label: 'Projects & Tasks', icon: ListTodo },
-      { to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
-      { to: '/buyer-invoices', label: 'Buyer Invoices', moduleId: 'buyer_invoices', icon: ReceiptText },
-      { to: '/incoming-payments', label: 'Incoming Payments', moduleId: 'incoming_payments', icon: Banknote },
-      { to: '/cashflow-forecast', label: 'Cashflow', moduleId: 'cashflow_forecast', icon: WalletCards },
+      { id: 'my_commitments', to: '/my-commitments', label: 'My Commitments', icon: UserRoundCheck },
+      { id: 'growth_coaching', to: '/growth-coaching', label: 'Growth & Coaching', icon: Sprout },
+      { id: 'projects_tasks', to: '/projects-tasks', label: 'Projects & Tasks', icon: ListTodo },
     ],
   },
   {
-    label: 'Review',
+    id: 'trading',
+    label: 'Trading',
     items: [
-      { to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
-      { to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
-      { to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
-      { to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
+      { id: 'dashboard', to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
+      { id: 'payment_collections', to: '/payment-collections', label: 'Payment Collections', moduleIds: ['buyer_invoices', 'incoming_payments'], icon: ReceiptText },
+      { id: 'unofficial_compensation', to: '/unofficial-compensation', label: 'Unofficial Compensation', moduleId: 'unofficial_compensation', icon: HandCoins },
+      { id: 'cashflow_forecast', to: '/cashflow-forecast', label: 'Cashflow', moduleId: 'cashflow_forecast', icon: WalletCards },
+      { id: 'disputes', to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
+      { id: 'brokers', to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
+      { id: 'buyers_administrator', to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
     ],
   },
   {
-    label: 'System',
+    id: 'tools',
+    label: 'Tools',
     items: [
-      { to: '/report-archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
-      { to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
-      { to: '/settings', label: 'Settings', moduleId: 'settings', icon: Settings },
-      { to: '/audit-trail', label: 'Audit Trail', moduleId: 'admin', icon: History },
-      { to: '/admin', label: 'Admin Control', moduleId: 'admin', icon: ShieldCheck },
+      { id: 'review', to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
+      { id: 'pnl', to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
+      { id: 'report_archive', to: '/brokers?tab=archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
     ],
   },
 ];
 
+const DEFAULT_NAVIGATION_PREFERENCES = {
+  sectionOrders: Object.fromEntries(navGroups.map((group) => [group.id, group.items.map((item) => item.id)])),
+  hiddenItemIds: ['review', 'pnl', 'report_archive'],
+  revision: 0,
+};
+
 const VERSION_CHECK_INTERVAL_MS = 60_000;
 const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
 const LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY = 'workspace-sidebar-hidden';
+
+function navigationCacheKey(user) {
+  return `fcos:navigation:${user?.id || user?.email || 'anonymous'}`;
+}
+
+function normalizedNavigationPreferences(value = {}) {
+  const hidden = new Set(Array.isArray(value.hiddenItemIds) ? value.hiddenItemIds : DEFAULT_NAVIGATION_PREFERENCES.hiddenItemIds);
+  return {
+    sectionOrders: Object.fromEntries(navGroups.map((group) => {
+      const requested = Array.isArray(value.sectionOrders?.[group.id]) ? value.sectionOrders[group.id] : [];
+      const allowed = new Set(group.items.map((item) => item.id));
+      const ordered = [...new Set(requested.filter((id) => allowed.has(id)))];
+      const missing = group.items.map((item) => item.id).filter((id) => !ordered.includes(id));
+      for (const id of missing) {
+        if (id === 'unofficial_compensation') {
+          const collectionIndex = ordered.indexOf('payment_collections');
+          ordered.splice(collectionIndex >= 0 ? collectionIndex + 1 : ordered.length, 0, id);
+        } else {
+          ordered.push(id);
+        }
+      }
+      return [group.id, ordered];
+    })),
+    hiddenItemIds: [...hidden].filter((id) => navGroups.some((group) => group.items.some((item) => item.id === id))),
+    revision: Number(value.revision || 0),
+    updatedAt: value.updatedAt || null,
+  };
+}
 
 export default function Layout() {
   const location = useLocation();
@@ -75,16 +117,28 @@ export default function Layout() {
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
   const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const [navigationPreferences, setNavigationPreferences] = useState(() => normalizedNavigationPreferences(DEFAULT_NAVIGATION_PREFERENCES));
+  const [navigationDraft, setNavigationDraft] = useState(null);
+  const [navigationEditing, setNavigationEditing] = useState(false);
+  const [navigationSaving, setNavigationSaving] = useState(false);
+  const [navigationError, setNavigationError] = useState('');
   const currentBuildIdRef = useRef(null);
 
-  const accessibleGroups = useMemo(() => (
-    navGroups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => hasModuleAccess(item.moduleId)),
-      }))
-      .filter((group) => group.items.length > 0)
-  ), [hasModuleAccess]);
+  const activeNavigationPreferences = navigationEditing && navigationDraft ? navigationDraft : navigationPreferences;
+  const accessibleGroups = useMemo(() => navGroups
+    .map((group) => {
+      const order = activeNavigationPreferences.sectionOrders[group.id] || [];
+      const itemById = Object.fromEntries(group.items.map((item) => [item.id, item]));
+      const items = order
+        .map((id) => itemById[id])
+        .filter(Boolean)
+        .filter((item) => item.moduleIds ? item.moduleIds.some((moduleId) => hasModuleAccess(moduleId)) : !item.moduleId || hasModuleAccess(item.moduleId))
+        .filter((item) => navigationEditing || !activeNavigationPreferences.hiddenItemIds.includes(item.id));
+      return { ...group, items };
+    })
+    .filter((group) => group.items.length > 0), [activeNavigationPreferences, hasModuleAccess, navigationEditing]);
+  const effectiveSidebarFixed = sidebarFixed || navigationEditing;
 
   const pageOwnsScroll = location.pathname === '/disputes'
     || location.pathname.startsWith('/disputes/');
@@ -98,6 +152,106 @@ export default function Layout() {
     localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarFixed));
     localStorage.removeItem(LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY);
   }, [sidebarFixed]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    let cancelled = false;
+    const cacheKey = navigationCacheKey(user);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+      if (cached) setNavigationPreferences(normalizedNavigationPreferences(cached));
+    } catch {
+      localStorage.removeItem(cacheKey);
+    }
+    const load = async () => {
+      const response = await appClient.functions.invoke('navigationPreferencesGet');
+      if (cancelled) return;
+      if (response.data?.preferences) {
+        const next = normalizedNavigationPreferences(response.data.preferences);
+        setNavigationPreferences(next);
+        localStorage.setItem(cacheKey, JSON.stringify(next));
+      } else if (response.data?.error) {
+        setNavigationError(response.data.error);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const startNavigationEditing = () => {
+    setNavigationDraft(normalizedNavigationPreferences(navigationPreferences));
+    setNavigationError('');
+    setNavigationEditing(true);
+  };
+
+  const cancelNavigationEditing = () => {
+    setNavigationDraft(null);
+    setNavigationError('');
+    setNavigationEditing(false);
+  };
+
+  const toggleNavigationItem = (itemId) => {
+    setNavigationDraft((current) => {
+      const next = normalizedNavigationPreferences(current || navigationPreferences);
+      const hidden = new Set(next.hiddenItemIds);
+      if (hidden.has(itemId)) hidden.delete(itemId);
+      else hidden.add(itemId);
+      return { ...next, hiddenItemIds: [...hidden] };
+    });
+  };
+
+  const moveNavigationItem = ({ source, destination, draggableId }) => {
+    if (!destination || source.droppableId !== destination.droppableId || source.index === destination.index) return;
+    setNavigationDraft((current) => {
+      const next = normalizedNavigationPreferences(current || navigationPreferences);
+      const order = [...(next.sectionOrders[source.droppableId] || [])];
+      const visibleIds = accessibleGroups.find((group) => group.id === source.droppableId)?.items.map((item) => item.id) || [];
+      const targetId = visibleIds.filter((id) => id !== draggableId)[destination.index] || null;
+      const sourceOrderIndex = order.indexOf(draggableId);
+      if (sourceOrderIndex < 0) return next;
+      const [moved] = order.splice(sourceOrderIndex, 1);
+      const targetOrderIndex = targetId ? order.indexOf(targetId) : order.length;
+      order.splice(targetOrderIndex < 0 ? order.length : targetOrderIndex, 0, moved);
+      return { ...next, sectionOrders: { ...next.sectionOrders, [source.droppableId]: order } };
+    });
+  };
+
+  const saveNavigationPreferences = async () => {
+    const draft = normalizedNavigationPreferences(navigationDraft || navigationPreferences);
+    setNavigationSaving(true);
+    setNavigationError('');
+    const response = await appClient.functions.invoke('navigationPreferencesSave', {
+      sectionOrders: draft.sectionOrders,
+      hiddenItemIds: draft.hiddenItemIds,
+      expectedRevision: navigationPreferences.revision,
+    });
+    if (response.data?.error) {
+      setNavigationError(response.data.error);
+    } else {
+      const next = normalizedNavigationPreferences(response.data.preferences);
+      setNavigationPreferences(next);
+      setNavigationDraft(null);
+      setNavigationEditing(false);
+      if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
+    }
+    setNavigationSaving(false);
+  };
+
+  const resetNavigationPreferences = async () => {
+    setNavigationSaving(true);
+    setNavigationError('');
+    const response = await appClient.functions.invoke('navigationPreferencesReset', { expectedRevision: navigationPreferences.revision });
+    if (response.data?.error) {
+      setNavigationError(response.data.error);
+    } else {
+      const next = normalizedNavigationPreferences(response.data.preferences || DEFAULT_NAVIGATION_PREFERENCES);
+      setNavigationPreferences(next);
+      setNavigationDraft(null);
+      setNavigationEditing(false);
+      if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
+    }
+    setNavigationSaving(false);
+  };
 
   useEffect(() => {
     const onDirtyState = (event) => {
@@ -174,28 +328,41 @@ export default function Layout() {
         data-testid="toggle-fixed-sidebar"
         className={cn(
           'top-3 z-[45] h-8 w-7 rounded-md bg-white p-0 shadow-sm transition-[left] duration-200 ease-out',
-          sidebarFixed
+          effectiveSidebarFixed
             ? 'absolute left-[240px]'
             : 'fixed left-0 rounded-l-none border-l-0',
         )}
         onClick={() => setSidebarFixed((fixed) => !fixed)}
-        aria-label={sidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
-        title={sidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
+        disabled={navigationEditing}
+        aria-label={effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
+        title={navigationEditing ? 'Finish editing navigation first' : effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
       >
-        {sidebarFixed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {effectiveSidebarFixed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
       </Button>
 
+      {!effectiveSidebarFixed && (
+        <div
+          className="fixed inset-y-0 left-0 z-[39] w-1 bg-transparent"
+          onMouseEnter={() => setSidebarHovered(true)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside
+        onMouseEnter={() => setSidebarHovered(true)}
+        onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
           'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-out',
-          sidebarFixed
+          effectiveSidebarFixed
             ? 'translate-x-0 shadow-xl shadow-slate-900/10 md:relative md:shadow-none'
-            : '-translate-x-[260px] shadow-xl shadow-slate-900/10 hover:translate-x-0 focus-within:translate-x-0',
+            : sidebarHovered
+              ? 'translate-x-0 shadow-xl shadow-slate-900/10'
+              : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-slate-200 focus-within:shadow-xl focus-within:shadow-slate-900/10',
         )}
       >
         <div className={cn(
           'border-b border-slate-200 py-4',
-          sidebarFixed ? 'pl-5 pr-12' : 'pl-10 pr-5',
+          effectiveSidebarFixed ? 'pl-5 pr-12' : 'pl-10 pr-5',
         )}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -208,35 +375,97 @@ export default function Layout() {
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-auto px-3 py-4">
           <AppSelector confirmPortalNavigation={confirmLeaveWithUnsavedChanges} />
-          {accessibleGroups.map((group) => (
-            <section key={group.label}>
-              <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                {group.label}
+          <div className="flex items-center justify-between px-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
+            {!navigationEditing ? (
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={startNavigationEditing} title="Customize navigation" aria-label="Customize navigation">
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={resetNavigationPreferences} disabled={navigationSaving} title="Reset navigation" aria-label="Reset navigation">
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={cancelNavigationEditing} disabled={navigationSaving} title="Cancel navigation changes" aria-label="Cancel navigation changes">
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-blue-700" onClick={saveNavigationPreferences} disabled={navigationSaving} title="Save navigation" aria-label="Save navigation">
+                  <Save className="h-3.5 w-3.5" />
+                </Button>
               </div>
-              <div className="space-y-1">
-                {group.items.map(({ to, label, icon: Icon }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={to === '/'}
-                    onClick={handleNavigation}
-                    className={({ isActive }) => cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                      isActive
-                        ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
-                    )}
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{label}</span>
-                  </NavLink>
-                ))}
-              </div>
-            </section>
-          ))}
+            )}
+          </div>
+          {navigationError && <div className="mx-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">{navigationError}</div>}
+          <DragDropContext onDragEnd={moveNavigationItem}>
+            {accessibleGroups.map((group) => (
+              <section key={group.id}>
+                <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  {group.label}
+                </div>
+                <Droppable droppableId={group.id} isDropDisabled={!navigationEditing}>
+                  {(dropProvided) => (
+                    <div ref={dropProvided.innerRef} {...dropProvided.droppableProps} className="space-y-1">
+                      {group.items.map(({ id, to, label, icon: Icon }, index) => {
+                        const hidden = activeNavigationPreferences.hiddenItemIds.includes(id);
+                        return (
+                          <Draggable key={id} draggableId={id} index={index} isDragDisabled={!navigationEditing}>
+                            {(dragProvided, dragSnapshot) => (
+                              <div ref={dragProvided.innerRef} {...dragProvided.draggableProps} className={cn(dragSnapshot.isDragging && 'rounded-lg bg-white shadow-lg')}>
+                                {navigationEditing ? (
+                                  <div className={cn('flex h-9 items-center gap-2 rounded-lg border px-2 text-sm', hidden ? 'border-dashed text-slate-400' : 'border-slate-200 text-slate-700')}>
+                                    <button type="button" {...dragProvided.dragHandleProps} className="cursor-grab text-slate-400" title={`Reorder ${label}`} aria-label={`Reorder ${label}`}>
+                                      <GripVertical className="h-4 w-4" />
+                                    </button>
+                                    <Icon className="h-4 w-4 shrink-0" />
+                                    <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+                                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleNavigationItem(id)} title={hidden ? `Show ${label}` : `Hide ${label}`} aria-label={hidden ? `Show ${label}` : `Hide ${label}`}>
+                                      {hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <NavLink
+                                    to={to}
+                                    end={to === '/'}
+                                    onClick={handleNavigation}
+                                    className={({ isActive }) => cn(
+                                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                                      isActive
+                                        ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
+                                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
+                                    )}
+                                  >
+                                    <Icon className="h-4 w-4 shrink-0" />
+                                    <span className="truncate">{label}</span>
+                                  </NavLink>
+                                )}
+                              </div>
+                            )}
+                          </Draggable>
+                        );
+                      })}
+                      {dropProvided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </section>
+            ))}
+          </DragDropContext>
         </nav>
 
         <div className="space-y-3 border-t border-slate-200 p-3">
+          {(hasModuleAccess('settings') || hasModuleAccess('admin')) && (
+            <NavLink
+              to="/settings"
+              onClick={handleNavigation}
+              className={({ isActive }) => cn(
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                isActive ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
+              )}
+            >
+              <Settings className="h-4 w-4" />
+              Settings
+            </NavLink>
+          )}
           {user && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>

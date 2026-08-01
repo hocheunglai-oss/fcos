@@ -1,6 +1,37 @@
-export const APP_VERSION = '2.0.58';
+export const APP_VERSION = '2.0.61';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.61',
+    releasedAt: '2026-08-01',
+    title: 'Unofficial Compensation monitoring',
+    changes: [
+      'Added a Salesforce-authoritative Unofficial Compensation workspace grouped by exact Account, Contact, and currency.',
+      'Added controlled Agreed Compensation claim, UOC recovery, group status, and erroneous-recovery actions with live validation and audit protection.',
+      'Connected UOC opened dispute closures to exact-Account Agreed Compensation claims and blocked final closure when a required claim is missing.',
+    ],
+  },
+  {
+    version: '2.0.60',
+    releasedAt: '2026-08-01',
+    title: 'Page methodology guides',
+    changes: [
+      'Added page-specific Methodology dialogs across every authenticated FCOS workspace and application portal.',
+      'Added tab-sensitive methodology for Payment Collections, Broker Commissions and Report Archive, and each Settings section.',
+      'Documented data scope, calculations, priority rules, responsibilities, automatic behavior, and system boundaries in each guide.',
+    ],
+  },
+  {
+    version: '2.0.59',
+    releasedAt: '2026-08-01',
+    title: 'Personal navigation and payment collections',
+    changes: [
+      'Reorganized FCOS into Personal, Trading, and optional Tools sections with per-user ordering and visibility.',
+      'Integrated Incoming Payments with the Payment Collections queue and added live Salesforce reconciliation exceptions.',
+      'Added evidence-backed Payment Advice Received follow-up with reminder pausing and verification dates.',
+      'Integrated Report Archive into Broker Commissions and moved Users & Access and Audit Trail into Settings.',
+    ],
+  },
   {
     version: '2.0.58',
     releasedAt: '2026-07-31',

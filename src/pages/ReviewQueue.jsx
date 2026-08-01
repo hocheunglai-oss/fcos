@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
@@ -24,6 +25,7 @@ import {
 } from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
@@ -315,6 +317,7 @@ export default function ReviewQueue() {
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce'}
         actions={(
           <>
+            <PageMethodology {...EXCEPTION_REVIEW_METHODOLOGY} />
             <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className="gap-2">
               <Download className="w-3.5 h-3.5" /> Export CSV
             </Button>

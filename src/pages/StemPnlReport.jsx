@@ -7,11 +7,13 @@ import { AlertCircle, Loader2, Download, Play, TrendingUp, BarChart2 } from 'luc
 import { format } from 'date-fns';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { buildDeliveryWhere } from '@/lib/dashboardFilters';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { QLIK_VALIDATOR_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const fmt = (v, isPercent = false) => {
   const number = numericValue(v);
@@ -161,10 +163,15 @@ export default function StemPnlReport() {
           title="Dashboard and Qlik Validator Tool"
           description="Validate calculated Gross Profit against Qlik reference values and inspect the underlying STEM detail."
           meta={rows.length > 0 ? `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} stems shown` : undefined}
-          actions={rows.length > 0 && (
-            <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
-              <Download className="w-3.5 h-3.5" /> Export CSV
-            </Button>
+          actions={(
+            <>
+              <PageMethodology {...QLIK_VALIDATOR_METHODOLOGY} size="sm" />
+              {rows.length > 0 && (
+                <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
+                  <Download className="w-3.5 h-3.5" /> Export CSV
+                </Button>
+              )}
+            </>
           )}
         />
 

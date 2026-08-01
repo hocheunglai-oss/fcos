@@ -8,22 +8,20 @@ import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
+import ModuleGateAny from '@/components/ModuleGateAny';
 import Layout from '@/components/Layout';
 import { clearLegacyPaymentReminderSmtpSettings } from '@/lib/smtpSettings';
 
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
-const SettingsPage = lazy(() => import('@/pages/Settings'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
-const BrokerRegister = lazy(() => import('@/pages/BrokerRegister'));
-const ReportArchive = lazy(() => import('@/pages/ReportArchive'));
+const BrokerWorkspace = lazy(() => import('@/pages/BrokerWorkspace'));
 const ReviewQueue = lazy(() => import('@/pages/ReviewQueue'));
-const BuyerInvoices = lazy(() => import('@/pages/BuyerInvoices'));
-const IncomingPayments = lazy(() => import('@/pages/IncomingPayments'));
+const PaymentCollections = lazy(() => import('@/pages/PaymentCollections'));
+const UnofficialCompensation = lazy(() => import('@/pages/UnofficialCompensation'));
 const CashflowForecast = lazy(() => import('@/pages/CashflowForecast'));
 const DisputeWorkflow = lazy(() => import('@/pages/DisputeWorkflow'));
 const Login = lazy(() => import('@/pages/Login'));
-const AdminControl = lazy(() => import('@/pages/AdminControl'));
-const UniversalAuditTrail = lazy(() => import('@/pages/UniversalAuditTrail'));
+const SettingsWorkspace = lazy(() => import('@/pages/SettingsWorkspace'));
 const AccountManagers = lazy(() => import('@/pages/AccountManagers'));
 const AppPortal = lazy(() => import('@/pages/AppPortal'));
 const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
@@ -95,20 +93,22 @@ const AuthenticatedApp = () => {
             <Route path="/growth-coaching" element={<GrowthCoaching />} />
             <Route path="/projects-tasks" element={<ProjectsTasks />} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
-            <Route path="/settings" element={<ModuleGate moduleId="settings"><SettingsPage /></ModuleGate>} />
+            <Route path="/settings" element={<ModuleGateAny moduleIds={['settings', 'admin']}><SettingsWorkspace /></ModuleGateAny>} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
             <Route path="/review" element={<ModuleGate moduleId="review"><ReviewQueue /></ModuleGate>} />
             <Route path="/disputes" element={<ModuleGate moduleId="disputes"><DisputeWorkflow /></ModuleGate>} />
             <Route path="/disputes-beta" element={<Navigate to="/disputes" replace />} />
-            <Route path="/buyer-invoices" element={<ModuleGate moduleId="buyer_invoices"><BuyerInvoices /></ModuleGate>} />
-            <Route path="/incoming-payments" element={<ModuleGate moduleId="incoming_payments"><IncomingPayments /></ModuleGate>} />
+            <Route path="/payment-collections" element={<ModuleGateAny moduleIds={['buyer_invoices', 'incoming_payments']}><PaymentCollections /></ModuleGateAny>} />
+            <Route path="/unofficial-compensation" element={<ModuleGate moduleId="unofficial_compensation"><UnofficialCompensation /></ModuleGate>} />
+            <Route path="/buyer-invoices" element={<RedirectWithTab path="/payment-collections" tab="collections" />} />
+            <Route path="/incoming-payments" element={<RedirectWithTab path="/payment-collections" tab="incoming" />} />
             <Route path="/cashflow-forecast" element={<ModuleGate moduleId="cashflow_forecast"><CashflowForecast /></ModuleGate>} />
-            <Route path="/brokers" element={<ModuleGate moduleId="brokers"><BrokerRegister /></ModuleGate>} />
-            <Route path="/report-archive" element={<ModuleGate moduleId="report_archive"><ReportArchive /></ModuleGate>} />
+            <Route path="/brokers" element={<ModuleGateAny moduleIds={['brokers', 'report_archive']}><BrokerWorkspace /></ModuleGateAny>} />
+            <Route path="/report-archive" element={<RedirectWithTab path="/brokers" tab="archive" />} />
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
-            <Route path="/audit-trail" element={<ModuleGate moduleId="admin"><UniversalAuditTrail /></ModuleGate>} />
-            <Route path="/admin" element={<ModuleGate moduleId="admin"><AdminControl /></ModuleGate>} />
+            <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />
+            <Route path="/admin" element={<RedirectWithSection section="users" />} />
             <Route path="*" element={<PageNotFound />} />
           </Route>
         </>
@@ -122,6 +122,20 @@ function RedirectLegacyWorkspace() {
   const location = useLocation();
   const canonicalPath = location.pathname.replace(/^\/v2(?=\/|$)/, '') || '/';
   return <Navigate to={`${canonicalPath}${location.search}${location.hash}`} replace />;
+}
+
+function RedirectWithTab({ path, tab }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  params.set('tab', tab);
+  return <Navigate to={`${path}?${params.toString()}${location.hash}`} replace />;
+}
+
+function RedirectWithSection({ section }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  params.set('section', section);
+  return <Navigate to={`/settings?${params.toString()}${location.hash}`} replace />;
 }
 
 function App() {

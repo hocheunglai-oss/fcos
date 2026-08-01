@@ -103,6 +103,33 @@ export function buyerReminderEligibility(row = {}, rule = {}, rulesAvailable = t
     };
   }
 
+  const collectionStatus = String(row.collection?.status || '').trim();
+  if (collectionStatus === 'Paid / Closed') {
+    return {
+      eligible: false,
+      blockingReason: 'This collection is closed because Salesforce confirms the buyer balance is settled.',
+      ruleApplied: false,
+    };
+  }
+  if (collectionStatus === 'Payment Advice Received') {
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Hong_Kong',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    const verificationDate = String(row.collection?.adviceVerificationDate || '').slice(0, 10);
+    if (!verificationDate || verificationDate > today) {
+      return {
+        eligible: false,
+        blockingReason: verificationDate
+          ? `Payment advice is awaiting Salesforce posting until ${verificationDate}.`
+          : 'Payment advice is awaiting Salesforce verification.',
+        ruleApplied: false,
+      };
+    }
+  }
+
   if ((row.buyerBrokerRoutingMode || 'buyer_only') === 'broker_only') {
     return {
       eligible: true,

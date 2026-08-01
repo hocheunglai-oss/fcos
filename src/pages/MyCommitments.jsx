@@ -12,12 +12,14 @@ import {
 } from "lucide-react";
 import { appClient } from "@/api/appClient";
 import PageHeader from "@/components/common/PageHeader";
+import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
 import TableShell from "@/components/common/TableShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { MY_COMMITMENTS_METHODOLOGY } from "@/lib/pageMethodologies";
 
 const SECTIONS = [
   { key: "needs_action", label: "Needs action", icon: CircleDot },
@@ -106,19 +108,22 @@ export default function MyCommitments() {
         eyebrow="Daily Work"
         title="My Commitments"
         description="Your operational work, approvals, development checkpoints, coaching actions, and sessions in one place."
-        actions={
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => load({ background: true })}
-            disabled={refreshing}
-          >
-            <RefreshCw
-              className={cn("mr-2 h-4 w-4", refreshing && "animate-spin")}
-            />
-            Refresh
-          </Button>
-        }
+        actions={(
+          <>
+            <PageMethodology {...MY_COMMITMENTS_METHODOLOGY} />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => load({ background: true })}
+              disabled={refreshing}
+            >
+              <RefreshCw
+                className={cn("mr-2 h-4 w-4", refreshing && "animate-spin")}
+              />
+              Refresh
+            </Button>
+          </>
+        )}
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

@@ -9,10 +9,12 @@ import StatCard from '@/components/dashboard/StatCard';
 import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
 import TableShell from '@/components/common/TableShell';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff, Sparkles, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const STORAGE_KEY = 'dashboard_filters';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
@@ -461,6 +463,7 @@ export default function DashboardSettings() {
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}
         actions={(
           <>
+            <PageMethodology {...DASHBOARD_METHODOLOGY} />
             <Button
               type="button"
               variant={showAnalytics ? 'default' : 'outline'}

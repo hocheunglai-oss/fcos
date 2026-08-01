@@ -16,8 +16,18 @@ const PAGE_COPY = {
   },
   'Outstanding Buyer Invoices': {
     eyebrow: 'Collection',
-    title: 'Buyer Invoices',
-    description: 'Track overdue and due buyer invoices.',
+    title: 'Payment Collections',
+    description: 'Prioritize overdue receivables, buyer commitments, payment advice, and settlement.',
+  },
+  'Payment Collections': {
+    eyebrow: 'Collection',
+    title: 'Payment Collections',
+    description: 'Prioritize overdue receivables, buyer commitments, payment advice, and settlement.',
+  },
+  'Unofficial Compensation': {
+    eyebrow: 'Recovery',
+    title: 'Unofficial Compensation',
+    description: 'Monitor agreed compensation claims, UOC recoveries, deadlines, and outstanding Account balances.',
   },
   'Incoming Payment': {
     eyebrow: 'Receipts',
@@ -71,7 +81,7 @@ const PAGE_COPY = {
   },
   'Admin Control': {
     eyebrow: 'Access',
-    title: 'Admin Control',
+    title: 'Users & Access',
     description: 'Manage users, access rights, and controlled FCOS update communications.',
   },
 };

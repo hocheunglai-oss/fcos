@@ -387,7 +387,7 @@ function CompactTableEmptyState({ icon: Icon, title, description }) {
   );
 }
 
-export default function IncomingPayments() {
+export default function IncomingPayments({ reconciliationItems = [] }) {
   const { toast } = useToast();
   const { isAdministrator } = useAuth();
   const [pageState, setPageState] = useState(initialPageState);
@@ -461,7 +461,21 @@ export default function IncomingPayments() {
     if (!data) load({ force: true });
   }, []);
 
-  const rows = data?.rows || [];
+  const reconciliationByStem = useMemo(() => new Map(
+    reconciliationItems
+      .filter((entry) => entry?.item?.stemId)
+      .map((entry) => [entry.item.stemId, entry]),
+  ), [reconciliationItems]);
+  const rows = useMemo(() => (data?.rows || []).map((row) => {
+    const live = reconciliationByStem.get(row.stemId);
+    if (!live) return row;
+    return {
+      ...row,
+      receivableBalance: live.item.verifiedReceivableBalance ?? row.receivableBalance,
+      collection: live.item,
+      collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
+    };
+  }), [data?.rows, reconciliationByStem]);
   const buyerCiaRows = data?.buyerCiaInvoices || [];
   const availableBalanceRows = data?.availableBalances || [];
   const visibleRows = useMemo(() => {
@@ -637,6 +651,26 @@ export default function IncomingPayments() {
           {row.receivableBalance == null ? '-' : fmtMoney(row.receivableBalance, row.currency)}
         </span>
       ),
+    },
+    {
+      id: 'collection',
+      header: 'Collection',
+      cellClassName: 'min-w-[170px] text-sm',
+      cell: (row) => row.stemId ? (
+        <a
+          href={`/payment-collections?tab=collections&collectionStemId=${encodeURIComponent(row.stemId)}`}
+          onClick={(event) => event.stopPropagation()}
+          className="block rounded-md px-2 py-1 hover:bg-muted"
+        >
+          <span className="font-medium text-primary">{row.collection?.status || 'To Contact'}</span>
+          <span className="block text-xs text-muted-foreground">{row.collection?.ownerName || 'Unassigned'}{row.collection?.nextFollowUpDate ? ` · ${fmtDate(row.collection.nextFollowUpDate)}` : ''}</span>
+          {row.collection?.adviceReceivedDate && (
+            <span className="block text-xs font-medium text-cyan-700">
+              Advice {fmtDate(row.collection.adviceReceivedDate)}{row.collection.adviceAmount != null ? ` · ${fmtMoney(row.collection.adviceAmount, row.currency)}` : ''}
+            </span>
+          )}
+        </a>
+      ) : '-',
     },
     {
       id: 'interestInvoice',

@@ -83,6 +83,17 @@ import {
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
 import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
+import {
+  agreedCompensationClaimsForAccount,
+  createUnofficialCompensationClaim as createUnofficialCompensationClaimService,
+  createUnofficialCompensationRecovery as createUnofficialCompensationRecoveryService,
+  deleteUnofficialCompensationRecovery as deleteUnofficialCompensationRecoveryService,
+  linkDisputeAgreedCompensationClaim,
+  listUnofficialCompensation,
+  unofficialCompensationOptions as unofficialCompensationOptionsService,
+  updateUnofficialCompensationClaimGroupStatus as updateUnofficialCompensationClaimGroupStatusService,
+  validateAgreedCompensationClaimLink,
+} from '../_unofficialCompensationService.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -107,14 +118,20 @@ const ADMIN_APP_MODULES = [
   },
   {
     id: 'buyer_invoices',
-    label: 'Outstanding Buyer Invoices',
-    path: '/buyer-invoices',
+    label: 'Payment Collections',
+    path: '/payment-collections?tab=collections',
     sortOrder: 40,
   },
   {
+    id: 'unofficial_compensation',
+    label: 'Unofficial Compensation',
+    path: '/unofficial-compensation',
+    sortOrder: 42,
+  },
+  {
     id: 'incoming_payments',
-    label: 'Incoming Payment',
-    path: '/incoming-payments',
+    label: 'Incoming Payments (Payment Collections)',
+    path: '/payment-collections?tab=incoming',
     sortOrder: 45,
   },
   {
@@ -138,7 +155,7 @@ const ADMIN_APP_MODULES = [
   {
     id: 'report_archive',
     label: 'Reports Archive',
-    path: '/report-archive',
+    path: '/brokers?tab=archive',
     sortOrder: 75,
   },
   {
@@ -148,7 +165,7 @@ const ADMIN_APP_MODULES = [
     sortOrder: 85,
   },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
-  { id: 'admin', label: 'Admin Control', path: '/admin', sortOrder: 100 },
+  { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
 
 let portalOutboxScheduledAt = 0;
@@ -249,6 +266,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     review: true,
     disputes: true,
     buyer_invoices: true,
+    unofficial_compensation: true,
     incoming_payments: true,
     cashflow_forecast: true,
     pnl: true,
@@ -263,6 +281,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     review: true,
     disputes: true,
     buyer_invoices: true,
+    unofficial_compensation: true,
     incoming_payments: true,
     cashflow_forecast: true,
     pnl: true,
@@ -277,6 +296,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     review: true,
     disputes: true,
     buyer_invoices: false,
+    unofficial_compensation: false,
     incoming_payments: true,
     cashflow_forecast: false,
     pnl: true,
@@ -291,6 +311,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     review: true,
     disputes: true,
     buyer_invoices: true,
+    unofficial_compensation: true,
     incoming_payments: true,
     cashflow_forecast: true,
     pnl: true,
@@ -305,6 +326,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     review: false,
     disputes: false,
     buyer_invoices: false,
+    unofficial_compensation: false,
     incoming_payments: true,
     cashflow_forecast: false,
     pnl: false,
@@ -869,7 +891,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -900,6 +922,10 @@ const HANDLER_MODULE_ACCESS = {
   workNotificationsRead: [],
   workNotificationsState: [],
   workCommitmentsList: [],
+  navigationPreferencesGet: [],
+  navigationPreferencesSave: [],
+  navigationPreferencesReset: [],
+  paymentCollectionsReconcileCron: [],
   growthReportingLinesList: [],
   growthReportingLineSave: [],
   growthCoachingBootstrap: [],
@@ -931,9 +957,15 @@ const HANDLER_MODULE_ACCESS = {
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
   salesforceTopBuyers: ['dashboard'],
-  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'pnl', 'brokers'],
+  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
+  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
+  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'pnl', 'brokers'],
+  unofficialCompensationList: ['unofficial_compensation'],
+  unofficialCompensationOptions: ['unofficial_compensation'],
+  unofficialCompensationClaimCreate: ['unofficial_compensation'],
+  unofficialCompensationClaimGroupStatus: ['unofficial_compensation'],
+  unofficialCompensationRecoveryCreate: ['unofficial_compensation'],
+  unofficialCompensationRecoveryDelete: ['unofficial_compensation'],
   exceptionReviewWorkflowList: ['review'],
   exceptionReviewWorkflowSave: ['review'],
   salesforceDisputeStems: ['disputes'],
@@ -957,10 +989,14 @@ const HANDLER_MODULE_ACCESS = {
   disputeWorkflowDocuments: ['disputes'],
   disputeWorkflowMarkExecuted: ['disputes'],
   disputeWorkflowClose: ['disputes'],
+  disputeWorkflowCompensationClaims: ['disputes'],
+  disputeWorkflowCompensationClaimLink: ['disputes'],
   salesforceBuyerInvoicesDue: ['buyer_invoices'],
   buyerInvoiceCollectionList: ['buyer_invoices'],
   buyerInvoiceCollectionSave: ['buyer_invoices'],
   buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
+  buyerInvoicePaymentAdviceSave: ['buyer_invoices'],
+  paymentCollectionsReconcile: ['buyer_invoices', 'incoming_payments'],
   buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
   buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
   buyerInvoiceReminderRulesList: ['buyer_invoices'],
@@ -1196,6 +1232,47 @@ async function requireHandlerAccess(name, req) {
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, HANDLER_MODULE_ACCESS[name] || []);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   return context;
+}
+
+function unofficialCompensationServiceContext(accessContext) {
+  return {
+    client: accessContext.client,
+    profile: accessContext.profile,
+    interoffice: isInterofficeAccess(accessContext),
+  };
+}
+
+async function unofficialCompensationList(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return listUnofficialCompensation({
+    force: requestForcesRefresh(body, req),
+    interoffice: isInterofficeAccess(context),
+  });
+}
+
+async function unofficialCompensationOptions(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return unofficialCompensationOptionsService(body, { interoffice: isInterofficeAccess(context) });
+}
+
+async function unofficialCompensationClaimCreate(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return createUnofficialCompensationClaimService(body, unofficialCompensationServiceContext(context));
+}
+
+async function unofficialCompensationClaimGroupStatus(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return updateUnofficialCompensationClaimGroupStatusService(body, unofficialCompensationServiceContext(context));
+}
+
+async function unofficialCompensationRecoveryCreate(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return createUnofficialCompensationRecoveryService(body, unofficialCompensationServiceContext(context));
+}
+
+async function unofficialCompensationRecoveryDelete(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return deleteUnofficialCompensationRecoveryService(body, unofficialCompensationServiceContext(context));
 }
 
 const EXCEPTION_REVIEW_STATUSES = ['Open', 'Acknowledged', 'In Progress', 'Resolved', 'Dismissed'];
@@ -1690,7 +1767,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, portalRows, collaborationRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows] = await Promise.all([
+  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -1826,9 +1903,24 @@ async function universalAuditTrail(body, req) {
         hasTargetUser: Boolean(row.target_user_id),
       },
     })),
+    safeAuditRows(client.from('unofficial_compensation_operations').select('id,operation_type,operation_status,salesforce_object,error_code,actor_email,created_at,completed_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `unofficial-compensation:${row.id}`,
+      source: 'Unofficial Compensation',
+      module: 'Unofficial Compensation',
+      action: normalizedAuditAction(row.operation_type),
+      createdAt: row.completed_at || row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.salesforce_object || 'Compensation workflow',
+      summary: compactAuditSummary([normalizedAuditAction(row.operation_status), row.salesforce_object, row.error_code]),
+      metadata: {
+        status: row.operation_status,
+        salesforceObject: row.salesforce_object,
+        errorCode: row.error_code,
+      },
+    })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -3192,6 +3284,84 @@ async function reportExportDownload(body, req, accessContext = null) {
   };
 }
 
+const NAVIGATION_SECTION_DEFAULTS = Object.freeze({
+  personal: ['my_commitments', 'growth_coaching', 'projects_tasks'],
+  trading: ['dashboard', 'payment_collections', 'unofficial_compensation', 'cashflow_forecast', 'disputes', 'brokers', 'buyers_administrator'],
+  tools: ['review', 'pnl', 'report_archive'],
+});
+const NAVIGATION_ITEM_IDS = new Set(Object.values(NAVIGATION_SECTION_DEFAULTS).flat());
+const NAVIGATION_DEFAULT_HIDDEN_IDS = ['review', 'pnl', 'report_archive'];
+
+function normalizeNavigationSectionOrders(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(Object.entries(NAVIGATION_SECTION_DEFAULTS).map(([section, defaults]) => {
+    const requested = Array.isArray(source[section]) ? source[section] : [];
+    const allowed = new Set(defaults);
+    const ordered = [...new Set(requested.map((id) => String(id || '').trim()).filter((id) => allowed.has(id)))];
+    for (const id of defaults.filter((itemId) => !ordered.includes(itemId))) {
+      if (id === 'unofficial_compensation') {
+        const collectionIndex = ordered.indexOf('payment_collections');
+        ordered.splice(collectionIndex >= 0 ? collectionIndex + 1 : ordered.length, 0, id);
+      } else {
+        ordered.push(id);
+      }
+    }
+    return [section, ordered];
+  }));
+}
+
+function normalizeNavigationHiddenItems(value, useDefaults = false) {
+  const requested = Array.isArray(value) ? value : useDefaults ? NAVIGATION_DEFAULT_HIDDEN_IDS : [];
+  return [...new Set(requested.map((id) => String(id || '').trim()).filter((id) => NAVIGATION_ITEM_IDS.has(id)))];
+}
+
+function serializeNavigationPreferences(row = null) {
+  return {
+    sectionOrders: normalizeNavigationSectionOrders(row?.section_orders),
+    hiddenItemIds: normalizeNavigationHiddenItems(row?.hidden_item_ids, !row),
+    revision: Number(row?.revision || 0),
+    updatedAt: row?.updated_at || null,
+  };
+}
+
+async function navigationPreferencesGet(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  const { data, error } = await client.from('user_navigation_preferences').select('user_id,section_orders,hidden_item_ids,revision,updated_at').eq('user_id', profile.id).maybeSingle();
+  if (error) throw error;
+  return { preferences: serializeNavigationPreferences(data) };
+}
+
+async function navigationPreferencesSave(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  const sectionOrders = normalizeNavigationSectionOrders(body.sectionOrders || body.section_orders);
+  const hiddenItemIds = normalizeNavigationHiddenItems(body.hiddenItemIds || body.hidden_item_ids);
+  const expectedRevision = Number(body.expectedRevision ?? body.expected_revision ?? 0);
+  const { data, error } = await client.rpc('save_user_navigation_preferences', {
+    p_user_id: profile.id,
+    p_section_orders: sectionOrders,
+    p_hidden_item_ids: hiddenItemIds,
+    p_expected_revision: expectedRevision,
+    p_actor_user_id: profile.id,
+  });
+  if (error) {
+    if (/changed after they were opened/i.test(error.message || '')) throw appError(error.message, 409);
+    throw error;
+  }
+  return { preferences: serializeNavigationPreferences(data) };
+}
+
+async function navigationPreferencesReset(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  const expectedRevision = Number(body.expectedRevision ?? body.expected_revision ?? 0);
+  const { data: current, error: currentError } = await client.from('user_navigation_preferences').select('revision').eq('user_id', profile.id).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return { preferences: serializeNavigationPreferences(null) };
+  if (expectedRevision !== Number(current.revision)) throw appError('Navigation preferences changed after they were opened. Refresh and try again.', 409);
+  const { error } = await client.from('user_navigation_preferences').delete().eq('user_id', profile.id).eq('revision', expectedRevision);
+  if (error) throw error;
+  return { preferences: serializeNavigationPreferences(null) };
+}
+
 async function buyerInvoiceCollectionList(body, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   const stemIds = Array.isArray(body.stemIds) ? body.stemIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
@@ -3206,13 +3376,54 @@ async function buyerInvoiceCollectionList(body, req, accessContext = null) {
   };
 }
 
+async function currentBuyerInvoiceCollection(client, stemId) {
+  const { data, error } = await client
+    .from('buyer_invoice_collection_items')
+    .select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at')
+    .eq('stem_id', stemId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function validateBuyerInvoiceCollectionUpdate(current, updates) {
+  const merged = { ...(current || {}), ...updates };
+  const status = normalizeCollectionStatus(merged.status);
+  if (status === 'Promise to Pay') {
+    if (!merged.promised_payment_date) throw appError('Promised payment date is required for Promise to Pay.', 400);
+    if (!(Number(merged.promised_amount) > 0)) throw appError('Promised payment amount must be greater than zero.', 400);
+  }
+  if (status === 'Payment Advice Received') {
+    const currentStatus = current ? normalizeCollectionStatus(current.status) : 'To Contact';
+    if (currentStatus !== status && !BUYER_COLLECTION_ADVICE_SOURCE_STATUSES.has(currentStatus)) {
+      throw appError('Payment Advice Received may follow Awaiting Buyer, Promise to Pay, or Escalated.', 409);
+    }
+    if (!merged.advice_received_date) throw appError('Payment advice received date is required.', 400);
+    if (!(Number(merged.advice_amount) > 0)) throw appError('Payment advice amount must be greater than zero.', 400);
+    if (!merged.advice_verification_date) throw appError('Payment advice verification date is required.', 400);
+    const documentIds = Array.isArray(merged.advice_document_ids) ? merged.advice_document_ids : [];
+    if (!String(merged.advice_reference || '').trim() && !documentIds.length) {
+      throw appError('Enter the buyer payment reference or upload the payment advice document.', 400);
+    }
+  }
+  if (status === 'On Hold') {
+    if (!String(merged.on_hold_reason || '').trim()) throw appError('A reason is required when putting a collection on hold.', 400);
+    if (!merged.on_hold_review_date) throw appError('A review date is required when putting a collection on hold.', 400);
+  }
+  return merged;
+}
+
 async function persistBuyerInvoiceCollection(body, req, eventOverride = null, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   const stemId = String(body.stemId || body.stem_id || '').trim();
   if (!stemId) throw appError('stemId is required.', 400);
   await requireInterofficeStemAccess(stemId, { client, profile });
 
+  const current = await currentBuyerInvoiceCollection(client, stemId);
   const updates = normalizeCollectionUpdates(body.updates || body, profile);
+  if (updates.status === 'Paid / Closed' && !Object.prototype.hasOwnProperty.call(updates, 'closure_source')) updates.closure_source = 'manual';
+  if (updates.status && updates.status !== 'Paid / Closed' && !Object.prototype.hasOwnProperty.call(updates, 'closure_source')) updates.closure_source = null;
+  validateBuyerInvoiceCollectionUpdate(current, updates);
   const eventInput = eventOverride || body.event || {};
   const eventPayload = {
     event_type: normalizeEventType(eventInput.eventType || eventInput.event_type || collectionEventTypeFromChanges(updates)),
@@ -3222,6 +3433,12 @@ async function persistBuyerInvoiceCollection(body, req, eventOverride = null, ac
     next_follow_up_date: Object.prototype.hasOwnProperty.call(updates, 'next_follow_up_date') ? updates.next_follow_up_date : dateOrNull(eventInput.nextFollowUpDate || eventInput.next_follow_up_date),
     promised_payment_date: Object.prototype.hasOwnProperty.call(updates, 'promised_payment_date') ? updates.promised_payment_date : dateOrNull(eventInput.promisedPaymentDate || eventInput.promised_payment_date),
     promised_amount: Object.prototype.hasOwnProperty.call(updates, 'promised_amount') ? updates.promised_amount : decimalOrNull(eventInput.promisedAmount || eventInput.promised_amount),
+    event_key: String(eventInput.eventKey || eventInput.event_key || '').trim() || null,
+    metadata: {
+      ...(eventInput.metadata && typeof eventInput.metadata === 'object' ? eventInput.metadata : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'on_hold_reason') ? { onHoldReason: updates.on_hold_reason, onHoldReviewDate: updates.on_hold_review_date || null } : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'advice_received_date') ? { adviceReceivedDate: updates.advice_received_date, adviceAmount: updates.advice_amount, adviceReference: updates.advice_reference, adviceVerificationDate: updates.advice_verification_date } : {}),
+    },
   };
   const expectedUpdatedAt = body.expectedUpdatedAt || body.expected_updated_at || null;
   const { data, error } = await client.rpc('save_buyer_invoice_collection', {
@@ -3232,7 +3449,10 @@ async function persistBuyerInvoiceCollection(body, req, eventOverride = null, ac
     p_actor_email: profile.email,
     p_expected_updated_at: expectedUpdatedAt,
   });
-  if (error) throw error;
+  if (error) {
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    throw error;
+  }
   const item = data?.item;
   const event = data?.event;
   if (!item || !event) throw appError('Collection save did not return the updated workflow state.', 500);
@@ -3262,7 +3482,430 @@ async function buyerInvoiceCollectionEventCreate(body, req, accessContext = null
   if (Object.prototype.hasOwnProperty.call(event, 'promisedAmount') || Object.prototype.hasOwnProperty.call(event, 'promised_amount')) {
     updates.promisedAmount = event.promisedAmount ?? event.promised_amount;
   }
+  for (const [camel, snake] of [
+    ['onHoldReason', 'on_hold_reason'],
+    ['onHoldReviewDate', 'on_hold_review_date'],
+    ['adviceReceivedDate', 'advice_received_date'],
+    ['adviceAmount', 'advice_amount'],
+    ['adviceReference', 'advice_reference'],
+    ['adviceVerificationDate', 'advice_verification_date'],
+    ['adviceDocumentIds', 'advice_document_ids'],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(event, camel) || Object.prototype.hasOwnProperty.call(event, snake)) {
+      updates[camel] = event[camel] ?? event[snake];
+    }
+  }
   return persistBuyerInvoiceCollection({ ...body, updates }, req, event, accessContext);
+}
+
+const BUYER_COLLECTION_ITEM_SELECT = 'stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at';
+
+function collectionPaymentSnapshot(payment, { dateField, amountField, referenceFields }) {
+  if (!payment) return null;
+  return {
+    paymentId: payment.Id,
+    paymentName: payment.Name || null,
+    paymentDate: (dateField && payment[dateField]) || payment.CreatedDate || null,
+    amount: amountField ? incomingPaymentNumber(payment[amountField]) : null,
+    currency: payment.CurrencyIsoCode || payment.Currency__c || null,
+    reference: incomingPaymentReference(payment, referenceFields) || null,
+  };
+}
+
+async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
+  const ids = [...new Set((stemIds || []).map((id) => String(id || '').trim()).filter(isSalesforceId))];
+  if (!ids.length) return { stems: {}, latestPayments: {}, warnings: [] };
+  const [stemDescribe, paymentDescribe] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c' }),
+    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] })),
+  ]);
+  const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
+  if (!stemFieldNames.has('Receivable_Balance__c')) {
+    throw appError('Payment Collections requires STEM__c.Receivable_Balance__c for live reconciliation.', 503);
+  }
+  const accountDescribe = stemFieldNames.has('Account__c')
+    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({ fields: [] }))
+    : { fields: [] };
+  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
+  const accessCondition = await interofficeStemAccessCondition(accessContext, [...stemFieldNames], [...accountFieldNames]);
+  const dueFields = selectedFields(stemFieldNames, ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c']);
+  const stemFields = [
+    'Id',
+    'Name',
+    'Receivable_Balance__c',
+    ...selectedFields(stemFieldNames, [
+      'KeyStem__c',
+      'Payment_Date__c',
+      'CurrencyIsoCode',
+      'Delivery_Date__c',
+      'Delivery_Date_Or_Expected__c',
+      'Expected_Delivery_Date__c',
+      'Payment_Term__c',
+      'Buyer_Name__c',
+      'Buyer__c',
+    ]),
+    ...dueFields,
+  ];
+  if (stemFieldNames.has('Vessel__c')) stemFields.push('Vessel__r.Name');
+  if (stemFieldNames.has('Port__c')) stemFields.push('Port__r.Name');
+  if (stemFieldNames.has('Account__c')) {
+    stemFields.push('Account__c', 'Account__r.Name');
+    if (accountFieldNames.has('Group_Name__c')) stemFields.push('Account__r.Group_Name__c');
+    if (accountFieldNames.has('ParentId')) stemFields.push('Account__r.ParentId', 'Account__r.Parent.Name');
+  }
+  const stemRows = (await compositeQueryRows(chunkIds(ids).map((chunk) => ({
+    soql: `SELECT ${[...new Set(stemFields)].join(', ')} FROM stem__c WHERE ${combineWhereConditions([`Id IN (${chunk.map((id) => `'${escapeSoql(id)}'`).join(',')})`, accessCondition])} LIMIT 5000`,
+    limit: 5000,
+    softFail: false,
+  })))).flat();
+  const stems = Object.fromEntries(stemRows.map((stem) => [stem.Id, stem]));
+
+  const paymentFields = paymentDescribe.fields || [];
+  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
+  if (!paymentFieldNames.has('STEM__c')) {
+    return { stems, latestPayments: {}, warnings: ['Payment__c.STEM__c is unavailable; balances remain authoritative but payment evidence cannot be linked.'] };
+  }
+  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
+  const referenceFields = incomingPaymentReferenceFields(paymentFields);
+  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
+  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
+  const directionFields = incomingPaymentDirectionFields(paymentFields);
+  const supplierInvoiceFields = incomingPaymentSupplierInvoiceFields(paymentFields);
+  const selectFields = [
+    'Id',
+    'Name',
+    'STEM__c',
+    'CreatedDate',
+    ...selectedFields(paymentFieldNames, ['RecordTypeId', 'CurrencyIsoCode', 'Currency__c']),
+    paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null,
+    paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null,
+    dateField,
+    amountField,
+    ...referenceFields,
+    ...statusFields,
+    ...typeFields,
+    ...directionFields,
+    ...supplierInvoiceFields,
+  ].filter(Boolean);
+  const paymentRows = (await compositeQueryRows(chunkIds(Object.keys(stems)).map((chunk) => ({
+    soql: `SELECT ${[...new Set(selectFields)].join(', ')} FROM Payment__c WHERE STEM__c IN (${chunk.map((id) => `'${escapeSoql(id)}'`).join(',')}) ORDER BY ${dateField || 'CreatedDate'} DESC NULLS LAST, CreatedDate DESC LIMIT 5000`,
+    limit: 5000,
+    softFail: true,
+  })))).flat();
+  const latestPayments = {};
+  for (const payment of paymentRows) {
+    if (!payment.STEM__c || latestPayments[payment.STEM__c]) continue;
+    if (incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields)) continue;
+    if (incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields])) continue;
+    const paymentType = incomingPaymentTypeFromContext(payment, {
+      amount: amountField ? incomingPaymentNumber(payment[amountField]) : null,
+      stem: stems[payment.STEM__c],
+      supplierInvoice: null,
+      supplierInvoiceFields,
+      directionFields,
+      typeFields,
+      statusFields,
+    });
+    if (paymentType !== 'Buyer Payment') continue;
+    latestPayments[payment.STEM__c] = collectionPaymentSnapshot(payment, { dateField, amountField, referenceFields });
+  }
+  return { stems, latestPayments, warnings: [], dueFields };
+}
+
+function buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today) {
+  const currentStatus = normalizeCollectionStatus(item.status);
+  const balance = incomingPaymentNumber(stem?.Receivable_Balance__c);
+  if (balance == null) {
+    return { status: currentStatus, state: 'balance_unavailable', balance: null, eventType: currentStatus === 'Paid / Closed' && item.reconciliation_state !== 'balance_unavailable' ? 'reconciliation_warning' : null, note: 'Salesforce receivable balance is unavailable.' };
+  }
+  const settled = balance <= threshold;
+  if (settled && currentStatus !== 'Paid / Closed') {
+    return { status: 'Paid / Closed', state: 'settled', balance, closureSource: 'system', previousActiveStatus: currentStatus, eventType: 'auto_closed', note: `Salesforce receivable balance ${balance.toFixed(2)} is within the fully-paid threshold ${threshold.toFixed(2)}.` };
+  }
+  if (!settled && currentStatus === 'Paid / Closed' && item.closure_source === 'system') {
+    const previous = BUYER_INVOICE_COLLECTION_STATUSES.includes(item.previous_active_status) && item.previous_active_status !== 'Paid / Closed' ? item.previous_active_status : 'To Contact';
+    return { status: previous, state: 'reopened', balance, closureSource: null, previousActiveStatus: null, eventType: 'auto_reopened', note: `Salesforce receivable balance returned to ${balance.toFixed(2)}.` };
+  }
+  if (!settled && currentStatus === 'Paid / Closed') {
+    return { status: currentStatus, state: 'manual_closure_mismatch', balance, eventType: item.reconciliation_state === 'manual_closure_mismatch' ? null : 'reconciliation_warning', note: `The manually closed collection has an open Salesforce balance of ${balance.toFixed(2)}.` };
+  }
+  if (currentStatus === 'Payment Advice Received') {
+    const overdue = Boolean(item.advice_verification_date && item.advice_verification_date <= today);
+    return { status: currentStatus, state: overdue ? 'advice_overdue' : 'advice_pending', balance, eventType: overdue && item.reconciliation_state !== 'advice_overdue' ? 'reconciliation_warning' : null, note: overdue ? 'Payment advice has not posted to the Salesforce receivable balance by its verification date.' : null };
+  }
+  const newPayment = latestPayment?.paymentId && latestPayment.paymentId !== item.latest_payment_snapshot?.paymentId;
+  const previousBalance = incomingPaymentNumber(item.verified_receivable_balance);
+  const unchangedBalance = latestPayment && previousBalance != null && Math.abs(previousBalance - balance) < 0.005;
+  const paymentPendingPosting = unchangedBalance && (newPayment || item.reconciliation_state === 'payment_pending_posting');
+  return {
+    status: currentStatus,
+    state: paymentPendingPosting ? 'payment_pending_posting' : latestPayment ? 'partial_payment' : 'open',
+    balance,
+    eventType: newPayment ? 'payment_detected' : null,
+    note: newPayment
+      ? paymentPendingPosting
+        ? 'A buyer payment was detected, but the Salesforce receivable balance has not posted the payment yet.'
+        : 'A buyer payment was detected while the Salesforce receivable balance remains open.'
+      : null,
+  };
+}
+
+function collectionReconciliationChanged(item, decision, latestPayment) {
+  const sameNumber = (left, right) => {
+    const a = incomingPaymentNumber(left);
+    const b = incomingPaymentNumber(right);
+    return a == null && b == null ? true : a != null && b != null && Math.abs(a - b) < 0.005;
+  };
+  return (
+    normalizeCollectionStatus(item.status) !== decision.status
+    || String(item.reconciliation_state || '') !== String(decision.state || '')
+    || !sameNumber(item.verified_receivable_balance, decision.balance)
+    || JSON.stringify(item.latest_payment_snapshot || null) !== JSON.stringify(latestPayment || null)
+    || (Object.prototype.hasOwnProperty.call(decision, 'closureSource') && (item.closure_source || null) !== (decision.closureSource || null))
+    || (Object.prototype.hasOwnProperty.call(decision, 'previousActiveStatus') && (item.previous_active_status || null) !== (decision.previousActiveStatus || null))
+  );
+}
+
+async function reconcileBuyerInvoiceCollections({ client, profile = null, accessContext = null, stemIds = null } = {}) {
+  let query = client.from('buyer_invoice_collection_items').select(BUYER_COLLECTION_ITEM_SELECT).order('updated_at', { ascending: false }).limit(5000);
+  const requestedIds = Array.isArray(stemIds) ? [...new Set(stemIds.map((id) => String(id || '').trim()).filter(isSalesforceId))] : [];
+  if (requestedIds.length) query = query.in('stem_id', requestedIds);
+  const { data: items, error } = await query;
+  if (error) throw error;
+  if (!(items || []).length) return { items: [], exceptions: [], summary: { checked: 0, closed: 0, reopened: 0, exceptions: 0 }, warnings: [] };
+  const settings = await loadIncomingPaymentSettings();
+  const threshold = Math.max(0, Number(settings.fullyPaidThreshold || 0));
+  const today = hongKongScheduleParts().date;
+  const live = await buyerCollectionSalesforceState(items.map((item) => item.stem_id), accessContext);
+  const reconciled = [];
+  const exceptions = [];
+  let closed = 0;
+  let reopened = 0;
+  for (const item of items) {
+    const stem = live.stems[item.stem_id];
+    if (!stem) continue;
+    const latestPayment = live.latestPayments[item.stem_id] || null;
+    const decision = buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today);
+    const nowIso = new Date().toISOString();
+    const updates = {
+      status: decision.status,
+      reconciliation_state: decision.state,
+      verified_receivable_balance: decision.balance,
+      latest_payment_snapshot: latestPayment,
+      last_reconciled_at: nowIso,
+    };
+    if (Object.prototype.hasOwnProperty.call(decision, 'closureSource')) updates.closure_source = decision.closureSource;
+    if (Object.prototype.hasOwnProperty.call(decision, 'previousActiveStatus')) updates.previous_active_status = decision.previousActiveStatus;
+    const transition = decision.status !== normalizeCollectionStatus(item.status);
+    const stateChanged = collectionReconciliationChanged(item, decision, latestPayment);
+    let savedItem = null;
+    let savedEvent = null;
+    if (decision.eventType) {
+      const eventIdentity = latestPayment?.paymentId || `${decision.state}:${item.updated_at}`;
+      const { data, error: saveError } = await client.rpc('save_buyer_invoice_collection', {
+        p_stem_id: item.stem_id,
+        p_updates: updates,
+        p_event: {
+          event_type: decision.eventType,
+          event_key: `${decision.eventType}:${eventIdentity}`,
+          status: decision.status,
+          note: decision.note,
+          metadata: {
+            verifiedReceivableBalance: decision.balance,
+            fullyPaidThreshold: threshold,
+            latestPayment,
+            reconciliationState: decision.state,
+          },
+        },
+        p_actor_user_id: profile?.id || null,
+        p_actor_email: profile?.email || 'FCOS system',
+        p_expected_updated_at: item.updated_at,
+      });
+      if (saveError) {
+        const message = String(saveError.message || '');
+        if (!message.includes('buyer_invoice_collection_events_event_key_idx') && !message.includes('changed after it was opened')) {
+          throw saveError;
+        }
+        const { data: latestItem, error: latestError } = await client
+          .from('buyer_invoice_collection_items')
+          .select(BUYER_COLLECTION_ITEM_SELECT)
+          .eq('stem_id', item.stem_id)
+          .maybeSingle();
+        if (latestError) throw latestError;
+        savedItem = latestItem || item;
+      } else {
+        savedItem = data?.item || null;
+        savedEvent = data?.event || null;
+      }
+    } else if (stateChanged) {
+      const { data, error: updateError } = await client
+        .from('buyer_invoice_collection_items')
+        .update({
+          reconciliation_state: decision.state,
+          verified_receivable_balance: decision.balance,
+          latest_payment_snapshot: latestPayment,
+          last_reconciled_at: nowIso,
+          last_updated_by: profile?.id || null,
+          last_updated_by_email: profile?.email || 'FCOS system',
+          updated_at: nowIso,
+        })
+        .eq('stem_id', item.stem_id)
+        .eq('updated_at', item.updated_at)
+        .select(BUYER_COLLECTION_ITEM_SELECT)
+        .maybeSingle();
+      if (updateError) throw updateError;
+      if (data) {
+        savedItem = data;
+      } else {
+        const { data: latestItem, error: latestError } = await client
+          .from('buyer_invoice_collection_items')
+          .select(BUYER_COLLECTION_ITEM_SELECT)
+          .eq('stem_id', item.stem_id)
+          .maybeSingle();
+        if (latestError) throw latestError;
+        savedItem = latestItem || item;
+      }
+    } else {
+      savedItem = {
+        ...item,
+        reconciliation_state: decision.state,
+        verified_receivable_balance: decision.balance,
+        latest_payment_snapshot: latestPayment,
+        last_reconciled_at: nowIso,
+      };
+    }
+    if (transition && decision.status === 'Paid / Closed') closed += 1;
+    if (transition && decision.state === 'reopened') reopened += 1;
+    const serialized = {
+      item: serializeCollectionItem(savedItem),
+      event: serializeCollectionEvent(savedEvent),
+      stemName: formatStemName(stem),
+      buyerAccountId: stem.Account__c || null,
+      buyerName: incomingPaymentBuyerName(stem),
+      buyerGroupName: incomingPaymentBuyerGroup(stem),
+      buyerInvoiceDueDate: calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate((live.dueFields || []).map((field) => stem[field])),
+      currency: stem.CurrencyIsoCode || latestPayment?.currency || 'USD',
+      latestPayment,
+    };
+    reconciled.push(serialized);
+    if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(decision.state)) exceptions.push(serialized);
+  }
+  return { items: reconciled, exceptions, summary: { checked: reconciled.length, closed, reopened, exceptions: exceptions.length }, warnings: live.warnings };
+}
+
+async function paymentCollectionsReconcile(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  return reconcileBuyerInvoiceCollections({ client, profile, accessContext: accessContext || { client, profile }, stemIds: body.stemIds });
+}
+
+async function paymentCollectionsReconcileCron(body, req) {
+  requireCronAuthorization(req);
+  const client = safeSupabaseAdminClient();
+  if (!client) throw appError('Supabase service configuration is required for Payment Collections reconciliation.', 503);
+  return reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
+}
+
+function paymentAdviceExtension(fileName) {
+  const extension = String(fileName || '').split('.').pop()?.toLowerCase() || '';
+  const allowed = new Set(['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'msg']);
+  return allowed.has(extension) ? extension : '';
+}
+
+async function buyerInvoicePaymentAdviceSave(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  const stemId = String(body.stemId || '').trim();
+  if (!isSalesforceId(stemId)) throw appError('Valid Salesforce STEM is required.', 400);
+  await requireInterofficeStemAccess(stemId, accessContext || { client, profile });
+  const current = await currentBuyerInvoiceCollection(client, stemId);
+  const currentStatus = normalizeCollectionStatus(current?.status);
+  if (!BUYER_COLLECTION_ADVICE_SOURCE_STATUSES.has(currentStatus)) {
+    throw appError('Payment Advice Received may follow Awaiting Buyer, Promise to Pay, or Escalated.', 409);
+  }
+  const adviceReceivedDate = dateOrNull(body.adviceReceivedDate);
+  const adviceAmount = decimalOrNull(body.adviceAmount);
+  const adviceReference = String(body.adviceReference || '').trim();
+  const adviceVerificationDate = dateOrNull(body.adviceVerificationDate);
+  if (!adviceReceivedDate) throw appError('Payment advice received date is required.', 400);
+  if (!(adviceAmount > 0)) throw appError('Payment advice amount must be greater than zero.', 400);
+  if (!adviceVerificationDate) throw appError('Payment advice verification date is required.', 400);
+
+  const adviceStemDescribe = await salesforceObjectFields({ objectName: 'stem__c' });
+  const adviceStemFields = new Set((adviceStemDescribe.fields || []).map((field) => field.name));
+  const stemRows = await queryRows(`SELECT Id, Name${adviceStemFields.has('CurrencyIsoCode') ? ', CurrencyIsoCode' : ''} FROM stem__c WHERE Id = '${escapeSoql(stemId)}' LIMIT 1`, { softFail: false });
+  const stem = stemRows[0];
+  if (!stem) throw appError('The selected STEM is no longer available in Salesforce.', 404);
+  const adviceCurrency = stem.CurrencyIsoCode || null;
+
+  const rawBase64 = String(body.base64 || '').replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+  if (!adviceReference && !rawBase64) throw appError('Enter the buyer payment reference or upload the payment advice document.', 400);
+  let contentDocumentId = null;
+  let contentVersionId = null;
+  let document = null;
+  if (rawBase64) {
+    requireExternalActionGate('salesforce_write');
+    const originalFileName = String(body.originalFileName || '').trim();
+    const extension = paymentAdviceExtension(originalFileName);
+    if (!extension) throw appError('Payment advice must be a PDF, image, Office, CSV, text, or Outlook message file.', 400);
+    const buffer = Buffer.from(rawBase64, 'base64');
+    if (!buffer.length) throw appError('Payment advice document is empty or invalid.', 400);
+    if (buffer.length > BUYER_COLLECTION_DOCUMENT_MAX_BYTES) throw appError('Payment advice document is too large. Maximum size is 3 MB.', 413);
+    const dateToken = adviceReceivedDate.replaceAll('-', '');
+    const baseTitle = `${dateToken} Payment advice ${formatStemName(stem)}`.slice(0, 200);
+    const existingLinks = await queryRows(`SELECT ContentDocument.Title FROM ContentDocumentLink WHERE LinkedEntityId = '${escapeSoql(stemId)}' LIMIT 2000`, { limit: 2000, softFail: true });
+    const existingTitles = new Set(existingLinks.map((link) => String(link.ContentDocument?.Title || '').toLowerCase()));
+    let title = baseTitle;
+    for (let suffix = 1; existingTitles.has(title.toLowerCase()); suffix += 1) title = `${baseTitle}-${suffix}`;
+    try {
+      const contentVersion = await sfRequest('/sobjects/ContentVersion', {
+        method: 'POST',
+        body: { Title: title, PathOnClient: `/${title}.${extension}`, VersionData: buffer.toString('base64'), FirstPublishLocationId: stemId },
+      });
+      contentVersionId = contentVersion?.id;
+      if (!isSalesforceId(contentVersionId)) throw appError('Salesforce did not return a ContentVersion id.', 502);
+      const versions = await queryRows(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id = '${escapeSoql(contentVersionId)}' LIMIT 1`, { softFail: false });
+      contentDocumentId = versions[0]?.ContentDocumentId || null;
+      if (!isSalesforceId(contentDocumentId)) throw appError('Salesforce did not return a ContentDocument id.', 502);
+      document = {
+        contentDocumentId,
+        versionId: contentVersionId,
+        fileName: `${title}.${extension}`,
+        downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
+        salesforceUrl: `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`,
+      };
+    } catch (error) {
+      if (contentDocumentId) await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(contentDocumentId)}`, { method: 'DELETE' }).catch(() => null);
+      else if (contentVersionId) await sfRequest(`/sobjects/ContentVersion/${encodeURIComponent(contentVersionId)}`, { method: 'DELETE' }).catch(() => null);
+      throw error;
+    }
+  }
+
+  const documentIds = [...new Set([...(current?.advice_document_ids || []), contentDocumentId].filter(isSalesforceId))];
+  try {
+    const result = await persistBuyerInvoiceCollection({
+      stemId,
+      expectedUpdatedAt: body.expectedUpdatedAt || current?.updated_at || null,
+      updates: {
+        status: 'Payment Advice Received',
+        adviceReceivedDate,
+        adviceAmount,
+        adviceReference,
+        adviceVerificationDate,
+        adviceDocumentIds: documentIds,
+        nextFollowUpDate: adviceVerificationDate,
+      },
+      event: {
+        eventType: 'payment_advice',
+        note: adviceReference ? `Payment advice received. Reference: ${adviceReference}` : 'Payment advice document received.',
+        metadata: { adviceReceivedDate, adviceAmount, adviceReference: adviceReference || null, adviceVerificationDate, currency: adviceCurrency, document },
+      },
+    }, req, null, accessContext || { client, profile });
+    if (document) await expireRuntimeCacheTags(['salesforce:documents', `salesforce:documents:${stemId}`]);
+    return { ...result, document };
+  } catch (error) {
+    if (contentDocumentId) await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(contentDocumentId)}`, { method: 'DELETE' }).catch(() => null);
+    throw error;
+  }
 }
 
 async function salesforceSchema() {
@@ -4195,8 +4838,16 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
   paymentReminderBody: '<p>Dear {{primaryRecipientName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>{{invoiceTable}}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>',
 };
-const BUYER_INVOICE_COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
-const BUYER_INVOICE_EVENT_TYPES = ['update', 'status_change', 'note', 'follow_up', 'promise', 'owner_change'];
+const BUYER_INVOICE_COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
+const LEGACY_BUYER_INVOICE_COLLECTION_STATUSES = {
+  'Not Started': 'To Contact',
+  'Reminder Sent': 'Awaiting Buyer',
+  'Awaiting Buyer Reply': 'Awaiting Buyer',
+};
+const BUYER_INVOICE_EVENT_TYPES = ['update', 'status_change', 'note', 'follow_up', 'promise', 'owner_change', 'contact', 'reminder_sent', 'payment_advice', 'payment_detected', 'auto_closed', 'auto_reopened', 'reconciliation_warning'];
+const BUYER_COLLECTION_RECONCILIATION_STATES = new Set(['not_checked', 'open', 'partial_payment', 'payment_pending_posting', 'advice_pending', 'advice_overdue', 'settled', 'reopened', 'balance_unavailable', 'manual_closure_mismatch']);
+const BUYER_COLLECTION_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
+const BUYER_COLLECTION_DOCUMENT_MAX_BYTES = 3 * 1024 * 1024;
 const DISPUTE_BETA_WORKFLOW_STATUSES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_BETA_APPROVAL_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Revision Requested'];
 const DISPUTE_BETA_EXECUTION_STATUSES = ['Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required'];
@@ -4216,7 +4867,7 @@ const DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 const DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS = new Set(['from_supplier', 'to_supplier', 'from_buyer', 'to_buyer']);
 const DISPUTE_BETA_CASE_SELECT = 'id,stem_id,stem_name,buyer_name,supplier_names,current_salesforce_status,workflow_status,approval_status,latest_note,submitted_by,submitted_by_email,submitted_at,approved_by,approved_by_email,approved_at,rejected_by,rejected_by_email,rejected_at,rejection_reason,closed_by,closed_by_email,closed_at,settlement_financials,settlement_pnl,salesforce_writeback_status,salesforce_writeback_error,created_at,updated_at';
 const DISPUTE_WORKFLOW_PARTY_SELECT = 'id,case_id,stem_id,account_id,account_key,account_name,roles,source_types,source_record_ids,payment_terms,products,cancelled_source_only,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
-const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_id,party_side,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
+const DISPUTE_BETA_ACTION_SELECT = 'id,case_id,stem_id,party_id,party_side,action_type,action_label,amount,special_sell_price,special_buy_price,quantity,quantity_unit,close_reason,balance_payment_instruction,description,requires_attachment,execution_status,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,accounting_by,accounting_by_email,accounting_at,executed_by,executed_by_email,executed_at,execution_note,linked_agreed_compensation_id,linked_compensation_snapshot,linked_compensation_by,linked_compensation_by_email,linked_compensation_at,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at';
 const DISPUTE_SUPPLIER_INSTRUCTION_SELECT = 'id,case_id,action_id,party_id,stem_id,instruction_type,recovery_method,source_supplier_invoice_id,source_supplier_invoice_name,source_stem_id,target_supplier_invoice_id,target_supplier_invoice_name,target_stem_id,currency_iso_code,planned_amount,allocated_amount,source_invoice_amount_snapshot,source_payable_balance_snapshot,source_paid_amount_snapshot,target_invoice_amount_snapshot,target_payable_amount_snapshot,source_invoice_snapshot,source_stem_snapshot,target_invoice_snapshot,target_stem_snapshot,payment_snapshot,allocation_fingerprint,status,matched_salesforce_payment_id,matching_payment_snapshot,instruction_reference,instruction_date,instruction_amount,settlement_reference,settlement_date,settlement_amount,accounting_note,revision,created_by,created_by_email,updated_by,updated_by_email,created_at,updated_at,acknowledged_by,acknowledged_by_email,acknowledged_at,settled_by,settled_by_email,settled_at';
 const DISPUTE_SUPPLIER_INSTRUCTION_STATUSES = new Set(['Provisional Hold', 'Hold Acknowledged', 'Pending Accounting', 'Instruction Issued', 'Settled', 'Not Required', 'Superseded']);
 const DISPUTE_BETA_EVENT_SELECT = 'id,case_id,action_id,stem_id,event_type,note,metadata,actor_user_id,actor_email,created_at';
@@ -5347,7 +5998,8 @@ function parseStringList(value, fallback = []) {
 
 function normalizeCollectionStatus(value) {
   const status = String(value || '').trim();
-  return BUYER_INVOICE_COLLECTION_STATUSES.includes(status) ? status : 'Not Started';
+  const migratedStatus = LEGACY_BUYER_INVOICE_COLLECTION_STATUSES[status] || status;
+  return BUYER_INVOICE_COLLECTION_STATUSES.includes(migratedStatus) ? migratedStatus : 'To Contact';
 }
 
 function dateOrNull(value) {
@@ -5381,13 +6033,26 @@ function serializeCollectionItem(row) {
   if (!row) return null;
   return {
     stemId: row.stem_id,
-    status: row.status || 'Not Started',
+    status: normalizeCollectionStatus(row.status),
     ownerUserId: row.owner_user_id || null,
     ownerName: row.owner_name || '',
     latestNote: row.latest_note || '',
     nextFollowUpDate: row.next_follow_up_date || null,
     promisedPaymentDate: row.promised_payment_date || null,
     promisedAmount: row.promised_amount == null ? null : Number(row.promised_amount),
+    onHoldReason: row.on_hold_reason || null,
+    onHoldReviewDate: row.on_hold_review_date || null,
+    adviceReceivedDate: row.advice_received_date || null,
+    adviceAmount: row.advice_amount == null ? null : Number(row.advice_amount),
+    adviceReference: row.advice_reference || null,
+    adviceVerificationDate: row.advice_verification_date || null,
+    adviceDocumentIds: Array.isArray(row.advice_document_ids) ? row.advice_document_ids : [],
+    reconciliationState: row.reconciliation_state || 'not_checked',
+    verifiedReceivableBalance: row.verified_receivable_balance == null ? null : Number(row.verified_receivable_balance),
+    latestPaymentSnapshot: row.latest_payment_snapshot || null,
+    previousActiveStatus: row.previous_active_status || null,
+    closureSource: row.closure_source || null,
+    lastReconciledAt: row.last_reconciled_at || null,
     lastEventAt: row.last_event_at || null,
     lastUpdatedBy: row.last_updated_by || null,
     lastUpdatedByEmail: row.last_updated_by_email || null,
@@ -5408,6 +6073,8 @@ function serializeCollectionEvent(row) {
     nextFollowUpDate: row.next_follow_up_date || null,
     promisedPaymentDate: row.promised_payment_date || null,
     promisedAmount: row.promised_amount == null ? null : Number(row.promised_amount),
+    eventKey: row.event_key || null,
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
     actorUserId: row.actor_user_id || null,
     actorEmail: row.actor_email || null,
     createdAt: row.created_at || null,
@@ -5422,10 +6089,10 @@ async function loadBuyerInvoiceCollectionMap(stemIds = []) {
 
   try {
     const [itemsRes, eventsRes] = await Promise.all([
-      client.from('buyer_invoice_collection_items').select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at').in('stem_id', ids),
+      client.from('buyer_invoice_collection_items').select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at').in('stem_id', ids),
       client
         .from('buyer_invoice_collection_events')
-        .select('id,stem_id,event_type,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,actor_user_id,actor_email,created_at')
+        .select('id,stem_id,event_type,event_key,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,metadata,actor_user_id,actor_email,created_at')
         .in('stem_id', ids)
         .order('created_at', { ascending: false })
         .limit(Math.max(100, Math.min(ids.length * 20, 2000))),
@@ -5465,6 +6132,50 @@ function normalizeCollectionUpdates(updates = {}, profile = {}) {
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'promisedAmount') || Object.prototype.hasOwnProperty.call(updates, 'promised_amount')) {
     normalized.promised_amount = decimalOrNull(updates.promisedAmount ?? updates.promised_amount);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'onHoldReason') || Object.prototype.hasOwnProperty.call(updates, 'on_hold_reason')) {
+    normalized.on_hold_reason = String(updates.onHoldReason ?? updates.on_hold_reason ?? '').trim() || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'onHoldReviewDate') || Object.prototype.hasOwnProperty.call(updates, 'on_hold_review_date')) {
+    normalized.on_hold_review_date = dateOrNull(updates.onHoldReviewDate ?? updates.on_hold_review_date);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'adviceReceivedDate') || Object.prototype.hasOwnProperty.call(updates, 'advice_received_date')) {
+    normalized.advice_received_date = dateOrNull(updates.adviceReceivedDate ?? updates.advice_received_date);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'adviceAmount') || Object.prototype.hasOwnProperty.call(updates, 'advice_amount')) {
+    normalized.advice_amount = decimalOrNull(updates.adviceAmount ?? updates.advice_amount);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'adviceReference') || Object.prototype.hasOwnProperty.call(updates, 'advice_reference')) {
+    normalized.advice_reference = String(updates.adviceReference ?? updates.advice_reference ?? '').trim() || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'adviceVerificationDate') || Object.prototype.hasOwnProperty.call(updates, 'advice_verification_date')) {
+    normalized.advice_verification_date = dateOrNull(updates.adviceVerificationDate ?? updates.advice_verification_date);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'adviceDocumentIds') || Object.prototype.hasOwnProperty.call(updates, 'advice_document_ids')) {
+    normalized.advice_document_ids = [...new Set((updates.adviceDocumentIds ?? updates.advice_document_ids ?? []).map((id) => String(id || '').trim()).filter(isSalesforceId))];
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'reconciliationState') || Object.prototype.hasOwnProperty.call(updates, 'reconciliation_state')) {
+    const state = String(updates.reconciliationState ?? updates.reconciliation_state ?? '').trim();
+    normalized.reconciliation_state = BUYER_COLLECTION_RECONCILIATION_STATES.has(state) ? state : 'not_checked';
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'verifiedReceivableBalance') || Object.prototype.hasOwnProperty.call(updates, 'verified_receivable_balance')) {
+    normalized.verified_receivable_balance = decimalOrNull(updates.verifiedReceivableBalance ?? updates.verified_receivable_balance);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'latestPaymentSnapshot') || Object.prototype.hasOwnProperty.call(updates, 'latest_payment_snapshot')) {
+    const snapshot = updates.latestPaymentSnapshot ?? updates.latest_payment_snapshot;
+    normalized.latest_payment_snapshot = snapshot && typeof snapshot === 'object' ? snapshot : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'previousActiveStatus') || Object.prototype.hasOwnProperty.call(updates, 'previous_active_status')) {
+    const previous = updates.previousActiveStatus ?? updates.previous_active_status;
+    normalized.previous_active_status = previous ? normalizeCollectionStatus(previous) : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'closureSource') || Object.prototype.hasOwnProperty.call(updates, 'closure_source')) {
+    const closureSource = String(updates.closureSource ?? updates.closure_source ?? '').trim();
+    normalized.closure_source = ['manual', 'system'].includes(closureSource) ? closureSource : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'lastReconciledAt') || Object.prototype.hasOwnProperty.call(updates, 'last_reconciled_at')) {
+    const timestamp = updates.lastReconciledAt ?? updates.last_reconciled_at;
+    normalized.last_reconciled_at = timestamp ? new Date(timestamp).toISOString() : null;
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'ownerUserId') || Object.prototype.hasOwnProperty.call(updates, 'owner_user_id')) {
     normalized.owner_user_id = updates.ownerUserId || updates.owner_user_id || null;
@@ -6808,6 +7519,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const fields = ['Id', 'Name'];
   for (const field of dueFields) fields.push(field);
   if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
+  if (fieldNames.includes('CurrencyIsoCode')) fields.push('CurrencyIsoCode');
   if (fieldNames.includes('Delivery_Date__c')) fields.push('Delivery_Date__c');
   if (fieldNames.includes('Delivery_Date_Or_Expected__c')) fields.push('Delivery_Date_Or_Expected__c');
   if (fieldNames.includes('Expected_Delivery_Date__c')) fields.push('Expected_Delivery_Date__c');
@@ -7043,6 +7755,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
         buyerGroupName: account.Group_Name__c || account.Parent?.Name || null,
         buyerName: stem.Buyer_Name__c || account.Name || stem.Buyer__c || null,
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
+        currency: stem.CurrencyIsoCode || 'USD',
         receivableBalance: stem.Receivable_Balance__c ?? null,
         buyerInvoiceDueDate: dueDate,
         deliveryDate: stem.Delivery_Date__c || null,
@@ -9049,6 +9762,7 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
       ),
   });
   const notificationMap = await loadIncomingPaymentInterestNotificationMap((snapshot.rows || []).map((row) => row.paymentId || row.id));
+  const collectionMap = await loadBuyerInvoiceCollectionMap((snapshot.rows || []).map((row) => row.stemId).filter(Boolean));
   return {
     ...snapshot,
     settings,
@@ -9056,6 +9770,8 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
       const notification = notificationMap[row.paymentId || row.id] || null;
       return {
         ...row,
+        collection: collectionMap[row.stemId]?.item || null,
+        collectionEvents: collectionMap[row.stemId]?.events || [],
         interestInvoiceNotification: notification,
         interestInvoiceNotificationSent: notification?.deliveryStatus === 'sent',
         interestInvoiceNotificationPending: ['sending', 'uncertain'].includes(notification?.deliveryStatus),
@@ -10746,16 +11462,22 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
 }
 
 async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) {
-  if (!accessContext) await requireActiveUser(req);
+  const activeAccess = accessContext || (await requireActiveUser(req));
+  const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : []).map((id) => String(id || '').trim()).filter(Boolean));
+  if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
+  await reconcileBuyerInvoiceCollections({
+    client: activeAccess.client,
+    profile: activeAccess.profile,
+    accessContext: activeAccess,
+    stemIds: [...selectedStemIds],
+  });
   const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(
     {
       ...body,
       forceLive: true,
     },
-    accessContext,
+    activeAccess,
   );
-  const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : []).map((id) => String(id || '').trim()).filter(Boolean));
-  if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
   const selection = evaluateBuyerReminderSelection(candidates, [...selectedStemIds]);
   if (selection.unknownStemIds.length) {
     throw appError('The selected invoice list is stale or does not belong to this buyer reminder. Reopen the preview and review the current invoices.', 409);
@@ -10838,8 +11560,8 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
 
     const note = [`Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`, `Subject: ${email.subject}`, `Routing: ${group.mode}`, `Included invoices: ${group.rows.length}`].join('\n');
     for (const row of group.rows) {
-      const currentStatus = row.collection?.status || 'Not Started';
-      const nextStatus = currentStatus === 'Not Started' ? 'Reminder Sent' : currentStatus;
+      const currentStatus = normalizeCollectionStatus(row.collection?.status);
+      const nextStatus = currentStatus === 'To Contact' ? 'Awaiting Buyer' : currentStatus;
       const ownerName = row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
       try {
         const collectionResult = await persistBuyerInvoiceCollection(
@@ -10852,7 +11574,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
               latestNote: note,
             },
             event: {
-              eventType: currentStatus === 'Not Started' ? 'status_change' : 'note',
+              eventType: 'reminder_sent',
               status: nextStatus,
               ownerName,
               note,
@@ -11912,6 +12634,11 @@ function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows =
     executedByEmail: row.executed_by_email || null,
     executedAt: row.executed_at || null,
     executionNote: row.execution_note || null,
+    linkedAgreedCompensationId: row.linked_agreed_compensation_id || null,
+    linkedCompensationSnapshot: row.linked_compensation_snapshot || {},
+    linkedCompensationBy: row.linked_compensation_by || null,
+    linkedCompensationByEmail: row.linked_compensation_by_email || null,
+    linkedCompensationAt: row.linked_compensation_at || null,
     createdBy: row.created_by || null,
     createdByEmail: row.created_by_email || null,
     updatedBy: row.updated_by || null,
@@ -12291,6 +13018,54 @@ async function loadDisputeWorkflowActions(client, caseId) {
     supplierInstructions: instructionRows.map(serializeDisputeSupplierInstruction),
     actions: (actionsResult.data || []).map((row) => serializeDisputeBetaAction(row, disputePartyRowMap(partyRows), instructionRows)),
   };
+}
+
+async function clearInvalidDisputeCompensationLinks(client, caseRow, profile) {
+  const workflow = await loadDisputeWorkflowActions(client, caseRow.id);
+  const partyMap = disputePartyRowMap(workflow.partyRows);
+  const invalid = workflow.actionRows.filter((action) => {
+    if (!action.linked_agreed_compensation_id) return false;
+    const party = partyMap.get(action.party_id);
+    const snapshotAccountId = action.linked_compensation_snapshot?.accountId;
+    return !['close_buyer_dispute', 'close_supplier_dispute'].includes(action.action_type)
+      || String(action.close_reason || '').trim().toLowerCase() !== 'uoc opened'
+      || !party?.account_id
+      || snapshotAccountId !== party.account_id;
+  });
+  for (const action of invalid) {
+    const now = new Date().toISOString();
+    const { error } = await client.from('dispute_beta_actions').update({
+      linked_agreed_compensation_id: null,
+      linked_compensation_snapshot: {},
+      linked_compensation_by: null,
+      linked_compensation_by_email: null,
+      linked_compensation_at: null,
+      updated_by: profile.id,
+      updated_by_email: profile.email,
+      updated_at: now,
+    }).eq('id', action.id);
+    if (error) throw error;
+    await writeDisputeBetaEvent(client, caseRow, 'compensation_claim_linked', profile, {
+      actionId: action.id,
+      note: 'Agreed Compensation claim link cleared because the dispute party or closure reason changed.',
+      metadata: { claimRemoved: true },
+    });
+  }
+}
+
+async function assertDisputeUocClaimsReadyForClosure(actions, partyRows) {
+  const partyMap = disputePartyRowMap(partyRows);
+  for (const action of actions.filter((row) => String(row.close_reason || '').trim().toLowerCase() === 'uoc opened')) {
+    const party = partyMap.get(action.party_id);
+    if (!action.linked_agreed_compensation_id) {
+      throw appError(`${party?.account_name || 'The dispute party'} requires a linked Agreed Compensation claim before final closure.`, 409);
+    }
+    const snapshot = action.linked_compensation_snapshot || {};
+    if (snapshot.linkedWhileOpen !== true || snapshot.accountId !== party?.account_id) {
+      throw appError(`${party?.account_name || 'The dispute party'} has an invalid compensation claim link. Remove it and select the correct open claim.`, 409);
+    }
+    await validateAgreedCompensationClaimLink(action.linked_agreed_compensation_id, party.account_id, { requireOpen: false });
+  }
 }
 
 function storedSupplierInvoiceAllocations(instructionRows = []) {
@@ -12727,6 +13502,7 @@ async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
   });
   if (saveError) throw saveError;
   const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
+  await clearInvalidDisputeCompensationLinks(client, updatedCase, profile);
   const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
   const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
   const statusPromise = recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Open - Trader Review');
@@ -13604,6 +14380,41 @@ async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
   );
 }
 
+async function disputeWorkflowCompensationClaims(body = {}, req, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const actionId = String(body.actionId || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actionId)) throw appError('Valid dispute action is required.', 400);
+  const { data: action, error } = await context.client
+    .from('dispute_beta_actions')
+    .select('id,case_id,stem_id,action_type,close_reason,party_id,updated_at,dispute_workflow_parties(account_id,account_name)')
+    .eq('id', actionId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!action) throw appError('Dispute action was not found.', 404);
+  await requireInterofficeStemAccess(action.stem_id, context);
+  if (!['close_buyer_dispute', 'close_supplier_dispute'].includes(action.action_type) || String(action.close_reason || '').trim().toLowerCase() !== 'uoc opened') {
+    throw appError('Compensation claims are available only for a UOC opened closure action.', 409);
+  }
+  const accountId = action.dispute_workflow_parties?.account_id;
+  const claims = await agreedCompensationClaimsForAccount(accountId, { includeClosed: false });
+  return {
+    actionId,
+    actionUpdatedAt: action.updated_at,
+    account: { accountId, accountName: action.dispute_workflow_parties?.account_name || '' },
+    claims,
+  };
+}
+
+async function disputeWorkflowCompensationClaimLink(body = {}, req, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const actionId = String(body.actionId || '').trim();
+  const { data: action, error } = await context.client.from('dispute_beta_actions').select('id,stem_id').eq('id', actionId).maybeSingle();
+  if (error) throw error;
+  if (!action) throw appError('Dispute action was not found.', 404);
+  await requireInterofficeStemAccess(action.stem_id, context);
+  return linkDisputeAgreedCompensationClaim(body, unofficialCompensationServiceContext(context));
+}
+
 async function disputeBetaClose(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required to close a dispute.');
@@ -13634,6 +14445,7 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   if (!(actions || []).length || !(actions || []).every((action) => action.execution_status === 'Settled' || action.execution_status === 'Not Required')) {
     throw appError('Every accounting action must be Settled or Not Required before closure.', 400);
   }
+  await assertDisputeUocClaimsReadyForClosure(actions, partyRows);
   const documents = await assertRequiredDisputeDocuments(client, actions || []);
   const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 'Closed', { required: true });
   const nowIso = new Date().toISOString();
@@ -14359,6 +15171,9 @@ const handlers = {
   workNotificationsRead,
   workNotificationsState,
   workCommitmentsList,
+  navigationPreferencesGet,
+  navigationPreferencesSave,
+  navigationPreferencesReset,
   growthReportingLinesList,
   growthReportingLineSave,
   growthCoachingBootstrap,
@@ -14399,6 +15214,12 @@ const handlers = {
   dashboardAiSettingsSave,
   salesforceStemDetail: salesforceStemDetailFull,
   salesforceStemDocuments,
+  unofficialCompensationList,
+  unofficialCompensationOptions,
+  unofficialCompensationClaimCreate,
+  unofficialCompensationClaimGroupStatus,
+  unofficialCompensationRecoveryCreate,
+  unofficialCompensationRecoveryDelete,
   exceptionReviewWorkflowList,
   exceptionReviewWorkflowSave,
   salesforceDescribeChildren,
@@ -14408,6 +15229,9 @@ const handlers = {
   buyerInvoiceCollectionList,
   buyerInvoiceCollectionSave,
   buyerInvoiceCollectionEventCreate,
+  buyerInvoicePaymentAdviceSave,
+  paymentCollectionsReconcile,
+  paymentCollectionsReconcileCron,
   buyerInvoiceEmailSettingsGet,
   buyerInvoiceEmailSettingsSave,
   buyerInvoiceReminderRulesList,
@@ -14449,6 +15273,8 @@ const handlers = {
   disputeWorkflowDocuments,
   disputeWorkflowMarkExecuted: disputeBetaMarkExecuted,
   disputeWorkflowClose: disputeBetaClose,
+  disputeWorkflowCompensationClaims,
+  disputeWorkflowCompensationClaimLink,
   stemPnl: stemPnlFull,
   frankfurterUsdCnyRate,
   reportExportCreate,

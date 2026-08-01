@@ -16,6 +16,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Upload,
   X,
 } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
@@ -48,7 +49,8 @@ import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/d
 const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
-const COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
+const COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
+const PAYMENT_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
 const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
@@ -164,6 +166,24 @@ function hongKongDateKey(value = new Date()) {
   }).formatToParts(date);
   const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+function nextHongKongBusinessDate(value = new Date()) {
+  const start = hongKongDateKey(value);
+  const date = new Date(`${start}T00:00:00.000Z`);
+  do {
+    date.setUTCDate(date.getUTCDate() + 1);
+  } while ([0, 6].includes(date.getUTCDay()));
+  return date.toISOString().slice(0, 10);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',').pop() || '');
+    reader.onerror = () => reject(reader.error || new Error('Unable to read the selected file.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 const fmtDate = (value) => {
@@ -535,7 +555,8 @@ function statusPill(status, daysUntilDue) {
 function collectionPill(status) {
   if (status === 'Escalated') return 'bg-red-50 text-red-700 border-red-200';
   if (status === 'Promise to Pay') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (status === 'Reminder Sent' || status === 'Awaiting Buyer Reply') return 'bg-blue-50 text-blue-700 border-blue-200';
+  if (status === 'Payment Advice Received') return 'bg-cyan-50 text-cyan-800 border-cyan-200';
+  if (status === 'Awaiting Buyer') return 'bg-blue-50 text-blue-700 border-blue-200';
   if (status === 'On Hold') return 'bg-amber-50 text-amber-700 border-amber-200';
   if (status === 'Paid / Closed') return 'bg-muted text-muted-foreground border-border';
   return 'bg-background text-foreground border-border';
@@ -702,7 +723,7 @@ function readInitialFilters() {
 }
 
 function collectionStatus(row) {
-  return row.collection?.status || 'Not Started';
+  return row.collection?.status || 'To Contact';
 }
 
 function defaultCollectionOwner(row) {
@@ -719,27 +740,44 @@ function isFollowUpDue(row, today) {
 }
 
 function isNeedsAction(row, today) {
-  return row.status === 'Overdue' || isFollowUpDue(row, today);
+  const collection = row.collection || {};
+  if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(collection.reconciliationState)) return true;
+  if (collectionStatus(row) === 'Payment Advice Received' && collection.adviceVerificationDate && collection.adviceVerificationDate <= today) return true;
+  if (collectionStatus(row) === 'Promise to Pay' && collection.promisedPaymentDate && collection.promisedPaymentDate <= today) return true;
+  if (isFollowUpDue(row, today)) return true;
+  const upcomingActionDate = nextHongKongBusinessDate(new Date(`${today}T04:00:00.000Z`));
+  if (collection.nextFollowUpDate && collection.nextFollowUpDate > today && collection.nextFollowUpDate <= upcomingActionDate) return true;
+  return ['Overdue', 'Due Today'].includes(row.status) && collectionStatus(row) === 'To Contact';
 }
 
 function uniqueNames(values) {
   return [...new Set(values.map((value) => textValue(value, '').trim()).filter(Boolean))];
 }
 
-function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
+function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOptions = [] }) {
   const draftKey = row?.stemId ? `buyer-invoices:collection:${row.stemId}` : null;
   const [form, setForm] = useState({
-    status: 'Not Started',
+    status: 'To Contact',
     ownerName: '',
     latestNote: '',
     nextFollowUpDate: '',
     promisedPaymentDate: '',
     promisedAmount: '',
+    onHoldReason: '',
+    onHoldReviewDate: '',
+    adviceReceivedDate: '',
+    adviceAmount: '',
+    adviceReference: '',
+    adviceVerificationDate: '',
+    activityType: 'status_change',
   });
+  const [adviceFile, setAdviceFile] = useState(null);
+  const [adviceDragActive, setAdviceDragActive] = useState(false);
   const [baseForm, setBaseForm] = useState(null);
   const [restoredAt, setRestoredAt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const ownerSelectRef = useRef(null);
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
   const ownerChoices = useMemo(() => uniqueNames([
     ...rowTraderOptions,
@@ -756,6 +794,13 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
       promisedAmount: row.collection?.promisedAmount ?? '',
+      onHoldReason: row.collection?.onHoldReason || '',
+      onHoldReviewDate: row.collection?.onHoldReviewDate || '',
+      adviceReceivedDate: row.collection?.adviceReceivedDate || '',
+      adviceAmount: row.collection?.adviceAmount ?? '',
+      adviceReference: row.collection?.adviceReference || '',
+      adviceVerificationDate: row.collection?.adviceVerificationDate || '',
+      activityType: 'status_change',
     };
     const draft = readDraft(draftKey);
     const nextForm = draft?.data && !sameDraftValue(draft.data, nextBase)
@@ -764,6 +809,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
     setBaseForm(nextBase);
     setForm(nextForm);
     setRestoredAt(draft?.data && !sameDraftValue(draft.data, nextBase) ? draft.updatedAt : null);
+    setAdviceFile(null);
     setError(null);
   }, [draftKey, ownerChoices, ownerOptions, row, rowTraderOptions]);
 
@@ -776,7 +822,18 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
 
   if (!open || !row) return null;
 
-  const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const update = (key, value) => setForm((prev) => {
+    const next = { ...prev, [key]: value };
+    if (key === 'status' && value === 'Payment Advice Received') {
+      next.adviceReceivedDate ||= hongKongDateKey();
+      next.adviceVerificationDate ||= nextHongKongBusinessDate();
+      next.nextFollowUpDate ||= next.adviceVerificationDate;
+      next.adviceAmount ||= row.receivableBalance == null ? '' : String(row.receivableBalance);
+    }
+    if (key === 'status' && value === 'Promise to Pay') next.promisedPaymentDate ||= next.nextFollowUpDate || nextHongKongBusinessDate();
+    if (key === 'status' && value === 'On Hold') next.onHoldReviewDate ||= nextHongKongBusinessDate();
+    return next;
+  });
   const discardDraft = () => {
     clearDraft(draftKey);
     if (baseForm) setForm(baseForm);
@@ -785,11 +842,46 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
   const save = async () => {
     setSaving(true);
     setError(null);
-    const res = await appClient.functions.invoke('buyerInvoiceCollectionSave', {
+    let functionName = 'buyerInvoiceCollectionSave';
+    let payload = {
       stemId: row.stemId,
       updates: form,
+      event: { eventType: form.activityType || 'status_change' },
       expectedUpdatedAt: row.collection?.updatedAt || null,
-    });
+    };
+    if (form.status === 'Payment Advice Received') {
+      if (!form.adviceReceivedDate || !(Number(form.adviceAmount) > 0) || !form.adviceVerificationDate) {
+        setError('Payment advice date, positive amount, and verification date are required.');
+        setSaving(false);
+        return;
+      }
+      if (!form.adviceReference.trim() && !adviceFile && !(row.collection?.adviceDocumentIds || []).length) {
+        setError('Enter the buyer reference or upload the payment advice document.');
+        setSaving(false);
+        return;
+      }
+      let base64 = null;
+      try {
+        base64 = adviceFile ? await fileToBase64(adviceFile) : null;
+      } catch (fileError) {
+        setError(fileError.message || 'Unable to read the payment advice document.');
+        setSaving(false);
+        return;
+      }
+      functionName = 'buyerInvoicePaymentAdviceSave';
+      payload = {
+        stemId: row.stemId,
+        adviceReceivedDate: form.adviceReceivedDate,
+        adviceAmount: Number(form.adviceAmount),
+        adviceReference: form.adviceReference,
+        adviceVerificationDate: form.adviceVerificationDate,
+        expectedUpdatedAt: row.collection?.updatedAt || null,
+        originalFileName: adviceFile?.name || null,
+        contentType: adviceFile?.type || null,
+        base64,
+      };
+    }
+    const res = await appClient.functions.invoke(functionName, payload);
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -818,22 +910,54 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
         <div className="grid max-h-[calc(90vh-76px)] gap-4 overflow-auto p-4 lg:grid-cols-[1fr_0.9fr]">
           <div className="space-y-4">
             <DraftNotice restoredAt={restoredAt} label="Collection draft restored" onDiscard={discardDraft} />
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={formDirty || row.paymentReminderEligible !== true} title={formDirty ? 'Save or discard the collection changes first.' : row.paymentReminderBlockingReason || 'Send payment reminder'} onClick={() => onSendReminder?.(row)}>
+                Send Reminder
+              </Button>
+              {[
+                ['Awaiting Buyer', 'Log Contact', 'contact'],
+                ['Promise to Pay', 'Record Promise', 'promise'],
+                ['Payment Advice Received', 'Record Payment Advice', 'payment_advice'],
+                ['Escalated', 'Escalate', 'status_change'],
+                ['On Hold', 'Put On Hold', 'status_change'],
+              ].map(([status, label, activityType]) => (
+                <Button
+                  key={status}
+                  type="button"
+                  size="sm"
+                  variant={form.status === status ? 'default' : 'outline'}
+                  disabled={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row))}
+                  title={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row)) ? 'Record contact or escalation before payment advice.' : undefined}
+                  onClick={() => setForm((current) => ({ ...current, status, activityType, ...(status === 'Payment Advice Received' ? { adviceReceivedDate: current.adviceReceivedDate || hongKongDateKey(), adviceVerificationDate: current.adviceVerificationDate || nextHongKongBusinessDate(), adviceAmount: current.adviceAmount || (row.receivableBalance == null ? '' : String(row.receivableBalance)) } : {}) }))}
+                >
+                  {label}
+                </Button>
+              ))}
+              <Button type="button" size="sm" variant="outline" onClick={() => { setForm((current) => ({ ...current, activityType: 'owner_change' })); ownerSelectRef.current?.focus(); }}>
+                Assign Handler
+              </Button>
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Collection Status</Label>
                 <select
                   value={form.status}
-                  onChange={(event) => update('status', event.target.value)}
+                  onChange={(event) => { update('status', event.target.value); update('activityType', 'status_change'); }}
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  {COLLECTION_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                  {COLLECTION_STATUSES.map((status) => (
+                    <option key={status} value={status} disabled={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row))}>
+                      {status}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Payment Handler</Label>
                 <select
+                  ref={ownerSelectRef}
                   value={form.ownerName}
-                  onChange={(event) => update('ownerName', event.target.value)}
+                  onChange={(event) => { update('ownerName', event.target.value); update('activityType', 'owner_change'); }}
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
                   {!ownerChoices.length && <option value="">No buyer trader assigned</option>}
@@ -858,6 +982,43 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                 <div><span className="font-semibold text-foreground">PSPRS:</span> {row.prpspStatus || '-'}</div>
               </div>
             </div>
+            {form.status === 'Promise to Pay' && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                Promise date and amount are required. A missed promise returns the case to Needs Action without changing its status automatically.
+              </div>
+            )}
+            {form.status === 'On Hold' && (
+              <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 md:grid-cols-2">
+                <div className="space-y-1.5"><Label>Hold reason</Label><Input value={form.onHoldReason} onChange={(event) => update('onHoldReason', event.target.value)} placeholder="Why collection activity is paused" /></div>
+                <div className="space-y-1.5"><Label>Review date</Label><Input type="date" value={form.onHoldReviewDate} onChange={(event) => update('onHoldReviewDate', event.target.value)} /></div>
+              </div>
+            )}
+            {form.status === 'Payment Advice Received' && (
+              <div className="space-y-3 rounded-lg border border-cyan-200 bg-cyan-50/60 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-cyan-950">Payment advice evidence</h3>
+                  <p className="mt-1 text-xs text-cyan-900">This pauses reminders until verification. Settlement still depends on the live Salesforce receivable balance.</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5"><Label>Advice received date</Label><Input type="date" value={form.adviceReceivedDate} onChange={(event) => update('adviceReceivedDate', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Advised amount ({row.currency || 'STEM currency'})</Label><Input type="number" min="0.01" step="0.01" value={form.adviceAmount} onChange={(event) => update('adviceAmount', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Buyer reference</Label><Input value={form.adviceReference} onChange={(event) => update('adviceReference', event.target.value)} placeholder="Reference from remittance advice" /></div>
+                  <div className="space-y-1.5"><Label>Verification date</Label><Input type="date" value={form.adviceVerificationDate} onChange={(event) => { update('adviceVerificationDate', event.target.value); update('nextFollowUpDate', event.target.value); }} /></div>
+                </div>
+                <label
+                  className={cn('flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center', adviceDragActive ? 'border-cyan-600 bg-cyan-100' : 'border-cyan-300 bg-white')}
+                  onDragEnter={(event) => { event.preventDefault(); setAdviceDragActive(true); }}
+                  onDragOver={(event) => { event.preventDefault(); setAdviceDragActive(true); }}
+                  onDragLeave={() => setAdviceDragActive(false)}
+                  onDrop={(event) => { event.preventDefault(); setAdviceDragActive(false); setAdviceFile(event.dataTransfer.files?.[0] || null); }}
+                >
+                  <Upload className="h-5 w-5 text-cyan-800" />
+                  <span className="max-w-full truncate text-sm font-medium">{adviceFile?.name || 'Drop payment advice here or choose a file'}</span>
+                  <span className="text-xs text-muted-foreground">Optional when a buyer reference is entered · Maximum 3 MB</span>
+                  <input type="file" className="sr-only" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.msg" onChange={(event) => setAdviceFile(event.target.files?.[0] || null)} />
+                </label>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Latest Note</Label>
               <Textarea value={form.latestNote} onChange={(event) => update('latestNote', event.target.value)} className="min-h-32" placeholder="Add the latest follow-up note..." />
@@ -892,6 +1053,12 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                         {event.nextFollowUpDate && <span>Next follow-up: {fmtDate(event.nextFollowUpDate)}</span>}
                         {event.promisedPaymentDate && <span>Promise date: {fmtDate(event.promisedPaymentDate)}</span>}
                         {event.promisedAmount != null && <span>Promise amount: {fmtMoney(event.promisedAmount)}</span>}
+                        {event.metadata?.adviceReceivedDate && <span>Advice received: {fmtDate(event.metadata.adviceReceivedDate)}</span>}
+                        {event.metadata?.adviceAmount != null && <span>Advised amount: {event.metadata.currency || row.currency || ''} {Number(event.metadata.adviceAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                        {event.metadata?.adviceVerificationDate && <span>Verify by: {fmtDate(event.metadata.adviceVerificationDate)}</span>}
+                        {event.metadata?.onHoldReason && <span>Hold reason: {event.metadata.onHoldReason}</span>}
+                        {event.metadata?.onHoldReviewDate && <span>Review hold: {fmtDate(event.metadata.onHoldReviewDate)}</span>}
+                        {event.metadata?.document?.downloadUrl && <a href={event.metadata.document.downloadUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</a>}
                         {event.actorEmail && <span>Updated by: {event.actorEmail}</span>}
                       </div>
                     </div>
@@ -2154,7 +2321,7 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
   );
 }
 
-export default function BuyerInvoices() {
+export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [] }) {
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => hongKongDateKey(), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
@@ -2185,11 +2352,12 @@ export default function BuyerInvoices() {
   const [invoiceKeyword, setInvoiceKeyword] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [followUpFilter, setFollowUpFilter] = useState('all');
-  const [actionOnly, setActionOnly] = useState(false);
+  const [queueView, setQueueView] = useState(defaultQueueView);
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
   const initialBuyerTraderFilter = useRef(initialFilters);
   const internalEmailEditorRef = useRef(null);
+  const deepLinkedCollectionOpened = useRef(false);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
   useDraftAutosave('buyer-invoices:email-settings', emailSettings, {
@@ -2198,13 +2366,34 @@ export default function BuyerInvoices() {
     message: 'Autosaved internal email reminder/template draft. Save or discard it before leaving.',
   });
 
+  const reconciliationByStem = useMemo(() => new Map(
+    reconciliationItems
+      .filter((entry) => entry?.item?.stemId)
+      .map((entry) => [entry.item.stemId, entry]),
+  ), [reconciliationItems]);
+  const collectionRows = useMemo(() => rows.map((row) => {
+    const live = reconciliationByStem.get(row.stemId);
+    if (!live) return row;
+    return {
+      ...row,
+      buyerName: live.buyerName || row.buyerName,
+      buyerGroupName: live.buyerGroupName || row.buyerGroupName,
+      buyerInvoiceDueDate: live.buyerInvoiceDueDate || row.buyerInvoiceDueDate,
+      currency: live.currency || row.currency,
+      receivableBalance: live.item.verifiedReceivableBalance ?? row.receivableBalance,
+      collection: live.item,
+      latestPayment: live.latestPayment || live.item.latestPaymentSnapshot || row.latestPayment || null,
+      collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
+    };
+  }), [reconciliationByStem, rows]);
+
   const buyerTraderOptions = useMemo(() => (
-    [...new Set(rows.flatMap((row) => [
+    [...new Set(collectionRows.flatMap((row) => [
       ...splitBuyerTraderNames(row.buyerTraderInCharge),
       collectionOwner(row),
     ].filter(Boolean)))]
       .sort((a, b) => a.localeCompare(b))
-  ), [rows]);
+  ), [collectionRows]);
 
   useEffect(() => {
     if (!buyerTraderOptions.length) {
@@ -2227,8 +2416,30 @@ export default function BuyerInvoices() {
     });
   }, [buyerTraderOptions]);
 
+  const closedRows = useMemo(() => reconciliationItems
+    .filter((entry) => entry?.item?.status === 'Paid / Closed')
+    .map((entry) => ({
+      id: entry.item.stemId,
+      stemId: entry.item.stemId,
+      stemName: entry.stemName || entry.item.stemId,
+      buyerName: entry.buyerName || null,
+      buyerGroupName: entry.buyerGroupName || null,
+      currency: entry.currency || entry.latestPayment?.currency || 'USD',
+      receivableBalance: entry.item.verifiedReceivableBalance,
+      invoiceAmount: null,
+      buyerInvoiceDueDate: entry.buyerInvoiceDueDate || null,
+      buyerTraderInCharge: null,
+      collection: entry.item,
+      collectionEvents: entry.event ? [entry.event] : [],
+      latestPayment: entry.latestPayment || entry.item.latestPaymentSnapshot || null,
+      status: 'Settled',
+      daysUntilDue: null,
+      paymentReminderEligible: false,
+      paymentReminderBlockingReason: 'This collection is closed because Salesforce confirms the buyer balance is settled.',
+    })), [reconciliationItems]);
+
   const filteredRows = useMemo(() => {
-    let next = rows;
+    let next = queueView === 'closed' ? closedRows : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
     if (invoiceKeyword.trim()) {
       next = next.filter((row) => matchesInvoiceKeyword(row, invoiceKeyword));
     }
@@ -2252,9 +2463,22 @@ export default function BuyerInvoices() {
     }
     if (followUpFilter === 'due') next = next.filter((row) => isFollowUpDue(row, today));
     if (followUpFilter === 'scheduled') next = next.filter((row) => Boolean(row.collection?.nextFollowUpDate));
-    if (actionOnly) next = next.filter((row) => isNeedsAction(row, today));
+    if (queueView === 'needs-action') next = next.filter((row) => isNeedsAction(row, today));
+    if (queueView === 'needs-action') {
+      next = [...next].sort((a, b) => {
+        const priority = (row) => {
+          if (['manual_closure_mismatch', 'balance_unavailable', 'payment_pending_posting', 'reopened'].includes(row.collection?.reconciliationState)) return 0;
+          if (row.collection?.reconciliationState === 'advice_overdue') return 1;
+          if (collectionStatus(row) === 'Promise to Pay' && row.collection?.promisedPaymentDate && row.collection.promisedPaymentDate <= today) return 2;
+          if (isFollowUpDue(row, today)) return 3;
+          if (row.status === 'Overdue' && collectionStatus(row) === 'To Contact') return 4;
+          return 5;
+        };
+        return priority(a) - priority(b) || Number(a.daysUntilDue || 0) - Number(b.daysUntilDue || 0) || Number(b.receivableBalance || 0) - Number(a.receivableBalance || 0);
+      });
+    }
     return next;
-  }, [actionOnly, buyerTraderOptions, followUpFilter, invoiceKeyword, rows, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+  }, [buyerTraderOptions, closedRows, collectionRows, followUpFilter, invoiceKeyword, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
 
   const loadRows = async (options = {}) => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
@@ -2296,6 +2520,25 @@ export default function BuyerInvoices() {
     loadRows();
     loadEmailSettings();
   }, []);
+
+  useEffect(() => {
+    if (deepLinkedCollectionOpened.current || (!collectionRows.length && !reconciliationItems.length)) return;
+    const stemId = new URLSearchParams(window.location.search).get('collectionStemId');
+    if (!stemId) return;
+    const closedEntry = reconciliationItems.find((entry) => entry?.item?.stemId === stemId);
+    const row = collectionRows.find((item) => item.stemId === stemId) || (closedEntry ? {
+      id: stemId,
+      stemId,
+      stemName: closedEntry.stemName || stemId,
+      currency: closedEntry.latestPayment?.currency || 'USD',
+      receivableBalance: closedEntry.item.verifiedReceivableBalance,
+      collection: closedEntry.item,
+      collectionEvents: closedEntry.event ? [closedEntry.event] : [],
+    } : null);
+    if (!row) return;
+    deepLinkedCollectionOpened.current = true;
+    setSelectedCollectionRow(row);
+  }, [collectionRows, reconciliationItems]);
 
   const totals = useMemo(() => {
     const overdue = filteredRows.filter((row) => row.status === 'Overdue');
@@ -2484,17 +2727,17 @@ export default function BuyerInvoices() {
     <div className="p-6 lg:p-8 space-y-6">
       <PageHeader
         icon={ReceiptText}
-        eyebrow="Buyer invoice follow-up"
-        title="Outstanding Buyer Invoices"
-        description="Manage overdue buyer invoices, due invoices, and AR collection follow-up."
-        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} invoices` : undefined}
+        eyebrow="Accounts receivable follow-up"
+        title="Payment Collections"
+        description="Prioritize buyer follow-up, promises, payment advice, and settlement using the live Salesforce receivable balance."
+        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${collectionRows.length.toLocaleString()} invoices` : undefined}
         actions={(
           <>
             <Button variant="outline" onClick={() => setShowReminderRules(true)} className="gap-2 w-fit">
               <ShieldCheck className="h-4 w-4" /> Reminder Rules
             </Button>
-            <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
-              <Mail className="h-4 w-4" /> Outstanding Buyer Invoices - Internal Daily Report
+            <Button variant="outline" onClick={toggleEmailSchedule} className="h-auto max-w-full gap-2 whitespace-normal text-left" title="Outstanding Buyer Invoices - Internal Daily Report">
+              <Mail className="h-4 w-4 shrink-0" /> Internal Daily Report
             </Button>
             <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -2506,7 +2749,7 @@ export default function BuyerInvoices() {
       {meta?.paymentReminderRulesAvailable === false && (
         <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          Buyer Invoice reminder rules are temporarily unavailable. Invoice data remains available, but external payment reminder sending is disabled.
+          Payment Collection reminder rules are temporarily unavailable. Receivable data remains available, but external payment reminder sending is disabled.
         </div>
       )}
 
@@ -2551,10 +2794,15 @@ export default function BuyerInvoices() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
             Apply
           </Button>
-          <Button variant={actionOnly ? 'default' : 'outline'} onClick={() => setActionOnly((value) => !value)} className="gap-2">
-            <MessageSquareText className="h-4 w-4" />
-            Needs Action Today
-          </Button>
+          <div className="flex rounded-md border border-input bg-background p-0.5">
+            {[
+              ['needs-action', 'Needs Action'],
+              ['all', 'All Open'],
+              ['closed', 'Closed'],
+            ].map(([value, label]) => (
+              <Button key={value} type="button" size="sm" variant={queueView === value ? 'default' : 'ghost'} className="h-8" onClick={() => setQueueView(value)}>{label}</Button>
+            ))}
+          </div>
           <p className="pb-2 text-xs text-muted-foreground">Overdue invoices are always included.</p>
         </div>
 
@@ -2841,7 +3089,7 @@ export default function BuyerInvoices() {
       )}
 
       {!loading && !error && (
-        <TableShell title="Buyer Invoice Due List" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
+        <TableShell title={queueView === 'needs-action' ? 'Needs Action' : queueView === 'closed' ? 'Closed Collections' : 'Open Collections'} meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
           {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
               <table className="w-full min-w-[1680px] text-sm">
@@ -2857,6 +3105,7 @@ export default function BuyerInvoices() {
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">PSPRS</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Collection Handler</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
+                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Evidence</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
                     <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
@@ -2907,6 +3156,18 @@ export default function BuyerInvoices() {
                         <div className={isFollowUpDue(row, today) ? 'font-semibold text-amber-800' : ''}>
                           {fmtDate(row.collection?.nextFollowUpDate)}
                         </div>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {row.collection?.adviceReceivedDate ? (
+                          <div><span className="font-medium text-cyan-800">Advice {fmtDate(row.collection.adviceReceivedDate)}</span><div>{row.currency || ''} {Number(row.collection.adviceAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+                        ) : row.collection?.latestPaymentSnapshot || row.latestPayment ? (
+                          <div>
+                            <span className={row.collection?.reconciliationState === 'payment_pending_posting' ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
+                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : 'Payment detected'}
+                            </span>
+                            <div>{fmtDate((row.collection?.latestPaymentSnapshot || row.latestPayment)?.paymentDate)}</div>
+                          </div>
+                        ) : '-'}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`}>
@@ -3007,6 +3268,10 @@ export default function BuyerInvoices() {
         open={!!selectedCollectionRow}
         onClose={() => setSelectedCollectionRow(null)}
         onSaved={mergeCollectionResult}
+        onSendReminder={(row) => {
+          setSelectedCollectionRow(null);
+          setSelectedReminderRow(row);
+        }}
         ownerOptions={buyerTraderOptions}
       />
       <PaymentReminderModal
