@@ -398,6 +398,7 @@ export default function GrowthCoaching() {
     [goals],
   );
   const hasPrimaryManager = Boolean(data.primaryManager || data.primaryManagerId || data.reportingLine?.primaryManagerId);
+  const selfManagedGoals = data.capabilities?.goalApprovalMode === 'self_managed';
   const milestonesWeight = useMemo(() => goalDraft.milestones.reduce((total, item) => total + numeric(item.weight), 0), [goalDraft.milestones]);
   const goalQuality = useMemo(() => goalQualityChecks(goalDraft), [goalDraft]);
   const visibleDirectReports = useMemo(
@@ -549,14 +550,14 @@ export default function GrowthCoaching() {
   };
 
   const submitGoal = async (goal) => {
-    if (!hasPrimaryManager) {
+    if (!hasPrimaryManager && !selfManagedGoals) {
       toast({
         variant: 'destructive',
         title: 'A primary manager is required before a goal can be submitted.',
       });
       return;
     }
-    await invoke('growthGoalSubmit', { goalId: goal.id, expectedRevision: numeric(goal.revision) }, 'Goal submitted for manager approval', `goal-submit-${goal.id}`);
+    await invoke('growthGoalSubmit', { goalId: goal.id, expectedRevision: numeric(goal.revision) }, selfManagedGoals ? 'Goal activated' : 'Goal submitted for manager approval', `goal-submit-${goal.id}`);
   };
 
   const decideGoal = async (decision) => {
@@ -606,6 +607,14 @@ export default function GrowthCoaching() {
   const completeGoal = async (outcome) => {
     const target = goalActionOpen?.goal;
     if (!target) return;
+    if (target.permissions?.selfManaged && outcome === 'complete' && !(goalActionOpen.evidence || '').trim()) {
+      toast({ variant: 'destructive', title: 'Final evidence is required to complete this goal.' });
+      return;
+    }
+    if (target.permissions?.selfManaged && outcome === 'not_achieved' && !(goalActionOpen.note || '').trim()) {
+      toast({ variant: 'destructive', title: 'A decision note is required to mark this goal not achieved.' });
+      return;
+    }
     const result = await invoke(
       'growthGoalCompletion',
       {
@@ -978,7 +987,7 @@ export default function GrowthCoaching() {
           }
         />
 
-        {!hasPrimaryManager && (
+        {!hasPrimaryManager && !selfManagedGoals && (
           <Alert className="border-amber-200 bg-amber-50 text-amber-900">
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>Primary manager not configured</AlertTitle>
@@ -1399,6 +1408,7 @@ function GoalRow({ goal, plan, onEdit, onSubmit, onProgress, onCompletion, onDec
   const latestUpdate = [...updates].sort((left, right) => String(right.submittedAt || '').localeCompare(String(left.submittedAt || '')))[0];
   const isOwner = (goal.ownerId || goal.employeeId) === currentUserId;
   const canApprove = goal.permissions?.canApprove === true;
+  const canEdit = isOwner && (['Draft', 'Revision Requested'].includes(state) || (goal.permissions?.selfManaged && state === 'Active'));
   const riskState = String(latestUpdate?.state || '').toLowerCase();
   return (
     <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
@@ -1414,7 +1424,7 @@ function GoalRow({ goal, plan, onEdit, onSubmit, onProgress, onCompletion, onDec
           {goal.description && <p className="mt-2 max-w-3xl text-sm text-muted-foreground">{goal.description}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
-          {isOwner && ['Draft', 'Revision Requested'].includes(state) && (
+          {canEdit && (
             <Button type="button" size="sm" variant="outline" onClick={onEdit}>
               <Pencil className="mr-1.5 h-3.5 w-3.5" />
               Edit
@@ -1423,7 +1433,7 @@ function GoalRow({ goal, plan, onEdit, onSubmit, onProgress, onCompletion, onDec
           {isOwner && ['Draft', 'Revision Requested'].includes(state) && (
             <Button type="button" size="sm" onClick={onSubmit} disabled={busy === `goal-submit-${goal.id}`}>
               <Send className="mr-1.5 h-3.5 w-3.5" />
-              Submit
+              {goal.permissions?.selfManaged ? 'Activate' : 'Submit'}
             </Button>
           )}
           {canApprove && state === 'Pending Approval' && (
@@ -1482,7 +1492,7 @@ function GoalRow({ goal, plan, onEdit, onSubmit, onProgress, onCompletion, onDec
               </div>
             ))}
           </GoalHistorySection>
-          <GoalHistorySection title="Manager decisions">
+          <GoalHistorySection title="Goal decisions">
             {decisions.map((decision) => (
               <div key={decision.id} className="rounded-md border border-border px-3 py-2">
                 <div className="flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
@@ -2526,7 +2536,7 @@ function GoalActionDialog({ state, setState, onDecision, onProgress, onCompletio
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && setState(null)}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{state.type === 'decision' ? 'Review goal' : state.type === 'progress' ? 'Record progress' : state.type === 'manager_comment' ? 'Manager comment' : 'Completion review'}</DialogTitle>
+          <DialogTitle>{state.type === 'decision' ? 'Review goal' : state.type === 'progress' ? 'Record progress' : state.type === 'manager_comment' ? 'Manager comment' : goal.permissions?.selfManaged ? 'Record goal outcome' : 'Completion review'}</DialogTitle>
           <DialogDescription>{goal.title}</DialogDescription>
         </DialogHeader>
         {state.type === 'decision' && (
@@ -2649,7 +2659,7 @@ function GoalActionDialog({ state, setState, onDecision, onProgress, onCompletio
         {['completion', 'completion_manager'].includes(state.type) && (
           <div className="space-y-3">
             <div>
-              <Label>Final evidence</Label>
+              <Label>Final evidence{goal.permissions?.selfManaged ? ' (required to complete)' : ''}</Label>
               <Textarea
                 rows={4}
                 value={state.evidence}
@@ -2664,7 +2674,7 @@ function GoalActionDialog({ state, setState, onDecision, onProgress, onCompletio
               />
             </div>
             <div>
-              <Label>{state.type === 'completion_manager' ? 'Decision note' : 'Note or cancellation reason'}</Label>
+              <Label>{state.type === 'completion_manager' ? 'Decision note' : goal.permissions?.selfManaged ? 'Decision note (required when not achieved)' : 'Note or cancellation reason'}</Label>
               <Textarea
                 rows={3}
                 value={state.note}
@@ -2707,6 +2717,15 @@ function GoalActionDialog({ state, setState, onDecision, onProgress, onCompletio
                 </Button>
               </>
             )
+          ) : goal.permissions?.selfManaged ? (
+            <>
+              <Button type="button" variant="outline" onClick={() => onCompletion('not_achieved')} disabled={busy === `goal-completion-${goal.id}`}>
+                Mark not achieved
+              </Button>
+              <Button type="button" onClick={() => onCompletion('complete')} disabled={busy === `goal-completion-${goal.id}`}>
+                Complete goal
+              </Button>
+            </>
           ) : (
             <>
               <Button type="button" variant="outline" onClick={() => onCompletion('request_cancellation')} disabled={busy === `goal-completion-${goal.id}`}>
@@ -2901,11 +2920,11 @@ function MethodologyDialog({ open, onOpenChange }) {
         <div className="space-y-5 text-sm">
           <section>
             <h3 className="font-semibold">Formal development goals</h3>
-            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision. The quality check guides authors toward specific outcomes, valid measures, and useful checkpoints before submission.</p>
+            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. The active UUID-backed General Manager is the reporting hierarchy root, needs no manager assignment, and activates their own goals without a self-notification. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision.</p>
           </section>
           <section>
             <h3 className="font-semibold">Progress and completion</h3>
-            <p className="mt-1 text-muted-foreground">Employees submit evidence and on-track signals. Managers comment and decide approval or completion. Missed checkpoints and deadlines remain visible as overdue, while plans can contain several concurrent goals. Manager review filters separate pending decisions, at-risk work, and goals without a recent update. Completed Projects & Tasks records may be linked as private goal evidence. Ended plans are explicitly closed or carried forward.</p>
+            <p className="mt-1 text-muted-foreground">Employees submit evidence and on-track signals. Managers comment and decide approval or completion. The General Manager records self-managed completion with final evidence or marks a goal not achieved with a note. Missed checkpoints and deadlines remain visible as overdue, while plans can contain several concurrent goals. Completed Projects & Tasks records may be linked as private goal evidence. Ended plans are explicitly closed or carried forward.</p>
           </section>
           <section>
             <h3 className="font-semibold">Equal-participant coaching</h3>

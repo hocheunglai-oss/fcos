@@ -29,16 +29,16 @@ function lineUserId(line) {
   return line.userId || line.employeeId || line.user_id;
 }
 
-function lineDraft(line) {
+function lineDraft(line, { clearReportingRoot = false } = {}) {
   return {
-    primaryManagerId: line.primaryManagerId || line.primary_manager_id || NONE,
-    secondaryManagerId: line.secondaryManagerId || line.secondary_manager_id || NONE,
+    primaryManagerId: clearReportingRoot && line.isGeneralManager ? NONE : line.primaryManagerId || line.primary_manager_id || NONE,
+    secondaryManagerId: clearReportingRoot && line.isGeneralManager ? NONE : line.secondaryManagerId || line.secondary_manager_id || NONE,
     expectedRevision: Number(line.revision || 0),
   };
 }
 
 function draftsForLines(lines) {
-  return Object.fromEntries(lines.map((line) => [lineUserId(line), lineDraft(line)]).filter(([userId]) => Boolean(userId)));
+  return Object.fromEntries(lines.map((line) => [lineUserId(line), lineDraft(line, { clearReportingRoot: true })]).filter(([userId]) => Boolean(userId)));
 }
 
 /**
@@ -58,7 +58,7 @@ export default function ReportingLinesPanel() {
   const usersById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
   const lines = useMemo(() => normalizedPayload(data), [data]);
   const issues = useMemo(() => data?.issues || data?.validationIssues || [], [data]);
-  const gaps = useMemo(() => data?.setupGaps || data?.gaps || lines.filter((line) => !line.primaryManagerId && !line.primary_manager_id), [data, lines]);
+  const gaps = useMemo(() => data?.setupGaps || data?.gaps || lines.filter((line) => line.managerAssignmentRequired !== false && !line.primaryManagerId && !line.primary_manager_id), [data, lines]);
   const changedLines = useMemo(() => lines.filter((line) => {
     const userId = lineUserId(line);
     const draft = drafts[userId];
@@ -71,6 +71,7 @@ export default function ReportingLinesPanel() {
   const changedIds = useMemo(() => new Set(changedLines.map(lineUserId)), [changedLines]);
   const hasChanges = changedLines.length > 0;
   const hasInvalidChanges = changedLines.some((line) => {
+    if (line.isGeneralManager) return false;
     const userId = lineUserId(line);
     const draft = drafts[userId];
     return !draft
@@ -143,7 +144,7 @@ export default function ReportingLinesPanel() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold">Reporting Lines</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Primary managers approve development goals. Advisory Managers can read goals but cannot comment, approve, or complete them.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Primary managers approve development goals. Advisory Managers have read-only visibility. The active General Manager is the reporting root and needs neither assignment.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           {hasChanges && (
@@ -194,29 +195,43 @@ export default function ReportingLinesPanel() {
               const userId = lineUserId(line);
               const employee = line.user || line.employee || usersById.get(userId) || { id: userId, fullName: line.userName || line.employeeName };
               const draft = drafts[userId] || lineDraft(line);
+              const isGeneralManager = line.isGeneralManager === true;
               const optionUsers = users.filter((user) => user.id !== userId && user.active !== false);
               const invalid = draft.primaryManagerId !== NONE && draft.primaryManagerId === draft.secondaryManagerId;
               return (
                 <TableRow key={userId} className={changedIds.has(userId) ? 'bg-blue-50/60' : undefined}>
                   <TableCell>
-                    <div className="font-medium">{userName(employee)}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-medium">{userName(employee)}</div>
+                      {isGeneralManager && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">General Manager · Reporting root</Badge>}
+                    </div>
                     {employee.email && <div className="text-xs text-muted-foreground">{employee.email}</div>}
                   </TableCell>
                   <TableCell>
-                    <Select value={draft.primaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'primaryManagerId', value)} disabled={saving}>
-                      <SelectTrigger className="w-full"><SelectValue placeholder="No primary manager" /></SelectTrigger>
-                      <SelectContent><SelectItem value={NONE}>No primary manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
-                    </Select>
+                    {isGeneralManager ? (
+                      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Not required</div>
+                    ) : (
+                      <Select value={draft.primaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'primaryManagerId', value)} disabled={saving}>
+                        <SelectTrigger className="w-full"><SelectValue placeholder="No primary manager" /></SelectTrigger>
+                        <SelectContent><SelectItem value={NONE}>No primary manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
+                      </Select>
+                    )}
                   </TableCell>
                   <TableCell>
-                    <Select value={draft.secondaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'secondaryManagerId', value)} disabled={saving}>
-                      <SelectTrigger className="w-full"><SelectValue placeholder="No Advisory Manager" /></SelectTrigger>
-                      <SelectContent><SelectItem value={NONE}>No Advisory Manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
-                    </Select>
-                    {invalid && <p className="mt-1 text-xs text-destructive">Choose two different managers.</p>}
+                    {isGeneralManager ? (
+                      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Not required</div>
+                    ) : (
+                      <>
+                        <Select value={draft.secondaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'secondaryManagerId', value)} disabled={saving}>
+                          <SelectTrigger className="w-full"><SelectValue placeholder="No Advisory Manager" /></SelectTrigger>
+                          <SelectContent><SelectItem value={NONE}>No Advisory Manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
+                        </Select>
+                        {invalid && <p className="mt-1 text-xs text-destructive">Choose two different managers.</p>}
+                      </>
+                    )}
                   </TableCell>
                   <TableCell>
-                    {line.valid === false || line.hierarchyValid === false ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">Invalid</Badge> : <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700"><CheckCircle2 className="mr-1 h-3 w-3" />Valid</Badge>}
+                    {isGeneralManager ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Reporting root</Badge> : line.valid === false || line.hierarchyValid === false ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">Invalid</Badge> : <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700"><CheckCircle2 className="mr-1 h-3 w-3" />Valid</Badge>}
                     {(line.path || line.hierarchyPath) && <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><GitBranch className="h-3 w-3" />{line.path || line.hierarchyPath}</div>}
                   </TableCell>
                   <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{draft.expectedRevision}</span>{changedIds.has(userId) && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Unsaved</Badge>}</div></TableCell>
@@ -227,7 +242,7 @@ export default function ReportingLinesPanel() {
           </TableBody>
         </Table>
       </div>
-      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Save changes validates every edited row and the resulting hierarchy together. A concurrent change or reporting cycle rejects the entire batch, so no partial manager assignments are saved.</p></div>
+      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Save changes validates every edited row and the resulting hierarchy together. The UUID-backed General Manager remains the manager-free reporting root and can still be selected as a manager for other employees. A concurrent change or reporting cycle rejects the entire batch.</p></div>
     </div>
   );
 }

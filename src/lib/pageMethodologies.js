@@ -336,7 +336,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Reporting lines and authority',
-        body: 'Growth & Coaching reporting assignments are maintained explicitly and reject self-management, duplicates, inactive managers, and primary-manager cycles. Other operational roles retain their own separate authority rules.',
+        body: 'Growth & Coaching reporting assignments are maintained explicitly and reject self-management, duplicates, inactive managers, and primary-manager cycles. The one active UUID-backed General Manager is the hierarchy root, requires neither a Primary nor Advisory Manager, and self-manages formal goals while remaining available to manage other employees.',
       },
       {
         title: 'Administrative safeguards',

@@ -40,6 +40,7 @@ function dateOnly(value) {
 
 function rpcError(error, fallback = "Growth & Coaching storage request failed.") {
   const message = String(error?.message || fallback);
+  if (/General Manager role validation failed/i.test(message)) return appError(message, 503);
   if (/changed after it was opened/i.test(message)) return appError(message, 409);
   if (/not found|unavailable/i.test(message)) return appError(message, 404);
   if (/required|cannot|must|only|active FCOS|valid|cycle|different/i.test(message)) {
@@ -114,6 +115,16 @@ async function reportingAssignments(client) {
   const { data, error } = await client.from("growth_reporting_assignments").select("*");
   if (error) throw rpcError(error);
   return data || [];
+}
+
+async function activeGeneralManagerId(client) {
+  const { data, error } = await client.rpc("growth_active_general_manager_id");
+  if (error) throw rpcError(error);
+  const generalManagerId = id(data);
+  if (!generalManagerId) {
+    throw appError("General Manager role validation failed. Exactly one active UUID-backed General Manager is required.", 503);
+  }
+  return generalManagerId;
 }
 
 function visibleEmployeeIds(assignments, viewerId) {
@@ -504,7 +515,11 @@ function serializeGoal(goal, version, checkpoints, permissions, updates = [], de
 
 export async function growthReportingLinesList(body = {}, accessContext) {
   const { client } = accessContext;
-  const [users, assignments] = await Promise.all([activeUsers(client), reportingAssignments(client)]);
+  const [users, assignments, generalManagerId] = await Promise.all([
+    activeUsers(client),
+    reportingAssignments(client),
+    activeGeneralManagerId(client),
+  ]);
   const byId = new Map(users.map((row) => [row.id, row]));
   const validation = validateReportingLines({
     assignments: assignments.map((row) => ({
@@ -515,8 +530,13 @@ export async function growthReportingLinesList(body = {}, accessContext) {
     activeUserIds: users.map((row) => row.id),
   });
   const byEmployee = new Map(assignments.map((row) => [row.employee_id, row]));
+  const rootIssues = [];
   const lines = users.map((user) => {
     const row = byEmployee.get(user.id);
+    const isGeneralManager = user.id === generalManagerId;
+    if (isGeneralManager && (row?.primary_manager_id || row?.secondary_manager_id)) {
+      rootIssues.push("The General Manager has an obsolete reporting assignment. Save changes to clear it.");
+    }
     const path = [];
     let current = row?.primary_manager_id;
     const seen = new Set();
@@ -530,22 +550,25 @@ export async function growthReportingLinesList(body = {}, accessContext) {
       user: userShape(user),
       primaryManagerId: row?.primary_manager_id || null,
       secondaryManagerId: row?.secondary_manager_id || null,
+      isGeneralManager,
+      managerAssignmentRequired: !isGeneralManager,
       revision: Number(row?.revision || 0),
-      valid: !validation.errors.some((issue) => issue.includes(user.id)),
+      valid: !validation.errors.some((issue) => issue.includes(user.id))
+        && (!isGeneralManager || (!row?.primary_manager_id && !row?.secondary_manager_id)),
       path: path.join(" > "),
     };
   });
   return {
     users: users.map(userShape),
     reportingLines: lines,
-    setupGaps: lines.filter((row) => !row.primaryManagerId).map((row) => row.userId),
-    validationIssues: validation.errors,
+    setupGaps: lines.filter((row) => row.managerAssignmentRequired && !row.primaryManagerId).map((row) => row.userId),
+    validationIssues: [...validation.errors, ...rootIssues],
   };
 }
 
 export async function growthReportingLineSave(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const users = await activeUsers(client);
+  const [users, generalManagerId] = await Promise.all([activeUsers(client), activeGeneralManagerId(client)]);
   const validation = validateReportingLinePayload({
     employeeId: body.userId || body.employeeId,
     primaryManagerId: body.primaryManagerId,
@@ -553,6 +576,10 @@ export async function growthReportingLineSave(body = {}, accessContext) {
     activeUserIds: users.map((row) => row.id),
   });
   if (!validation.ok) throw appError(validation.errors.join(" "), 400);
+  if (validation.value.employeeId === generalManagerId
+      && (validation.value.primaryManagerId || validation.value.secondaryManagerId)) {
+    throw appError("The active General Manager is the reporting root and cannot have a Primary or Advisory Manager.", 400);
+  }
   const { data, error } = await client.rpc("save_growth_reporting_assignment", {
     p_employee_id: validation.value.employeeId,
     p_primary_manager_id: validation.value.primaryManagerId,
@@ -571,7 +598,11 @@ export async function growthReportingLinesSaveBatch(body = {}, accessContext) {
   if (!requested.length) throw appError("At least one reporting-line change is required.", 400);
   if (requested.length > 500) throw appError("No more than 500 reporting lines may be saved together.", 400);
 
-  const [users, assignments] = await Promise.all([activeUsers(client), reportingAssignments(client)]);
+  const [users, assignments, generalManagerId] = await Promise.all([
+    activeUsers(client),
+    reportingAssignments(client),
+    activeGeneralManagerId(client),
+  ]);
   const activeUserIds = users.map((row) => row.id);
   const activeUserIdSet = new Set(activeUserIds);
   const seenEmployees = new Set();
@@ -583,6 +614,10 @@ export async function growthReportingLinesSaveBatch(body = {}, accessContext) {
       activeUserIds,
     });
     if (!validation.ok) throw appError(validation.errors.join(" "), 400);
+    if (validation.value.employeeId === generalManagerId
+        && (validation.value.primaryManagerId || validation.value.secondaryManagerId)) {
+      throw appError("The active General Manager is the reporting root and cannot have a Primary or Advisory Manager.", 400);
+    }
     if (seenEmployees.has(validation.value.employeeId)) {
       throw appError("Each employee may appear only once in a reporting-line save.", 400);
     }
@@ -631,7 +666,7 @@ export async function growthReportingLinesSaveBatch(body = {}, accessContext) {
 
 export async function growthCoachingBootstrap(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const [usersRaw, assignments, relationshipsResult, preferencesResult] = await Promise.all([activeUsers(client), reportingAssignments(client), client.from("growth_coaching_relationships").select("*").or(`participant_one_id.eq.${profile.id},participant_two_id.eq.${profile.id}`).order("updated_at", { ascending: false }), client.from("growth_email_preferences").select("*").eq("user_id", profile.id).maybeSingle()]);
+  const [usersRaw, assignments, generalManagerId, relationshipsResult, preferencesResult] = await Promise.all([activeUsers(client), reportingAssignments(client), activeGeneralManagerId(client), client.from("growth_coaching_relationships").select("*").or(`participant_one_id.eq.${profile.id},participant_two_id.eq.${profile.id}`).order("updated_at", { ascending: false }), client.from("growth_email_preferences").select("*").eq("user_id", profile.id).maybeSingle()]);
   if (relationshipsResult.error) throw rpcError(relationshipsResult.error);
   if (preferencesResult.error) throw rpcError(preferencesResult.error);
   const users = new Map(usersRaw.map((row) => [row.id, row]));
@@ -693,14 +728,17 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
     }
   }
   const assignment = assignments.find((row) => row.employee_id === profile.id);
+  const isGeneralManager = profile.id === generalManagerId;
   const serializedGoals = goals.map((goal) => ({
     ...serializeGoal(
       goal,
       versions.get(`${goal.id}:${goal.active_version}`),
       checkpoints.filter((row) => row.goal_id === goal.id && row.goal_version === goal.active_version),
       {
+        selfManaged: goal.employee_id === generalManagerId && !goal.primary_manager_id,
         canEdit: goal.employee_id === profile.id,
-        canSubmit: goal.employee_id === profile.id && Boolean(assignment?.primary_manager_id),
+        canSubmit: goal.employee_id === profile.id
+          && ((goal.employee_id === generalManagerId && !goal.primary_manager_id) || Boolean(goal.primary_manager_id)),
         canApprove: goal.primary_manager_id === profile.id,
       },
       updates.filter((row) => row.goal_id === goal.id),
@@ -724,7 +762,7 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
   return {
     currentUser: userShape({ ...profile, active: true }),
     users: usersRaw.map(userShape),
-    primaryManager: assignment?.primary_manager_id
+    primaryManager: !isGeneralManager && assignment?.primary_manager_id
       ? userShape(
           users.get(assignment.primary_manager_id) || {
             id: assignment.primary_manager_id,
@@ -732,7 +770,7 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
           },
         )
       : null,
-    secondaryManager: assignment?.secondary_manager_id
+    secondaryManager: !isGeneralManager && assignment?.secondary_manager_id
       ? userShape(
           users.get(assignment.secondary_manager_id) || {
             id: assignment.secondary_manager_id,
@@ -741,8 +779,10 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
         )
       : null,
     reportingLine: {
-      primaryManagerId: assignment?.primary_manager_id || null,
-      secondaryManagerId: assignment?.secondary_manager_id || null,
+      primaryManagerId: isGeneralManager ? null : assignment?.primary_manager_id || null,
+      secondaryManagerId: isGeneralManager ? null : assignment?.secondary_manager_id || null,
+      isGeneralManager,
+      managerAssignmentRequired: !isGeneralManager,
     },
     directReports,
     plans: (plansResult.data || [])
@@ -860,7 +900,9 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
     },
     capabilities: {
       canDraftGoals: true,
-      canSubmitGoals: Boolean(assignment?.primary_manager_id),
+      canSubmitGoals: isGeneralManager || Boolean(assignment?.primary_manager_id),
+      isGeneralManager,
+      goalApprovalMode: isGeneralManager ? "self_managed" : "manager_approval",
       coachingPrivate: true,
     },
   };
@@ -1023,25 +1065,48 @@ export async function growthGoalSave(body = {}, accessContext) {
 }
 
 async function goalDecisionContext(client, goalId, profile) {
-  const { goal } = await goalForViewer(client, goalId, profile.id);
+  const [{ goal }, generalManagerId] = await Promise.all([
+    goalForViewer(client, goalId, profile.id),
+    activeGeneralManagerId(client),
+  ]);
   const isEmployee = goal.employee_id === profile.id;
   const isPrimaryManager = goal.primary_manager_id === profile.id;
-  return { goal, isEmployee, isPrimaryManager };
+  const isSelfManagedGoal = isEmployee
+    && profile.id === generalManagerId
+    && goal.employee_id === generalManagerId
+    && !goal.primary_manager_id;
+  return { goal, isEmployee, isPrimaryManager, isSelfManagedGoal };
 }
 
 export async function growthGoalSubmit(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const { goal, isEmployee } = await goalDecisionContext(client, id(body.goalId), profile);
+  const { goal, isEmployee, isSelfManagedGoal } = await goalDecisionContext(client, id(body.goalId), profile);
   if (!isEmployee) throw appError("Only the employee may submit this goal.", 403);
-  if (!goal.primary_manager_id) throw appError("A primary manager is required before submission.", 400);
   if (!["Draft", "Revision Requested"].includes(goal.status)) {
-    throw appError("This goal is not ready for submission.", 400);
+    throw appError(isSelfManagedGoal ? "This goal is not ready for activation." : "This goal is not ready for submission.", 400);
   }
   if (Number(goal.revision) !== revision(body.expectedRevision)) {
     throw appError("The goal changed after it was opened.", 409, {
       current: goal,
     });
   }
+  if (isSelfManagedGoal) {
+    const { data, error } = await client.rpc("decide_growth_goal", {
+      p_goal_id: goal.id,
+      p_expected_revision: revision(body.expectedRevision),
+      p_actor_id: profile.id,
+      p_operation: "self_activate",
+      p_note: "",
+      p_evidence: "",
+    });
+    if (error) throw rpcError(error);
+    const saved = data?.goal;
+    if (!saved || data?.decisionType !== "self_activated") {
+      throw appError("The self-managed goal could not be activated.", 503);
+    }
+    return { goal: saved };
+  }
+  if (!goal.primary_manager_id) throw appError("A primary manager is required before submission.", 400);
   const now = new Date().toISOString();
   const { data, error } = await client
     .from("growth_goals")
@@ -1233,15 +1298,24 @@ export async function growthGoalProgressSave(body = {}, accessContext) {
 
 export async function growthGoalCompletion(body = {}, accessContext) {
   const { client, profile } = accessContext;
-  const { goal, isEmployee, isPrimaryManager } = await goalDecisionContext(client, id(body.goalId), profile);
+  const { goal, isEmployee, isPrimaryManager, isSelfManagedGoal } = await goalDecisionContext(client, id(body.goalId), profile);
   if (Number(goal.revision) !== revision(body.expectedRevision)) {
     throw appError("The goal changed after it was opened.", 409, {
       current: goal,
     });
   }
   const outcome = body.outcome;
+  let operation = outcome;
   let nextStatus;
-  if (outcome === "request_completion") {
+  if (isSelfManagedGoal && ["complete", "not_achieved"].includes(outcome)) {
+    if (goal.status !== "Active") throw appError("Only an active self-managed goal can record an outcome.", 400);
+    if (outcome === "complete" && !text(body.evidence, 10_000)) throw appError("Final evidence is required.", 400);
+    if (outcome === "not_achieved" && !text(body.note, 10_000)) throw appError("This outcome needs a note.", 400);
+    operation = outcome === "complete" ? "self_complete" : "self_not_achieved";
+    nextStatus = outcome === "complete" ? "Completed" : "Not Achieved";
+  } else if (isSelfManagedGoal) {
+    throw appError("Self-managed goals are completed or marked not achieved directly.", 400);
+  } else if (outcome === "request_completion") {
     if (!isEmployee || goal.status !== "Active") throw appError("Only the employee may request completion for an active goal.", 403);
     if (!text(body.evidence, 10_000)) throw appError("Final evidence is required.", 400);
     nextStatus = "Completion Review";
@@ -1276,7 +1350,7 @@ export async function growthGoalCompletion(body = {}, accessContext) {
     p_goal_id: goal.id,
     p_expected_revision: revision(body.expectedRevision),
     p_actor_id: profile.id,
-    p_operation: outcome,
+    p_operation: operation,
     p_note: text(body.note, 10_000),
     p_evidence: text(body.evidence, 10_000),
   });
@@ -1284,6 +1358,9 @@ export async function growthGoalCompletion(body = {}, accessContext) {
   const saved = data?.goal;
   const decisionType = data?.decisionType;
   if (!saved || !decisionType) throw appError("The goal outcome could not be saved.", 503);
+  if (isSelfManagedGoal) {
+    return { goal: saved };
+  }
   const targetId = isEmployee ? goal.primary_manager_id : goal.employee_id;
   const { data: target } = await client.from("user_profiles").select("id,email,full_name").eq("id", targetId).eq("active", true).maybeSingle();
   await notify(client, {

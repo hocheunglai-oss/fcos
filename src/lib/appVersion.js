@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.67';
+export const APP_VERSION = '2.0.68';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.68',
+    releasedAt: '2026-08-01',
+    title: 'General Manager reporting root',
+    changes: [
+      'Made the active UUID-backed General Manager the manager-free reporting hierarchy root while retaining manager eligibility for other employees.',
+      'Added self-managed goal activation and evidence-backed outcomes for the General Manager without self-notifications.',
+      'Added database enforcement against forged General Manager assignments and self-managed goal decisions.',
+    ],
+  },
   {
     version: '2.0.67',
     releasedAt: '2026-08-01',

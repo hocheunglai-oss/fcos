@@ -14,6 +14,10 @@ const reportingBatchMigrationUrl = new URL(
   "../supabase/migrations/20260801131500_growth_reporting_lines_batch_save_hotfix.sql",
   import.meta.url,
 );
+const generalManagerMigrationUrl = new URL(
+  "../supabase/migrations/20260801140504_general_manager_reporting_root_self_managed_goals.sql",
+  import.meta.url,
+);
 const serviceUrl = new URL("../api/_growthCoachingService.js", import.meta.url);
 const handlerUrl = new URL("../api/functions/[name].js", import.meta.url);
 const appUrl = new URL("../src/App.jsx", import.meta.url);
@@ -118,6 +122,42 @@ test("reporting-line edits save through one revision-safe atomic batch", async (
   assert.doesNotMatch(panel, /saveLine/);
 });
 
+test("the UUID-backed General Manager is the reporting root with self-managed goals", async () => {
+  const [sql, service, panel, page] = await Promise.all([
+    readFile(generalManagerMigrationUrl, "utf8"),
+    readFile(serviceUrl, "utf8"),
+    readFile(new URL("../src/components/admin/ReportingLinesPanel.jsx", import.meta.url), "utf8"),
+    readFile(pageUrl, "utf8"),
+  ]);
+
+  assert.match(sql, /from public\.collaboration_roles role_row[\s\S]*role_row\.role = 'general_manager'[\s\S]*role_row\.active[\s\S]*profile\.active/);
+  assert.match(sql, /Exactly one active UUID-backed General Manager is required/);
+  assert.match(sql, /cannot have a Primary or Advisory Manager/);
+  assert.match(sql, /v_change\.employee_id = v_general_manager_id[\s\S]*primary_manager_id is not null[\s\S]*secondary_manager_id is not null/);
+  assert.match(sql, /when 'self_activate'[\s\S]*v_goal\.employee_id is distinct from v_general_manager_id/);
+  assert.match(sql, /when 'self_complete'[\s\S]*Final evidence is required/);
+  assert.match(sql, /when 'self_not_achieved'[\s\S]*This outcome needs a note/);
+  assert.match(sql, /'self_activated', 'self_completed', 'self_not_achieved'/);
+  assert.match(sql, /insert into public\.growth_goal_decisions/);
+  assert.match(sql, /insert into public\.growth_events[\s\S]*'goal_' \|\| v_decision_type/);
+  assert.doesNotMatch(sql, /security definer/i);
+  assert.match(sql, /revoke all on function public\.growth_active_general_manager_id\(\) from public, anon, authenticated/);
+
+  assert.match(service, /isGeneralManager,/);
+  assert.match(service, /managerAssignmentRequired: !isGeneralManager/);
+  assert.match(service, /goalApprovalMode: isGeneralManager \? "self_managed" : "manager_approval"/);
+  assert.match(service, /p_operation: "self_activate"/);
+  assert.match(service, /operation = outcome === "complete" \? "self_complete" : "self_not_achieved"/);
+  assert.match(service, /if \(isSelfManagedGoal\) \{\s*return \{ goal: saved \};\s*\}\s*const targetId/);
+
+  assert.match(panel, /General Manager · Reporting root/);
+  assert.match(panel, /Not required/);
+  assert.match(panel, /line\.managerAssignmentRequired !== false/);
+  assert.match(page, /goal\.permissions\?\.selfManaged \? 'Activate' : 'Submit'/);
+  assert.match(page, /!hasPrimaryManager && !selfManagedGoals/);
+  assert.match(page, /GoalHistorySection title="Goal decisions"/);
+});
+
 test("coaching content is fetched only for the authenticated pair without an administrator override", async () => {
   const service = await readFile(serviceUrl, "utf8");
   assert.match(
@@ -198,7 +238,7 @@ test("Growth & Coaching preserves measurement shapes and uses the signed-upload 
   assert.match(page, /customCadenceDays: inviteCadence === 'custom'/);
   assert.match(page, /Every \$\{days\} days/);
   assert.doesNotMatch(page, /<SelectItem value="maintain">Maintain<\/SelectItem>/);
-  assert.match(page, /GoalHistorySection title="Manager decisions"/);
+  assert.match(page, /GoalHistorySection title="Goal decisions"/);
   assert.match(page, /GoalHistorySection title="Progress history"/);
   assert.match(page, /GoalHistorySection title="Checkpoint evidence"/);
   assert.match(page, /expectedPrivatePrepRevision: numeric\(sessionDraft\.privatePrepRevision\)/);
