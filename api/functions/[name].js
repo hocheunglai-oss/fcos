@@ -80,6 +80,7 @@ import {
   growthPlanSave as growthPlanSaveService,
   growthPlanCloseout as growthPlanCloseoutService,
   growthReportingLineSave as growthReportingLineSaveService,
+  growthReportingLinesSaveBatch as growthReportingLinesSaveBatchService,
   growthReportingLinesList as growthReportingLinesListService,
 } from '../_growthCoachingService.js';
 import { cancelFcosUpdateBatch as cancelFcosUpdateBatchService, listFcosUpdates as listFcosUpdatesService, restoreFcosUpdateItem as restoreFcosUpdateItemService, retryFcosUpdateDeliveries as retryFcosUpdateDeliveriesService, saveFcosUpdateBatch as saveFcosUpdateBatchService, saveFcosUpdateItem as saveFcosUpdateItemService, sendFcosUpdateBatch as sendFcosUpdateBatchService, skipFcosUpdateItem as skipFcosUpdateItemService, syncFcosUpdateItems as syncFcosUpdateItemsService } from '../_fcosUpdates.js';
@@ -709,6 +710,11 @@ async function growthReportingLineSave(body = {}, req = null, accessContext = nu
   return growthReportingLineSaveService(body, requireAdministratorContext(context));
 }
 
+async function growthReportingLinesSaveBatch(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireAdministrator(req));
+  return growthReportingLinesSaveBatchService(body, requireAdministratorContext(context));
+}
+
 async function growthCoachingBootstrap(body = {}, req = null, accessContext = null) {
   return growthCoachingBootstrapService(body, accessContext || (await requireActiveUser(req)));
 }
@@ -928,6 +934,7 @@ const HANDLER_MODULE_ACCESS = {
   paymentCollectionsReconcileCron: [],
   growthReportingLinesList: [],
   growthReportingLineSave: [],
+  growthReportingLinesSaveBatch: [],
   growthCoachingBootstrap: [],
   growthPlanSave: [],
   growthPlanCloseout: [],
@@ -3286,26 +3293,30 @@ async function reportExportDownload(body, req, accessContext = null) {
 
 const NAVIGATION_SECTION_DEFAULTS = Object.freeze({
   personal: ['my_commitments', 'growth_coaching', 'projects_tasks'],
-  trading: ['dashboard', 'payment_collections', 'unofficial_compensation', 'cashflow_forecast', 'disputes', 'brokers', 'buyers_administrator'],
+  trading: ['dashboard', 'buyers_administrator'],
+  cross_functions: ['payment_collections', 'disputes', 'unofficial_compensation', 'brokers'],
+  finance: ['cashflow_forecast'],
   tools: ['review', 'pnl', 'report_archive'],
 });
 const NAVIGATION_ITEM_IDS = new Set(Object.values(NAVIGATION_SECTION_DEFAULTS).flat());
 const NAVIGATION_DEFAULT_HIDDEN_IDS = ['review', 'pnl', 'report_archive'];
+const LEGACY_TRADING_DEFAULT_ORDER = ['dashboard', 'payment_collections', 'unofficial_compensation', 'cashflow_forecast', 'disputes', 'brokers', 'buyers_administrator'];
 
 function normalizeNavigationSectionOrders(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const legacyTradingOrder = Array.isArray(source.trading) ? source.trading : [];
+  const legacyTradingWasDefault = legacyTradingOrder.length === LEGACY_TRADING_DEFAULT_ORDER.length
+    && legacyTradingOrder.every((id, index) => id === LEGACY_TRADING_DEFAULT_ORDER[index]);
   return Object.fromEntries(Object.entries(NAVIGATION_SECTION_DEFAULTS).map(([section, defaults]) => {
-    const requested = Array.isArray(source[section]) ? source[section] : [];
+    const hasDirectOrder = Array.isArray(source[section]);
+    const requested = hasDirectOrder
+      ? source[section]
+      : ['cross_functions', 'finance'].includes(section) && !legacyTradingWasDefault
+        ? legacyTradingOrder
+        : [];
     const allowed = new Set(defaults);
     const ordered = [...new Set(requested.map((id) => String(id || '').trim()).filter((id) => allowed.has(id)))];
-    for (const id of defaults.filter((itemId) => !ordered.includes(itemId))) {
-      if (id === 'unofficial_compensation') {
-        const collectionIndex = ordered.indexOf('payment_collections');
-        ordered.splice(collectionIndex >= 0 ? collectionIndex + 1 : ordered.length, 0, id);
-      } else {
-        ordered.push(id);
-      }
-    }
+    ordered.push(...defaults.filter((itemId) => !ordered.includes(itemId)));
     return [section, ordered];
   }));
 }
@@ -15176,6 +15187,7 @@ const handlers = {
   navigationPreferencesReset,
   growthReportingLinesList,
   growthReportingLineSave,
+  growthReportingLinesSaveBatch,
   growthCoachingBootstrap,
   growthPlanSave,
   growthPlanCloseout,

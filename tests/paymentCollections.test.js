@@ -39,17 +39,29 @@ test('collection migration preserves history and installs service-only personali
   assert.match(migration, /save_user_navigation_preferences/);
 });
 
-test('FCOS exposes fixed personal, trading and tools navigation with user customization', async () => {
-  const [layout, app] = await Promise.all([
+test('FCOS exposes fixed personal, trading, cross-functional, finance and tools navigation with user customization', async () => {
+  const [layout, app, server] = await Promise.all([
     readFile(new URL('../src/components/Layout.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
   ]);
   assert.match(layout, /label: 'Personal'/);
   assert.match(layout, /label: 'Trading'/);
+  assert.match(layout, /label: 'Cross Functions'/);
+  assert.match(layout, /label: 'Finance'/);
   assert.match(layout, /label: 'Tools'/);
+  assert.match(layout, /id: 'trading'[\s\S]*id: 'dashboard'[\s\S]*id: 'buyers_administrator'/);
+  assert.match(layout, /id: 'cross_functions'[\s\S]*id: 'payment_collections'[\s\S]*id: 'disputes'[\s\S]*id: 'unofficial_compensation'[\s\S]*id: 'brokers'/);
+  assert.match(layout, /id: 'finance'[\s\S]*id: 'cashflow_forecast'/);
   assert.match(layout, /hiddenItemIds: \['review', 'pnl', 'report_archive'\]/);
   assert.match(layout, /DragDropContext/);
   assert.match(layout, /navigationPreferencesSave/);
+  assert.match(layout, /legacyTradingOrder/);
+  assert.match(layout, /legacyTradingWasDefault/);
+  assert.match(server, /cross_functions: \['payment_collections', 'disputes', 'unofficial_compensation', 'brokers'\]/);
+  assert.match(server, /finance: \['cashflow_forecast'\]/);
+  assert.match(server, /legacyTradingOrder/);
+  assert.match(server, /legacyTradingWasDefault/);
   assert.match(app, /path="\/payment-collections"/);
   assert.match(app, /RedirectWithTab path="\/payment-collections" tab="collections"/);
   assert.match(app, /RedirectWithSection section="users"/);

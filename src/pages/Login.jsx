@@ -5,12 +5,20 @@ import { useAuth } from '@/lib/AuthContext';
 
 export default function Login() {
   const location = useLocation();
-  const { isAuthenticated, login, isSupabaseConfigured: supabaseReady, authMode } = useAuth();
+  const { isAuthenticated, login, isSupabaseConfigured: supabaseReady, authMode, authError } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [logoutWarning, setLogoutWarning] = useState('');
+  const contextError = authError?.type === 'user_inactive'
+    ? 'Your FCOS account is inactive.'
+    : authError?.type === 'user_not_registered'
+      ? 'This account is not registered in FCOS.'
+      : authError?.type === 'local_auth_error'
+        ? authError.message
+        : '';
+  const visibleError = error || contextError;
 
   useEffect(() => {
     document.title = 'Sign in · FCOS';
@@ -99,7 +107,7 @@ export default function Login() {
               />
             </label>
 
-            {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+            {visibleError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{visibleError}</div>}
 
             <button
               type="submit"

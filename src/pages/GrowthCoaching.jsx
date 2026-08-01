@@ -2901,7 +2901,7 @@ function MethodologyDialog({ open, onOpenChange }) {
         <div className="space-y-5 text-sm">
           <section>
             <h3 className="font-semibold">Formal development goals</h3>
-            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. A secondary manager may read but cannot approve. Changes to an approved measurement, deadline, or checkpoint create a new approval revision. The quality check guides authors toward specific outcomes, valid measures, and useful checkpoints before submission.</p>
+            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision. The quality check guides authors toward specific outcomes, valid measures, and useful checkpoints before submission.</p>
           </section>
           <section>
             <h3 className="font-semibold">Progress and completion</h3>

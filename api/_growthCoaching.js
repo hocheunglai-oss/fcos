@@ -398,15 +398,15 @@ export function validateReportingLinePayload({
   const activeIds = new Set(uniqueIds(activeUserIds));
   if (!employee) errors.push("employeeId must be a valid FCOS user ID.");
   else if (!activeIds.has(employee)) errors.push("Employee must be an active FCOS user.");
-  for (const [label, managerId] of [["Primary manager", primaryManager], ["Secondary manager", secondaryManager]]) {
+  for (const [label, managerId] of [["Primary manager", primaryManager], ["Advisory Manager", secondaryManager]]) {
     if (managerId && !activeIds.has(managerId)) errors.push(`${label} must be an active FCOS user.`);
   }
   if (nullableString(primaryManagerId) && !primaryManager) errors.push("Primary manager ID is invalid.");
-  if (nullableString(secondaryManagerId) && !secondaryManager) errors.push("Secondary manager ID is invalid.");
+  if (nullableString(secondaryManagerId) && !secondaryManager) errors.push("Advisory Manager ID is invalid.");
   if (employee && primaryManager === employee) errors.push("An employee cannot be their own primary manager.");
-  if (employee && secondaryManager === employee) errors.push("An employee cannot be their own secondary manager.");
+  if (employee && secondaryManager === employee) errors.push("An employee cannot be their own Advisory Manager.");
   if (primaryManager && primaryManager === secondaryManager) {
-    errors.push("Primary and secondary managers must be different people.");
+    errors.push("Primary and advisory managers must be different people.");
   }
   return validationResult(errors, { employeeId: employee, primaryManagerId: primaryManager, secondaryManagerId: secondaryManager });
 }

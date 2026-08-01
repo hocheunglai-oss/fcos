@@ -116,7 +116,7 @@ test("validates active reporting assignments and rejects primary cycles", () => 
   );
   assert.match(
     validateReportingLinePayload({ employeeId: "alice", primaryManagerId: "ben", secondaryManagerId: "ben", activeUserIds }).errors.join(" "),
-    /must be different people/,
+    /Primary and advisory managers must be different people/,
   );
   const cycle = validateReportingLines({
     activeUserIds,

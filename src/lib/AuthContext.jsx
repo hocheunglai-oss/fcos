@@ -48,6 +48,13 @@ const LOCAL_APPLICATIONS = [
   },
 ];
 
+function loginFailureMessage(error) {
+  if (error?.type === 'user_inactive') return 'Your FCOS account is inactive.';
+  if (error?.type === 'user_not_registered') return 'This account is not registered in FCOS.';
+  if (error?.type === 'auth_required') return 'Your FCOS session could not be verified. Please sign in again.';
+  return error?.message || 'FCOS could not verify your account.';
+}
+
 function fullAccessLevels() {
   return { [REPORT_ARCHIVE_MODULE_ID]: 'full' };
 }
@@ -117,7 +124,7 @@ export const AuthProvider = ({ children }) => {
     try {
       if (!isSupabaseConfigured) {
         applyLocalAdmin();
-        return;
+        return { user: LOCAL_ADMIN_USER, error: null };
       }
       const result = await loadSupabaseUser();
       setUser(result.user);
@@ -127,14 +134,17 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(Boolean(result.user));
       setAuthError(result.error);
       setAuthChecked(true);
+      return result;
     } catch (error) {
+      const nextError = { type: 'local_auth_error', message: error.message };
       setUser(null);
       setModuleAccess({});
       setModuleAccessLevels({});
       setApplications([]);
-      setAuthError({ type: 'local_auth_error', message: error.message });
+      setAuthError(nextError);
       setIsAuthenticated(false);
       setAuthChecked(true);
+      return { user: null, error: nextError };
     } finally {
       if (showLoader) setIsLoadingAuth(false);
     }
@@ -172,7 +182,8 @@ export const AuthProvider = ({ children }) => {
     }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    await checkUserAuth({ showLoader: true });
+    const result = await checkUserAuth({ showLoader: true });
+    if (!result?.user) throw new Error(loginFailureMessage(result?.error));
   };
 
   const refreshApplications = async () => {

@@ -52,12 +52,24 @@ const navGroups = [
     label: 'Trading',
     items: [
       { id: 'dashboard', to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
-      { id: 'payment_collections', to: '/payment-collections', label: 'Payment Collections', moduleIds: ['buyer_invoices', 'incoming_payments'], icon: ReceiptText },
-      { id: 'unofficial_compensation', to: '/unofficial-compensation', label: 'Unofficial Compensation', moduleId: 'unofficial_compensation', icon: HandCoins },
-      { id: 'cashflow_forecast', to: '/cashflow-forecast', label: 'Cashflow', moduleId: 'cashflow_forecast', icon: WalletCards },
-      { id: 'disputes', to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
-      { id: 'brokers', to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
       { id: 'buyers_administrator', to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
+    ],
+  },
+  {
+    id: 'cross_functions',
+    label: 'Cross Functions',
+    items: [
+      { id: 'payment_collections', to: '/payment-collections', label: 'Payment Collections', moduleIds: ['buyer_invoices', 'incoming_payments'], icon: ReceiptText },
+      { id: 'disputes', to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
+      { id: 'unofficial_compensation', to: '/unofficial-compensation', label: 'Unofficial Compensation', moduleId: 'unofficial_compensation', icon: HandCoins },
+      { id: 'brokers', to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
+    ],
+  },
+  {
+    id: 'finance',
+    label: 'Finance',
+    items: [
+      { id: 'cashflow_forecast', to: '/cashflow-forecast', label: 'Cashflow', moduleId: 'cashflow_forecast', icon: WalletCards },
     ],
   },
   {
@@ -76,6 +88,7 @@ const DEFAULT_NAVIGATION_PREFERENCES = {
   hiddenItemIds: ['review', 'pnl', 'report_archive'],
   revision: 0,
 };
+const LEGACY_TRADING_DEFAULT_ORDER = ['dashboard', 'payment_collections', 'unofficial_compensation', 'cashflow_forecast', 'disputes', 'brokers', 'buyers_administrator'];
 
 const VERSION_CHECK_INTERVAL_MS = 60_000;
 const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
@@ -87,20 +100,22 @@ function navigationCacheKey(user) {
 
 function normalizedNavigationPreferences(value = {}) {
   const hidden = new Set(Array.isArray(value.hiddenItemIds) ? value.hiddenItemIds : DEFAULT_NAVIGATION_PREFERENCES.hiddenItemIds);
+  const sectionOrders = value.sectionOrders && typeof value.sectionOrders === 'object' ? value.sectionOrders : {};
+  const legacyTradingOrder = Array.isArray(sectionOrders.trading) ? sectionOrders.trading : [];
+  const legacyTradingWasDefault = legacyTradingOrder.length === LEGACY_TRADING_DEFAULT_ORDER.length
+    && legacyTradingOrder.every((id, index) => id === LEGACY_TRADING_DEFAULT_ORDER[index]);
   return {
     sectionOrders: Object.fromEntries(navGroups.map((group) => {
-      const requested = Array.isArray(value.sectionOrders?.[group.id]) ? value.sectionOrders[group.id] : [];
+      const hasDirectOrder = Array.isArray(sectionOrders[group.id]);
+      const requested = hasDirectOrder
+        ? sectionOrders[group.id]
+        : ['cross_functions', 'finance'].includes(group.id) && !legacyTradingWasDefault
+          ? legacyTradingOrder
+          : [];
       const allowed = new Set(group.items.map((item) => item.id));
       const ordered = [...new Set(requested.filter((id) => allowed.has(id)))];
       const missing = group.items.map((item) => item.id).filter((id) => !ordered.includes(id));
-      for (const id of missing) {
-        if (id === 'unofficial_compensation') {
-          const collectionIndex = ordered.indexOf('payment_collections');
-          ordered.splice(collectionIndex >= 0 ? collectionIndex + 1 : ordered.length, 0, id);
-        } else {
-          ordered.push(id);
-        }
-      }
+      ordered.push(...missing);
       return [group.id, ordered];
     })),
     hiddenItemIds: [...hidden].filter((id) => navGroups.some((group) => group.items.some((item) => item.id === id))),

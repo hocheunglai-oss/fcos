@@ -134,13 +134,29 @@ async function invoke(name, payload = {}, options = {}) {
       },
     };
   }
-  const data = await res.json().catch(() => ({}));
+  const responseContentType = res.headers?.get?.('content-type') || '';
+  const responseIsJson = responseContentType.toLowerCase().includes('application/json');
+  const data = responseIsJson ? await res.json().catch(() => ({})) : {};
   const responseHeader = (name) => res.headers?.get?.(name) || null;
   const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
   const serverFetchedAt = responseHeader('x-fcos-data-fetched-at') || now();
   const requestId = responseHeader('x-fcos-request-id');
   const salesforceCallsHeader = responseHeader('x-fcos-salesforce-calls');
   const salesforceCalls = salesforceCallsHeader == null ? null : Number(salesforceCallsHeader);
+
+  if (!responseIsJson) {
+    return {
+      data: { error: 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
+      meta: {
+        cached: false,
+        cacheLayer: 'network',
+        cacheStatus: 'UNAVAILABLE',
+        cachedAt: null,
+        requestId,
+        salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+      },
+    };
+  }
 
   if (!res.ok) {
     return {

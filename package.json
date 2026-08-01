@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vercel dev",
+    "dev:ui": "vite",
     "test": "node --test tests/*.test.js",
     "build": "node scripts/write-app-version.mjs && vite build",
     "lint": "eslint . --quiet",

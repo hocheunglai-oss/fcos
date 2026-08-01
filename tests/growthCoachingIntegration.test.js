@@ -10,6 +10,10 @@ const workflowFixMigrationUrl = new URL(
   "../supabase/migrations/20260731082000_growth_coaching_workflow_fixes.sql",
   import.meta.url,
 );
+const reportingBatchMigrationUrl = new URL(
+  "../supabase/migrations/20260801120853_growth_reporting_lines_batch_save.sql",
+  import.meta.url,
+);
 const serviceUrl = new URL("../api/_growthCoachingService.js", import.meta.url);
 const handlerUrl = new URL("../api/functions/[name].js", import.meta.url);
 const appUrl = new URL("../src/App.jsx", import.meta.url);
@@ -90,6 +94,28 @@ test("goal decisions, progress, coaching content, and reporting-line transfers a
   assert.match(service, /context\.session\.relationship_id !== relationship\.id/);
 });
 
+test("reporting-line edits save through one revision-safe atomic batch", async () => {
+  const [sql, service, panel, handler] = await Promise.all([
+    readFile(reportingBatchMigrationUrl, "utf8"),
+    readFile(serviceUrl, "utf8"),
+    readFile(new URL("../src/components/admin/ReportingLinesPanel.jsx", import.meta.url), "utf8"),
+    readFile(handlerUrl, "utf8"),
+  ]);
+  assert.match(sql, /function public\.save_growth_reporting_assignments_batch/);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\('growth_reporting_hierarchy'\)\)/);
+  assert.match(sql, /reporting_walk[\s\S]*has_cycle/);
+  assert.match(sql, /update public\.growth_reporting_assignments[\s\S]*set primary_manager_id = null/);
+  assert.match(sql, /public\.save_growth_reporting_assignment/);
+  assert.match(sql, /security invoker/);
+  assert.match(sql, /revoke all on function public\.save_growth_reporting_assignments_batch[\s\S]*from public, anon, authenticated/);
+  assert.match(sql, /grant execute on function public\.save_growth_reporting_assignments_batch[\s\S]*to service_role/);
+  assert.match(service, /client\.rpc\("save_growth_reporting_assignments_batch"/);
+  assert.match(handler, /growthReportingLinesSaveBatch: \[\]/);
+  assert.match(panel, /Save changes \(\{changedLines\.length\}\)/);
+  assert.match(panel, /growthReportingLinesSaveBatch/);
+  assert.doesNotMatch(panel, /saveLine/);
+});
+
 test("coaching content is fetched only for the authenticated pair without an administrator override", async () => {
   const service = await readFile(serviceUrl, "utf8");
   assert.match(
@@ -153,6 +179,7 @@ test("Growth & Coaching is universal, sits above Projects & Tasks, and exposes r
   assert.match(admin, /<ReportingLinesPanel \/>/);
   assert.match(handler, /growthCoachingBootstrap: \[\]/);
   assert.match(handler, /growthReportingLineSave: \[\]/);
+  assert.match(handler, /growthReportingLinesSaveBatch: \[\]/);
   assert.match(handler, /'growthCoachingDailyCron'/);
 });
 

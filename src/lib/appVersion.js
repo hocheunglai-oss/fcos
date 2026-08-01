@@ -1,6 +1,43 @@
-export const APP_VERSION = '2.0.61';
+export const APP_VERSION = '2.0.65';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.65',
+    releasedAt: '2026-08-01',
+    title: 'Universal reporting-line save',
+    changes: [
+      'Replaced row-by-row reporting-line saves with one Save changes button that appears only when assignments are edited.',
+      'Added atomic batch validation so revision conflicts or reporting cycles reject every edited assignment without partial saves.',
+    ],
+  },
+  {
+    version: '2.0.64',
+    releasedAt: '2026-08-01',
+    title: 'Reliable local sign-in',
+    changes: [
+      'Changed the default local development command to run the complete FCOS interface and server API together.',
+      'Added visible authentication errors when FCOS cannot verify a signed-in Supabase account.',
+    ],
+  },
+  {
+    version: '2.0.63',
+    releasedAt: '2026-08-01',
+    title: 'Advisory Manager terminology',
+    changes: [
+      'Renamed the read-only secondary development role to Advisory Manager across Growth & Coaching and reporting-line administration.',
+      'Clarified that Advisory Managers may view goals but cannot comment, approve, or complete them.',
+    ],
+  },
+  {
+    version: '2.0.62',
+    releasedAt: '2026-08-01',
+    title: 'Responsibility-based sidebar sections',
+    changes: [
+      'Focused Trading on Dashboard and Account Managers.',
+      'Added Cross Functions for Payment Collections, disputes, unofficial compensation, and broker commissions.',
+      'Added a dedicated Finance section for Cashflow while preserving each user\'s saved navigation preferences.',
+    ],
+  },
   {
     version: '2.0.61',
     releasedAt: '2026-08-01',

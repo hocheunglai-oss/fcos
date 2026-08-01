@@ -565,6 +565,70 @@ export async function growthReportingLineSave(body = {}, accessContext) {
   return { reportingLine: data };
 }
 
+export async function growthReportingLinesSaveBatch(body = {}, accessContext) {
+  const { client, profile } = accessContext;
+  const requested = Array.isArray(body.changes) ? body.changes : [];
+  if (!requested.length) throw appError("At least one reporting-line change is required.", 400);
+  if (requested.length > 500) throw appError("No more than 500 reporting lines may be saved together.", 400);
+
+  const [users, assignments] = await Promise.all([activeUsers(client), reportingAssignments(client)]);
+  const activeUserIds = users.map((row) => row.id);
+  const activeUserIdSet = new Set(activeUserIds);
+  const seenEmployees = new Set();
+  const normalizedChanges = requested.map((change) => {
+    const validation = validateReportingLinePayload({
+      employeeId: change?.userId || change?.employeeId,
+      primaryManagerId: change?.primaryManagerId,
+      secondaryManagerId: change?.secondaryManagerId,
+      activeUserIds,
+    });
+    if (!validation.ok) throw appError(validation.errors.join(" "), 400);
+    if (seenEmployees.has(validation.value.employeeId)) {
+      throw appError("Each employee may appear only once in a reporting-line save.", 400);
+    }
+    seenEmployees.add(validation.value.employeeId);
+    const expectedRevision = Number(change?.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw appError("Each reporting-line change requires a valid expected revision.", 400);
+    }
+    return { ...validation.value, expectedRevision };
+  });
+
+  const currentByEmployee = new Map(assignments.map((row) => [row.employee_id, row]));
+  for (const change of normalizedChanges) {
+    const currentRevision = Number(currentByEmployee.get(change.employeeId)?.revision || 0);
+    if (currentRevision !== change.expectedRevision) {
+      throw appError("A reporting line changed after it was opened. Refresh and review the current hierarchy.", 409);
+    }
+  }
+
+  const effectiveByEmployee = new Map(
+    assignments
+      .filter((row) => activeUserIdSet.has(row.employee_id))
+      .map((row) => [row.employee_id, {
+        employeeId: row.employee_id,
+        primaryManagerId: row.primary_manager_id,
+        secondaryManagerId: row.secondary_manager_id,
+      }]),
+  );
+  for (const change of normalizedChanges) effectiveByEmployee.set(change.employeeId, change);
+  const hierarchy = validateReportingLines({ assignments: [...effectiveByEmployee.values()], activeUserIds });
+  if (!hierarchy.ok) throw appError(hierarchy.errors.join(" "), 400);
+
+  const { data, error } = await client.rpc("save_growth_reporting_assignments_batch", {
+    p_changes: normalizedChanges.map((change) => ({
+      employee_id: change.employeeId,
+      primary_manager_id: change.primaryManagerId,
+      secondary_manager_id: change.secondaryManagerId,
+      expected_revision: change.expectedRevision,
+    })),
+    p_actor_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (error) throw rpcError(error);
+  return data || { reportingLines: [], savedCount: 0 };
+}
+
 export async function growthCoachingBootstrap(body = {}, accessContext) {
   const { client, profile } = accessContext;
   const [usersRaw, assignments, relationshipsResult, preferencesResult] = await Promise.all([activeUsers(client), reportingAssignments(client), client.from("growth_coaching_relationships").select("*").or(`participant_one_id.eq.${profile.id},participant_two_id.eq.${profile.id}`).order("updated_at", { ascending: false }), client.from("growth_email_preferences").select("*").eq("user_id", profile.id).maybeSingle()]);
@@ -653,7 +717,7 @@ export async function growthCoachingBootstrap(body = {}, accessContext) {
       ...userShape(person),
       primaryManagerId: reportAssignment?.primary_manager_id || null,
       secondaryManagerId: reportAssignment?.secondary_manager_id || null,
-      relationshipRole: reportAssignment?.primary_manager_id === profile.id ? "Primary manager" : reportAssignment?.secondary_manager_id === profile.id ? "Secondary manager" : "Higher manager",
+      relationshipRole: reportAssignment?.primary_manager_id === profile.id ? "Primary manager" : reportAssignment?.secondary_manager_id === profile.id ? "Advisory Manager" : "Higher manager",
       goals: serializedGoals.filter((goal) => goal.employeeId === userId),
     };
   });

@@ -90,7 +90,7 @@ test('Unofficial Compensation is service-only, permissioned, navigable and dispu
   assert.match(page, /recoveryDisplayLabel\(recovery\)/);
   assert.doesNotMatch(page, />\{claim\.name \|\|/);
   assert.doesNotMatch(page, />\{recovery\.name \|\|/);
-  assert.match(layout, /payment_collections[\s\S]*unofficial_compensation[\s\S]*cashflow_forecast/);
+  assert.match(layout, /id: 'cross_functions'[\s\S]*payment_collections[\s\S]*disputes[\s\S]*unofficial_compensation[\s\S]*brokers/);
   assert.match(app, /path="\/unofficial-compensation"/);
   assert.match(authModules, /id: 'unofficial_compensation'/);
   assert.match(disputePage, /CompensationClaimLinkModal/);

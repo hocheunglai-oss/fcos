@@ -6,6 +6,8 @@ const migrationUrl = new URL('../supabase/migrations/20260712120242_operational_
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const appClientUrl = new URL('../src/api/appClient.js', import.meta.url);
 const authContextUrl = new URL('../src/lib/AuthContext.jsx', import.meta.url);
+const loginUrl = new URL('../src/pages/Login.jsx', import.meta.url);
+const packageUrl = new URL('../package.json', import.meta.url);
 
 test('operational migration adds atomic collection and exception workflow writes', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -37,16 +39,24 @@ test('short-lived function cache expires and can be cleared at an auth boundary'
 });
 
 test('browser authentication loads protected profile data through the server API', async () => {
-  const [serverSource, clientSource] = await Promise.all([
+  const [serverSource, clientSource, appClientSource, loginSource, packageSource] = await Promise.all([
     readFile(functionUrl, 'utf8'),
     readFile(authContextUrl, 'utf8'),
+    readFile(appClientUrl, 'utf8'),
+    readFile(loginUrl, 'utf8'),
+    readFile(packageUrl, 'utf8'),
   ]);
   assert.match(serverSource, /async function authContext\(/);
   assert.match(serverSource, /authContext: \[\]/);
   assert.match(clientSource, /functions\.invoke\('authContext'/);
+  assert.match(clientSource, /if \(!result\?\.user\) throw new Error\(loginFailureMessage/);
   assert.doesNotMatch(clientSource, /\.from\('user_profiles'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_module_permissions'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_type_module_permissions'\)/);
+  assert.match(appClientSource, /responseIsJson/);
+  assert.match(appClientSource, /The FCOS server API is unavailable/);
+  assert.match(loginSource, /visibleError/);
+  assert.equal(JSON.parse(packageSource).scripts.dev, 'vercel dev');
 });
 
 test('report archive compensates cross-system failures', async () => {

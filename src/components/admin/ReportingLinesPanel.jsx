@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, GitBranch, Loader2, RefreshCw, Save, Users } from 'lucide-react';
+import { AlertCircle, CheckCircle2, GitBranch, Loader2, RefreshCw, RotateCcw, Save, Users } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import StateBlock from '@/components/common/StateBlock';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -25,6 +25,22 @@ function normalizedPayload(data) {
   return data?.reportingLines || data?.lines || data?.assignments || [];
 }
 
+function lineUserId(line) {
+  return line.userId || line.employeeId || line.user_id;
+}
+
+function lineDraft(line) {
+  return {
+    primaryManagerId: line.primaryManagerId || line.primary_manager_id || NONE,
+    secondaryManagerId: line.secondaryManagerId || line.secondary_manager_id || NONE,
+    expectedRevision: Number(line.revision || 0),
+  };
+}
+
+function draftsForLines(lines) {
+  return Object.fromEntries(lines.map((line) => [lineUserId(line), lineDraft(line)]).filter(([userId]) => Boolean(userId)));
+}
+
 /**
  * Service-backed Admin Control panel. The API deliberately owns hierarchy and
  * revision validation; this component only presents the latest server state.
@@ -33,7 +49,7 @@ export default function ReportingLinesPanel() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [savingId, setSavingId] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState({});
   const [drafts, setDrafts] = useState({});
@@ -43,6 +59,25 @@ export default function ReportingLinesPanel() {
   const lines = useMemo(() => normalizedPayload(data), [data]);
   const issues = useMemo(() => data?.issues || data?.validationIssues || [], [data]);
   const gaps = useMemo(() => data?.setupGaps || data?.gaps || lines.filter((line) => !line.primaryManagerId && !line.primary_manager_id), [data, lines]);
+  const changedLines = useMemo(() => lines.filter((line) => {
+    const userId = lineUserId(line);
+    const draft = drafts[userId];
+    const saved = lineDraft(line);
+    return Boolean(draft) && (
+      draft.primaryManagerId !== saved.primaryManagerId
+      || draft.secondaryManagerId !== saved.secondaryManagerId
+    );
+  }), [drafts, lines]);
+  const changedIds = useMemo(() => new Set(changedLines.map(lineUserId)), [changedLines]);
+  const hasChanges = changedLines.length > 0;
+  const hasInvalidChanges = changedLines.some((line) => {
+    const userId = lineUserId(line);
+    const draft = drafts[userId];
+    return !draft
+      || draft.primaryManagerId === userId
+      || draft.secondaryManagerId === userId
+      || (draft.primaryManagerId !== NONE && draft.primaryManagerId === draft.secondaryManagerId);
+  });
 
   const load = useCallback(async ({ background = false } = {}) => {
     if (background) setRefreshing(true);
@@ -54,17 +89,7 @@ export default function ReportingLinesPanel() {
     } else {
       const next = response.data || {};
       setData(next);
-      const nextDrafts = {};
-      normalizedPayload(next).forEach((line) => {
-        const id = line.userId || line.employeeId || line.user_id;
-        if (!id) return;
-        nextDrafts[id] = {
-          primaryManagerId: line.primaryManagerId || line.primary_manager_id || NONE,
-          secondaryManagerId: line.secondaryManagerId || line.secondary_manager_id || NONE,
-          expectedRevision: Number(line.revision || 0),
-        };
-      });
-      setDrafts(nextDrafts);
+      setDrafts(draftsForLines(normalizedPayload(next)));
     }
     setLoading(false);
     setRefreshing(false);
@@ -81,33 +106,33 @@ export default function ReportingLinesPanel() {
     }));
   };
 
-  const saveLine = async (line) => {
-    const userId = line.userId || line.employeeId || line.user_id;
-    const draft = drafts[userId];
-    if (!userId || !draft) return;
-    if (draft.primaryManagerId === userId || draft.secondaryManagerId === userId) {
-      toast({ variant: 'destructive', title: 'A user cannot manage themselves.' });
-      return;
-    }
-    if (draft.primaryManagerId !== NONE && draft.primaryManagerId === draft.secondaryManagerId) {
-      toast({ variant: 'destructive', title: 'Primary and secondary managers must be different.' });
-      return;
-    }
-    setSavingId(userId);
-    const response = await appClient.functions.invoke('growthReportingLineSave', {
-      userId,
-      primaryManagerId: draft.primaryManagerId === NONE ? null : draft.primaryManagerId,
-      secondaryManagerId: draft.secondaryManagerId === NONE ? null : draft.secondaryManagerId,
-      expectedRevision: draft.expectedRevision,
+  const discardChanges = () => {
+    setDrafts(draftsForLines(lines));
+  };
+
+  const saveChanges = async () => {
+    if (!hasChanges || hasInvalidChanges) return;
+    setSaving(true);
+    const changes = changedLines.map((line) => {
+      const userId = lineUserId(line);
+      const draft = drafts[userId];
+      return {
+        userId,
+        primaryManagerId: draft.primaryManagerId === NONE ? null : draft.primaryManagerId,
+        secondaryManagerId: draft.secondaryManagerId === NONE ? null : draft.secondaryManagerId,
+        expectedRevision: draft.expectedRevision,
+      };
+    });
+    const response = await appClient.functions.invoke('growthReportingLinesSaveBatch', {
+      changes,
     }, { force: true });
     if (response.data?.error) {
-      toast({ variant: 'destructive', title: 'Reporting line was not saved', description: errorText(response) });
-      if (response.data?.current) await load({ background: true });
+      toast({ variant: 'destructive', title: 'Reporting lines were not saved', description: errorText(response) });
     } else {
-      toast({ title: 'Reporting line saved', description: `${userName(usersById.get(userId))} has the current manager assignment.` });
+      toast({ title: 'Reporting lines saved', description: `${changes.length} ${changes.length === 1 ? 'assignment is' : 'assignments are'} now current.` });
       await load({ background: true });
     }
-    setSavingId(null);
+    setSaving(false);
   };
 
   if (loading) return <StateBlock icon={Loader2} title="Loading reporting lines" description="Checking the current management hierarchy." />;
@@ -118,11 +143,23 @@ export default function ReportingLinesPanel() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold">Reporting Lines</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Primary managers approve development goals. Secondary managers can read goals but cannot approve them.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Primary managers approve development goals. Advisory Managers can read goals but cannot comment, approve, or complete them.</p>
         </div>
-        <Button type="button" variant="outline" onClick={() => load({ background: true })} disabled={refreshing} className="gap-2 self-start sm:self-auto">
-          {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {hasChanges && (
+            <>
+              <Button type="button" variant="outline" onClick={discardChanges} disabled={saving} className="gap-2">
+                <RotateCcw className="h-4 w-4" /> Discard
+              </Button>
+              <Button type="button" onClick={saveChanges} disabled={saving || hasInvalidChanges} className="gap-2">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save changes ({changedLines.length})
+              </Button>
+            </>
+          )}
+          <Button type="button" variant="outline" onClick={() => load({ background: true })} disabled={refreshing || saving || hasChanges} title={hasChanges ? 'Save or discard changes before refreshing.' : 'Refresh reporting lines'} className="gap-2">
+            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
+          </Button>
+        </div>
       </div>
 
       {issues.length > 0 && (
@@ -147,35 +184,34 @@ export default function ReportingLinesPanel() {
             <TableRow>
               <TableHead>Employee</TableHead>
               <TableHead className="min-w-[190px]">Primary manager</TableHead>
-              <TableHead className="min-w-[190px]">Secondary manager</TableHead>
+              <TableHead className="min-w-[190px]">Advisory Manager</TableHead>
               <TableHead>Hierarchy</TableHead>
-              <TableHead className="w-[100px]">Revision</TableHead>
-              <TableHead className="w-[92px] text-right">Save</TableHead>
+              <TableHead className="w-[130px]">Revision</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {lines.map((line) => {
-              const userId = line.userId || line.employeeId || line.user_id;
+              const userId = lineUserId(line);
               const employee = line.user || line.employee || usersById.get(userId) || { id: userId, fullName: line.userName || line.employeeName };
-              const draft = drafts[userId] || { primaryManagerId: NONE, secondaryManagerId: NONE, expectedRevision: Number(line.revision || 0) };
+              const draft = drafts[userId] || lineDraft(line);
               const optionUsers = users.filter((user) => user.id !== userId && user.active !== false);
               const invalid = draft.primaryManagerId !== NONE && draft.primaryManagerId === draft.secondaryManagerId;
               return (
-                <TableRow key={userId}>
+                <TableRow key={userId} className={changedIds.has(userId) ? 'bg-blue-50/60' : undefined}>
                   <TableCell>
                     <div className="font-medium">{userName(employee)}</div>
                     {employee.email && <div className="text-xs text-muted-foreground">{employee.email}</div>}
                   </TableCell>
                   <TableCell>
-                    <Select value={draft.primaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'primaryManagerId', value)} disabled={savingId === userId}>
+                    <Select value={draft.primaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'primaryManagerId', value)} disabled={saving}>
                       <SelectTrigger className="w-full"><SelectValue placeholder="No primary manager" /></SelectTrigger>
                       <SelectContent><SelectItem value={NONE}>No primary manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
                     </Select>
                   </TableCell>
                   <TableCell>
-                    <Select value={draft.secondaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'secondaryManagerId', value)} disabled={savingId === userId}>
-                      <SelectTrigger className="w-full"><SelectValue placeholder="No secondary manager" /></SelectTrigger>
-                      <SelectContent><SelectItem value={NONE}>No secondary manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
+                    <Select value={draft.secondaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'secondaryManagerId', value)} disabled={saving}>
+                      <SelectTrigger className="w-full"><SelectValue placeholder="No Advisory Manager" /></SelectTrigger>
+                      <SelectContent><SelectItem value={NONE}>No Advisory Manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
                     </Select>
                     {invalid && <p className="mt-1 text-xs text-destructive">Choose two different managers.</p>}
                   </TableCell>
@@ -183,16 +219,15 @@ export default function ReportingLinesPanel() {
                     {line.valid === false || line.hierarchyValid === false ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">Invalid</Badge> : <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700"><CheckCircle2 className="mr-1 h-3 w-3" />Valid</Badge>}
                     {(line.path || line.hierarchyPath) && <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><GitBranch className="h-3 w-3" />{line.path || line.hierarchyPath}</div>}
                   </TableCell>
-                  <TableCell><span className="font-mono text-xs">{draft.expectedRevision}</span></TableCell>
-                  <TableCell className="text-right"><Button type="button" size="icon" variant="outline" title="Save reporting line" onClick={() => saveLine(line)} disabled={savingId === userId || invalid}>{savingId === userId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}</Button></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{draft.expectedRevision}</span>{changedIds.has(userId) && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Unsaved</Badge>}</div></TableCell>
                 </TableRow>
               );
             })}
-            {!lines.length && <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No active users are available for reporting-line setup.</TableCell></TableRow>}
+            {!lines.length && <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No active users are available for reporting-line setup.</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>
-      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Each save sends the row&apos;s expected revision. A concurrent hierarchy change is rejected by the server and the latest hierarchy is reloaded.</p></div>
+      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Save changes validates every edited row and the resulting hierarchy together. A concurrent change or reporting cycle rejects the entire batch, so no partial manager assignments are saved.</p></div>
     </div>
   );
 }
