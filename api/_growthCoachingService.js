@@ -4,7 +4,7 @@ import { calculateMilestoneGoalProgress, calculateNumericGoalProgress, calculate
 import { COLLABORATION_ALLOWED_ATTACHMENTS, collaborationAvailableDisplayFilename, validateCollaborationAttachment } from "./_collaboration.js";
 import { growthCalendarCancel, growthCalendarConfigured, growthCalendarCreate, growthCalendarEventPayload, growthCalendarGet, growthCalendarUpdate } from "./_growthOutlook.js";
 import { isExternalActionEnabled } from "./_externalActionGates.js";
-import { sendWithSmtp, smtpAuthenticatedFromAddress } from "./_smtp.js";
+import { sendOperationalMail } from "./_operationalMail.js";
 
 const BUCKET = "growth-coaching-files";
 const PUBLIC_PATH = "/growth-coaching";
@@ -280,9 +280,8 @@ async function sendNotificationEmail(client, { user, eventId, category, dedupeKe
   const html = details.map((line, index) => (index === 0 ? `<h2>${line}</h2>` : `<p>${line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`)).join("");
   try {
     const senderName = text(process.env.FCOS_GROWTH_SENDER_NAME || "FCOS", 100);
-    const from = smtpAuthenticatedFromAddress({}, `${senderName} <${process.env.SMTP_USER || ""}>`);
-    await sendWithSmtp({
-      from,
+    await sendOperationalMail({
+      from: senderName,
       to: user.email,
       subject: `FCOS: ${safeTitle}`,
       text: details.join("\n"),
@@ -401,9 +400,8 @@ async function sendRoutineDigests(client, today) {
     const url = publicUrl();
     const lines = ["FCOS Growth & Coaching reminder digest", `Date: ${today}`, ...items.map((row) => `- ${text(row.message || row.title, 255)}`), url ? `Open FCOS: ${url}${PUBLIC_PATH}` : ""].filter(Boolean);
     try {
-      const from = smtpAuthenticatedFromAddress({}, `${text(process.env.FCOS_GROWTH_SENDER_NAME || "FCOS", 100)} <${process.env.SMTP_USER || ""}>`);
-      await sendWithSmtp({
-        from,
+      await sendOperationalMail({
+        from: text(process.env.FCOS_GROWTH_SENDER_NAME || "FCOS", 100),
         to: user.email,
         subject: `FCOS Growth & Coaching reminders - ${today}`,
         text: lines.join("\n"),

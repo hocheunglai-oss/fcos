@@ -30,6 +30,25 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
+### Operational Microsoft 365 sender
+
+Routine FCOS email should use Microsoft Graph with the operational mailbox. The
+operational channel can reuse the FCOS Updates Entra application and Vercel OIDC
+trust, while Exchange recipient scope must include the operational mailbox:
+
+```bash
+FCOS_OPERATIONAL_TRANSPORT=microsoft_graph_oidc
+FCOS_OPERATIONAL_MICROSOFT_MAILBOX=louisa@cosulich.com.hk
+FCOS_OPERATIONAL_SENDER_NAME="FCOS"
+FCOS_OPERATIONAL_SMTP_FALLBACK=true
+```
+
+`FCOS_OPERATIONAL_MICROSOFT_TENANT_ID` and
+`FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID` may be set independently. When absent,
+FCOS reuses the corresponding `FCOS_UPDATE_*` values. The SMTP fallback is a
+temporary continuity control: it runs only after a definite Graph authentication
+or mailbox-authorization failure and never retries an uncertain Graph send.
+
 ### FCOS Updates Microsoft 365 sender
 
 FCOS Updates should use Microsoft Graph with a mailbox-scoped Exchange application role. Vercel authenticates through its short-lived production OIDC identity, so no mailbox password or application secret is stored:

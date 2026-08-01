@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.71';
+export const APP_VERSION = '2.0.72';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.72',
+    releasedAt: '2026-08-02',
+    title: 'Operational Microsoft Graph sender',
+    changes: [
+      'Moved payment reminders, reports, notifications, and other routine FCOS email to Microsoft Graph using Vercel OIDC and the operational mailbox.',
+      'Added one Graph-first operational mail service with To, CC, BCC, plain-text, and HTML support across existing email workflows.',
+      'Added a guarded temporary SMTP fallback for definite authentication failures while preventing automatic retries after uncertain Graph responses.',
+      'Updated Email Senders and System Health to report the operational and FCOS Updates Microsoft 365 channels independently.',
+    ],
+  },
   {
     version: '2.0.71',
     releasedAt: '2026-08-02',

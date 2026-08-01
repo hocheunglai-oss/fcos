@@ -1,15 +1,10 @@
 import { isExternalActionEnabled } from './_externalActionGates.js';
 import { fcosUpdateMailConfig } from './_fcosUpdates.js';
-import { smtpAddressParts } from './_smtp.js';
+import { operationalMailStatus } from './_operationalMail.js';
 
 export function emailSenderStatus(env = process.env) {
   const deliveryGateEnabled = isExternalActionEnabled('email_delivery', env);
-  const operationalAddress = smtpAddressParts(env.SMTP_USER).email.toLowerCase();
-  const operationalConfigured = Boolean(
-    env.SMTP_HOST
-    && operationalAddress
-    && env.SMTP_PASSWORD
-  );
+  const operational = operationalMailStatus(env);
   const updateConfig = fcosUpdateMailConfig(env);
   const updateConfigured = updateConfig.deliveryMethod === 'microsoft_graph_oidc'
     ? Boolean(
@@ -29,17 +24,7 @@ export function emailSenderStatus(env = process.env) {
 
   return {
     deliveryGateEnabled,
-    operational: {
-      id: 'operational-email',
-      senderName: null,
-      senderAddress: operationalAddress || null,
-      authenticatedAddress: operationalAddress || null,
-      displayNameMode: 'workflow_specific',
-      deliveryMethod: 'smtp',
-      transportLabel: 'Authenticated SMTP',
-      configured: operationalConfigured,
-      configurationIssue: operationalConfigured ? null : 'The shared SMTP mailbox is not fully configured.',
-    },
+    operational,
     fcosUpdates: {
       id: 'fcos-updates-email',
       senderName: updateConfig.senderName || null,

@@ -170,6 +170,8 @@ function SenderChannelBand({ title, description, channel, deliveryGateEnabled })
           <dd className="mt-1 text-foreground">
             {channel?.displayNameMode === 'workflow_specific'
               ? 'Set by each workflow'
+              : channel?.displayNameMode === 'mailbox_managed'
+                ? 'Managed by Microsoft 365 mailbox'
               : channel?.senderName || 'Not configured'}
           </dd>
         </div>
@@ -177,6 +179,16 @@ function SenderChannelBand({ title, description, channel, deliveryGateEnabled })
           <dt className="font-semibold uppercase text-muted-foreground">Delivery gate</dt>
           <dd className="mt-1 text-foreground">{deliveryGateEnabled ? 'Enabled' : 'Disabled'}</dd>
         </div>
+        {channel?.fallbackEnabled && (
+          <div>
+            <dt className="font-semibold uppercase text-muted-foreground">Temporary fallback</dt>
+            <dd className="mt-1 break-words text-foreground">
+              {channel.fallbackConfigured
+                ? `${channel.fallbackTransportLabel || 'SMTP'} · ${channel.fallbackAddress || 'Configured'}`
+                : 'Enabled but not configured'}
+            </dd>
+          </div>
+        )}
       </dl>
       {channel?.configurationIssue && (
         <p className="mt-3 text-xs text-amber-700">{channel.configurationIssue}</p>
@@ -823,13 +835,13 @@ export default function SettingsPage({ methodologyAction = null }) {
               <div className="grid divide-y divide-border border-y border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
                 <SenderChannelBand
                   title="Operational Email Sender"
-                  description="Payment reminders, reports, notifications, and other routine FCOS email authenticate through the shared SMTP mailbox. A workflow may set its display name, but FCOS enforces the authenticated mailbox address."
+                  description="Payment reminders, reports, notifications, and other routine FCOS email use the operational Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Any temporary SMTP fallback is shown explicitly below."
                   channel={emailSenders?.operational}
                   deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
                 />
                 <SenderChannelBand
                   title="FCOS Updates Sender"
-                  description="Administrator-controlled FCOS Updates batches use their dedicated mailbox and transport instead of the operational SMTP identity."
+                  description="Administrator-controlled FCOS Updates batches use their dedicated Microsoft 365 mailbox and remain independent from the operational sender identity."
                   channel={emailSenders?.fcosUpdates}
                   deliveryGateEnabled={emailSenders?.deliveryGateEnabled === true}
                 />

@@ -4,6 +4,7 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 
 const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 
 function graphMailError(message, { code, global = false, uncertain = false, status = 502 } = {}) {
   const error = new Error(message);
@@ -11,19 +12,31 @@ function graphMailError(message, { code, global = false, uncertain = false, stat
   error.status = status;
   error.fcosUpdateGlobal = global;
   error.fcosUpdateUncertain = uncertain;
+  error.mailDeliveryGlobal = global;
+  error.mailDeliveryUncertain = uncertain;
   return error;
 }
 
 function requiredConfigValue(value, label) {
   const normalized = String(value || '').trim();
   if (!normalized) {
-    throw graphMailError(`Missing ${label} for FCOS Updates Microsoft 365 OAuth.`, {
+    throw graphMailError(`Missing ${label} for Microsoft 365 OAuth email delivery.`, {
       code: 'MICROSOFT_GRAPH_MAIL_CONFIG_MISSING',
       global: true,
       status: 503,
     });
   }
   return normalized;
+}
+
+function graphRecipients(value) {
+  const inputs = Array.isArray(value) ? value : value == null ? [] : [value];
+  const addresses = inputs.flatMap((entry) => String(entry || '').match(EMAIL_PATTERN) || []);
+  return [...new Set(addresses.map((address) => address.toLowerCase()))];
+}
+
+function graphRecipientRows(addresses) {
+  return addresses.map((address) => ({ emailAddress: { address } }));
 }
 
 async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
@@ -40,7 +53,7 @@ async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
     assertion = '';
   }
   if (!assertion) {
-    throw graphMailError('Vercel did not provide the production OIDC identity required for FCOS Updates.', {
+    throw graphMailError('Vercel did not provide the production OIDC identity required for Microsoft 365 email delivery.', {
       code: 'VERCEL_OIDC_TOKEN_MISSING',
       global: true,
       status: 503,
@@ -65,7 +78,7 @@ async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
 
   if (!tokenResponse?.ok) {
     throw graphMailError(
-      'Microsoft 365 OAuth authentication failed for FCOS Updates. Verify the Vercel OIDC trust and Microsoft application configuration.',
+      'Microsoft 365 OAuth authentication failed. Verify the Vercel OIDC trust and Microsoft application configuration.',
       {
         code: 'MICROSOFT_GRAPH_TOKEN_FAILED',
         global: true,
@@ -77,7 +90,7 @@ async function acquireMicrosoftGraphMailToken(config, dependencies = {}) {
   const tokenPayload = await tokenResponse.json().catch(() => ({}));
   const accessToken = String(tokenPayload?.access_token || '').trim();
   if (!accessToken) {
-    throw graphMailError('Microsoft 365 OAuth returned no access token for FCOS Updates.', {
+    throw graphMailError('Microsoft 365 OAuth returned no access token for email delivery.', {
       code: 'MICROSOFT_GRAPH_TOKEN_MISSING',
       global: true,
       status: 503,
@@ -112,9 +125,14 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
   return {
     method: 'microsoft_graph_oidc',
     authenticatedAddress: mailbox,
-    async sendMail({ to, subject, html }) {
-      const recipient = String(Array.isArray(to) ? to[0] : to || '').trim().toLowerCase();
-      if (!recipient) throw graphMailError('The FCOS Updates recipient is missing.', { status: 400 });
+    accessTokenExpiresAt: authentication.accessTokenExpiresAt,
+    async sendMail({ to, cc, bcc, subject, html, text }) {
+      const toRecipients = graphRecipients(to);
+      const ccRecipients = graphRecipients(cc);
+      const bccRecipients = graphRecipients(bcc);
+      if (!toRecipients.length) throw graphMailError('The email recipient is missing.', { status: 400 });
+      const accepted = [...new Set([...toRecipients, ...ccRecipients, ...bccRecipients])];
+      const hasHtml = String(html || '').trim().length > 0;
       const requestId = randomUUID();
       let response;
       try {
@@ -130,8 +148,13 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
             body: JSON.stringify({
               message: {
                 subject: String(subject || ''),
-                body: { contentType: 'HTML', content: String(html || '') },
-                toRecipients: [{ emailAddress: { address: recipient } }],
+                body: {
+                  contentType: hasHtml ? 'HTML' : 'Text',
+                  content: hasHtml ? String(html || '') : String(text || ''),
+                },
+                toRecipients: graphRecipientRows(toRecipients),
+                ccRecipients: graphRecipientRows(ccRecipients),
+                bccRecipients: graphRecipientRows(bccRecipients),
               },
               saveToSentItems: true,
             }),
@@ -146,17 +169,17 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
       }
 
       if (response.status === 202) {
-        return { id: requestId, accepted: [recipient], rejected: [] };
+        return { id: requestId, accepted, rejected: [] };
       }
       if ([401, 403, 404].includes(response.status)) {
         throw graphMailError(
-          'Microsoft 365 has not authorized FCOS Updates to send from the configured mailbox. Verify the scoped Application Mail.Send assignment and wait for Exchange permission propagation before retrying.',
+          'Microsoft 365 has not authorized FCOS to send from the configured mailbox. Verify the scoped Application Mail.Send assignment and wait for Exchange permission propagation before retrying.',
           { code: 'MICROSOFT_GRAPH_MAIL_UNAUTHORIZED', global: true, status: 503 },
         );
       }
       if (response.status === 429) {
         throw graphMailError(
-          'Microsoft Graph temporarily throttled FCOS Updates. Wait before retrying the batch.',
+          'Microsoft Graph temporarily throttled FCOS email delivery. Wait before retrying.',
           { code: 'MICROSOFT_GRAPH_MAIL_THROTTLED', global: true, status: 503 },
         );
       }
@@ -166,7 +189,7 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
           { code: 'MICROSOFT_GRAPH_SEND_UNCERTAIN', uncertain: true },
         );
       }
-      throw graphMailError('Microsoft Graph rejected this FCOS Updates recipient.', {
+      throw graphMailError('Microsoft Graph rejected this email recipient.', {
         code: 'MICROSOFT_GRAPH_RECIPIENT_REJECTED',
         status: 400,
       });

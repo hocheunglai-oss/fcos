@@ -47,7 +47,7 @@ import {
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
-import { sendWithSmtp, sendWithSmtpSendAsFallback, smtpAuthenticatedFromAddress } from '../_smtp.js';
+import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { verifyMicrosoftGraphMailAuthentication } from '../_microsoftGraphMail.js';
 import { emailSenderStatus as configuredEmailSenderStatus } from '../_emailSenderStatus.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
@@ -5042,15 +5042,16 @@ function incomingPaymentStemUrl(settings = {}, stemId) {
 }
 
 function serverEmailDeliveryStatus() {
-  const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+  const mailConfig = operationalMailConfig();
   const enabled = isExternalActionEnabled('email_delivery');
   return {
-    hasServerProvider: hasSmtp && enabled,
-    configured: hasSmtp,
+    hasServerProvider: mailConfig.configured && enabled,
+    configured: mailConfig.configured,
     enabled,
-    provider: hasSmtp ? 'smtp' : 'none',
-    sender: hasSmtp ? maskValue(process.env.SMTP_USER) : null,
-    scope: hasSmtp ? 'shared_server' : 'none',
+    provider: mailConfig.configured ? mailConfig.deliveryMethod : 'none',
+    sender: mailConfig.senderAddress ? maskValue(mailConfig.senderAddress) : null,
+    scope: mailConfig.configured ? 'operational_server' : 'none',
+    fallbackEnabled: mailConfig.fallback.enabled && mailConfig.fallback.configured,
   };
 }
 
@@ -5426,7 +5427,7 @@ function externalActionGateHealthRow() {
     error: null,
     tokenExpiry: 'Not applicable.',
     details: Object.fromEntries(Object.values(gates).map((gate) => [gate.label, `${gate.enabled ? 'Enabled' : 'Disabled'} (${gate.expectedState === 'live' ? 'existing live function' : 'UAT gated'})`])),
-    notes: unexpected.length ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`] : ['Existing Salesforce, Google Drive, and shared SMTP functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
+    notes: unexpected.length ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`] : ['Existing Salesforce, Google Drive, and operational email delivery functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
   };
 }
 
@@ -5485,53 +5486,105 @@ async function nagerHealthRow() {
   );
 }
 
-async function smtpHealthRow() {
-  const required = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD'];
-  const configured = missingEnv(required).length === 0;
-  const result = configured
+async function operationalMailHealthRow() {
+  const mailConfig = operationalMailConfig();
+  const usesGraph = mailConfig.deliveryMethod === 'microsoft_graph_oidc';
+  const deliveryGateEnabled = isExternalActionEnabled('email_delivery');
+  const missingGraphEnv = usesGraph
+    ? [
+        ...(!mailConfig.graph.tenantId ? ['FCOS_OPERATIONAL_MICROSOFT_TENANT_ID or FCOS_UPDATE_MICROSOFT_TENANT_ID'] : []),
+        ...(!mailConfig.graph.clientId ? ['FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID or FCOS_UPDATE_MICROSOFT_CLIENT_ID'] : []),
+        ...(!mailConfig.graph.mailbox ? ['FCOS_OPERATIONAL_MICROSOFT_MAILBOX'] : []),
+      ]
+    : [];
+  let result = mailConfig.configured
     ? await timedCheck(async () => {
+        if (usesGraph) {
+          return {
+            ...await verifyMicrosoftGraphMailAuthentication(mailConfig.graph),
+            senderAddress: mailConfig.senderAddress,
+            deliveryGateEnabled,
+          };
+        }
         const nodemailer = await import('nodemailer');
         const createTransport = nodemailer.createTransport || nodemailer.default?.createTransport;
         if (!createTransport) throw new Error('SMTP email library failed to load.');
-        const port = Number(process.env.SMTP_PORT || 587);
+        const port = Number(mailConfig.smtp.port || 587);
         const transporter = createTransport({
-          host: process.env.SMTP_HOST,
+          host: mailConfig.smtp.host,
           port,
-          secure: process.env.SMTP_SECURE != null ? process.env.SMTP_SECURE === 'true' : port === 465,
+          secure: mailConfig.smtp.secure,
           connectionTimeout: 7000,
           greetingTimeout: 7000,
           socketTimeout: 10000,
           auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASSWORD,
+            user: mailConfig.smtp.user,
+            pass: mailConfig.smtp.password,
           },
         });
-        await transporter.verify();
-        return {
-          host: process.env.SMTP_HOST,
-          port,
-          user: maskValue(process.env.SMTP_USER),
-        };
+        try {
+          await transporter.verify();
+          return {
+            host: mailConfig.smtp.host,
+            port,
+            authenticatedAddress: mailConfig.senderAddress,
+            deliveryGateEnabled,
+          };
+        } finally {
+          transporter.close?.();
+        }
       })
     : null;
+  if (result?.ok && !deliveryGateEnabled) result.status = 'disabled';
+  if (result && !result.ok && mailConfig.fallback.enabled && mailConfig.fallback.configured) {
+    result.status = 'warning';
+    result.details = {
+      fallbackAvailable: true,
+      fallbackAddress: mailConfig.fallback.authenticatedAddress,
+    };
+  }
   return healthRow(
     {
-      id: 'server-smtp',
-      name: 'Shared Server SMTP Sender',
+      id: 'operational-mail',
+      name: usesGraph ? 'Operational Microsoft 365 Sender' : 'Operational SMTP Sender',
       category: 'Email',
-      purpose: 'Shared sender for every External Payment Reminder, plus scheduled and server-generated email delivery.',
+      purpose: 'Operational sender for payment reminders, reports, notifications, and other routine FCOS email.',
       scope: 'server',
-      provider: 'SMTP',
-      endpoint: process.env.SMTP_HOST || null,
-      authType: 'SMTP username/password',
-      configured,
-      configuredEnv: configuredEnv(['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE']),
-      missingEnv: missingEnv(required),
-      tokenExpiry: 'Not applicable.',
+      provider: usesGraph ? 'Microsoft Graph' : 'SMTP',
+      endpoint: usesGraph ? 'https://login.microsoftonline.com' : mailConfig.smtp.host || null,
+      authType: usesGraph ? 'Vercel OIDC to Microsoft OAuth' : 'SMTP username/password',
+      configured: mailConfig.configured,
+      configuredEnv: configuredEnv([
+        'FCOS_OPERATIONAL_TRANSPORT',
+        'FCOS_OPERATIONAL_MICROSOFT_TENANT_ID',
+        'FCOS_OPERATIONAL_MICROSOFT_CLIENT_ID',
+        'FCOS_OPERATIONAL_MICROSOFT_MAILBOX',
+        'FCOS_OPERATIONAL_SMTP_FALLBACK',
+        'SMTP_HOST',
+        'SMTP_PORT',
+        'SMTP_USER',
+        'SMTP_PASSWORD',
+        'SMTP_SECURE',
+      ]),
+      missingEnv: usesGraph ? missingGraphEnv : missingEnv(['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD']),
+      tokenExpiry: usesGraph ? null : 'Not applicable.',
       details: {
-        deliveryGateEnabled: isExternalActionEnabled('email_delivery'),
+        senderAddress: mailConfig.senderAddress || null,
+        authenticatedAddress: mailConfig.authenticatedAddress || null,
+        deliveryMethod: mailConfig.deliveryMethod,
+        deliveryGateEnabled,
+        smtpFallbackEnabled: mailConfig.fallback.enabled,
+        smtpFallbackConfigured: mailConfig.fallback.configured,
+        smtpFallbackAddress: mailConfig.fallback.enabled ? mailConfig.fallback.authenticatedAddress : null,
       },
-      notes: ['This check verifies login only; it does not send an email. The emergency delivery control is reported separately.'],
+      notes: [
+        usesGraph
+          ? 'This check verifies Vercel OIDC and Microsoft token exchange without sending email. Mailbox-scoped send authorization is confirmed only during an actual operational email send.'
+          : 'This check verifies SMTP login without sending email.',
+        mailConfig.fallback.enabled
+          ? 'Authenticated SMTP remains a temporary fallback only for definite Graph authentication or authorization failures; uncertain Graph sends are never retried automatically.'
+          : 'No automatic transport fallback is enabled.',
+      ],
     },
     result,
   );
@@ -5822,7 +5875,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('google-drive', 5 * 60, force, googleDriveHealthRow),
     cachedHealthCheck('frankfurter', 30 * 60, force, frankfurterHealthRow),
     cachedHealthCheck('nager-date', 30 * 60, force, nagerHealthRow),
-    cachedHealthCheck('smtp', 5 * 60, force, smtpHealthRow),
+    cachedHealthCheck('operational-mail', 5 * 60, force, operationalMailHealthRow),
     cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
@@ -10549,11 +10602,10 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
   const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId }, accessContext);
   const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId }, profile, calculation);
   const from = String(body.from || DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS.from);
-  const hasServerSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
-  if (!hasServerSmtp) {
-    throw appError('The shared server email sender is not configured. Ask an administrator to check Settings > System Health.', 400);
+  if (!operationalMailDeliveryAvailable()) {
+    throw appError('The operational email sender is unavailable. Ask an administrator to check Settings > System Health.', 400);
   }
-  const smtpFrom = smtpAuthenticatedFromAddress({ user: process.env.SMTP_USER }, from) || from;
+  const mailConfig = operationalMailConfig();
   const recipients = email.to;
   if (!recipients.length) {
     throw appError('Late payment interest request recipient is not configured. Add at least one To recipient in the template.', 400);
@@ -10575,7 +10627,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
     recipient_email: uniqueEmailList(recipients, email.cc, email.bcc).join(', '),
     email_subject: email.subject,
     email_message_id: null,
-    email_provider: 'smtp',
+    email_provider: mailConfig.deliveryMethod,
     actor_user_id: profile.id,
     actor_email: profile.email,
     actor_name: profile.full_name || profile.email || null,
@@ -10618,8 +10670,8 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
 
   let result;
   try {
-    result = await sendWithSmtp({
-      from: smtpFrom,
+    result = await sendOperationalMail({
+      from,
       to: recipients,
       cc: email.cc,
       bcc: email.bcc,
@@ -10631,7 +10683,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
     await client
       .from('incoming_payment_interest_notifications')
       .update({
-        delivery_status: 'failed',
+        delivery_status: error.mailDeliveryUncertain ? 'uncertain' : 'failed',
         last_error: error.message,
         updated_at: new Date().toISOString(),
       })
@@ -10645,6 +10697,7 @@ async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, acce
     .update({
       delivery_status: 'sent',
       email_message_id: result.id || result.messageId || null,
+      email_provider: result.deliveryMethod || mailConfig.deliveryMethod,
       sent_at: sentAt,
       last_error: null,
       updated_at: sentAt,
@@ -10983,9 +11036,8 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
     };
   }
   if (!settings.to.length) throw appError('At least one To recipient is required before sending the Incoming Payment report.', 400);
-  const smtpFrom = smtpAuthenticatedFromAddress({ user: process.env.SMTP_USER }, settings.from) || settings.from;
-  const result = await sendWithSmtp({
-    from: smtpFrom,
+  const result = await sendOperationalMail({
+    from: settings.from,
     to: settings.to,
     cc: settings.cc,
     bcc: settings.bcc,
@@ -11743,9 +11795,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
   }
   const reviewedRecipientBatches = new Map(body.recipientBatches.filter((batch) => batch?.key).map((batch) => [batch.key, batch]));
-  const sharedSmtp = { user: process.env.SMTP_USER };
   const configuredFrom = process.env.PAYMENT_REMINDER_FROM || settings.from;
-  const smtpFrom = smtpAuthenticatedFromAddress(sharedSmtp, configuredFrom) || configuredFrom;
   const sendResults = [];
   const collectionResults = [];
   const collectionWarnings = [];
@@ -11773,9 +11823,8 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     );
     let result;
     try {
-      const delivery = await sendWithSmtpSendAsFallback({
-        smtp: sharedSmtp,
-        from: smtpFrom,
+      result = await sendOperationalMail({
+        from: configuredFrom,
         to,
         cc,
         bcc,
@@ -11783,13 +11832,11 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
         html: email.html,
         text: email.text,
       });
-      result = delivery.result;
     } catch (error) {
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         message: error.message,
-        provider: 'smtp',
-        sharedServerSender: true,
-        hasSmtpEnv: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD),
+        provider: operationalMailConfig().deliveryMethod,
+        operationalServerSender: true,
         toCount: to.length,
         ccCount: cc.length,
         bccCount: bcc.length,
@@ -11959,11 +12006,10 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
       },
     };
   }
-  const smtpFrom = smtpAuthenticatedFromAddress({ user: process.env.SMTP_USER }, settings.from) || settings.from;
   let result;
   try {
-    result = await sendWithSmtp({
-      from: smtpFrom,
+    result = await sendOperationalMail({
+      from: settings.from,
       to: settings.to,
       cc: settings.cc,
       subject: email.subject,

@@ -15,7 +15,7 @@ const GATE_DEFINITIONS = Object.freeze({
     envName: 'FCOS_DISABLE_EMAIL_DELIVERY',
     defaultEnabled: true,
     label: 'Email delivery',
-    description: 'Manual and scheduled SMTP email delivery.',
+    description: 'Manual and scheduled server email delivery.',
   },
   outlook_calendar: {
     envName: 'FCOS_ENABLE_OUTLOOK_CALENDAR',

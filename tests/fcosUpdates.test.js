@@ -125,7 +125,7 @@ test('FCOS Updates uses mailbox-matched Microsoft Graph OIDC without Send As del
   assert.equal(config.configurationIssue, '');
 });
 
-test('sender status keeps operational SMTP and FCOS Updates identities separate without exposing secrets', () => {
+test('sender status keeps operational and FCOS Updates identities separate without exposing secrets', () => {
   const status = emailSenderStatus({
     FCOS_ENABLE_EMAIL_DELIVERY: 'true',
     SMTP_HOST: 'smtp.office365.com',
@@ -147,6 +147,27 @@ test('sender status keeps operational SMTP and FCOS Updates identities separate 
   assert.equal(status.fcosUpdates.deliveryMethod, 'microsoft_graph_oidc');
   assert.notEqual(status.operational.senderAddress, status.fcosUpdates.senderAddress);
   assert.doesNotMatch(JSON.stringify(status), /operational-secret|tenant-id|client-id/);
+});
+
+test('sender status reports the operational Microsoft Graph mailbox separately', () => {
+  const status = emailSenderStatus({
+    FCOS_OPERATIONAL_TRANSPORT: 'microsoft_graph_oidc',
+    FCOS_OPERATIONAL_MICROSOFT_MAILBOX: 'louisa@example.com',
+    FCOS_OPERATIONAL_SMTP_FALLBACK: 'true',
+    FCOS_UPDATE_TRANSPORT: 'microsoft_graph',
+    FCOS_UPDATE_MICROSOFT_TENANT_ID: 'tenant-id',
+    FCOS_UPDATE_MICROSOFT_CLIENT_ID: 'client-id',
+    FCOS_UPDATE_MICROSOFT_MAILBOX: 'vincent@example.com',
+    FCOS_UPDATE_FROM_EMAIL: 'vincent@example.com',
+    SMTP_HOST: 'smtp.office365.com',
+    SMTP_USER: 'louisa@example.com',
+    SMTP_PASSWORD: 'operational-secret',
+  });
+
+  assert.equal(status.operational.deliveryMethod, 'microsoft_graph_oidc');
+  assert.equal(status.operational.senderAddress, 'louisa@example.com');
+  assert.equal(status.operational.fallbackEnabled, true);
+  assert.equal(status.fcosUpdates.senderAddress, 'vincent@example.com');
 });
 
 test('FCOS Updates fails closed on partial or mismatched Microsoft Graph configuration', () => {
@@ -191,7 +212,7 @@ test('Settings separates operational email from the FCOS Updates sender and heal
   assert.match(handlerSource, /cachedHealthCheck\('fcos-updates-mail', 5 \* 60/);
   assert.match(handlerSource, /verifyMicrosoftGraphMailAuthentication/);
   assert.match(handlerSource, /without sending email/);
-  assert.match(methodologySource, /FCOS Updates use their separately configured/);
+  assert.match(methodologySource, /FCOS Updates use a separately configured Microsoft 365 sender/);
 });
 
 test('FCOS update migration creates service-only workflow and General Manager controls', async () => {

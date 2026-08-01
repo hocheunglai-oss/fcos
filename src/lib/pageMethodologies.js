@@ -310,7 +310,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Email and external actions',
-        body: 'Routine reports, reminders, and notifications use the shared operational SMTP mailbox. FCOS Updates use their separately configured Microsoft 365 or SMTP sender. Templates, recipients, schedules, and sender displays remain subject to the applicable authenticated sender and the external-action safety gate. Saving a setting does not send an email.',
+        body: 'Routine reports, reminders, and notifications use the operational Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. FCOS Updates use a separately configured Microsoft 365 sender. A temporary SMTP fallback, when enabled, is used only after a definite operational Graph authentication or authorization failure and is shown in Email Senders. Templates, recipients, schedules, and sender identities remain subject to the external-action safety gate. Saving a setting does not send an email.',
       },
       {
         title: 'AI configuration',
@@ -318,7 +318,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'System health',
-        body: 'Health states combine direct probes and provider telemetry. The operational SMTP mailbox and FCOS Updates sender are checked separately without sending test messages. Monitoring unavailable is distinct from Online; a missing metric is never presented as a healthy result.',
+        body: 'Health states combine direct probes and provider telemetry. The operational Microsoft 365 mailbox and FCOS Updates sender are checked separately through non-sending Vercel OIDC token exchanges. Mailbox-scoped send authorization is confirmed only by an actual send. Monitoring unavailable is distinct from Online; a missing metric is never presented as a healthy result.',
       },
     ],
   },
