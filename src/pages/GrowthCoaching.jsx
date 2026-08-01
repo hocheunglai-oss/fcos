@@ -2920,7 +2920,7 @@ function MethodologyDialog({ open, onOpenChange }) {
         <div className="space-y-5 text-sm">
           <section>
             <h3 className="font-semibold">Formal development goals</h3>
-            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. The active UUID-backed General Manager is the reporting hierarchy root, needs no manager assignment, and activates their own goals without a self-notification. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision.</p>
+            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. The active General Manager selected in Users & Access is the UUID-backed reporting hierarchy root, needs no manager assignment, and activates their own goals without a self-notification. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision.</p>
           </section>
           <section>
             <h3 className="font-semibold">Progress and completion</h3>

@@ -18,6 +18,10 @@ const generalManagerMigrationUrl = new URL(
   "../supabase/migrations/20260801140504_general_manager_reporting_root_self_managed_goals.sql",
   import.meta.url,
 );
+const generalManagerTransferMigrationUrl = new URL(
+  "../supabase/migrations/20260801150451_general_manager_user_type_transfer.sql",
+  import.meta.url,
+);
 const serviceUrl = new URL("../api/_growthCoachingService.js", import.meta.url);
 const handlerUrl = new URL("../api/functions/[name].js", import.meta.url);
 const appUrl = new URL("../src/App.jsx", import.meta.url);
@@ -156,6 +160,43 @@ test("the UUID-backed General Manager is the reporting root with self-managed go
   assert.match(page, /goal\.permissions\?\.selfManaged \? 'Activate' : 'Submit'/);
   assert.match(page, /!hasPrimaryManager && !selfManagedGoals/);
   assert.match(page, /GoalHistorySection title="Goal decisions"/);
+});
+
+test("General Manager is a protected user type with an atomic successor transfer", async () => {
+  const [sql, handler, admin, authModules, portal, updates] = await Promise.all([
+    readFile(generalManagerTransferMigrationUrl, "utf8"),
+    readFile(handlerUrl, "utf8"),
+    readFile(adminUrl, "utf8"),
+    readFile(new URL("../src/lib/authModules.js", import.meta.url), "utf8"),
+    readFile(new URL("../api/_portal.js", import.meta.url), "utf8"),
+    readFile(new URL("../api/_fcosUpdates.js", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(sql, /'general_manager',[\s\S]*'General Manager'[\s\S]*true,[\s\S]*5/);
+  assert.match(sql, /from public\.user_type_module_permissions permission[\s\S]*permission\.user_type_id = 'administrator'/);
+  assert.match(sql, /function public\.assign_general_manager_user_type[\s\S]*security invoker/);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\('fcos_general_manager_assignment'\)\)/);
+  assert.match(sql, /if not p_confirm_transfer[\s\S]*Confirm the General Manager transfer/);
+  assert.match(sql, /set user_type = 'administrator'[\s\S]*set user_type = 'general_manager'/);
+  assert.match(sql, /delete from public\.growth_reporting_assignments[\s\S]*employee_id = v_target\.id/);
+  assert.match(sql, /where employee_id = v_target\.id[\s\S]*'Completion Review', 'Cancellation Requested'/);
+  assert.match(sql, /function public\.protect_last_active_administrator[\s\S]*user_type in \('administrator', 'general_manager'\)/);
+  assert.match(sql, /function public\.save_fcos_update_batch[\s\S]*profile\.user_type in \('administrator', 'general_manager'\)/);
+  assert.match(sql, /function public\.cancel_fcos_update_batch[\s\S]*profile\.user_type in \('administrator', 'general_manager'\)/);
+  assert.match(sql, /profile\.user_type = 'general_manager'/);
+  assert.match(sql, /revoke all on function public\.assign_general_manager_user_type[\s\S]*from public, anon, authenticated/);
+  assert.doesNotMatch(sql, /security definer/i);
+
+  assert.match(handler, /ADMINISTRATIVE_USER_TYPES = new Set\(\['administrator', 'general_manager'\]\)/);
+  assert.match(handler, /rpc\('assign_general_manager_user_type'/);
+  assert.match(handler, /confirmGeneralManagerTransfer/);
+  assert.match(handler, /Transfer General Manager authority to another active user before changing or deleting/);
+  assert.match(admin, /Transfer General Manager authority from/);
+  assert.match(admin, /edit the successor and select General Manager as their user type/);
+  assert.match(admin, /confirmGeneralManagerTransfer: generalManagerTransferPending/);
+  assert.match(authModules, /userType === 'administrator' \|\| userType === 'general_manager'/);
+  assert.match(portal, /\['administrator', 'general_manager'\]\.includes\(profile\.user_type\)/);
+  assert.doesNotMatch(updates, /assigned to Vincent Lee/);
 });
 
 test("coaching content is fetched only for the authenticated pair without an administrator override", async () => {

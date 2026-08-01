@@ -242,7 +242,7 @@ export default function ReportingLinesPanel() {
           </TableBody>
         </Table>
       </div>
-      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Save changes validates every edited row and the resulting hierarchy together. The UUID-backed General Manager remains the manager-free reporting root and can still be selected as a manager for other employees. A concurrent change or reporting cycle rejects the entire batch.</p></div>
+      <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground"><Label className="text-xs font-medium text-foreground">Revision protection</Label><p className="mt-1">Save changes validates every edited row and the resulting hierarchy together. The General Manager selected in Users & Access remains the manager-free reporting root and can still be selected as a manager for other employees. A concurrent change or reporting cycle rejects the entire batch.</p></div>
     </div>
   );
 }

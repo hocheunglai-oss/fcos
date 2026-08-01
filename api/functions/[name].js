@@ -190,6 +190,11 @@ function schedulePortalOutboxRetry(client) {
 
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));
+const ADMINISTRATIVE_USER_TYPES = new Set(['administrator', 'general_manager']);
+
+function isAdministratorUserType(userType) {
+  return ADMINISTRATIVE_USER_TYPES.has(String(userType || ''));
+}
 const ADMIN_CAPABILITIES = [
   {
     id: 'disputes_approve',
@@ -217,6 +222,13 @@ const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capab
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
 const DEFAULT_USER_TYPES = [
+  {
+    id: 'general_manager',
+    label: 'General Manager',
+    description: 'Full administration access and the single reporting-hierarchy root.',
+    is_system: true,
+    sort_order: 5,
+  },
   {
     id: 'administrator',
     label: 'Administrator',
@@ -261,6 +273,7 @@ const DEFAULT_USER_TYPES = [
   },
 ];
 const FALLBACK_TYPE_PERMISSIONS = {
+  general_manager: ADMIN_FULL_ACCESS,
   administrator: ADMIN_FULL_ACCESS,
   manager: {
     dashboard: true,
@@ -339,6 +352,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
   },
 };
 const FALLBACK_TYPE_CAPABILITIES = {
+  general_manager: ADMIN_FULL_CAPABILITIES,
   administrator: ADMIN_FULL_CAPABILITIES,
   manager: {
     disputes_approve: true,
@@ -469,8 +483,8 @@ function bearerToken(req) {
 
 async function requireAdministrator(req) {
   const context = await requireActiveUser(req);
-  if (context.profile.user_type !== 'administrator') {
-    throw appError('Administrator access required.', 403);
+  if (!isAdministratorUserType(context.profile.user_type)) {
+    throw appError('Administrator or General Manager access required.', 403);
   }
   return context;
 }
@@ -503,7 +517,7 @@ async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
   let permissionValues;
 
-  if (profile.user_type === 'administrator') {
+  if (isAdministratorUserType(profile.user_type)) {
     permissionValues = ADMIN_FULL_ACCESS;
   } else {
     const permissionQuery = profile.use_type_defaults === false ? client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id) : client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type);
@@ -532,7 +546,7 @@ async function authContext(body, req, accessContext) {
       id: profile.id,
       full_name: profile.full_name || authUser.user_metadata?.full_name || profile.email || authUser.email,
       email: profile.email || authUser.email,
-      role: profile.user_type === 'administrator' ? 'admin' : profile.user_type,
+      role: isAdministratorUserType(profile.user_type) ? 'admin' : profile.user_type,
       user_type: profile.user_type,
       use_type_defaults: profile.use_type_defaults !== false,
       active: profile.active === true,
@@ -678,8 +692,8 @@ async function collaborationNotificationsRead(body = {}, req = null, accessConte
 }
 
 function requireAdministratorContext(accessContext) {
-  if (accessContext?.profile?.user_type !== 'administrator') {
-    throw appError('Administrator access required.', 403);
+  if (!isAdministratorUserType(accessContext?.profile?.user_type)) {
+    throw appError('Administrator or General Manager access required.', 403);
   }
   return accessContext;
 }
@@ -825,7 +839,7 @@ async function growthCoachingDailyCron(body = {}, req = null) {
 }
 
 function normalizePermissions(userType, permissions = {}) {
-  if (userType === 'administrator') return ADMIN_FULL_ACCESS;
+  if (isAdministratorUserType(userType)) return ADMIN_FULL_ACCESS;
   const normalized = {};
   for (const module of ADMIN_APP_MODULES) {
     normalized[module.id] = normalizedPermissionForModule(module.id, permissions, false);
@@ -843,7 +857,7 @@ function slugifyUserTypeId(value) {
 }
 
 function normalizeUserTypePermissions(userTypeId, permissions = {}) {
-  if (userTypeId === 'administrator') return ADMIN_FULL_ACCESS;
+  if (isAdministratorUserType(userTypeId)) return ADMIN_FULL_ACCESS;
   const base = FALLBACK_TYPE_PERMISSIONS[userTypeId] || {};
   const normalized = {};
   for (const module of ADMIN_APP_MODULES) {
@@ -853,7 +867,7 @@ function normalizeUserTypePermissions(userTypeId, permissions = {}) {
 }
 
 function normalizeCapabilities(userTypeId, capabilities = {}) {
-  if (userTypeId === 'administrator') return ADMIN_FULL_CAPABILITIES;
+  if (isAdministratorUserType(userTypeId)) return ADMIN_FULL_CAPABILITIES;
   const fallback = FALLBACK_TYPE_CAPABILITIES[userTypeId] || {};
   return Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, Object.prototype.hasOwnProperty.call(capabilities, capability.id) ? capabilities[capability.id] === true : fallback[capability.id] === true]));
 }
@@ -1073,7 +1087,7 @@ const HANDLER_MODULE_ACCESS = {
 
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!moduleIds?.length) return true;
-  if (profile?.user_type === 'administrator') return true;
+  if (isAdministratorUserType(profile?.user_type)) return true;
 
   const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
   if (!validModuleIds.length) return false;
@@ -1094,7 +1108,7 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
 
 async function userHasCapability(client, profile, capabilityId) {
   if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
-  if (profile?.user_type === 'administrator') return true;
+  if (isAdministratorUserType(profile?.user_type)) return true;
 
   const { data: userPermission, error: userError } = await client.from('user_module_permissions').select('can_view').eq('user_id', profile?.id).eq('module_id', capabilityId).maybeSingle();
   if (userError) throw userError;
@@ -1114,7 +1128,7 @@ async function requireCapability(client, profile, capabilityId, message) {
 }
 
 async function reportArchiveAccessForUser(client, profile) {
-  if (profile?.user_type === 'administrator') return 'full';
+  if (isAdministratorUserType(profile?.user_type)) return 'full';
   if (profile?.use_type_defaults === false) {
     const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
     if (error) throw error;
@@ -1420,7 +1434,7 @@ async function sanitizeManagedUserPayload(client, body = {}) {
   const active = body.active !== false;
   const password = String(body.password || '');
   const id = body.id ? String(body.id) : null;
-  const useTypeDefaults = userType === 'administrator' ? true : body.use_type_defaults !== false;
+  const useTypeDefaults = isAdministratorUserType(userType) ? true : body.use_type_defaults !== false;
 
   if (!email || !email.includes('@')) throw appError('Valid email is required.', 400);
   if (!id && password.length < 8) throw appError('Password must be at least 8 characters.', 400);
@@ -1467,17 +1481,50 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
   if (error) console.error('Failed to write admin audit log', error.message);
 }
 
+async function loadActiveGeneralManager(client) {
+  const { data: roleRows, error: roleError } = await client
+    .from('collaboration_roles')
+    .select('user_id')
+    .eq('role', 'general_manager')
+    .eq('active', true)
+    .limit(2);
+  if (roleError) throw roleError;
+  if ((roleRows || []).length !== 1) {
+    throw appError('General Manager role validation failed. Exactly one active General Manager is required.', 503);
+  }
+
+  const { data: generalManager, error: profileError } = await client
+    .from('user_profiles')
+    .select('id,email,full_name,user_type,active')
+    .eq('id', roleRows[0].user_id)
+    .maybeSingle();
+  if (profileError) throw profileError;
+  if (!generalManager?.active || generalManager.user_type !== 'general_manager') {
+    throw appError('General Manager role validation failed. The authority role and user type are inconsistent.', 503);
+  }
+  return generalManager;
+}
+
 async function assertAdministratorContinuity(client, { userId, nextActive = false, nextUserType = null, deleting = false }) {
   if (!userId) return;
   const { data: current, error: currentError } = await client.from('user_profiles').select('id,user_type,active').eq('id', userId).maybeSingle();
   if (currentError) throw currentError;
-  if (!current?.active || current.user_type !== 'administrator') return;
-  if (!deleting && nextActive && nextUserType === 'administrator') return;
+  const generalManager = await loadActiveGeneralManager(client);
+  if (current?.id === generalManager.id && (deleting || !nextActive || nextUserType !== 'general_manager')) {
+    throw appError('Transfer General Manager authority to another active user before changing or deleting the current General Manager.', 409);
+  }
+  if (!current?.active || !isAdministratorUserType(current.user_type)) return;
+  if (!deleting && nextActive && isAdministratorUserType(nextUserType)) return;
 
-  const { count, error: countError } = await client.from('user_profiles').select('id', { count: 'exact', head: true }).eq('active', true).eq('user_type', 'administrator').neq('id', userId);
+  const { count, error: countError } = await client
+    .from('user_profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('active', true)
+    .in('user_type', [...ADMINISTRATIVE_USER_TYPES])
+    .neq('id', userId);
   if (countError) throw countError;
   if (!count) {
-    throw appError('At least one active FCOS Administrator is required.', 409);
+    throw appError('At least one active FCOS Administrator or General Manager is required.', 409);
   }
 }
 
@@ -1497,51 +1544,59 @@ async function ensureReportArchiveManageModule(client) {
 
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
-  let authUser = null;
   const isUpdate = Boolean(payload.id);
+  const generalManager = await loadActiveGeneralManager(client);
+  let authUser = isUpdate ? { id: payload.id } : await findAuthUserByEmail(client, payload.email);
+  let managedProfile = null;
 
-  if (isUpdate) {
+  if (authUser?.id) {
+    const { data, error } = await client
+      .from('user_profiles')
+      .select('id,email,full_name,user_type,active')
+      .eq('id', authUser.id)
+      .maybeSingle();
+    if (error) throw error;
+    managedProfile = data;
     await assertAdministratorContinuity(client, {
-      userId: payload.id,
+      userId: authUser.id,
       nextActive: payload.active,
       nextUserType: payload.user_type,
     });
+  }
+
+  const transferRequested = payload.user_type === 'general_manager'
+    && authUser?.id !== generalManager.id;
+  if (payload.user_type === 'general_manager' && !payload.active) {
+    throw appError('The General Manager must remain an active user.', 400);
+  }
+  if (transferRequested && body.confirmGeneralManagerTransfer !== true) {
+    throw appError(`Confirm the General Manager transfer from ${generalManager.full_name || generalManager.email}.`, 409);
+  }
+
+  const stagedUserType = transferRequested
+    ? managedProfile?.user_type || 'viewer'
+    : payload.user_type;
+
+  if (authUser?.id) {
     const updatePayload = {
       email: payload.email,
       user_metadata: { full_name: payload.full_name },
-      app_metadata: { user_type: payload.user_type },
+      app_metadata: { user_type: stagedUserType },
     };
     if (payload.password) updatePayload.password = payload.password;
-    const { data, error } = await client.auth.admin.updateUserById(payload.id, updatePayload);
+    const { data, error } = await client.auth.admin.updateUserById(authUser.id, updatePayload);
     if (error) throw error;
     authUser = data.user;
   } else {
-    const existing = await findAuthUserByEmail(client, payload.email);
-    if (existing) {
-      await assertAdministratorContinuity(client, {
-        userId: existing.id,
-        nextActive: payload.active,
-        nextUserType: payload.user_type,
-      });
-      authUser = existing;
-      const updatePayload = {
-        user_metadata: { full_name: payload.full_name },
-        app_metadata: { user_type: payload.user_type },
-      };
-      if (payload.password) updatePayload.password = payload.password;
-      const { error } = await client.auth.admin.updateUserById(existing.id, updatePayload);
-      if (error) throw error;
-    } else {
-      const { data, error } = await client.auth.admin.createUser({
-        email: payload.email,
-        password: payload.password,
-        email_confirm: true,
-        user_metadata: { full_name: payload.full_name },
-        app_metadata: { user_type: payload.user_type },
-      });
-      if (error) throw error;
-      authUser = data.user;
-    }
+    const { data, error } = await client.auth.admin.createUser({
+      email: payload.email,
+      password: payload.password,
+      email_confirm: true,
+      user_metadata: { full_name: payload.full_name },
+      app_metadata: { user_type: stagedUserType },
+    });
+    if (error) throw error;
+    authUser = data.user;
   }
 
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
@@ -1552,7 +1607,7 @@ async function persistManagedUser(client, body, actor = null) {
       id: authUser.id,
       email: payload.email,
       full_name: payload.full_name,
-      user_type: payload.user_type,
+      user_type: stagedUserType,
       active: payload.active,
       use_type_defaults: payload.use_type_defaults,
       updated_at: nowIso,
@@ -1590,6 +1645,40 @@ async function persistManagedUser(client, body, actor = null) {
     if (insertPermissionError) throw insertPermissionError;
   }
 
+  let generalManagerTransfer = null;
+  const authMetadataWarnings = [];
+  if (payload.user_type === 'general_manager') {
+    const { data, error } = await client.rpc('assign_general_manager_user_type', {
+      p_target_user_id: authUser.id,
+      p_actor_id: actor?.id || null,
+      p_actor_email: actor?.email || null,
+      p_confirm_transfer: body.confirmGeneralManagerTransfer === true,
+    });
+    if (error) {
+      if (/confirm the general manager transfer/i.test(error.message || '')) {
+        throw appError(error.message, 409);
+      }
+      throw error;
+    }
+    generalManagerTransfer = data || null;
+
+    if (generalManagerTransfer?.transferred) {
+      const metadataUpdates = [
+        [authUser.id, 'general_manager'],
+        [generalManagerTransfer.formerGeneralManagerUserId, 'administrator'],
+      ];
+      for (const [userId, userType] of metadataUpdates) {
+        if (!userId) continue;
+        const { error: metadataError } = await client.auth.admin.updateUserById(userId, {
+          app_metadata: { user_type: userType },
+        });
+        if (metadataError) {
+          authMetadataWarnings.push({ userId, message: metadataError.message });
+        }
+      }
+    }
+  }
+
   await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
     user_type: payload.user_type,
     active: payload.active,
@@ -1614,6 +1703,8 @@ async function persistManagedUser(client, body, actor = null) {
     use_type_defaults: payload.use_type_defaults,
     permissions: payload.permissions,
     capabilities: payload.capabilities,
+    generalManagerTransfer,
+    authMetadataWarnings,
   };
 }
 
@@ -1657,10 +1748,11 @@ async function adminUsersList(body, req) {
   const users = (profiles || []).map((profile) => ({
     ...profile,
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
-    use_type_defaults: profile.user_type === 'administrator' ? true : profile.use_type_defaults !== false,
-    permissions: profile.user_type === 'administrator' ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
-    capabilities: profile.user_type === 'administrator' ? ADMIN_FULL_CAPABILITIES : profile.use_type_defaults !== false ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {}) : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
+    use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
+    permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
+    capabilities: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_CAPABILITIES : profile.use_type_defaults !== false ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {}) : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
   }));
+  const generalManager = await loadActiveGeneralManager(client);
   const portal = await portalAdminModel({ client, profiles: profiles || [] });
   for (const user of users) {
     user.applicationAccess = portal.accessByUser[user.id] || {};
@@ -1673,6 +1765,11 @@ async function adminUsersList(body, req) {
     typePermissions,
     typeCapabilities,
     portalApplications: portal.applications,
+    generalManager: {
+      userId: generalManager.id,
+      name: generalManager.full_name || generalManager.email,
+      email: generalManager.email,
+    },
   };
 }
 
@@ -2030,20 +2127,35 @@ async function adminPortalApplicationsHealth(body, req) {
 async function adminUserTypeSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const existingId = body.id ? String(body.id) : null;
-  const label = String(body.label || '').trim();
+  let label = String(body.label || '').trim();
   const id = slugifyUserTypeId(existingId || label);
   if (!id) throw appError('User type name is required.', 400);
   if (!label) throw appError('User type label is required.', 400);
 
+  const protectedType = {
+    administrator: {
+      label: 'Administrator',
+      description: 'Full system administration access.',
+      sortOrder: 10,
+    },
+    general_manager: {
+      label: 'General Manager',
+      description: 'Full administration access and the single reporting-hierarchy root.',
+      sortOrder: 5,
+    },
+  }[id];
+  if (protectedType) label = protectedType.label;
+
   const { data: existing, error: existingError } = await client.from('user_types').select('id,is_system,sort_order').eq('id', id).maybeSingle();
   if (existingError) throw existingError;
 
-  const sortOrder = Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing?.sort_order ?? 100);
+  const sortOrder = protectedType?.sortOrder
+    ?? (Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing?.sort_order ?? 100));
   const userType = {
     id,
     label,
-    description: String(body.description || '').trim(),
-    is_system: existing?.is_system === true,
+    description: protectedType?.description || String(body.description || '').trim(),
+    is_system: protectedType ? true : existing?.is_system === true,
     sort_order: sortOrder,
     updated_at: new Date().toISOString(),
   };
@@ -2097,7 +2209,7 @@ async function adminUserTypeDelete(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const id = String(body.id || '').trim();
   if (!id) throw appError('User type id is required.', 400);
-  if (id === 'administrator') throw appError('Administrator user type cannot be deleted.', 400);
+  if (isAdministratorUserType(id)) throw appError('Administrator and General Manager user types cannot be deleted.', 400);
 
   const { data: userType, error: typeError } = await client.from('user_types').select('id,label,is_system').eq('id', id).maybeSingle();
   if (typeError) throw typeError;
@@ -4099,7 +4211,7 @@ async function dashboardAiSettingsGet(body, req, accessContext = null) {
     models: DASHBOARD_AI_MODELS,
     usage,
     capabilities: {
-      canManageSettings: context.profile.user_type === 'administrator',
+      canManageSettings: isAdministratorUserType(context.profile.user_type),
     },
   };
 }
@@ -14163,7 +14275,7 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
           .trim()
           .toLowerCase() === actorEmail,
     );
-  if (profile.user_type !== 'administrator' && !responsibleTrader) {
+  if (!isAdministratorUserType(profile.user_type) && !responsibleTrader) {
     throw appError('Only the responsible trader or an administrator can record this supplier dispute amount.', 403);
   }
   if (caseRow.workflow_status === 'Closed') throw appError('Closed disputes cannot be amended.', 400);

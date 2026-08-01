@@ -1,4 +1,5 @@
 export const USER_TYPES = [
+  { id: 'general_manager', label: 'General Manager' },
   { id: 'administrator', label: 'Administrator' },
   { id: 'manager', label: 'Manager' },
   { id: 'finance', label: 'Finance' },
@@ -6,6 +7,10 @@ export const USER_TYPES = [
   { id: 'interoffice', label: 'Interoffice' },
   { id: 'viewer', label: 'Viewer' },
 ];
+
+export function isAdministratorUserType(userType) {
+  return userType === 'administrator' || userType === 'general_manager';
+}
 
 export const APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', path: '/', sortOrder: 10 },

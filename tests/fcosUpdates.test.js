@@ -210,7 +210,7 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
 
   assert.match(panel, /const batchIsDirty = useMemo/);
   assert.match(panel, /recipients: batchDraft\.recipients/);
-  assert.match(panel, /Save all recipient changes before Vincent sends/);
+  assert.match(panel, /Save all recipient changes before the General Manager sends/);
   assert.match(panel, /Sender: \{model\.sender\?\.name/);
   assert.match(panel, /expectedRevision: sendConfirmation\.revision/);
   assert.match(panel, /expectedRecipientCount: sendConfirmation\.recipientCount/);

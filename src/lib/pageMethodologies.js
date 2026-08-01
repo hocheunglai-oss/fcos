@@ -336,11 +336,11 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Reporting lines and authority',
-        body: 'Growth & Coaching reporting assignments are maintained explicitly and reject self-management, duplicates, inactive managers, and primary-manager cycles. The one active UUID-backed General Manager is the hierarchy root, requires neither a Primary nor Advisory Manager, and self-manages formal goals while remaining available to manage other employees.',
+        body: 'Growth & Coaching reporting assignments are maintained explicitly and reject self-management, duplicates, inactive managers, and primary-manager cycles. General Manager is a protected user type selected in Users & Access. The one active UUID-backed holder is the hierarchy root, requires neither a Primary nor Advisory Manager, and self-manages formal goals while remaining available to manage other employees.',
       },
       {
         title: 'Administrative safeguards',
-        body: 'Revision checks prevent stale saves, important changes require audit context, and FCOS prevents removal or deactivation of the final active Administrator.',
+        body: 'Revision checks prevent stale saves and important changes require audit context. General Manager authority transfers atomically to one active user; the former holder becomes an Administrator and then requires a reporting line. FCOS blocks direct demotion, deactivation, or deletion of the active General Manager.',
       },
     ],
   },

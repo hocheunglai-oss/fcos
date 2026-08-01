@@ -36,6 +36,14 @@ test('Administrator access is automatic while explicit grants survive a downgrad
   );
   assert.deepEqual(
     resolveEffectivePortalAccess(
+      { active: true, user_type: 'general_manager' },
+      application,
+      explicit,
+    ),
+    { active: true, roleId: 'owner', source: 'administrator_default' },
+  );
+  assert.deepEqual(
+    resolveEffectivePortalAccess(
       { active: true, user_type: 'trader' },
       application,
       explicit,

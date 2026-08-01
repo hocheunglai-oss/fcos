@@ -19,7 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
-import { APP_CAPABILITIES, APP_MODULES, FULL_ACCESS, FULL_CAPABILITIES, USER_TYPES } from '@/lib/authModules';
+import { APP_CAPABILITIES, APP_MODULES, FULL_ACCESS, FULL_CAPABILITIES, USER_TYPES, isAdministratorUserType } from '@/lib/authModules';
 import { useAuth } from '@/lib/AuthContext';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
@@ -257,6 +257,7 @@ export default function AdminControl({ methodologyAction = null }) {
   const [capabilityDefinitions, setCapabilityDefinitions] = useState(APP_CAPABILITIES);
   const [typeCapabilities, setTypeCapabilities] = useState({});
   const [portalApplications, setPortalApplications] = useState([]);
+  const [generalManager, setGeneralManager] = useState(null);
   const [portalAccess, setPortalAccess] = useState({});
   const [auditLogs, setAuditLogs] = useState([]);
   const [userForm, setUserForm] = useState(emptyUserForm);
@@ -300,26 +301,29 @@ export default function AdminControl({ methodologyAction = null }) {
     () => normalizedCapabilities(capabilityDefinitions, typeCapabilities[userForm.user_type] || {}),
     [capabilityDefinitions, typeCapabilities, userForm.user_type]
   );
-  const effectiveUserPermissions = userForm.user_type === 'administrator'
+  const effectiveUserPermissions = isAdministratorUserType(userForm.user_type)
     ? FULL_ACCESS
     : userForm.use_type_defaults
       ? selectedTypePermissions
       : normalizedPermissions(sortedModules, userForm.permissions);
-  const effectiveUserCapabilities = userForm.user_type === 'administrator'
+  const effectiveUserCapabilities = isAdministratorUserType(userForm.user_type)
     ? FULL_CAPABILITIES
     : userForm.use_type_defaults
       ? selectedTypeCapabilities
       : normalizedCapabilities(capabilityDefinitions, userForm.capabilities);
-  const activeTypePermissions = typeForm.id === 'administrator'
+  const activeTypePermissions = isAdministratorUserType(typeForm.id)
     ? FULL_ACCESS
     : normalizedPermissions(sortedModules, typeForm.permissions);
-  const activeTypeCapabilities = typeForm.id === 'administrator'
+  const activeTypeCapabilities = isAdministratorUserType(typeForm.id)
     ? FULL_CAPABILITIES
     : normalizedCapabilities(capabilityDefinitions, typeForm.capabilities);
   const selectedTypeAssignedCount = useMemo(
     () => users.filter((item) => item.user_type === typeForm.id).length,
     [typeForm.id, users]
   );
+  const selectedUserIsGeneralManager = Boolean(userForm.id && userForm.id === generalManager?.userId);
+  const generalManagerTransferPending = userForm.user_type === 'general_manager'
+    && userForm.id !== generalManager?.userId;
   const profileChangesPending = Boolean(
     selectedUser
     && (
@@ -365,6 +369,7 @@ export default function AdminControl({ methodologyAction = null }) {
         setCapabilityDefinitions(usersRes.data.capabilities?.length ? usersRes.data.capabilities : APP_CAPABILITIES);
         setTypeCapabilities(usersRes.data.typeCapabilities || {});
         setPortalApplications(usersRes.data.portalApplications || []);
+        setGeneralManager(usersRes.data.generalManager || null);
       }
       if (!logsRes.data?.error) setAuditLogs(logsRes.data.logs || []);
     } catch (loadError) {
@@ -404,7 +409,7 @@ export default function AdminControl({ methodologyAction = null }) {
       return;
     }
 
-    const useTypeDefaults = item.user_type === 'administrator' ? true : item.use_type_defaults !== false;
+    const useTypeDefaults = isAdministratorUserType(item.user_type) ? true : item.use_type_defaults !== false;
     const sourcePermissions = useTypeDefaults
       ? typePermissions[item.user_type] || item.permissions || {}
       : item.permissions || {};
@@ -423,9 +428,12 @@ export default function AdminControl({ methodologyAction = null }) {
       capabilities: normalizedCapabilities(capabilityDefinitions, sourceCapabilities),
     };
     const draft = readDraft(userDraftKey(base));
-    const next = draft?.data && !sameDraftValue(draft.data, safeUserDraft(base))
+    let next = draft?.data && !sameDraftValue(draft.data, safeUserDraft(base))
       ? { ...base, ...draft.data, password: '' }
       : base;
+    if (item.id === generalManager?.userId) {
+      next = { ...next, user_type: 'general_manager', active: true, use_type_defaults: true };
+    }
     setBaseUserForm(base);
     setUserForm(next);
     setPortalAccess(portalAccessDrafts(portalApplications, item.applicationAccess));
@@ -435,7 +443,7 @@ export default function AdminControl({ methodologyAction = null }) {
 
   const setUserType = (userType) => {
     setUserForm((prev) => {
-      const useTypeDefaults = userType === 'administrator' ? true : prev.use_type_defaults;
+      const useTypeDefaults = isAdministratorUserType(userType) ? true : prev.use_type_defaults;
       const typeDefaults = normalizedPermissions(sortedModules, typePermissions[userType] || {});
       const capabilityDefaults = normalizedCapabilities(capabilityDefinitions, typeCapabilities[userType] || {});
       return {
@@ -494,6 +502,12 @@ export default function AdminControl({ methodologyAction = null }) {
 
   const saveUser = async (event) => {
     event.preventDefault();
+    if (generalManagerTransferPending) {
+      const confirmed = window.confirm(
+        `Transfer General Manager authority from ${generalManager?.name || generalManager?.email || 'the current General Manager'} to ${userForm.full_name.trim() || userForm.email.trim()}? The former General Manager will become an Administrator and will need a reporting line.`,
+      );
+      if (!confirmed) return;
+    }
     setSavingUser(true);
     setError('');
     setMessage('');
@@ -504,9 +518,10 @@ export default function AdminControl({ methodologyAction = null }) {
       user_type: userForm.user_type,
       active: userForm.active,
       password: userForm.password,
-      use_type_defaults: userForm.user_type === 'administrator' ? true : userForm.use_type_defaults,
-      permissions: userForm.user_type === 'administrator' ? FULL_ACCESS : normalizedPermissions(sortedModules, userForm.permissions),
-      capabilities: userForm.user_type === 'administrator' ? FULL_CAPABILITIES : normalizedCapabilities(capabilityDefinitions, userForm.capabilities),
+      use_type_defaults: isAdministratorUserType(userForm.user_type) ? true : userForm.use_type_defaults,
+      permissions: isAdministratorUserType(userForm.user_type) ? FULL_ACCESS : normalizedPermissions(sortedModules, userForm.permissions),
+      capabilities: isAdministratorUserType(userForm.user_type) ? FULL_CAPABILITIES : normalizedCapabilities(capabilityDefinitions, userForm.capabilities),
+      confirmGeneralManagerTransfer: generalManagerTransferPending,
     };
     const res = await appClient.functions.invoke('adminUserSave', payload);
     setSavingUser(false);
@@ -517,9 +532,12 @@ export default function AdminControl({ methodologyAction = null }) {
     clearDraft(activeUserDraftKey);
     setUserDraftRestoredAt(null);
     const syncFailures = res.data.portalSyncErrors || [];
-    setMessage(syncFailures.length
-      ? `User saved. ${syncFailures.length} application access update${syncFailures.length === 1 ? '' : 's'} will be retried.`
-      : 'User saved.');
+    const transfer = res.data.user?.generalManagerTransfer;
+    setMessage(transfer?.transferred
+      ? `General Manager authority transferred to ${transfer.generalManagerName || userForm.full_name}. ${transfer.formerGeneralManagerName || 'The former General Manager'} is now an Administrator and should be assigned a Primary Manager.`
+      : syncFailures.length
+        ? `User saved. ${syncFailures.length} application access update${syncFailures.length === 1 ? '' : 's'} will be retried.`
+        : 'User saved.');
     setUserDialogOpen(false);
     setUserForm((prev) => ({ ...prev, id: res.data.user?.id || prev.id, password: '' }));
     await load({ force: true });
@@ -714,8 +732,8 @@ export default function AdminControl({ methodologyAction = null }) {
       label: typeForm.label.trim(),
       description: typeForm.description.trim(),
       sort_order: typeForm.sort_order,
-      permissions: typeForm.id === 'administrator' ? FULL_ACCESS : normalizedPermissions(sortedModules, typeForm.permissions),
-      capabilities: typeForm.id === 'administrator' ? FULL_CAPABILITIES : normalizedCapabilities(capabilityDefinitions, typeForm.capabilities),
+      permissions: isAdministratorUserType(typeForm.id) ? FULL_ACCESS : normalizedPermissions(sortedModules, typeForm.permissions),
+      capabilities: isAdministratorUserType(typeForm.id) ? FULL_CAPABILITIES : normalizedCapabilities(capabilityDefinitions, typeForm.capabilities),
     };
     const res = await appClient.functions.invoke('adminUserTypeSave', payload);
     setSavingType(false);
@@ -738,7 +756,7 @@ export default function AdminControl({ methodologyAction = null }) {
   };
 
   const deleteUserType = async () => {
-    if (!typeForm.id || typeForm.id === 'administrator') return;
+    if (!typeForm.id || isAdministratorUserType(typeForm.id)) return;
     if (selectedTypeAssignedCount > 0) {
       setError('This user type is assigned to users. Reassign those users before deleting it.');
       return;
@@ -762,7 +780,7 @@ export default function AdminControl({ methodologyAction = null }) {
     await load({ force: true });
   };
 
-  const canDeleteSelectedType = typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount === 0;
+  const canDeleteSelectedType = typeForm.id && !isAdministratorUserType(typeForm.id) && selectedTypeAssignedCount === 0;
   const activeListTitle = activeSection === 'users'
     ? 'Users'
     : activeSection === 'types'
@@ -856,7 +874,7 @@ export default function AdminControl({ methodologyAction = null }) {
                 ? 'Sorted alphabetically.'
                 : activeSection === 'reporting'
                   ? 'Primary-manager links define the formal management chain.'
-                  : 'Administrators save drafts. Only Vincent sends.'}
+                  : 'Administrators save drafts. Only the active General Manager sends.'}
           </div>
         </div>
 
@@ -903,7 +921,10 @@ export default function AdminControl({ methodologyAction = null }) {
                         </div>
                         <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.email}</div>
                         <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
-                          <span>{typeLabel(userTypeMap[item.user_type] || { id: item.user_type })}</span>
+                          <span className="flex items-center gap-1.5">
+                            {typeLabel(userTypeMap[item.user_type] || { id: item.user_type })}
+                            {item.id === generalManager?.userId && <span className="text-blue-700">· Reporting root</span>}
+                          </span>
                           <span>{item.use_type_defaults !== false ? 'Type default' : permissionSummary(sortedModules, permissions)}</span>
                         </div>
                       </button>
@@ -1012,7 +1033,8 @@ export default function AdminControl({ methodologyAction = null }) {
                   <select
                     value={userForm.user_type}
                     onChange={(event) => setUserType(event.target.value)}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    disabled={selectedUserIsGeneralManager}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {sortedUserTypes.map((item) => <option key={item.id} value={item.id}>{typeLabel(item)}</option>)}
                   </select>
@@ -1031,20 +1053,32 @@ export default function AdminControl({ methodologyAction = null }) {
                 </label>
               </div>
 
+              {selectedUserIsGeneralManager && (
+                <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                  This user is the active General Manager and reporting root. To appoint a successor, edit the successor and select General Manager as their user type.
+                </div>
+              )}
+              {generalManagerTransferPending && (
+                <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  Saving will transfer General Manager authority from <span className="font-semibold">{generalManager?.name || generalManager?.email}</span> to this user. The former General Manager will become an Administrator and appear in Reporting Lines until a Primary Manager is assigned.
+                </div>
+              )}
+
               <div className="mt-4 flex flex-wrap gap-3">
                 <label className="flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground">
                   <input
                     type="checkbox"
                     checked={userForm.active}
+                    disabled={selectedUserIsGeneralManager || userForm.user_type === 'general_manager'}
                     onChange={(event) => setUserForm((prev) => ({ ...prev, active: event.target.checked }))}
                   />
                   Active user
                 </label>
-                <label className={`flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground ${userForm.user_type === 'administrator' ? 'opacity-60' : ''}`}>
+                <label className={`flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground ${isAdministratorUserType(userForm.user_type) ? 'opacity-60' : ''}`}>
                   <input
                     type="checkbox"
-                    checked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
-                    disabled={userForm.user_type === 'administrator'}
+                    checked={isAdministratorUserType(userForm.user_type) || userForm.use_type_defaults}
+                    disabled={isAdministratorUserType(userForm.user_type)}
                     onChange={(event) => setUseTypeDefaults(event.target.checked)}
                   />
                   Use user type defaults
@@ -1055,13 +1089,13 @@ export default function AdminControl({ methodologyAction = null }) {
                 <div className="mb-2 flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Module Access</div>
                   <div className="text-xs text-muted-foreground">
-                    {userForm.use_type_defaults || userForm.user_type === 'administrator' ? 'Inherited' : 'Custom'}
+                    {userForm.use_type_defaults || isAdministratorUserType(userForm.user_type) ? 'Inherited' : 'Custom'}
                   </div>
                 </div>
                 <ModuleGrid
                   modules={sortedModules}
                   permissions={effectiveUserPermissions}
-                  locked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
+                  locked={isAdministratorUserType(userForm.user_type) || userForm.use_type_defaults}
                   onToggle={toggleUserModule}
                   onSetAccess={setUserModuleAccess}
                 />
@@ -1070,13 +1104,13 @@ export default function AdminControl({ methodologyAction = null }) {
                 <div className="mb-2 flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Workflow & Settings Permissions</div>
                   <div className="text-xs text-muted-foreground">
-                    {userForm.use_type_defaults || userForm.user_type === 'administrator' ? 'Inherited' : 'Custom'}
+                    {userForm.use_type_defaults || isAdministratorUserType(userForm.user_type) ? 'Inherited' : 'Custom'}
                   </div>
                 </div>
                 <CapabilityGrid
                   definitions={capabilityDefinitions}
                   capabilities={effectiveUserCapabilities}
-                  locked={userForm.user_type === 'administrator' || userForm.use_type_defaults}
+                  locked={isAdministratorUserType(userForm.user_type) || userForm.use_type_defaults}
                   onToggle={toggleUserCapability}
                 />
               </div>
@@ -1095,14 +1129,14 @@ export default function AdminControl({ methodologyAction = null }) {
                   <div className="space-y-3">
                     {portalApplications.map((application) => {
                       const draft = portalAccess[application.id] || {};
-                      const automaticAdministratorAccess = userForm.user_type === 'administrator'
+                      const automaticAdministratorAccess = isAdministratorUserType(userForm.user_type)
                         && Boolean(application.administratorDefaultRole);
                       const effectiveRole = automaticAdministratorAccess
                         ? application.roles?.find((role) => role.id === application.administratorDefaultRole)?.label
                           || application.administratorDefaultRole
                         : draft.effectiveRoleLabel || 'No access';
                       const sourceLabel = automaticAdministratorAccess
-                        ? 'Automatic Administrator policy'
+                        ? 'Automatic administrator-level policy'
                         : draft.effectiveSource === 'explicit'
                           ? 'Explicit grant'
                           : 'No entitlement';
@@ -1153,7 +1187,7 @@ export default function AdminControl({ methodologyAction = null }) {
                                 onChange={(event) => updatePortalAccessDraft(application.id, { enabled: event.target.checked })}
                               />
                               {automaticAdministratorAccess
-                                ? 'Keep explicit access after Administrator downgrade'
+                                ? 'Keep explicit access after administrator-level downgrade'
                                 : `Grant ${application.name} access`}
                             </label>
                             <label className="space-y-1">
@@ -1262,12 +1296,12 @@ export default function AdminControl({ methodologyAction = null }) {
           <form onSubmit={saveUserType}>
             <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
               <DraftNotice restoredAt={typeDraftRestoredAt} label="Admin user type draft restored" onDiscard={discardTypeDraft} className="mb-4" />
-              {typeForm.id === 'administrator' && (
+              {isAdministratorUserType(typeForm.id) && (
                 <div className="mb-4 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-                  Administrator is protected and always has full access.
+                  {typeForm.id === 'general_manager' ? 'General Manager' : 'Administrator'} is protected and always has full access.
                 </div>
               )}
-              {typeForm.id && typeForm.id !== 'administrator' && selectedTypeAssignedCount > 0 && (
+              {typeForm.id && !isAdministratorUserType(typeForm.id) && selectedTypeAssignedCount > 0 && (
                 <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                   This type has {selectedTypeAssignedCount} assigned user{selectedTypeAssignedCount === 1 ? '' : 's'}. Reassign them before deleting it.
                 </div>
@@ -1279,7 +1313,8 @@ export default function AdminControl({ methodologyAction = null }) {
                   <input
                     value={typeForm.label}
                     onChange={(event) => setTypeForm((prev) => ({ ...prev, label: event.target.value }))}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    disabled={isAdministratorUserType(typeForm.id)}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                     required
                   />
                 </label>
@@ -1288,7 +1323,8 @@ export default function AdminControl({ methodologyAction = null }) {
                   <input
                     value={typeForm.description}
                     onChange={(event) => setTypeForm((prev) => ({ ...prev, description: event.target.value }))}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    disabled={isAdministratorUserType(typeForm.id)}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </label>
               </div>
@@ -1296,7 +1332,7 @@ export default function AdminControl({ methodologyAction = null }) {
               <div className="mt-6">
                 <div className="mb-2 flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Module Access</div>
-                  {typeForm.id === 'administrator' && (
+                  {isAdministratorUserType(typeForm.id) && (
                     <div className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                       <KeyRound className="h-3.5 w-3.5" /> Always full access
                     </div>
@@ -1305,7 +1341,7 @@ export default function AdminControl({ methodologyAction = null }) {
                 <ModuleGrid
                   modules={sortedModules}
                   permissions={activeTypePermissions}
-                  locked={typeForm.id === 'administrator'}
+                  locked={isAdministratorUserType(typeForm.id)}
                   onToggle={toggleTypeModule}
                   onSetAccess={setTypeModuleAccess}
                 />
@@ -1313,7 +1349,7 @@ export default function AdminControl({ methodologyAction = null }) {
               <div className="mt-6">
                 <div className="mb-2 flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Default Workflow & Settings Permissions</div>
-                  {typeForm.id === 'administrator' && (
+                  {isAdministratorUserType(typeForm.id) && (
                     <div className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                       <KeyRound className="h-3.5 w-3.5" /> Always full access
                     </div>
@@ -1322,13 +1358,13 @@ export default function AdminControl({ methodologyAction = null }) {
                 <CapabilityGrid
                   definitions={capabilityDefinitions}
                   capabilities={activeTypeCapabilities}
-                  locked={typeForm.id === 'administrator'}
+                  locked={isAdministratorUserType(typeForm.id)}
                   onToggle={toggleTypeCapability}
                 />
               </div>
             </div>
             <DialogFooter className="border-t border-border px-5 py-4">
-              {typeForm.id && typeForm.id !== 'administrator' && (
+              {typeForm.id && !isAdministratorUserType(typeForm.id) && (
                 <button
                   type="button"
                   onClick={deleteUserType}

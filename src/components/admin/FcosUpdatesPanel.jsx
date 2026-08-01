@@ -855,7 +855,7 @@ export default function FcosUpdatesPanel() {
                     <div>
                       <Label>Recipients</Label>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Each recipient receives a separate private email. Save all recipient changes before Vincent sends.
+                        Each recipient receives a separate private email. Save all recipient changes before the General Manager sends.
                       </p>
                     </div>
                     <span className="text-xs font-semibold text-muted-foreground">

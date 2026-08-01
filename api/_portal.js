@@ -68,7 +68,7 @@ export function resolveEffectivePortalAccess(profile, application, entitlement =
   if (!profile?.active || application?.application_kind !== 'external') {
     return { active: false, roleId: null, source: null };
   }
-  if (profile.user_type === 'administrator' && application.administrator_default_role) {
+  if (['administrator', 'general_manager'].includes(profile.user_type) && application.administrator_default_role) {
     return {
       active: true,
       roleId: application.administrator_default_role,
@@ -399,7 +399,7 @@ export async function listPortalApplicationsForUser({
   const catalog = await loadPortalCatalog(client);
   const reconciled = await reconcilePortalEntitlementsForProfile(client, profile);
   const entitlementMap = new Map(reconciled.map((row) => [row.application_id, row]));
-  const hasFcosAccess = profile.user_type === 'administrator'
+  const hasFcosAccess = ['administrator', 'general_manager'].includes(profile.user_type)
     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');
 
   return catalog.flatMap((application) => {

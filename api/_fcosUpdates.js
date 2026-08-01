@@ -334,7 +334,7 @@ async function isGeneralManager(client, profile) {
 async function requireGeneralManager(client, profile) {
   if (!await isGeneralManager(client, profile)) {
     throw updateError(
-      'Only the active General Manager assigned to Vincent Lee can perform this action.',
+      'Only the active General Manager can perform this action.',
       403,
       'GENERAL_MANAGER_REQUIRED',
     );
@@ -571,7 +571,7 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
       requiresSendAs: mailConfig.requiresSendAs,
     },
     authority: {
-      canPrepare: profile.user_type === 'administrator',
+      canPrepare: ['administrator', 'general_manager'].includes(profile.user_type),
       canControl: generalManager,
     },
     settings: {

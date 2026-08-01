@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { FULL_ACCESS } from '@/lib/authModules';
+import { FULL_ACCESS, isAdministratorUserType } from '@/lib/authModules';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { appClient } from '@/api/appClient';
 
@@ -268,10 +268,10 @@ export const AuthProvider = ({ children }) => {
   const checkAppState = () => checkUserAuth({ showLoader: false });
   const hasModuleAccess = useCallback((moduleId) => {
     if (!moduleId) return true;
-    if (user?.user_type === 'administrator') return true;
+    if (isAdministratorUserType(user?.user_type)) return true;
     return moduleAccess[moduleId] === true;
   }, [moduleAccess, user?.user_type]);
-  const isAdministrator = user?.user_type === 'administrator';
+  const isAdministrator = isAdministratorUserType(user?.user_type);
 
   const value = {
     user,

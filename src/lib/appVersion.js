@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.68';
+export const APP_VERSION = '2.0.69';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.69',
+    releasedAt: '2026-08-01',
+    title: 'Configurable General Manager',
+    changes: [
+      'Added General Manager as a protected user type that can be assigned to a successor in Users & Access.',
+      'Made General Manager transfers atomic while retaining the UUID-backed authority role, reporting-root rules, and full administration access.',
+      'Converted the former General Manager to Administrator and returned them to reporting-line setup after a confirmed transfer.',
+    ],
+  },
   {
     version: '2.0.68',
     releasedAt: '2026-08-01',
