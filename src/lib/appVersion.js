@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.65';
+export const APP_VERSION = '2.0.66';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.66',
+    releasedAt: '2026-08-01',
+    title: 'Reporting-line batch save correction',
+    changes: [
+      'Corrected universal reporting-line saves so assignments are written directly to their validated final state without violating the manager constraint.',
+      'Clearing both manager roles now removes the empty assignment record while retaining goal updates and audit history.',
+    ],
+  },
   {
     version: '2.0.65',
     releasedAt: '2026-08-01',

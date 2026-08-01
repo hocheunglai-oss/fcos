@@ -11,7 +11,7 @@ const workflowFixMigrationUrl = new URL(
   import.meta.url,
 );
 const reportingBatchMigrationUrl = new URL(
-  "../supabase/migrations/20260801120853_growth_reporting_lines_batch_save.sql",
+  "../supabase/migrations/20260801131500_growth_reporting_lines_batch_save_hotfix.sql",
   import.meta.url,
 );
 const serviceUrl = new URL("../api/_growthCoachingService.js", import.meta.url);
@@ -104,8 +104,10 @@ test("reporting-line edits save through one revision-safe atomic batch", async (
   assert.match(sql, /function public\.save_growth_reporting_assignments_batch/);
   assert.match(sql, /pg_advisory_xact_lock\(hashtext\('growth_reporting_hierarchy'\)\)/);
   assert.match(sql, /reporting_walk[\s\S]*has_cycle/);
-  assert.match(sql, /update public\.growth_reporting_assignments[\s\S]*set primary_manager_id = null/);
-  assert.match(sql, /public\.save_growth_reporting_assignment/);
+  assert.match(sql, /Validate and revision-lock every requested row before making any change/);
+  assert.match(sql, /delete from public\.growth_reporting_assignments[\s\S]*primary_manager_id is null and v_change\.secondary_manager_id is null/);
+  assert.match(sql, /insert into public\.growth_reporting_assignments[\s\S]*on conflict \(employee_id\) do update/);
+  assert.doesNotMatch(sql, /set primary_manager_id = null\s+where employee_id = any/);
   assert.match(sql, /security invoker/);
   assert.match(sql, /revoke all on function public\.save_growth_reporting_assignments_batch[\s\S]*from public, anon, authenticated/);
   assert.match(sql, /grant execute on function public\.save_growth_reporting_assignments_batch[\s\S]*to service_role/);
