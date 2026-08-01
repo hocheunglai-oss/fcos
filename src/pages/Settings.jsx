@@ -420,7 +420,7 @@ function SystemHealthPanel() {
     <SettingsPanel
       icon={Activity}
       title="System Health"
-      description="Live status of server-side APIs, both email sender channels, external tools, and token expiry notes."
+      description="Live status of server-side APIs, Microsoft Graph mailbox routes, external tools, and token expiry notes."
       meta={health?.generatedAt ? `Last checked ${formatHealthDate(health.generatedAt)}` : null}
     >
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

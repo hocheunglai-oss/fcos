@@ -318,7 +318,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'System health',
-        body: 'Health states combine direct probes and provider telemetry. The operational Microsoft 365 mailbox and FCOS Updates sender are checked separately through non-sending Vercel OIDC token exchanges. Mailbox-scoped send authorization is confirmed only by an actual send. Monitoring unavailable is distinct from Online; a missing metric is never presented as a healthy result.',
+        body: 'Health states combine direct probes and provider telemetry. FCOS checks the single Microsoft Graph application, approved mailbox registry, and purpose assignments through a non-sending Vercel OIDC token exchange. Mailbox-scoped send authorization is confirmed only by an actual send. Monitoring unavailable is distinct from Online; a missing metric is never presented as a healthy result.',
       },
     ],
   },
