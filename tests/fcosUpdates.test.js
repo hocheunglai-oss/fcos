@@ -187,6 +187,7 @@ test('Settings separates operational email from the FCOS Updates sender and heal
   assert.match(settingsSource, /emailSenderStatus/);
   assert.doesNotMatch(settingsSource, /Every user sends through the same mailbox and sender identity/);
   assert.match(handlerSource, /emailSenderStatus: \['settings'\]/);
+  assert.match(handlerSource, /function emailSenderStatus\(\)[\s\S]*configuredEmailSenderStatus\(process\.env\)/);
   assert.match(handlerSource, /cachedHealthCheck\('fcos-updates-mail', 5 \* 60/);
   assert.match(handlerSource, /verifyMicrosoftGraphMailAuthentication/);
   assert.match(handlerSource, /without sending email/);

@@ -49,7 +49,7 @@ import {
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { sendWithSmtp, sendWithSmtpSendAsFallback, smtpAuthenticatedFromAddress } from '../_smtp.js';
 import { verifyMicrosoftGraphMailAuthentication } from '../_microsoftGraphMail.js';
-import { emailSenderStatus } from '../_emailSenderStatus.js';
+import { emailSenderStatus as configuredEmailSenderStatus } from '../_emailSenderStatus.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
@@ -5052,6 +5052,10 @@ function serverEmailDeliveryStatus() {
     sender: hasSmtp ? maskValue(process.env.SMTP_USER) : null,
     scope: hasSmtp ? 'shared_server' : 'none',
   };
+}
+
+function emailSenderStatus() {
+  return configuredEmailSenderStatus(process.env);
 }
 
 function maskValue(value, visibleStart = 3, visibleEnd = 3) {

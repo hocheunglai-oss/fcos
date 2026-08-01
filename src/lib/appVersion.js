@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.70';
+export const APP_VERSION = '2.0.71';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.71',
+    releasedAt: '2026-08-02',
+    title: 'Email sender configuration display',
+    changes: [
+      'Corrected the Email Senders settings response so both configured Vercel mailbox addresses are displayed.',
+    ],
+  },
   {
     version: '2.0.70',
     releasedAt: '2026-08-01',
