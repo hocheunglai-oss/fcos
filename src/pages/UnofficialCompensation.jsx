@@ -8,6 +8,7 @@ import {
   ExternalLink,
   HandCoins,
   Loader2,
+  ListChecks,
   Plus,
   RefreshCw,
   Search,
@@ -113,6 +114,7 @@ export default function UnofficialCompensation() {
   const [options, setOptions] = useState({ accounts: [], picOptions: [] });
   const [claimDialog, setClaimDialog] = useState(false);
   const [claimDraft, setClaimDraft] = useState(EMPTY_CLAIM);
+  const [managedAccountId, setManagedAccountId] = useState('');
   const [contacts, setContacts] = useState([]);
   const [recoveryDialog, setRecoveryDialog] = useState(null);
   const [recoveryDraft, setRecoveryDraft] = useState(EMPTY_RECOVERY);
@@ -145,6 +147,12 @@ export default function UnofficialCompensation() {
       return !keyword || accountSearchText(account).includes(keyword);
     });
   }, [search, view, workspace.accounts]);
+
+  const managedAccount = useMemo(
+    () => (workspace.accounts || []).find((account) => account.accountId === managedAccountId) || null,
+    [managedAccountId, workspace.accounts],
+  );
+  const canChangeStatus = workspace.permissions?.canChangeSalesforceStatus === true;
 
   const ensureOptions = async () => {
     if (options.accounts.length) return options;
@@ -283,6 +291,24 @@ export default function UnofficialCompensation() {
     return next;
   });
 
+  const openStatus = (account, group, status) => {
+    setManagedAccountId('');
+    setReason('');
+    setStatusDialog({ account, group, status });
+  };
+
+  const openDelete = (account, group, recovery) => {
+    setManagedAccountId('');
+    setReason('');
+    setDeleteConfirmed(false);
+    setDeleteDialog({ account, group, recovery });
+  };
+
+  const openManagedRecovery = (account, group) => {
+    setManagedAccountId('');
+    openRecovery(account, group);
+  };
+
   return (
     <div className="space-y-5 p-4 sm:p-6">
       <PageHeader
@@ -333,9 +359,9 @@ export default function UnofficialCompensation() {
                     <TableCell className="text-right">{account.overdueDays ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">{account.overdueDays} days</Badge> : '—'}</TableCell>
                     <TableCell>{account.salesforceStatus}</TableCell>
                     <TableCell>{formatDateTime(account.latestRecoveryAt)}</TableCell>
-                    <TableCell className="text-right"><Button type="button" variant="outline" size="sm" onClick={() => openClaim(account.accountId)} disabled={!account.active}><Plus className="mr-1.5 h-3.5 w-3.5" />Claim</Button></TableCell>
+                    <TableCell className="text-right"><Button type="button" variant="outline" size="sm" onClick={() => setManagedAccountId(account.accountId)}><ListChecks className="mr-1.5 h-3.5 w-3.5" />Manage</Button></TableCell>
                   </TableRow>,
-                  isOpen && <TableRow key={`${account.accountId}:detail`}><TableCell colSpan={11} className="bg-slate-50 p-4"><AccountDetails account={account} instanceUrl={workspace.instanceUrl} onRecovery={openRecovery} onStatus={(group, status) => { setReason(''); setStatusDialog({ account, group, status }); }} onDelete={(group, recovery) => { setReason(''); setDeleteConfirmed(false); setDeleteDialog({ account, group, recovery }); }} /></TableCell></TableRow>,
+                  isOpen && <TableRow key={`${account.accountId}:detail`}><TableCell colSpan={11} className="bg-slate-50 p-4"><AccountDetails account={account} instanceUrl={workspace.instanceUrl} canChangeStatus={canChangeStatus} onRecovery={openRecovery} onStatus={(group, status) => openStatus(account, group, status)} onDelete={(group, recovery) => openDelete(account, group, recovery)} /></TableCell></TableRow>,
                 ];
               })}</TableBody>
             </Table>
@@ -343,8 +369,24 @@ export default function UnofficialCompensation() {
         )}
       </TableShell>
 
+      <Dialog open={Boolean(managedAccount)} onOpenChange={(open) => !open && setManagedAccountId('')}>
+        <DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Manage Agreed Compensation</DialogTitle>
+            <DialogDescription>
+              Existing Salesforce claims and recoveries for {managedAccount ? accountSearchDisplayText(managedAccount.accountName, managedAccount.clKey) : 'this Account'}.
+            </DialogDescription>
+          </DialogHeader>
+          {managedAccount && <AccountDetails account={managedAccount} instanceUrl={workspace.instanceUrl} canChangeStatus={canChangeStatus} onRecovery={openManagedRecovery} onStatus={(group, status) => openStatus(managedAccount, group, status)} onDelete={(group, recovery) => openDelete(managedAccount, group, recovery)} />}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setManagedAccountId('')}>Close</Button>
+            {managedAccount?.active && <Button type="button" onClick={() => { const accountId = managedAccount.accountId; setManagedAccountId(''); openClaim(accountId); }}><Plus className="mr-2 h-4 w-4" />Open New Claim</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={claimDialog} onOpenChange={setClaimDialog}>
-        <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Open Agreed Compensation Claim</DialogTitle><DialogDescription>The positive claim opens the debt in Salesforce. Currency comes from the selected Account.</DialogDescription></DialogHeader>
+        <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Open New Agreed Compensation Claim</DialogTitle><DialogDescription>This creates an additional positive claim in Salesforce; it does not edit an existing claim. Currency comes from the selected Account.</DialogDescription></DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2"><Label>Account</Label><Select value={claimDraft.accountId} onValueChange={async (value) => { setClaimDraft((current) => ({ ...current, accountId: value, contactId: '__none__' })); try { await loadContacts(value); } catch (loadError) { toast({ title: 'Contacts unavailable', description: loadError.message, variant: 'destructive' }); } }}><SelectTrigger><SelectValue placeholder="Select active Account" /></SelectTrigger><SelectContent>{options.accounts.map((account) => <SelectItem key={account.accountId} value={account.accountId}>{accountSearchDisplayText(account.accountName, account.clKey)}</SelectItem>)}</SelectContent></Select></div>
             <div><Label>Contact (optional)</Label><Select value={claimDraft.contactId} onValueChange={(value) => setClaimDraft((current) => ({ ...current, contactId: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">No Contact</SelectItem>{contacts.map((contact) => <SelectItem key={contact.contactId} value={contact.contactId}>{contact.contactName}</SelectItem>)}</SelectContent></Select></div>
@@ -382,11 +424,12 @@ export default function UnofficialCompensation() {
   );
 }
 
-function AccountDetails({ account, instanceUrl, onRecovery, onStatus, onDelete }) {
+function AccountDetails({ account, instanceUrl, canChangeStatus, onRecovery, onStatus, onDelete }) {
   return <div className="space-y-4">
     {!!account.issues?.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data issues</div><ul className="mt-2 space-y-1 text-sm text-amber-800">{account.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></div>}
+    {!canChangeStatus && <div className="rounded-md border bg-slate-50 px-4 py-3 text-sm text-muted-foreground">Salesforce claim status can be changed only by Finance, an Administrator, or the General Manager.</div>}
     {account.groups.map((group) => <section key={group.key} className="overflow-hidden rounded-md border bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3"><div><div className="font-semibold">{group.contactName}</div><div className="text-xs text-muted-foreground">{group.currencyIsoCode} · {group.openClaimCount} open claim{group.openClaimCount === 1 ? '' : 's'}</div></div><div className="flex flex-wrap gap-2">{group.openClaimCount > 0 && <><Button type="button" size="sm" variant="outline" onClick={() => onRecovery(account, group)}><HandCoins className="mr-1.5 h-3.5 w-3.5" />Record Recovery</Button><Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Closed')}>Close Group</Button></>}{group.openClaimCount === 0 && group.claims.length > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Opened')}>Open Group</Button>}</div></div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3"><div><div className="font-semibold">{group.contactName}</div><div className="text-xs text-muted-foreground">{group.currencyIsoCode} · {group.openClaimCount} open claim{group.openClaimCount === 1 ? '' : 's'}</div></div><div className="flex flex-wrap gap-2">{group.openClaimCount > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onRecovery(account, group)}><HandCoins className="mr-1.5 h-3.5 w-3.5" />Record Recovery</Button>}{canChangeStatus && group.openClaimCount > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Closed')}>Close Group</Button>}{canChangeStatus && group.openClaimCount === 0 && group.claims.length > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Opened')}>Open Group</Button>}</div></div>
       <div className="grid divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0"><SummaryMetric label="Agreed" value={formatMoney(group.agreedAmount, group.currencyIsoCode)} /><SummaryMetric label="Recovered" value={formatMoney(group.recoveredAmount, group.currencyIsoCode)} /><SummaryMetric label="Outstanding" value={formatMoney(group.outstandingAmount, group.currencyIsoCode)} tone={group.outstandingAmount > 0.005 ? 'warning' : 'normal'} /></div>
       <div className="grid gap-4 border-t p-4 xl:grid-cols-2">
         <div><h4 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Agreed Compensation Claims</h4><div className="space-y-2">{group.claims.map((claim) => <div key={claim.id} className="rounded-md border px-3 py-2 text-sm"><div className="flex items-start justify-between gap-3"><SalesforceRecordLink instanceUrl={instanceUrl} id={claim.id}>{claimDisplayLabel(claim)}</SalesforceRecordLink><Badge variant="outline">{claim.status}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{formatMoney(claim.amount, claim.currencyIsoCode)} · PIC {claim.pic || 'not set'}</div></div>)}{!group.claims.length && <div className="text-sm text-muted-foreground">No claims.</div>}</div></div>

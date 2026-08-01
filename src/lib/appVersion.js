@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.72';
+export const APP_VERSION = '2.0.73';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.73',
+    releasedAt: '2026-08-02',
+    title: 'Unofficial Compensation claim management',
+    changes: [
+      'Replaced the ambiguous Account Claim action with a Manage view that displays every existing open or closed Salesforce claim and its agreed amount.',
+      'Separated the populated Account management view from the explicit Open New Claim flow.',
+      'Restricted Salesforce compensation status changes to Finance, Administrators, and the active General Manager with server-side enforcement.',
+    ],
+  },
   {
     version: '2.0.72',
     releasedAt: '2026-08-02',

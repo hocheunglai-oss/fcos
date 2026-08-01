@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { buildUnofficialCompensationWorkspace, unofficialCompensationAmount } from '../api/_unofficialCompensation.js';
+import { buildUnofficialCompensationWorkspace, canManageUnofficialCompensationStatus, unofficialCompensationAmount } from '../api/_unofficialCompensation.js';
 
 const account = {
   Id: '0012x00000ABCDEAAA',
@@ -20,12 +20,21 @@ test('UOC recovery uses fixed price or delivered quantity before ordered quantit
   assert.equal(unofficialCompensationAmount({ fixed: false, quantity: 100, deliveredQuantity: 0, unitPrice: 2 }), -200);
 });
 
+test('only Finance, Administrators and the General Manager may change Salesforce compensation status', () => {
+  assert.equal(canManageUnofficialCompensationStatus('administrator'), true);
+  assert.equal(canManageUnofficialCompensationStatus('finance'), true);
+  assert.equal(canManageUnofficialCompensationStatus('general_manager'), true);
+  assert.equal(canManageUnofficialCompensationStatus('manager'), false);
+  assert.equal(canManageUnofficialCompensationStatus('interoffice'), false);
+  assert.equal(canManageUnofficialCompensationStatus(''), false);
+});
+
 test('claims and recoveries group by Account, Contact and currency without cross-currency netting', () => {
   const result = buildUnofficialCompensationWorkspace({
     accounts: [account],
     claims: [
       { Id: 'a011', Account__c: account.Id, Contact__c: '0031', Contact__r: { Name: 'Amy' }, Amount__c: 150, CurrencyIsoCode: 'USD', Deadline_Date__c: '2026-07-20', Status__c: 'Opened', Buyer_Supplier_Trader__c: 'Vincent', LastModifiedDate: '2026-07-01T00:00:00Z' },
-      { Id: 'a012', Account__c: account.Id, Contact__c: '0031', Contact__r: { Name: 'Amy' }, Amount__c: 80, CurrencyIsoCode: 'EUR', Deadline_Date__c: '2026-08-05', Status__c: 'Opened', Buyer_Supplier_Trader__c: 'Vincent' },
+      { Id: 'a012', Account__c: account.Id, Contact__c: '0031', Contact__r: { Name: 'Amy' }, Amount__c: 80, CurrencyIsoCode: 'EUR', Deadline_Date__c: '2026-08-05', Status__c: 'Closed', Buyer_Supplier_Trader__c: 'Vincent' },
     ],
     recoveries: [
       { Id: 'a021', Account__c: account.Id, Contact__c: '0031', Contact__r: { Name: 'Amy' }, Amount__c: -40, CurrencyIsoCode: 'USD', STEM__c: 'a031', STEM__r: { Name: 'HK260001T' }, CreatedDate: '2026-07-25T00:00:00Z' },
@@ -42,6 +51,8 @@ test('claims and recoveries group by Account, Contact and currency without cross
   assert.equal(result.accounts[0].overdueDays, 12);
   assert.equal(result.summary.outstandingAccountCount, 1);
   assert.equal(result.accounts[0].groups.find((row) => row.currencyIsoCode === 'USD').recoveredAmount, 40);
+  assert.equal(result.accounts[0].groups.find((row) => row.currencyIsoCode === 'EUR').claims[0].amount, 80);
+  assert.equal(result.accounts[0].groups.find((row) => row.currencyIsoCode === 'EUR').claims[0].status, 'Closed');
   assert.deepEqual(result.summary.currencyTotals.map((row) => [row.currencyIsoCode, row.outstandingAmount]), [['EUR', 0], ['USD', 110]]);
 });
 
@@ -86,6 +97,12 @@ test('Unofficial Compensation is service-only, permissioned, navigable and dispu
   assert.match(page, /Data Issues/);
   assert.match(page, /accountClKeyLabel/);
   assert.match(page, /Record UOC Recovery/);
+  assert.match(page, /Manage Agreed Compensation/);
+  assert.match(page, /Open New Claim/);
+  assert.match(page, /canChangeStatus/);
+  assert.doesNotMatch(page, /onClick=\{\(\) => openClaim\(account\.accountId\)\}/);
+  assert.match(server, /canChangeSalesforceStatus: canManageUnofficialCompensationStatus/);
+  assert.match(server, /Only Finance, an Administrator, or the General Manager can change Unofficial Compensation status in Salesforce/);
   assert.match(page, /claimDisplayLabel\(claim\)/);
   assert.match(page, /recoveryDisplayLabel\(recovery\)/);
   assert.doesNotMatch(page, />\{claim\.name \|\|/);

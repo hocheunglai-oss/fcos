@@ -1,4 +1,9 @@
 const ZERO_TOLERANCE = 0.005;
+const STATUS_MANAGER_USER_TYPES = new Set(['administrator', 'finance', 'general_manager']);
+
+export function canManageUnofficialCompensationStatus(userType) {
+  return STATUS_MANAGER_USER_TYPES.has(String(userType || '').trim());
+}
 
 function numberValue(value) {
   const parsed = Number(value);

@@ -97,6 +97,7 @@ import {
   updateUnofficialCompensationClaimGroupStatus as updateUnofficialCompensationClaimGroupStatusService,
   validateAgreedCompensationClaimLink,
 } from '../_unofficialCompensationService.js';
+import { canManageUnofficialCompensationStatus } from '../_unofficialCompensation.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -1268,10 +1269,16 @@ function unofficialCompensationServiceContext(accessContext) {
 
 async function unofficialCompensationList(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  return listUnofficialCompensation({
+  const workspace = await listUnofficialCompensation({
     force: requestForcesRefresh(body, req),
     interoffice: isInterofficeAccess(context),
   });
+  return {
+    ...workspace,
+    permissions: {
+      canChangeSalesforceStatus: canManageUnofficialCompensationStatus(context.profile.user_type),
+    },
+  };
 }
 
 async function unofficialCompensationOptions(body = {}, req = null, accessContext = null) {
@@ -1286,6 +1293,9 @@ async function unofficialCompensationClaimCreate(body = {}, req = null, accessCo
 
 async function unofficialCompensationClaimGroupStatus(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  if (!canManageUnofficialCompensationStatus(context.profile.user_type)) {
+    throw appError('Only Finance, an Administrator, or the General Manager can change Unofficial Compensation status in Salesforce.', 403);
+  }
   return updateUnofficialCompensationClaimGroupStatusService(body, unofficialCompensationServiceContext(context));
 }
 

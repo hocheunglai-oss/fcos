@@ -166,11 +166,11 @@ export const UNOFFICIAL_COMPENSATION_METHODOLOGY = {
     },
     {
       title: 'Controlled changes',
-      body: 'New claims require an active Account, positive amount, deadline, and Salesforce PIC. Recovery Account eligibility, Product, quantity, delivered quantity, UOM, currency, and amount are re-derived from live Salesforce records immediately before creation.',
+      body: 'Manage opens the selected Account\'s existing open and closed claims, agreed amounts, and recoveries. Open New Claim is a separate creation flow requiring an active Account, positive amount, deadline, and Salesforce PIC. Recovery Account eligibility, Product, quantity, delivered quantity, UOM, currency, and amount are re-derived from live Salesforce records immediately before creation.',
     },
     {
       title: 'Status and deletion',
-      body: 'Opening or closing an Account and Contact claim group updates every claim plus the Account status all-or-none and requires a reason. Only an erroneous UOC recovery may be deleted in FCOS, with explicit confirmation and an audit reason.',
+      body: 'Finance, Administrators, and the General Manager may open or close an Account and Contact claim group. Salesforce updates every claim plus the Account status all-or-none and requires a reason. Only an erroneous UOC recovery may be deleted in FCOS, with explicit confirmation and an audit reason.',
     },
     {
       title: 'Dispute linkage',
