@@ -556,7 +556,7 @@ function SystemHealthPanel() {
   );
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ methodologyAction = null }) {
   const { isAdministrator } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -680,10 +680,13 @@ export default function SettingsPage() {
         title="Settings"
         description="Configure email senders, exchange rates, STEM documents, and Dashboard AI Search."
         actions={(
-          <Button onClick={saveAll} disabled={saving} className="gap-2">
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-            {saved ? 'Saved!' : 'Save All Settings'}
-          </Button>
+          <>
+            {methodologyAction}
+            <Button onClick={saveAll} disabled={saving} className="gap-2">
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
+              {saved ? 'Saved!' : 'Save All Settings'}
+            </Button>
+          </>
         )}
       />
 

@@ -21,6 +21,7 @@ export default function SettingsWorkspace() {
   const requested = searchParams.get('section');
   const active = available.some((section) => section.id === requested) ? requested : available[0]?.id || 'system';
   const activeMethodology = SETTINGS_METHODOLOGIES[active] || SETTINGS_METHODOLOGIES.system;
+  const methodologyAction = <PageMethodology key={active} {...activeMethodology} />;
 
   const changeSection = (section) => {
     const next = new URLSearchParams(searchParams);
@@ -31,12 +32,9 @@ export default function SettingsWorkspace() {
   return (
     <div className="min-h-full bg-slate-50 lg:grid lg:grid-cols-[220px_minmax(0,1fr)]">
       <aside className="border-b border-slate-200 bg-white p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
-        <div className="mb-3 flex items-center justify-between gap-2 px-2">
-          <div className="hidden items-center gap-2 lg:flex">
-            <Activity className="h-4 w-4 text-blue-700" />
-            <span className="text-sm font-semibold">Settings</span>
-          </div>
-          <PageMethodology {...activeMethodology} size="sm" className="ml-auto" />
+        <div className="mb-3 hidden items-center gap-2 px-2 lg:flex">
+          <Activity className="h-4 w-4 text-blue-700" />
+          <span className="text-sm font-semibold">Settings</span>
         </div>
         <div className="flex gap-1 overflow-x-auto lg:block lg:space-y-1">
           {available.map((section) => {
@@ -54,9 +52,9 @@ export default function SettingsWorkspace() {
         </div>
       </aside>
       <div className="min-w-0">
-        {active === 'system' && <SettingsPage />}
-        {active === 'users' && <AdminControl />}
-        {active === 'audit' && <UniversalAuditTrail />}
+        {active === 'system' && <SettingsPage methodologyAction={methodologyAction} />}
+        {active === 'users' && <AdminControl methodologyAction={methodologyAction} />}
+        {active === 'audit' && <UniversalAuditTrail methodologyAction={methodologyAction} />}
       </div>
     </div>
   );

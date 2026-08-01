@@ -34,9 +34,15 @@ test('every authenticated FCOS workspace exposes a Methodology control', () => {
 
 test('integrated workspaces provide methodology for every tab or section', () => {
   const methodologies = read('src/lib/pageMethodologies.js');
+  const settingsWorkspace = read('src/pages/SettingsWorkspace.jsx');
   assert.match(methodologies, /PAYMENT_COLLECTIONS_METHODOLOGIES[\s\S]*collections:[\s\S]*incoming:[\s\S]*reconciliation:/);
   assert.match(methodologies, /BROKER_METHODOLOGIES[\s\S]*commissions:[\s\S]*archive:/);
   assert.match(methodologies, /SETTINGS_METHODOLOGIES[\s\S]*system:[\s\S]*users:[\s\S]*audit:/);
+  assert.match(settingsWorkspace, /const methodologyAction = <PageMethodology/);
+  assert.match(settingsWorkspace, /<SettingsPage methodologyAction=\{methodologyAction\}/);
+  assert.match(settingsWorkspace, /<AdminControl methodologyAction=\{methodologyAction\}/);
+  assert.match(settingsWorkspace, /<UniversalAuditTrail methodologyAction=\{methodologyAction\}/);
+  assert.doesNotMatch(settingsWorkspace, /<PageMethodology[^>]*className="ml-auto"/);
 });
 
 test('the shared Methodology dialog remains readable on constrained viewports', () => {

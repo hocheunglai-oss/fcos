@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.66';
+export const APP_VERSION = '2.0.67';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.67',
+    releasedAt: '2026-08-01',
+    title: 'Settings methodology placement',
+    changes: [
+      'Moved each Settings methodology control from the section navigator into the active page header beside its primary actions.',
+      'Removed the isolated mobile methodology row while retaining section-specific guidance for System Settings, Users & Access, and Audit Trail.',
+    ],
+  },
   {
     version: '2.0.66',
     releasedAt: '2026-08-01',

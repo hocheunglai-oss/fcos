@@ -247,7 +247,7 @@ function CapabilityGrid({ definitions, capabilities, locked = false, onToggle })
   );
 }
 
-export default function AdminControl() {
+export default function AdminControl({ methodologyAction = null }) {
   const { authMode, isSupabaseConfigured, user: currentUser } = useAuth();
   const [activeSection, setActiveSection] = useState('users');
   const [users, setUsers] = useState([]);
@@ -789,27 +789,32 @@ export default function AdminControl() {
         eyebrow="Administration"
         title="Admin Control"
         description="Manage users, access rights, reporting lines, and controlled FCOS update communications."
-        actions={['updates', 'reporting'].includes(activeSection) ? null : (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => (activeSection === 'users' ? openUserDialog(null) : openTypeDialog(null))}
-              disabled={!isSupabaseConfigured}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-            >
-              {activeSection === 'users' ? <UserPlus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-              {newButtonLabel}
-            </button>
-            <button
-              type="button"
-              onClick={load}
-              disabled={loading || !isSupabaseConfigured}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground disabled:opacity-60"
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Refresh
-            </button>
-          </div>
+        actions={(
+          <>
+            {methodologyAction}
+            {!['updates', 'reporting'].includes(activeSection) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => (activeSection === 'users' ? openUserDialog(null) : openTypeDialog(null))}
+                  disabled={!isSupabaseConfigured}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                >
+                  {activeSection === 'users' ? <UserPlus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                  {newButtonLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={load}
+                  disabled={loading || !isSupabaseConfigured}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground disabled:opacity-60"
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  Refresh
+                </button>
+              </>
+            )}
+          </>
         )}
       />
 

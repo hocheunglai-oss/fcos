@@ -49,7 +49,7 @@ function sourceTone(source) {
   return 'border-violet-200 bg-violet-50 text-violet-700';
 }
 
-export default function UniversalAuditTrail() {
+export default function UniversalAuditTrail({ methodologyAction = null }) {
   const [rows, setRows] = useState([]);
   const [sources, setSources] = useState([]);
   const [source, setSource] = useState('all');
@@ -101,10 +101,13 @@ export default function UniversalAuditTrail() {
         description="Review redacted app-level audit events from administration, collaboration, Growth & Coaching, FCOS updates, collections, reports, disputes, internal report runs, and late-payment interest requests."
         meta={`${rows.length.toLocaleString()} events shown · Hong Kong time`}
         actions={(
-          <Button onClick={() => loadRows({ force: true })} disabled={loading}>
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
-          </Button>
+          <>
+            {methodologyAction}
+            <Button onClick={() => loadRows({ force: true })} disabled={loading}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          </>
         )}
       />
 
