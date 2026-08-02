@@ -80,6 +80,10 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(buyerPage, /adviceReceivedDate/);
   assert.match(buyerPage, /adviceVerificationDate/);
   assert.match(buyerPage, /Drop payment advice here/);
+  assert.match(buyerPage, /promisedAmount: row\.collection\?\.promisedAmount \?\? promiseAmountFromReceivable\(row\)/);
+  assert.match(buyerPage, /status === 'Promise to Pay'[\s\S]*promisedAmount: current\.promisedAmount \|\| promiseAmountFromReceivable\(row\)/);
+  assert.match(buyerPage, /Promised Amount[\s\S]*type="text" inputMode="decimal"/);
+  assert.doesNotMatch(buyerPage, /Promised Amount[\s\S]{0,200}type="number"/);
   assert.match(server, /async function buyerInvoicePaymentAdviceSave/);
   assert.match(server, /Payment Collections requires STEM__c\.Receivable_Balance__c/);
   assert.match(server, /eventType: 'auto_closed'/);

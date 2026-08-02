@@ -733,6 +733,10 @@ function collectionOwner(row) {
   return row.collection?.ownerName || defaultCollectionOwner(row);
 }
 
+function promiseAmountFromReceivable(row) {
+  return row?.receivableBalance == null ? '' : String(row.receivableBalance);
+}
+
 function isFollowUpDue(row, today) {
   const date = row.collection?.nextFollowUpDate;
   return Boolean(date && date <= today && collectionStatus(row) !== 'Paid / Closed');
@@ -792,7 +796,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
       latestNote: row.collection?.latestNote || '',
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
-      promisedAmount: row.collection?.promisedAmount ?? '',
+      promisedAmount: row.collection?.promisedAmount ?? promiseAmountFromReceivable(row),
       onHoldReason: row.collection?.onHoldReason || '',
       onHoldReviewDate: row.collection?.onHoldReviewDate || '',
       adviceReceivedDate: row.collection?.adviceReceivedDate || '',
@@ -829,7 +833,10 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
       next.nextFollowUpDate ||= next.adviceVerificationDate;
       next.adviceAmount ||= row.receivableBalance == null ? '' : String(row.receivableBalance);
     }
-    if (key === 'status' && value === 'Promise to Pay') next.promisedPaymentDate ||= next.nextFollowUpDate || nextHongKongBusinessDate();
+    if (key === 'status' && value === 'Promise to Pay') {
+      next.promisedPaymentDate ||= next.nextFollowUpDate || nextHongKongBusinessDate();
+      next.promisedAmount ||= promiseAmountFromReceivable(row);
+    }
     if (key === 'status' && value === 'On Hold') next.onHoldReviewDate ||= nextHongKongBusinessDate();
     return next;
   });
@@ -927,7 +934,16 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
                   variant={form.status === status ? 'default' : 'outline'}
                   disabled={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row))}
                   title={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row)) ? 'Record contact or escalation before payment advice.' : undefined}
-                  onClick={() => setForm((current) => ({ ...current, status, activityType, ...(status === 'Payment Advice Received' ? { adviceReceivedDate: current.adviceReceivedDate || hongKongDateKey(), adviceVerificationDate: current.adviceVerificationDate || nextHongKongBusinessDate(), adviceAmount: current.adviceAmount || (row.receivableBalance == null ? '' : String(row.receivableBalance)) } : {}) }))}
+                  onClick={() => setForm((current) => ({
+                    ...current,
+                    status,
+                    activityType,
+                    ...(status === 'Promise to Pay' ? {
+                      promisedPaymentDate: current.promisedPaymentDate || current.nextFollowUpDate || nextHongKongBusinessDate(),
+                      promisedAmount: current.promisedAmount || promiseAmountFromReceivable(row),
+                    } : {}),
+                    ...(status === 'Payment Advice Received' ? { adviceReceivedDate: current.adviceReceivedDate || hongKongDateKey(), adviceVerificationDate: current.adviceVerificationDate || nextHongKongBusinessDate(), adviceAmount: current.adviceAmount || (row.receivableBalance == null ? '' : String(row.receivableBalance)) } : {}),
+                  }))}
                 >
                   {label}
                 </Button>
@@ -973,7 +989,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Promised Amount</Label>
-                <Input type="number" min="0" step="0.01" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
+                <Input type="text" inputMode="decimal" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
               </div>
               <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <div><span className="font-semibold text-foreground">Due:</span> {fmtDate(row.buyerInvoiceDueDate)}</div>

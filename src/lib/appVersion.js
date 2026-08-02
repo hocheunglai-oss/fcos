@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.81';
+export const APP_VERSION = '2.0.82';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.82',
+    releasedAt: '2026-08-02',
+    title: 'Payment promise amount entry',
+    changes: [
+      'Defaulted new Payment Collection promise amounts to the current receivable balance and removed the amount field increment and decrement controls.',
+    ],
+  },
   {
     version: '2.0.81',
     releasedAt: '2026-08-02',
