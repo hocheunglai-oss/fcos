@@ -47,8 +47,8 @@ non-secret Supabase configuration. The Entra federated credential must match
 the Vercel production issuer, subject, and audience exactly. In Exchange Online,
 assign `Application Mail.Send` to the service principal through a recipient scope
 covering every approved mailbox. Do not also grant an unscoped Entra `Mail.Send`
-application permission because Entra and Exchange grants are additive. FCOS has
-no SMTP transport, mailbox password, Send As path, or automatic fallback.
+application permission because Entra and Exchange grants are additive. This
+Microsoft Graph route is the only FCOS email-delivery path.
 
 ### Universal application portal
 

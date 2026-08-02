@@ -5634,8 +5634,6 @@ async function operationalMailHealthRow() {
       configuredEnv: configuredEnv([
         'FCOS_MICROSOFT_TENANT_ID',
         'FCOS_MICROSOFT_CLIENT_ID',
-        'FCOS_UPDATE_MICROSOFT_TENANT_ID',
-        'FCOS_UPDATE_MICROSOFT_CLIENT_ID',
       ]),
       missingEnv: [
         ...(!graphConfig.tenantId ? ['FCOS_MICROSOFT_TENANT_ID'] : []),
@@ -5649,7 +5647,7 @@ async function operationalMailHealthRow() {
       notes: [
         'This check verifies Vercel OIDC, Microsoft token exchange, and configured purpose routes without sending email.',
         'Mailbox-scoped Mail.Send authorization is confirmed only by an actual controlled delivery.',
-        'No SMTP transport or automatic fallback exists.',
+        'Failed or uncertain Graph deliveries remain reserved for controlled review and explicit retry.',
       ],
     },
     result,

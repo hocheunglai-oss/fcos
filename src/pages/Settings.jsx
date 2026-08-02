@@ -951,7 +951,7 @@ export default function SettingsPage({ methodologyAction = null }) {
               <Server className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
                 <p>Microsoft application configuration remains protected in Vercel. Mailbox addresses and purpose assignments contain no credentials and are stored server-side in Supabase.</p>
-                <p className="mt-1">SMTP and automatic transport fallback are not available. A failed Graph delivery remains failed or uncertain for controlled review.</p>
+                <p className="mt-1">Every message uses its assigned Microsoft 365 mailbox through Microsoft Graph. Failed or uncertain deliveries remain reserved for controlled review.</p>
               </div>
             </div>
           </SettingsPanel>

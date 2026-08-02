@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildFcosUpdateEmail,
-  FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE,
+  FCOS_UPDATE_SENDER_RECOVERY_MESSAGE,
   fcosUpdateMailConfig,
   fcosUpdateSenderFailureMessage,
   fcosUpdateSourceCandidates,
@@ -65,7 +65,7 @@ test('FCOS Updates uses the shared Microsoft Graph application and no workflow s
   assert.equal(config.deliveryMethod, 'microsoft_graph_oidc');
   assert.equal(config.graph.configured, true);
   assert.equal(config.senderAddress, null);
-  assert.equal(config.requiresSendAs, false);
+  assert.equal(Object.hasOwn(config, 'requiresSendAs'), false);
   assert.equal(config.configurationIssue, '');
   assert.equal(Object.hasOwn(config, 'from'), false);
 });
@@ -86,7 +86,7 @@ test('FCOS Updates treats Microsoft Graph mailbox authorization as a sender-wide
     'Microsoft Graph mailbox authorization failed.',
   );
   assert.equal(fcosUpdateSenderFailureMessage(new Error('550 recipient rejected')), '');
-  assert.doesNotMatch(FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE, /@/);
+  assert.doesNotMatch(FCOS_UPDATE_SENDER_RECOVERY_MESSAGE, /@/);
 });
 
 test('Settings manages Graph mailboxes and purpose assignments', async () => {

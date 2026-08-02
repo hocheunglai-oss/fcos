@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.74';
+export const APP_VERSION = '2.0.75';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.75',
+    releasedAt: '2026-08-02',
+    title: 'Hedge Desk retirement and Graph-only email configuration',
+    changes: [
+      'Retired the standalone Hedge Desk deployment after a final source-to-FCOS reconciliation passed without record, relationship, document, or financial mismatches.',
+      'Removed legacy SMTP credentials and channel-specific Microsoft configuration aliases from the active FCOS deployment.',
+      'Made the shared Microsoft Graph application configuration and administrator-assigned mailbox registry the only FCOS email-delivery path.',
+    ],
+  },
   {
     version: '2.0.74',
     releasedAt: '2026-08-02',

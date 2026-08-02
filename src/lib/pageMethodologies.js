@@ -310,7 +310,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Email and external actions',
-        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. There is no SMTP fallback, and saving a setting does not send an email.',
+        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. Saving a setting does not send an email.',
       },
       {
         title: 'AI configuration',

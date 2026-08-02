@@ -19,12 +19,12 @@ const REASON_MAX_LENGTH = 255;
 const INTERRUPTED_DELIVERY_MINUTES = 15;
 const UPDATE_TABLE_PATTERN = /fcos_update_(settings|items|batches|batch_items|batch_recipients|deliveries|events)/i;
 
-export const FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE =
+export const FCOS_UPDATE_SENDER_RECOVERY_MESSAGE =
   'Microsoft 365 rejected the assigned FCOS Updates mailbox. Verify its mailbox-scoped Application Mail.Send authorization before retrying.';
 
 export function fcosUpdateSenderFailureMessage(error) {
   if (error?.fcosUpdateGlobal) return cleanText(error.message, 500);
-  return error?.mailDeliveryGlobal ? cleanText(error.message || FCOS_UPDATE_SEND_AS_RECOVERY_MESSAGE, 500) : '';
+  return error?.mailDeliveryGlobal ? cleanText(error.message || FCOS_UPDATE_SENDER_RECOVERY_MESSAGE, 500) : '';
 }
 
 function updateError(message, status = 400, code = 'FCOS_UPDATE_ERROR', details = undefined) {
@@ -65,7 +65,6 @@ export function fcosUpdateMailConfig(env = process.env) {
     senderName: null,
     senderAddress: null,
     authenticatedAddress: null,
-    requiresSendAs: false,
   };
 }
 
@@ -526,7 +525,6 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
       mailboxId: senderResult.mailboxId || null,
       deliveryMethod: 'microsoft_graph_oidc',
       configurationIssue: senderResult.error?.message || null,
-      requiresSendAs: false,
     },
     authority: {
       canPrepare: ['administrator', 'general_manager'].includes(profile.user_type),

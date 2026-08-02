@@ -31,8 +31,8 @@ function normalizedEmail(value) {
 }
 
 export function graphEmailApplicationConfig(env = process.env) {
-  const tenantId = cleanText(env.FCOS_MICROSOFT_TENANT_ID || env.FCOS_UPDATE_MICROSOFT_TENANT_ID, 200);
-  const clientId = cleanText(env.FCOS_MICROSOFT_CLIENT_ID || env.FCOS_UPDATE_MICROSOFT_CLIENT_ID, 200);
+  const tenantId = cleanText(env.FCOS_MICROSOFT_TENANT_ID, 200);
+  const clientId = cleanText(env.FCOS_MICROSOFT_CLIENT_ID, 200);
   return {
     tenantId,
     clientId,
