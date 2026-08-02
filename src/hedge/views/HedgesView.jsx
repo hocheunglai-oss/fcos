@@ -365,7 +365,7 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
           <div className="app-form-section__title">Control</div>
           <Field label="Notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field>
           <label className="app-check"><input type="checkbox" checked={Boolean(form.round_trip)} onChange={(event) => setField("round_trip", event.target.checked)} /><span>Round trip fees</span></label>
-          <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day, every scheduled MOPS row is complete, and the one final monthly average is verified against the pasted third-party message.</div>
+          <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day, every scheduled MOPS row is complete, and manual verification text has been saved for the final monthly average.</div>
         </section>
       </Drawer>
 

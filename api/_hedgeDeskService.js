@@ -1,6 +1,6 @@
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
-import { decorateMopsMonthVerifications, verifyMopsMonthlyAverage } from './_hedgeMops.js';
+import { decorateMopsMonthVerifications, prepareManualMopsVerification } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
@@ -504,15 +504,16 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
       throw httpError('This monthly MOPS verification changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT', { current: currentResult.data || null });
     }
 
-    const verification = verifyMopsMonthlyAverage(month, pricesResult.data || [], sourceMessage);
+    const verification = prepareManualMopsVerification(month, pricesResult.data || [], sourceMessage);
     if (!verification.verified) {
-      throw httpError(`The final monthly average could not be verified: ${verification.issues.join(' ')}`, 400, 'HEDGE_MOPS_MONTH_VERIFICATION_FAILED', { issues: verification.issues });
+      throw httpError(`The monthly verification could not be saved: ${verification.issues.join(' ')}`, 400, 'HEDGE_MOPS_MONTH_VERIFICATION_FAILED', { issues: verification.issues });
     }
     const saved = await client.rpc('verify_mops_month_with_audit', {
       p_contract_month: month,
       p_expected_revision: expectedRevision,
       p_calculated_snapshot: verification.calculatedSnapshot,
       p_source_snapshot: verification.sourceSnapshot,
+      p_source_message: verification.sourceMessage,
       p_input_fingerprint: verification.inputFingerprint,
       p_source_hash: verification.sourceHash,
       p_actor_user_id: profile.id,

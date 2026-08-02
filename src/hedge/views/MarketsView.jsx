@@ -360,7 +360,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       await verifyMonth(selectedMonth, verificationText, monthFinality.verification?.revision || 0);
       setVerificationOpen(false);
       setVerificationText("");
-      actions.notify({ message: `${formatMonth(selectedMonth)} final MOPS average verified` });
+      actions.notify({ message: `${formatMonth(selectedMonth)} manual MOPS verification saved` });
     } catch (nextError) {
       setVerificationError(nextError);
     } finally {
@@ -483,9 +483,9 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           })}
         </div>
         <div className={`app-mops-finality ${monthFinality.ready ? "is-ready" : "is-pending"}`}>
-          <StatusBadge tone={monthFinality.ready ? "positive" : "warning"}>{monthFinality.ready ? "Final average verified" : "Not final"}</StatusBadge>
+          <StatusBadge tone={monthFinality.ready ? "positive" : "warning"}>{monthFinality.ready ? "Manual verification saved" : "Not final"}</StatusBadge>
           <span>{monthFinality.ready
-            ? `The completed monthly average is source-verified. Paper hedges for this month expire automatically.`
+            ? `The completed monthly average has a saved manual verification. Paper hedges for this month expire automatically.`
             : !monthFinality.calendarSupported
               ? "The approved Platts publication calendar is unavailable for this year."
               : !monthFinality.reachedLastTradingDay
@@ -493,13 +493,13 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
                 : monthFinality.complete !== monthFinality.total
                   ? `${monthFinality.complete} of ${monthFinality.total} publication days contain complete actual values.`
                   : monthFinality.verification && !monthFinality.verification.is_current
-                    ? "The saved monthly verification is stale because the underlying MOPS values changed. Verify the final average again."
-                    : "All daily values are complete. Verify the final monthly average against the third-party message."}</span>
+                    ? "The saved manual verification is stale because the underlying MOPS values changed. Save the verification again."
+                    : "All daily values are complete. Paste and save the manual verification text."}</span>
           {!readOnly && verifyMonth ? <Button
             variant="primary"
             disabled={!monthFinality.reachedLastTradingDay || monthFinality.complete !== monthFinality.total}
-            onClick={() => { setVerificationText(""); setVerificationError(null); setVerificationOpen(true); }}
-          >{monthFinality.verification ? "Verify again" : "Verify final average"}</Button> : null}
+            onClick={() => { setVerificationText(monthFinality.verification?.source_message || ""); setVerificationError(null); setVerificationOpen(true); }}
+          >{monthFinality.verification ? "View / update verification" : "Save verification"}</Button> : null}
         </div>
       </Panel>
 
@@ -545,7 +545,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
             <textarea className="app-input app-textarea" rows="5" value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder="07-Apr-2026 S380: 421.50 S0.5: 492.25 SGO: 73.45" />
           </Field>
           <Button icon={Bot} onClick={parseRaw} disabled={parsing || !rawText.trim()}>{parsing ? "Parsing..." : "Parse values"}</Button>
-          <div className="app-callout app-callout--neutral">This message is used only to extract the daily values. Source verification happens once, against the completed final monthly average.</div>
+          <div className="app-callout app-callout--neutral">This message is used only to extract the daily values. Final monthly verification is recorded separately as a manual attestation.</div>
         </section>
         {drawer?.mode === "create" && (
           <section className="app-form-section app-form-section--indication">
@@ -627,10 +627,10 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       <Drawer
         open={verificationOpen}
         onClose={() => setVerificationOpen(false)}
-        title={`Verify ${formatMonth(selectedMonth)} final average`}
-        description="Paste the third-party message that states the final monthly averages. FCOS compares all three products with its calculated result."
+        title={`${formatMonth(selectedMonth)} manual verification`}
+        description="Paste the text used to verify the final monthly average. FCOS saves it as manual evidence without parsing or comparing its contents."
         width="medium"
-        footer={<><Button onClick={() => setVerificationOpen(false)} disabled={saving}>Cancel</Button><Button variant="primary" onClick={saveMonthlyVerification} disabled={saving || !verificationText.trim()}>{saving ? "Verifying..." : "Verify monthly average"}</Button></>}
+        footer={<><Button onClick={() => setVerificationOpen(false)} disabled={saving}>Cancel</Button><Button variant="primary" onClick={saveMonthlyVerification} disabled={saving || !verificationText.trim()}>{saving ? "Saving..." : "Save verification"}</Button></>}
       >
         {verificationError && <InlineError error={verificationError} />}
         <section className="app-form-section">
@@ -638,10 +638,10 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           <div className="app-mops-average-values">
             {MOPS_PRODUCTS.map((product) => <div key={product.field}><span>{product.label}</span><strong>{formatMoney(monthFinality.calculatedAverages?.[product.field], { digits: 3 })}</strong><small>{product.unit}</small></div>)}
           </div>
-          <Field label="Third-party final monthly-average message" required hint={`The message must identify ${formatMonth(selectedMonth)} and state S380, S0.5, and SGO averages.`}>
+          <Field label="Verified text" required hint="FCOS stores the submitted text as the manual verification evidence.">
             <textarea className="app-input app-textarea" rows="8" value={verificationText} onChange={(event) => setVerificationText(event.target.value)} placeholder={`Jul 2026\nMOPS Average\nS380: 421.500\nS0.5: 492.250\nSGO: 73.450`} />
           </Field>
-          <div className="app-callout app-callout--neutral">Only a cryptographic hash and the compared monthly values are retained as verification evidence. The pasted message is not stored.</div>
+          <div className="app-callout app-callout--neutral">This is a manual confirmation. FCOS does not validate the wording, month, or values in the pasted text.</div>
         </section>
       </Drawer>
 

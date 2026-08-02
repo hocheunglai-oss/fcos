@@ -227,7 +227,7 @@ async function loadFinalFinancials(client, inputs) {
   for (const monthStatus of expiryStatus.months) {
     if (!monthStatus.calendarSupported) issues.push(`The Platts publication calendar for ${monthStatus.month.slice(0, 4)} has not been approved.`);
     if (!monthStatus.reachedLastTradingDay) issues.push(`${monthStatus.month} has not reached its final trading day ${monthStatus.lastTradingDay || 'not available'}.`);
-    if (!monthStatus.averageVerified) issues.push(`The final MOPS monthly average has not been source-verified for ${monthStatus.month}.`);
+    if (!monthStatus.averageVerified) issues.push(`Manual verification text has not been saved for the final MOPS monthly average for ${monthStatus.month}.`);
   }
   for (const month of months) {
     const completeness = getSfsMopsCompleteness(month, priceResult.data || []);

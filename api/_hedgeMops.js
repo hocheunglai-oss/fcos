@@ -2,8 +2,6 @@ import { createHash } from 'node:crypto'
 import { finalMopsMonthlyAverages, mopsMonthFinality } from '../src/hedge/lib/domain.js'
 
 const NUMBER_PATTERN = '(-?\\d+(?:\\.\\d+)?)'
-const MOPS_PRICE_FIELDS = ['s380', 's05', 'sgo']
-
 const MONTH_NUMBER = Object.fromEntries([
   ['jan', 1], ['january', 1], ['feb', 2], ['february', 2], ['mar', 3], ['march', 3],
   ['apr', 4], ['april', 4], ['may', 5], ['jun', 6], ['june', 6], ['jul', 7],
@@ -194,10 +192,6 @@ export function parseMopsText(text = '', options = {}) {
   }
 }
 
-function finitePrice(value) {
-  return value !== null && value !== '' && Number.isFinite(Number(value))
-}
-
 export function parseMopsContractMonth(text) {
   const input = String(text || '')
   let match = input.match(/\b(20\d{2})[-/](0?[1-9]|1[0-2])\b/)
@@ -232,7 +226,7 @@ export function decorateMopsMonthVerifications(verifications = [], records = [])
   })
 }
 
-export function verifyMopsMonthlyAverage(yearMonth, records = [], rawInput = '', options = {}) {
+export function prepareManualMopsVerification(yearMonth, records = [], rawInput = '', options = {}) {
   const sourceMessage = String(rawInput || '').trim()
   const now = options.now || new Date()
   const finality = mopsMonthFinality(yearMonth, records, now)
@@ -242,22 +236,7 @@ export function verifyMopsMonthlyAverage(yearMonth, records = [], rawInput = '',
   if (finality.complete !== finality.total) issues.push(`All ${finality.total} scheduled publication days must contain complete actual MOPS values first.`)
   if (!sourceMessage) issues.push('Paste the third-party final monthly-average message.')
 
-  const sourceMonth = sourceMessage ? parseMopsContractMonth(sourceMessage) : null
-  const parsed = sourceMessage ? parseMopsText(sourceMessage, options) : null
   const calculated = finality.calculatedAverages
-  if (sourceMessage && !sourceMonth) issues.push('The third-party message does not contain a recognizable contract month and year.')
-  else if (sourceMonth && sourceMonth !== yearMonth) issues.push(`The message month ${sourceMonth} does not match ${yearMonth}.`)
-
-  for (const field of MOPS_PRICE_FIELDS) {
-    if (!calculated || !finitePrice(calculated[field])) continue
-    if (!finitePrice(parsed?.[field])) {
-      issues.push(`The third-party message does not contain the final ${field.toUpperCase()} monthly average.`)
-      continue
-    }
-    if (Math.abs(Number(calculated[field]) - Number(parsed[field])) >= 0.0005) {
-      issues.push(`${field.toUpperCase()} in the message does not match FCOS's final monthly average of ${Number(calculated[field]).toFixed(3)}.`)
-    }
-  }
 
   return {
     verified: issues.length === 0,
@@ -269,12 +248,8 @@ export function verifyMopsMonthlyAverage(yearMonth, records = [], rawInput = '',
       s05: calculated.s05,
       sgo: calculated.sgo,
     } : null,
-    sourceSnapshot: parsed ? {
-      contract_month: sourceMonth,
-      s380: parsed.s380,
-      s05: parsed.s05,
-      sgo: parsed.sgo,
-    } : null,
+    sourceSnapshot: { verification_mode: 'manual_attestation' },
+    sourceMessage,
     inputFingerprint: mopsMonthInputFingerprint(yearMonth, records),
     sourceHash: sourceMessage ? createHash('sha256').update(sourceMessage).digest('hex') : null,
   }

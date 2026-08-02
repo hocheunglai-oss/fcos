@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.79';
+export const APP_VERSION = '2.0.80';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.80',
+    releasedAt: '2026-08-02',
+    title: 'Manual MOPS verification evidence',
+    changes: [
+      'Changed final monthly MOPS verification to save the manually verified text without parsing or comparing its wording, month, or values.',
+      'Made saved verification text viewable and editable from Markets while keeping revision, final-trading-day, complete-input, and audit controls.',
+    ],
+  },
   {
     version: '2.0.79',
     releasedAt: '2026-08-02',

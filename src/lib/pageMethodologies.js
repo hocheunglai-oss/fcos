@@ -336,7 +336,7 @@ export const MARKETS_METHODOLOGY = {
     },
     {
       title: 'Automatic hedge expiry',
-      body: 'FCOS expires a paper hedge automatically only after every contract month reaches its final Platts trading day, every scheduled MOPS row contains complete actual values, and the one final monthly average matches the manually pasted third-party message. Spread hedges wait for both contract months. A daily-value change makes the monthly verification stale.',
+      body: 'FCOS expires a paper hedge automatically only after every contract month reaches its final Platts trading day, every scheduled MOPS row contains complete actual values, and a user saves the manual verification text for the final monthly average. FCOS stores but does not parse or compare that text. Spread hedges wait for both contract months. A daily-value change makes the monthly verification stale.',
     },
     {
       title: 'Forward adjustments',
