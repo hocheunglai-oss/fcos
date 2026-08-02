@@ -202,7 +202,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Reminder safety',
-        body: 'Before sending, FCOS bypasses caches and revalidates the live Salesforce balance, payment evidence, reminder policy, routing, and recipient eligibility. Fully paid or restricted selections are rejected rather than sent.',
+        body: 'Before sending, FCOS bypasses caches and revalidates the live Salesforce balance, payment evidence, reminder policy, routing, and recipient eligibility. An unresolved payment-posting difference pauses every external reminder route. Finance may allow contact for that exact exception only by recording a reason; a changed payment set or resolved exception automatically clears the override.',
       },
       {
         title: 'Settlement',
@@ -224,7 +224,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Posting interpretation',
-        body: 'A payment record is supporting evidence. Until the authoritative STEM receivable balance changes, FCOS may show Pending Salesforce posting and will not treat the invoice as settled.',
+        body: 'A payment record is supporting evidence. FCOS compares the previous balance less all newly detected buyer payments with the current authoritative STEM receivable balance. It distinguishes Posting pending, Partially posted, Posting mismatch, and Posting overdue after one Hong Kong business day.',
       },
       {
         title: 'Refresh',
@@ -246,7 +246,11 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Exception types',
-        body: 'Exceptions include unverified payment advice past its verification date, payment records awaiting balance posting, manual closure with an open balance, missing balances, and reconciliation failures.',
+        body: 'Payment posting is Pending when no expected movement appears, Partially posted when only part appears, Mismatched when the movement differs in another way, and Overdue when an unchanged pending difference remains after one Hong Kong business day. The table shows prior balance, detected payments, expected balance, current balance, difference, and age. Other exceptions include overdue advice, manual closure with an open balance, and missing balances.',
+      },
+      {
+        title: 'Reminder control',
+        body: 'Every active posting discrepancy pauses external reminders, including broker-only routing. Finance, Administrators, and the General Manager may record a reason to allow reminders for the current issue. The exception clears only when the Salesforce balance movement matches the detected payment movement within the monetary tolerance.',
       },
       {
         title: 'Refresh behavior',

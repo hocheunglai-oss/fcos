@@ -59,6 +59,7 @@ const PAYMENT_EVIDENCE_FILTERS = [
   ['full_payment', 'Full Payment'],
 ];
 const PAYMENT_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
+const PAYMENT_POSTING_EXCEPTION_STATES = new Set(['payment_posting_pending', 'payment_partially_posted', 'payment_posting_mismatch', 'payment_posting_overdue']);
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
 const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
@@ -226,13 +227,22 @@ function paymentComparisonText(evidence) {
   ].filter(Boolean).join(' · ');
 }
 
-function PaymentEvidenceDisplay({ latestPayment, evidence, summary, pendingPosting = false }) {
+function paymentPostingLabel(state) {
+  if (state === 'payment_partially_posted') return 'Payment partly posted';
+  if (state === 'payment_posting_mismatch') return 'Payment posting mismatch';
+  if (state === 'payment_posting_overdue') return 'Payment posting overdue';
+  if (state === 'payment_posting_pending') return 'Payment posting pending';
+  return '';
+}
+
+function PaymentEvidenceDisplay({ latestPayment, evidence, summary, postingState = '' }) {
   if (!latestPayment) return '-';
   const payments = summary?.payments || [];
+  const postingException = PAYMENT_POSTING_EXCEPTION_STATES.has(postingState);
   return (
     <div className="min-w-[230px]">
-      <span className={pendingPosting ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
-        {pendingPosting ? 'Pending Salesforce posting' : evidence?.label || 'Buyer payment'}
+      <span className={postingException ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
+        {postingException ? paymentPostingLabel(postingState) : evidence?.label || 'Buyer payment'}
       </span>
       <div>{latestPayment.amount != null ? fmtMoney(latestPayment.amount) : '-'}</div>
       <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{paymentComparisonText(evidence) || fmtDate(latestPayment.paymentDate)}</div>
@@ -798,7 +808,7 @@ function isFollowUpDue(row, today) {
 
 function isNeedsAction(row, today) {
   const collection = row.collection || {};
-  if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(collection.reconciliationState)) return true;
+  if (PAYMENT_POSTING_EXCEPTION_STATES.has(collection.reconciliationState) || ['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'reopened'].includes(collection.reconciliationState)) return true;
   if (collectionStatus(row) === 'Payment Advice Received' && collection.adviceVerificationDate && collection.adviceVerificationDate <= today) return true;
   if (collectionStatus(row) === 'Promise to Pay' && collection.promisedPaymentDate && collection.promisedPaymentDate <= today) return true;
   if (isFollowUpDue(row, today)) return true;
@@ -2390,7 +2400,7 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
   );
 }
 
-export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [] }) {
+export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [], dataRefreshToken = 0 }) {
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => hongKongDateKey(), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
@@ -2444,6 +2454,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const collectionRows = useMemo(() => rows.map((row) => {
     const live = reconciliationByStem.get(row.stemId);
     if (!live) return row;
+    const postingReminderPaused = PAYMENT_POSTING_EXCEPTION_STATES.has(live.item?.reconciliationState)
+      && live.item?.postingReminderOverrideActive !== true;
     return {
       ...row,
       buyerName: live.buyerName || row.buyerName,
@@ -2458,6 +2470,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       paymentEvidence: live.paymentEvidence || row.paymentEvidence || null,
       paymentEvidenceSummary: live.paymentEvidenceSummary || row.paymentEvidenceSummary || null,
       collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
+      paymentReminderEligible: postingReminderPaused ? false : row.paymentReminderEligible,
+      paymentReminderBlockingReason: postingReminderPaused
+        ? 'A detected buyer payment does not reconcile to the Salesforce receivable balance. External reminders are paused pending Finance review.'
+        : row.paymentReminderBlockingReason,
     };
   }), [reconciliationByStem, rows]);
 
@@ -2546,7 +2562,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     if (queueView === 'needs-action') {
       next = [...next].sort((a, b) => {
         const priority = (row) => {
-          if (['manual_closure_mismatch', 'balance_unavailable', 'payment_pending_posting', 'reopened'].includes(row.collection?.reconciliationState)) return 0;
+          if (PAYMENT_POSTING_EXCEPTION_STATES.has(row.collection?.reconciliationState) || ['manual_closure_mismatch', 'balance_unavailable', 'reopened'].includes(row.collection?.reconciliationState)) return 0;
           if (row.collection?.reconciliationState === 'advice_overdue') return 1;
           if (collectionStatus(row) === 'Promise to Pay' && row.collection?.promisedPaymentDate && row.collection.promisedPaymentDate <= today) return 2;
           if (isFollowUpDue(row, today)) return 3;
@@ -2609,6 +2625,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     loadRows();
     loadEmailSettings();
   }, []);
+
+  useEffect(() => {
+    if (dataRefreshToken > 0) loadRows({ force: true });
+  }, [dataRefreshToken]);
 
   useEffect(() => {
     if (deepLinkedCollectionOpened.current || (!collectionRows.length && !reconciliationItems.length)) return;
@@ -3270,7 +3290,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                             latestPayment={latestBuyerPayment}
                             evidence={paymentEvidence}
                             summary={row.paymentEvidenceSummary}
-                            pendingPosting={row.collection?.reconciliationState === 'payment_pending_posting'}
+                            postingState={row.collection?.reconciliationState}
                           />
                         ) : '-'}
                       </td>

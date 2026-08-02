@@ -3,6 +3,20 @@ export const BUYER_REMINDER_POLICIES = Object.freeze({
   OVERDUE_ONLY: 'overdue_only',
 });
 
+export const BUYER_PAYMENT_POSTING_ISSUE_STATES = new Set([
+  'payment_posting_pending',
+  'payment_partially_posted',
+  'payment_posting_mismatch',
+  'payment_posting_overdue',
+]);
+
+function postingIssueLabel(state) {
+  if (state === 'payment_partially_posted') return 'The detected payment is only partly reflected in the Salesforce receivable balance.';
+  if (state === 'payment_posting_mismatch') return 'The detected payment and Salesforce receivable-balance movement do not match.';
+  if (state === 'payment_posting_overdue') return 'The detected payment remains unposted after one Hong Kong business day.';
+  return 'The detected payment is awaiting posting to the Salesforce receivable balance.';
+}
+
 const SALESFORCE_ID_PATTERN = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 
 export function canonicalSalesforceAccountId(value) {
@@ -108,6 +122,21 @@ export function buyerReminderEligibility(row = {}, rule = {}, rulesAvailable = t
     return {
       eligible: false,
       blockingReason: 'This collection is closed because Salesforce confirms the buyer balance is settled.',
+      ruleApplied: false,
+    };
+  }
+
+  const postingState = String(row.collection?.reconciliationState || '');
+  const postingIssueKey = String(row.collection?.paymentReconciliationSnapshot?.issueKey || '');
+  const overrideActive = Boolean(
+    row.collection?.postingReminderOverrideActive === true
+    && postingIssueKey
+    && row.collection?.postingReminderOverrideIssueKey === postingIssueKey
+  );
+  if (BUYER_PAYMENT_POSTING_ISSUE_STATES.has(postingState) && !overrideActive) {
+    return {
+      eligible: false,
+      blockingReason: `${postingIssueLabel(postingState)} External reminders are paused until Finance resolves it or records an override.`,
       ruleApplied: false,
     };
   }

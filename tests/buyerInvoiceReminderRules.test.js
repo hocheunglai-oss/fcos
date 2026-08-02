@@ -99,6 +99,60 @@ test('broker-only routing ignores an available buyer policy', () => {
   assert.equal(row.paymentReminderRuleApplied, false);
 });
 
+test('active payment-posting exceptions pause reminders for buyer and broker-only routes', () => {
+  const rows = applyBuyerReminderRules([
+    {
+      stemId: 'buyer-route',
+      buyerAccountId: buyerId,
+      daysUntilDue: -3,
+      buyerBrokerRoutingMode: 'buyer_only',
+      collection: {
+        reconciliationState: 'payment_posting_pending',
+        paymentReconciliationSnapshot: { issueKey: 'posting-1' },
+      },
+    },
+    {
+      stemId: 'broker-route',
+      buyerAccountId: buyerId,
+      daysUntilDue: -3,
+      buyerBrokerRoutingMode: 'broker_only',
+      collection: {
+        reconciliationState: 'payment_posting_overdue',
+        paymentReconciliationSnapshot: { issueKey: 'posting-2' },
+      },
+    },
+  ], []);
+
+  assert.equal(rows[0].paymentReminderEligible, false);
+  assert.equal(rows[1].paymentReminderEligible, false);
+  assert.match(rows[0].paymentReminderBlockingReason, /reminders are paused/i);
+});
+
+test('a matching Finance override resumes reminders but a stale override does not', () => {
+  const base = {
+    buyerAccountId: buyerId,
+    daysUntilDue: -3,
+    buyerBrokerRoutingMode: 'buyer_only',
+    collection: {
+      reconciliationState: 'payment_posting_mismatch',
+      paymentReconciliationSnapshot: { issueKey: 'posting-current' },
+      postingReminderOverrideActive: true,
+      postingReminderOverrideIssueKey: 'posting-current',
+    },
+  };
+  const [allowed, stale] = applyBuyerReminderRules([
+    base,
+    {
+      ...base,
+      stemId: 'stale',
+      collection: { ...base.collection, postingReminderOverrideIssueKey: 'posting-old' },
+    },
+  ], []);
+
+  assert.equal(allowed.paymentReminderEligible, true);
+  assert.equal(stale.paymentReminderEligible, false);
+});
+
 test('buyer routing fails closed without a valid Salesforce Buyer Account ID', () => {
   const rows = applyBuyerReminderRules([
     { buyerAccountId: null, daysUntilDue: -10, buyerBrokerRoutingMode: 'buyer_only' },

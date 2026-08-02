@@ -5,6 +5,7 @@ import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
+import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../../src/lib/paymentPostingReconciliation.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
@@ -216,6 +217,10 @@ const ADMINISTRATIVE_USER_TYPES = new Set(['administrator', 'general_manager']);
 
 function isAdministratorUserType(userType) {
   return ADMINISTRATIVE_USER_TYPES.has(String(userType || ''));
+}
+
+function canOverridePaymentPostingReminder(profile) {
+  return isAdministratorUserType(profile?.user_type) || profile?.user_type === 'finance';
 }
 const ADMIN_CAPABILITIES = [
   {
@@ -1106,6 +1111,7 @@ const HANDLER_MODULE_ACCESS = {
   buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
   buyerInvoicePaymentAdviceSave: ['buyer_invoices'],
   paymentCollectionsReconcile: ['buyer_invoices', 'incoming_payments'],
+  buyerInvoicePostingReminderOverrideSave: ['incoming_payments'],
   buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
   buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
   buyerInvoiceReminderRulesList: ['buyer_invoices'],
@@ -3644,7 +3650,7 @@ async function buyerInvoiceCollectionList(body, req, accessContext = null) {
 async function currentBuyerInvoiceCollection(client, stemId) {
   const { data, error } = await client
     .from('buyer_invoice_collection_items')
-    .select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at')
+    .select(BUYER_COLLECTION_ITEM_SELECT)
     .eq('stem_id', stemId)
     .maybeSingle();
   if (error) throw error;
@@ -3763,7 +3769,7 @@ async function buyerInvoiceCollectionEventCreate(body, req, accessContext = null
   return persistBuyerInvoiceCollection({ ...body, updates }, req, event, accessContext);
 }
 
-const BUYER_COLLECTION_ITEM_SELECT = 'stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at';
+const BUYER_COLLECTION_ITEM_SELECT = 'stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,payment_reconciliation_snapshot,posting_reminder_override_reason,posting_reminder_override_by,posting_reminder_override_by_email,posting_reminder_override_at,posting_reminder_override_issue_key,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at';
 
 function collectionPaymentSnapshot(payment, { dateField, amountField, referenceFields }) {
   if (!payment) return null;
@@ -3891,45 +3897,79 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
   return { stems, buyerPayments, latestPayments, warnings: [], dueFields };
 }
 
-function buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today) {
+function paymentPostingIssueNote(issue) {
+  if (!issue) return null;
+  const amounts = `baseline ${issue.baselineBalance.toFixed(2)}, detected payments ${issue.detectedPaymentAmount.toFixed(2)}, expected balance ${issue.expectedBalance.toFixed(2)}, current balance ${issue.currentBalance.toFixed(2)}`;
+  if (issue.state === 'payment_posting_pending') return `Buyer payment posting is pending: ${amounts}. No receivable-balance movement was detected.`;
+  if (issue.state === 'payment_posting_overdue') return `Buyer payment posting is overdue after ${issue.businessDaysOpen} Hong Kong business day(s): ${amounts}.`;
+  if (issue.state === 'payment_partially_posted') return `Buyer payment was only partly posted: ${amounts}, leaving ${issue.unpostedAmount.toFixed(2)} unposted.`;
+  return `Buyer payment and receivable balance do not reconcile: ${amounts}, difference ${issue.differenceAmount.toFixed(2)}.`;
+}
+
+function buyerCollectionReconciliationDecision(item, stem, latestPayment, posting, threshold, today) {
   const currentStatus = normalizeCollectionStatus(item.status);
   const balance = incomingPaymentNumber(stem?.Receivable_Balance__c);
   if (balance == null) {
-    return { status: currentStatus, state: 'balance_unavailable', balance: null, eventType: currentStatus === 'Paid / Closed' && item.reconciliation_state !== 'balance_unavailable' ? 'reconciliation_warning' : null, note: 'Salesforce receivable balance is unavailable.' };
+    return { status: currentStatus, state: 'balance_unavailable', balance: null, paymentReconciliationSnapshot: posting.snapshot, eventType: currentStatus === 'Paid / Closed' && item.reconciliation_state !== 'balance_unavailable' ? 'reconciliation_warning' : null, note: 'Salesforce receivable balance is unavailable.' };
   }
   const settled = balance <= threshold;
   if (settled && currentStatus !== 'Paid / Closed') {
-    return { status: 'Paid / Closed', state: 'settled', balance, closureSource: 'system', previousActiveStatus: currentStatus, eventType: 'auto_closed', note: `Salesforce receivable balance ${balance.toFixed(2)} is within the fully-paid threshold ${threshold.toFixed(2)}.` };
+    return { status: 'Paid / Closed', state: 'settled', balance, paymentReconciliationSnapshot: posting.snapshot, closureSource: 'system', previousActiveStatus: currentStatus, eventType: 'auto_closed', note: `Salesforce receivable balance ${balance.toFixed(2)} is within the fully-paid threshold ${threshold.toFixed(2)}.` };
+  }
+  if (settled && currentStatus === 'Paid / Closed') {
+    return { status: currentStatus, state: 'settled', balance, paymentReconciliationSnapshot: posting.snapshot, eventType: null, note: null };
   }
   if (!settled && currentStatus === 'Paid / Closed' && item.closure_source === 'system') {
     const previous = BUYER_INVOICE_COLLECTION_STATUSES.includes(item.previous_active_status) && item.previous_active_status !== 'Paid / Closed' ? item.previous_active_status : 'To Contact';
-    return { status: previous, state: 'reopened', balance, closureSource: null, previousActiveStatus: null, eventType: 'auto_reopened', note: `Salesforce receivable balance returned to ${balance.toFixed(2)}.` };
+    return { status: previous, state: 'reopened', balance, paymentReconciliationSnapshot: posting.snapshot, closureSource: null, previousActiveStatus: null, eventType: 'auto_reopened', note: `Salesforce receivable balance returned to ${balance.toFixed(2)}.` };
   }
   if (!settled && currentStatus === 'Paid / Closed') {
-    return { status: currentStatus, state: 'manual_closure_mismatch', balance, eventType: item.reconciliation_state === 'manual_closure_mismatch' ? null : 'reconciliation_warning', note: `The manually closed collection has an open Salesforce balance of ${balance.toFixed(2)}.` };
+    return { status: currentStatus, state: 'manual_closure_mismatch', balance, paymentReconciliationSnapshot: posting.snapshot, eventType: item.reconciliation_state === 'manual_closure_mismatch' ? null : 'reconciliation_warning', note: `The manually closed collection has an open Salesforce balance of ${balance.toFixed(2)}.` };
   }
+
+  const newPayment = latestPayment?.paymentId && latestPayment.paymentId !== item.latest_payment_snapshot?.paymentId;
+  const wasPostingIssue = PAYMENT_POSTING_ISSUE_STATES.has(String(item.reconciliation_state || ''));
+  if (PAYMENT_POSTING_ISSUE_STATES.has(posting.state)) {
+    const issueChanged = item.payment_reconciliation_snapshot?.issueKey !== posting.issue?.issueKey;
+    return {
+      status: currentStatus,
+      state: posting.state,
+      balance,
+      paymentReconciliationSnapshot: posting.snapshot,
+      paymentPostingIssue: posting.issue,
+      eventType: newPayment ? 'payment_detected' : issueChanged || item.reconciliation_state !== posting.state ? 'reconciliation_warning' : null,
+      eventIdentity: `${posting.state}:${posting.issue?.issueKey || latestPayment?.paymentId || 'posting'}`,
+      note: paymentPostingIssueNote(posting.issue),
+    };
+  }
+
+  const postingResolved = wasPostingIssue && !PAYMENT_POSTING_ISSUE_STATES.has(posting.state);
   if (currentStatus === 'Payment Advice Received') {
     const overdue = Boolean(item.advice_verification_date && item.advice_verification_date <= today);
-    return { status: currentStatus, state: overdue ? 'advice_overdue' : 'advice_pending', balance, eventType: overdue && item.reconciliation_state !== 'advice_overdue' ? 'reconciliation_warning' : null, note: overdue ? 'Payment advice has not posted to the Salesforce receivable balance by its verification date.' : null };
+    return {
+      status: currentStatus,
+      state: overdue ? 'advice_overdue' : 'advice_pending',
+      balance,
+      paymentReconciliationSnapshot: posting.snapshot,
+      eventType: postingResolved ? 'reconciliation_resolved' : overdue && item.reconciliation_state !== 'advice_overdue' ? 'reconciliation_warning' : null,
+      note: postingResolved ? 'The detected buyer payments now reconcile to the Salesforce receivable balance.' : overdue ? 'Payment advice has not posted to the Salesforce receivable balance by its verification date.' : null,
+    };
   }
-  const newPayment = latestPayment?.paymentId && latestPayment.paymentId !== item.latest_payment_snapshot?.paymentId;
-  const previousBalance = incomingPaymentNumber(item.verified_receivable_balance);
-  const unchangedBalance = latestPayment && previousBalance != null && Math.abs(previousBalance - balance) < 0.005;
-  const paymentPendingPosting = unchangedBalance && (newPayment || item.reconciliation_state === 'payment_pending_posting');
   return {
     status: currentStatus,
-    state: paymentPendingPosting ? 'payment_pending_posting' : latestPayment ? 'partial_payment' : 'open',
+    state: posting.state,
     balance,
-    eventType: newPayment ? 'payment_detected' : null,
-    note: newPayment
-      ? paymentPendingPosting
-        ? 'A buyer payment was detected, but the Salesforce receivable balance has not posted the payment yet.'
-        : 'A buyer payment was detected while the Salesforce receivable balance remains open.'
-      : null,
+    paymentReconciliationSnapshot: posting.snapshot,
+    eventType: postingResolved ? 'reconciliation_resolved' : newPayment ? 'payment_detected' : null,
+    note: postingResolved
+      ? 'The detected buyer payments now reconcile to the Salesforce receivable balance.'
+      : newPayment
+        ? 'A buyer payment was detected and reconciled to the current Salesforce receivable balance.'
+        : null,
   };
 }
 
-function collectionReconciliationChanged(item, decision, latestPayment) {
+function collectionReconciliationChanged(item, decision, latestPayment, overrideValues) {
   const sameNumber = (left, right) => {
     const a = incomingPaymentNumber(left);
     const b = incomingPaymentNumber(right);
@@ -3940,6 +3980,8 @@ function collectionReconciliationChanged(item, decision, latestPayment) {
     || String(item.reconciliation_state || '') !== String(decision.state || '')
     || !sameNumber(item.verified_receivable_balance, decision.balance)
     || JSON.stringify(item.latest_payment_snapshot || null) !== JSON.stringify(latestPayment || null)
+    || JSON.stringify(item.payment_reconciliation_snapshot || null) !== JSON.stringify(decision.paymentReconciliationSnapshot || null)
+    || String(item.posting_reminder_override_issue_key || '') !== String(overrideValues.posting_reminder_override_issue_key || '')
     || (Object.prototype.hasOwnProperty.call(decision, 'closureSource') && (item.closure_source || null) !== (decision.closureSource || null))
     || (Object.prototype.hasOwnProperty.call(decision, 'previousActiveStatus') && (item.previous_active_status || null) !== (decision.previousActiveStatus || null))
   );
@@ -3955,6 +3997,7 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
   const settings = await loadIncomingPaymentSettings();
   const threshold = Math.max(0, Number(settings.fullyPaidThreshold || 0));
   const today = hongKongScheduleParts().date;
+  const reconciliationNow = new Date();
   const live = await buyerCollectionSalesforceState(items.map((item) => item.stem_id), accessContext);
   const reconciled = [];
   const exceptions = [];
@@ -3965,7 +4008,15 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
     if (!stem) continue;
     const buyerPayments = live.buyerPayments[item.stem_id] || [];
     const latestPayment = live.latestPayments[item.stem_id] || null;
-    const decision = buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today);
+    const posting = reconcileBuyerPaymentPosting({
+      previousSnapshot: item.payment_reconciliation_snapshot,
+      previousBalance: item.verified_receivable_balance,
+      currentBalance: stem.Receivable_Balance__c,
+      payments: buyerPayments,
+      fullyPaidThreshold: threshold,
+      now: reconciliationNow,
+    });
+    const decision = buyerCollectionReconciliationDecision(item, stem, latestPayment, posting, threshold, today);
     const paymentEvidenceSummary = summarizeBuyerPaymentEvidence({
       payments: buyerPayments,
       etaStartDate: stem.ETA_Start_Date__c,
@@ -3974,22 +4025,36 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       isFullyPaid: decision.balance != null && decision.balance <= threshold,
     });
     const paymentEvidence = paymentEvidenceSummary.latestEvidence;
-    const nowIso = new Date().toISOString();
+    const nowIso = reconciliationNow.toISOString();
+    const overrideMatchesIssue = Boolean(
+      posting.issue?.issueKey
+      && item.posting_reminder_override_issue_key === posting.issue.issueKey
+      && item.posting_reminder_override_reason,
+    );
+    const overrideValues = {
+      posting_reminder_override_reason: overrideMatchesIssue ? item.posting_reminder_override_reason : null,
+      posting_reminder_override_by: overrideMatchesIssue ? item.posting_reminder_override_by : null,
+      posting_reminder_override_by_email: overrideMatchesIssue ? item.posting_reminder_override_by_email : null,
+      posting_reminder_override_at: overrideMatchesIssue ? item.posting_reminder_override_at : null,
+      posting_reminder_override_issue_key: overrideMatchesIssue ? item.posting_reminder_override_issue_key : null,
+    };
     const updates = {
       status: decision.status,
       reconciliation_state: decision.state,
       verified_receivable_balance: decision.balance,
       latest_payment_snapshot: latestPayment,
+      payment_reconciliation_snapshot: decision.paymentReconciliationSnapshot,
+      ...overrideValues,
       last_reconciled_at: nowIso,
     };
     if (Object.prototype.hasOwnProperty.call(decision, 'closureSource')) updates.closure_source = decision.closureSource;
     if (Object.prototype.hasOwnProperty.call(decision, 'previousActiveStatus')) updates.previous_active_status = decision.previousActiveStatus;
     const transition = decision.status !== normalizeCollectionStatus(item.status);
-    const stateChanged = collectionReconciliationChanged(item, decision, latestPayment);
+    const stateChanged = collectionReconciliationChanged(item, decision, latestPayment, overrideValues);
     let savedItem = null;
     let savedEvent = null;
     if (decision.eventType) {
-      const eventIdentity = latestPayment?.paymentId || `${decision.state}:${item.updated_at}`;
+      const eventIdentity = decision.eventIdentity || latestPayment?.paymentId || `${decision.state}:${item.updated_at}`;
       const { data, error: saveError } = await client.rpc('save_buyer_invoice_collection', {
         p_stem_id: item.stem_id,
         p_updates: updates,
@@ -4011,6 +4076,7 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
               earliestEtaDate: paymentEvidenceSummary.earliestEtaDate,
               actualDeliveryDate: paymentEvidenceSummary.actualDeliveryDate,
             },
+            paymentPostingIssue: decision.paymentPostingIssue || null,
             reconciliationState: decision.state,
           },
         },
@@ -4041,6 +4107,8 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
           reconciliation_state: decision.state,
           verified_receivable_balance: decision.balance,
           latest_payment_snapshot: latestPayment,
+          payment_reconciliation_snapshot: decision.paymentReconciliationSnapshot,
+          ...overrideValues,
           last_reconciled_at: nowIso,
           last_updated_by: profile?.id || null,
           last_updated_by_email: profile?.email || 'FCOS system',
@@ -4068,6 +4136,8 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
         reconciliation_state: decision.state,
         verified_receivable_balance: decision.balance,
         latest_payment_snapshot: latestPayment,
+        payment_reconciliation_snapshot: decision.paymentReconciliationSnapshot,
+        ...overrideValues,
         last_reconciled_at: nowIso,
       };
     }
@@ -4087,16 +4157,106 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       actualDeliveryDate: stem.Delivery_Date__c || null,
       paymentEvidence,
       paymentEvidenceSummary,
+      paymentPostingIssue: decision.paymentPostingIssue || null,
     };
     reconciled.push(serialized);
-    if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(decision.state)) exceptions.push(serialized);
+    if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_posting_pending', 'payment_partially_posted', 'payment_posting_mismatch', 'payment_posting_overdue', 'reopened'].includes(decision.state)) exceptions.push(serialized);
   }
   return { items: reconciled, exceptions, summary: { checked: reconciled.length, closed, reopened, exceptions: exceptions.length }, warnings: live.warnings };
 }
 
 async function paymentCollectionsReconcile(body, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
-  return reconcileBuyerInvoiceCollections({ client, profile, accessContext: accessContext || { client, profile }, stemIds: body.stemIds });
+  const result = await reconcileBuyerInvoiceCollections({ client, profile, accessContext: accessContext || { client, profile }, stemIds: body.stemIds });
+  return {
+    ...result,
+    capabilities: {
+      canOverridePostingReminder: canOverridePaymentPostingReminder(profile),
+    },
+  };
+}
+
+async function buyerInvoicePostingReminderOverrideSave(body, req, accessContext = null) {
+  const { client, profile } = accessContext || (await requireActiveUser(req));
+  if (!canOverridePaymentPostingReminder(profile)) {
+    throw appError('Only Finance, an Administrator, or the General Manager may override a payment-posting reminder pause.', 403);
+  }
+
+  const stemId = String(body.stemId || '').trim();
+  const issueKey = String(body.issueKey || '').trim();
+  const operationId = String(body.operationId || '').trim();
+  const reason = String(body.reason || '').trim();
+  const allowReminder = body.allowReminder === true;
+  if (!isSalesforceId(stemId)) throw appError('A valid Salesforce STEM is required.', 400);
+  if (!issueKey) throw appError('The payment-posting issue identity is required. Refresh and try again.', 400);
+  if (!/^[A-Za-z0-9_-]{8,100}$/.test(operationId)) throw appError('A valid operation identity is required.', 400);
+  if (reason.length < 5 || reason.length > 1000) throw appError('Enter an override reason between 5 and 1,000 characters.', 400);
+
+  const context = accessContext || { client, profile };
+  await requireInterofficeStemAccess(stemId, context);
+  const live = await reconcileBuyerInvoiceCollections({ client, profile, accessContext: context, stemIds: [stemId] });
+  const liveEntry = live.items.find((entry) => entry.item?.stemId === stemId);
+  const current = await currentBuyerInvoiceCollection(client, stemId);
+  const currentIssueKey = String(current?.payment_reconciliation_snapshot?.issueKey || '');
+  if (!current || !PAYMENT_POSTING_ISSUE_STATES.has(String(current.reconciliation_state || '')) || !currentIssueKey) {
+    throw appError('The payment-posting exception is no longer active. Refresh the workspace.', 409);
+  }
+  if (currentIssueKey !== issueKey) {
+    throw appError('The payment-posting exception changed after it was opened. Refresh and review the current amounts.', 409);
+  }
+  if (!allowReminder && !current.posting_reminder_override_reason) {
+    throw appError('The reminder pause is already active for this payment-posting exception.', 409);
+  }
+
+  const nowIso = new Date().toISOString();
+  const overrideUpdates = allowReminder ? {
+    posting_reminder_override_reason: reason,
+    posting_reminder_override_by: profile.id,
+    posting_reminder_override_by_email: profile.email,
+    posting_reminder_override_at: nowIso,
+    posting_reminder_override_issue_key: currentIssueKey,
+  } : {
+    posting_reminder_override_reason: null,
+    posting_reminder_override_by: null,
+    posting_reminder_override_by_email: null,
+    posting_reminder_override_at: null,
+    posting_reminder_override_issue_key: null,
+  };
+  const issue = liveEntry?.paymentPostingIssue || current.payment_reconciliation_snapshot || {};
+  const { data, error } = await client.rpc('save_buyer_invoice_collection', {
+    p_stem_id: stemId,
+    p_updates: overrideUpdates,
+    p_event: {
+      event_type: 'posting_reminder_override',
+      event_key: `posting-reminder-override:${operationId}`,
+      status: current.status,
+      note: allowReminder
+        ? `Finance allowed external reminders during the active payment-posting exception. Reason: ${reason}`
+        : `Finance restored the external reminder pause. Reason: ${reason}`,
+      metadata: {
+        action: allowReminder ? 'allowed' : 'pause_restored',
+        reconciliationState: current.reconciliation_state,
+        issueKey: currentIssueKey,
+        baselineBalance: issue.baselineBalance ?? null,
+        detectedPaymentAmount: issue.detectedPaymentAmount ?? null,
+        expectedBalance: issue.expectedBalance ?? null,
+        currentBalance: issue.currentBalance ?? null,
+        differenceAmount: issue.differenceAmount ?? null,
+      },
+    },
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_updated_at: current.updated_at,
+  });
+  if (error) {
+    if (/changed after it was opened/i.test(error.message || '')) throw appError(error.message, 409);
+    throw error;
+  }
+  return {
+    item: serializeCollectionItem(data?.item),
+    event: serializeCollectionEvent(data?.event),
+    capabilities: { canOverridePostingReminder: true },
+  };
 }
 
 async function paymentCollectionsReconcileCron(body, req) {
@@ -5143,8 +5303,8 @@ const LEGACY_BUYER_INVOICE_COLLECTION_STATUSES = {
   'Reminder Sent': 'Awaiting Buyer',
   'Awaiting Buyer Reply': 'Awaiting Buyer',
 };
-const BUYER_INVOICE_EVENT_TYPES = ['update', 'status_change', 'note', 'follow_up', 'promise', 'owner_change', 'contact', 'reminder_sent', 'payment_advice', 'payment_detected', 'auto_closed', 'auto_reopened', 'reconciliation_warning'];
-const BUYER_COLLECTION_RECONCILIATION_STATES = new Set(['not_checked', 'open', 'partial_payment', 'payment_pending_posting', 'advice_pending', 'advice_overdue', 'settled', 'reopened', 'balance_unavailable', 'manual_closure_mismatch']);
+const BUYER_INVOICE_EVENT_TYPES = ['update', 'status_change', 'note', 'follow_up', 'promise', 'owner_change', 'contact', 'reminder_sent', 'payment_advice', 'payment_detected', 'auto_closed', 'auto_reopened', 'reconciliation_warning', 'reconciliation_resolved', 'posting_reminder_override'];
+const BUYER_COLLECTION_RECONCILIATION_STATES = new Set(['not_checked', 'open', 'partial_payment', ...PAYMENT_POSTING_ISSUE_STATES, 'advice_pending', 'advice_overdue', 'settled', 'reopened', 'balance_unavailable', 'manual_closure_mismatch']);
 const BUYER_COLLECTION_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
 const BUYER_COLLECTION_DOCUMENT_MAX_BYTES = 3 * 1024 * 1024;
 const DISPUTE_BETA_WORKFLOW_STATUSES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
@@ -6452,6 +6612,18 @@ function serializeCollectionItem(row) {
     reconciliationState: row.reconciliation_state || 'not_checked',
     verifiedReceivableBalance: row.verified_receivable_balance == null ? null : Number(row.verified_receivable_balance),
     latestPaymentSnapshot: row.latest_payment_snapshot || null,
+    paymentReconciliationSnapshot: row.payment_reconciliation_snapshot || null,
+    postingReminderOverrideReason: row.posting_reminder_override_reason || null,
+    postingReminderOverrideBy: row.posting_reminder_override_by || null,
+    postingReminderOverrideByEmail: row.posting_reminder_override_by_email || null,
+    postingReminderOverrideAt: row.posting_reminder_override_at || null,
+    postingReminderOverrideIssueKey: row.posting_reminder_override_issue_key || null,
+    postingReminderOverrideActive: Boolean(
+      row.posting_reminder_override_reason
+      && row.posting_reminder_override_issue_key
+      && row.posting_reminder_override_issue_key === row.payment_reconciliation_snapshot?.issueKey
+      && PAYMENT_POSTING_ISSUE_STATES.has(String(row.reconciliation_state || ''))
+    ),
     previousActiveStatus: row.previous_active_status || null,
     closureSource: row.closure_source || null,
     lastReconciledAt: row.last_reconciled_at || null,
@@ -6491,7 +6663,7 @@ async function loadBuyerInvoiceCollectionMap(stemIds = []) {
 
   try {
     const [itemsRes, eventsRes] = await Promise.all([
-      client.from('buyer_invoice_collection_items').select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_reason,on_hold_review_date,advice_received_date,advice_amount,advice_reference,advice_verification_date,advice_document_ids,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,previous_active_status,closure_source,last_reconciled_at,last_event_at,last_updated_by,last_updated_by_email,created_at,updated_at').in('stem_id', ids),
+      client.from('buyer_invoice_collection_items').select(BUYER_COLLECTION_ITEM_SELECT).in('stem_id', ids),
       client
         .from('buyer_invoice_collection_events')
         .select('id,stem_id,event_type,event_key,status,owner_name,note,next_follow_up_date,promised_payment_date,promised_amount,metadata,actor_user_id,actor_email,created_at')
@@ -15797,6 +15969,7 @@ const handlers = {
   buyerInvoiceCollectionEventCreate,
   buyerInvoicePaymentAdviceSave,
   paymentCollectionsReconcile,
+  buyerInvoicePostingReminderOverrideSave,
   paymentCollectionsReconcileCron,
   buyerInvoiceEmailSettingsGet,
   buyerInvoiceEmailSettingsSave,

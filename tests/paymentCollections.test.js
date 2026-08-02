@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { buyerReminderEligibility } from '../api/_buyerInvoiceReminderRules.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260731175320_personalized_navigation_payment_collections.sql', import.meta.url);
+const postingMigrationUrl = new URL('../supabase/migrations/20260802154311_payment_collection_posting_reconciliation.sql', import.meta.url);
 
 test('payment advice pauses reminders until verification and settlement always blocks reminders', () => {
   const baseRow = {
@@ -25,7 +26,10 @@ test('payment advice pauses reminders until verification and settlement always b
 });
 
 test('collection migration preserves history and installs service-only personalized navigation', async () => {
-  const migration = await readFile(migrationUrl, 'utf8');
+  const [migration, postingMigration] = await Promise.all([
+    readFile(migrationUrl, 'utf8'),
+    readFile(postingMigrationUrl, 'utf8'),
+  ]);
   assert.match(migration, /create table if not exists public\.user_navigation_preferences/);
   assert.match(migration, /enable row level security/);
   assert.match(migration, /revoke all on table public\.user_navigation_preferences from anon, authenticated/);
@@ -34,7 +38,13 @@ test('collection migration preserves history and installs service-only personali
   assert.match(migration, /when 'Reminder Sent' then 'Awaiting Buyer'/);
   assert.match(migration, /'Payment Advice Received'/);
   assert.match(migration, /'payment_advice'/);
-  assert.match(migration, /payment_pending_posting/);
+  assert.match(postingMigration, /payment_posting_pending/);
+  assert.match(postingMigration, /payment_partially_posted/);
+  assert.match(postingMigration, /payment_posting_mismatch/);
+  assert.match(postingMigration, /payment_posting_overdue/);
+  assert.match(postingMigration, /payment_reconciliation_snapshot jsonb/);
+  assert.match(postingMigration, /posting_reminder_override_reason/);
+  assert.match(postingMigration, /revoke all on table public\.buyer_invoice_collection_items from public, anon, authenticated/);
   assert.match(migration, /advice_document_ids jsonb/);
   assert.match(migration, /save_user_navigation_preferences/);
 });
@@ -88,7 +98,11 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(server, /Payment Collections requires STEM__c\.Receivable_Balance__c/);
   assert.match(server, /eventType: 'auto_closed'/);
   assert.match(server, /eventType: 'auto_reopened'/);
-  assert.match(server, /payment_pending_posting/);
+  assert.match(server, /payment_posting_pending/);
+  assert.match(server, /async function buyerInvoicePostingReminderOverrideSave/);
+  assert.match(workspace, /Previous balance/);
+  assert.match(workspace, /Detected payments/);
+  assert.match(workspace, /Allow reminder/);
   assert.match(server, /changed after they were opened[\s\S]*409/);
 });
 

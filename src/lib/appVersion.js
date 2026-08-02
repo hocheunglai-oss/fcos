@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.85';
+export const APP_VERSION = '2.0.86';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.86',
+    releasedAt: '2026-08-02',
+    title: 'Amount-based buyer payment posting reconciliation',
+    changes: [
+      'Compared all newly detected buyer payments with the expected Salesforce receivable-balance movement and separated pending, partial, mismatched, and overdue posting exceptions.',
+      'Added visible reconciliation arithmetic and Hong Kong business-day age to Payment Collections, and paused every external reminder route while a posting discrepancy remains active.',
+      'Added an audited, issue-specific reminder override for Finance, Administrators, and the General Manager; changed payment evidence automatically invalidates the override.',
+    ],
+  },
   {
     version: '2.0.85',
     releasedAt: '2026-08-02',
