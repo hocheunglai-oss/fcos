@@ -22,6 +22,7 @@ import {
   hktThisMonth,
   hktToday,
   isSwapLive,
+  paperHedgeExpiryStatus,
 } from "../lib/domain";
 import { useActions } from "../data/ActionsContext";
 import {
@@ -67,7 +68,6 @@ const BLANK_SWAP = {
   physical_trade_ids: [],
   notes: "",
   round_trip: false,
-  is_expired: false,
 };
 
 function normalizeSwap(form, settings) {
@@ -82,7 +82,6 @@ function normalizeSwap(form, settings) {
     pricing_basis: spread ? "WMA" : form.pricing_basis || "WMA",
     physical_trade_ids: form.physical_trade_ids || [],
     round_trip: Boolean(form.round_trip),
-    is_expired: Boolean(form.is_expired),
   };
   payload.initial_margin = BROKER_EXCHANGE.includes(payload.broker)
     ? estimateSwapInitialMargin(payload, settings.iceMargins, settings.general.sgo_bbl_per_mt)
@@ -143,7 +142,7 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
   };
   const duplicate = (record) => {
     const { id, created_date, updated_date, ...copy } = record;
-    setForm({ ...BLANK_SWAP, ...copy, trade_date: hktToday(), is_expired: false });
+    setForm({ ...BLANK_SWAP, ...copy, trade_date: hktToday() });
     setFormError(null);
     setDrawer({ mode: "create", source: record });
   };
@@ -294,12 +293,14 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
             <tbody>
               {rows.map((record) => {
                 const live = isSwapLive(record);
+                const expiry = paperHedgeExpiryStatus(record, data.mops);
+                const pendingMonth = expiry.months.find((item) => !item.ready);
                 const mtm = calcSwapMtm(record, data.mops, settings.general.sgo_bbl_per_mt);
                 const fees = calcSwapFees(record, settings.rates);
                 const totalFees = fees.total + (!live ? fees.iceSettlement : 0);
                 return (
                   <tr key={record.id}>
-                    <td><StatusBadge tone={live ? "positive" : "neutral"}>{live ? "Live" : "Expired"}</StatusBadge></td>
+                    <td><StatusBadge tone={live ? "positive" : "neutral"}>{live ? "Live" : "Expired"}</StatusBadge><small>{live ? pendingMonth ? `${pendingMonth.verified}/${pendingMonth.total} MOPS verified` : "Awaiting final MOPS" : "Final MOPS verified"}</small></td>
                     <td><strong>{formatDate(record.trade_date)}</strong><small>{record.trade_type === "SPREAD" ? "Calendar spread" : "Outright swap"}</small></td>
                     <td><ProductBadge product={record.product} /></td>
                     <td><strong className={record.trade_type === "SPREAD" ? "app-text-violet" : record.direction === "BUY" ? "app-text-positive" : "app-text-negative"}>{record.trade_type === "SPREAD" ? "SPREAD" : record.direction}</strong><small>{record.trade_type === "SPREAD" ? `${formatMonth(record.leg1_month)} / ${formatMonth(record.leg2_month)}` : formatMonth(record.swap_month)}</small></td>
@@ -363,7 +364,8 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
         <section className="app-form-section">
           <div className="app-form-section__title">Control</div>
           <Field label="Notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field>
-          <div className="app-check-row"><label className="app-check"><input type="checkbox" checked={Boolean(form.round_trip)} onChange={(event) => setField("round_trip", event.target.checked)} /><span>Round trip fees</span></label><label className="app-check"><input type="checkbox" checked={Boolean(form.is_expired)} onChange={(event) => setField("is_expired", event.target.checked)} /><span>Mark as expired</span></label></div>
+          <label className="app-check"><input type="checkbox" checked={Boolean(form.round_trip)} onChange={(event) => setField("round_trip", event.target.checked)} /><span>Round trip fees</span></label>
+          <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day and every scheduled MOPS row is complete and verified from the pasted third-party message.</div>
         </section>
       </Drawer>
 

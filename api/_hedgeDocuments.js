@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { jsPDF } from 'jspdf';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
+import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
 
 const BUCKET = 'hedge-documents';
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
@@ -27,6 +28,12 @@ function number(value, fallback = 0) {
 
 function money(value) {
   return Math.abs(number(value)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function signedMoney(value) {
+  const amount = number(value);
+  if (Math.abs(amount) < 0.005) return '0.00';
+  return `${amount > 0 ? '+' : '-'}${money(amount)}`;
 }
 
 function displayDate(value) {
@@ -58,6 +65,10 @@ export function normalizeHedgeInvoice(input = {}) {
     };
   });
   const netAmount = invoice.netAmount ?? invoice.subtotal;
+  const counterparty = typeof invoice.counterparty === 'object' && invoice.counterparty
+    ? invoice.counterparty
+    : { full_name: String(invoice.counterparty || 'COUNTERPARTY') };
+  const paymentDirection = hedgeSettlementPaymentDirection(number(netAmount, lineItems.reduce((sum, line) => sum + line.netValue, 0)), counterparty);
   return {
     invoiceNumber: String(invoice.invoiceNumber || invoice.invoice_number || 'FCBHK Invoice').slice(0, 100),
     invoiceDate: invoice.invoiceDate || invoice.issue_date || '',
@@ -65,11 +76,10 @@ export function normalizeHedgeInvoice(input = {}) {
     lineItems,
     totalMtm: number(invoice.totalMtm ?? invoice.total_mtm, lineItems.reduce((sum, line) => sum + line.mtmValue, 0)),
     totalHandling: number(invoice.totalHandling ?? invoice.total_handling, lineItems.reduce((sum, line) => sum + line.handlingFee, 0)),
-    netAmount: number(netAmount, lineItems.reduce((sum, line) => sum + line.netValue, 0)),
-    isReceivable: Boolean(invoice.isReceivable ?? invoice.is_receivable ?? true),
-    counterparty: typeof invoice.counterparty === 'object' && invoice.counterparty
-      ? invoice.counterparty
-      : { full_name: String(invoice.counterparty || 'COUNTERPARTY') },
+    netAmount: paymentDirection.signedAmount,
+    isReceivable: paymentDirection.isReceivable,
+    paymentDirection,
+    counterparty,
   };
 }
 
@@ -117,7 +127,16 @@ export function generateHedgeInvoicePdf(input = {}) {
     doc.text(`Attn: ${invoice.counterparty.attention}`, margin, y);
     y += 5;
   }
-  y += 5;
+  y += 2;
+  doc.setFillColor(invoice.isReceivable ? 230 : 255, invoice.isReceivable ? 245 : 244, invoice.isReceivable ? 238 : 220);
+  doc.rect(margin, y, right - margin, 14, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`PAYMENT DIRECTION: ${invoice.paymentDirection.payer.shortName} PAYS ${invoice.paymentDirection.payee.shortName}`, margin + 3, y + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`Beneficiary: ${invoice.paymentDirection.beneficiary.fullName}`, margin + 3, y + 10);
+  y += 19;
 
   const headers = ['Product', 'Side', 'Quantity', 'Price', 'MTM', 'Charges', 'Net'];
   const widths = [29, 18, 27, 24, 27, 25, 28];
@@ -138,7 +157,7 @@ export function generateHedgeInvoicePdf(input = {}) {
       y = 18;
       drawHeader();
     }
-    const cells = [line.product, line.direction, `${line.quantity.toLocaleString('en-US')} ${line.unit}`, `$${money(line.price)}`, `$${money(line.mtmValue)}`, `$${money(line.handlingFee)}`, `$${money(line.netValue)}`];
+    const cells = [line.product, line.direction, `${line.quantity.toLocaleString('en-US')} ${line.unit}`, `$${money(line.price)}`, signedMoney(line.mtmValue), signedMoney(line.handlingFee), signedMoney(line.netValue)];
     cells.forEach((cell, index) => doc.text(String(cell), starts[index] + 1, y + 4.8, { maxWidth: widths[index] - 2 }));
     doc.setDrawColor(220, 224, 222);
     doc.line(margin, y + 7, right, y + 7);
@@ -146,20 +165,28 @@ export function generateHedgeInvoicePdf(input = {}) {
   }
   y += 5;
   doc.setFont('helvetica', 'bold');
-  doc.text(`Gross MTM: USD ${money(invoice.totalMtm)}`, right, y, { align: 'right' });
+  doc.text(`Counterparty MTM: USD ${signedMoney(invoice.totalMtm)}`, right, y, { align: 'right' });
   y += 5;
-  doc.text(`Charges: USD ${money(invoice.totalHandling)}`, right, y, { align: 'right' });
+  doc.text(`Fee impact: USD ${signedMoney(invoice.totalHandling)}`, right, y, { align: 'right' });
   y += 6;
   doc.setFontSize(11);
-  doc.text(`Net ${invoice.isReceivable ? 'receivable' : 'payable'}: USD ${money(invoice.netAmount)}`, right, y, { align: 'right' });
+  doc.text(`${invoice.paymentDirection.payer.shortName} pays ${invoice.paymentDirection.payee.shortName}: USD ${money(invoice.netAmount)}`, right, y, { align: 'right' });
   y += 14;
   doc.setFontSize(8);
-  doc.text('Beneficiary: FRATELLI COSULICH BUNKERS (HK) LTD', margin, y);
+  doc.text(`Beneficiary: ${invoice.paymentDirection.beneficiary.fullName}`, margin, y);
   y += 5;
   doc.setFont('helvetica', 'normal');
-  doc.text('Bank: UBS AG, Singapore | SWIFT: UBSWSGSG', margin, y);
-  y += 5;
-  doc.text('Account: 0546-150117-01', margin, y);
+  if (invoice.paymentDirection.beneficiaryBankConfigured) {
+    doc.text(`Bank: ${invoice.paymentDirection.beneficiary.bankName} | SWIFT: ${invoice.paymentDirection.beneficiary.bankSwift || 'Not provided'}`, margin, y);
+    y += 5;
+    doc.text(`Account: ${invoice.paymentDirection.beneficiary.accountNumber}`, margin, y);
+    if (invoice.paymentDirection.beneficiary.intermediaryBank) {
+      y += 5;
+      doc.text(`Intermediary: ${invoice.paymentDirection.beneficiary.intermediaryBank}${invoice.paymentDirection.beneficiary.intermediarySwift ? ` | SWIFT: ${invoice.paymentDirection.beneficiary.intermediarySwift}` : ''}`, margin, y);
+    }
+  } else {
+    doc.text('Payment instructions: Obtain directly from the beneficiary; banking details are not configured in FCOS.', margin, y);
+  }
   doc.setFontSize(7);
   doc.setTextColor(100, 100, 105);
   doc.text('Computer generated document. Registered in Hong Kong.', pageWidth / 2, 288, { align: 'center' });
@@ -174,6 +201,34 @@ async function invoiceRecord(client, invoiceId) {
   if (error) throw hedgeDocumentError(`Invoice could not be loaded: ${error.message}`, 502);
   if (!data) throw hedgeDocumentError('Invoice was not found.', 404);
   return data;
+}
+
+async function invoiceCounterparty(client, shortName) {
+  if (!shortName) return null;
+  const { data, error } = await client
+    .from('hedge_counterparties')
+    .select('short_name,full_name,address_line1,address_line2,address_line3,attention,bank_name,bank_swift,intermediary_bank,intermediary_swift,account_number')
+    .eq('short_name', String(shortName))
+    .maybeSingle();
+  if (error) throw hedgeDocumentError(`Counterparty payment details could not be loaded: ${error.message}`, 502);
+  return data || null;
+}
+
+async function authoritativeInvoicePayload(client, invoice, requestedPayload = null) {
+  if (!invoice) return requestedPayload || {};
+  const storedPayload = invoice.pdf_payload || requestedPayload || {};
+  const counterparty = await invoiceCounterparty(client, invoice.counterparty);
+  return {
+    ...storedPayload,
+    invoiceNumber: invoice.invoice_number,
+    invoiceDate: invoice.issue_date,
+    settlementMonth: invoice.settlement_month,
+    lineItems: storedPayload.lineItems || invoice.line_items || [],
+    netAmount: invoice.subtotal,
+    counterparty: counterparty
+      ? { ...(storedPayload.counterparty || {}), ...counterparty }
+      : storedPayload.counterparty || { short_name: invoice.counterparty, full_name: invoice.counterparty },
+  };
 }
 
 export async function saveHedgeInvoicePdf(client, profile, body = {}) {
@@ -217,7 +272,8 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
 
 export async function sendHedgeInvoiceEmail(client, profile, body = {}, { mailboxSnapshot = null } = {}) {
   const invoice = body.invoiceId ? await invoiceRecord(client, body.invoiceId) : null;
-  const generated = generateHedgeInvoicePdf(body.pdfPayload || invoice?.pdf_payload || body);
+  const documentPayload = await authoritativeInvoicePayload(client, invoice, body.pdfPayload || null);
+  const generated = generateHedgeInvoicePdf(invoice ? documentPayload : body);
   const message = {
     to: body.to,
     cc: body.cc,

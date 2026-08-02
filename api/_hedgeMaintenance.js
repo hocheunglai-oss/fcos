@@ -1,5 +1,6 @@
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { evaluateHedgeSfsCandidates, hedgeSfsHealth } from './_hedgeSfsService.js';
+import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
 export const DEFAULT_ICE_MARGINS = Object.freeze({
   S05_FULL: { im: 64765, lotSize: 1000, unit: 'mt', label: 'VLSFO Full (1000mt)', code: 'MF4' },
@@ -205,11 +206,12 @@ export async function runHedgeMaintenance(client, { forceIce = false, dryRun = f
       if (!dryRun) await writeHealth(client, 'ice_margins', 'ICE margin automation', 'Critical', error.message, {}, now.toISOString()).catch(() => {});
     }
   }
+  const paperHedgeExpiry = await reconcilePaperHedgeExpiry(client, { dryRun, now });
   const sfs = await evaluateHedgeSfsCandidates(client, { dryRun, now });
   const sfsHealth = await hedgeSfsHealth(client);
   if (!dryRun) {
     await writeHealth(client, 'sfs_reports', 'SFS monthly reports', sfsHealth.status, sfsHealth.detail, { evaluatedMonths: sfs.length }, now.toISOString());
     await client.from('hedge_integration_operations').delete().lt('expires_at', now.toISOString());
   }
-  return { ok: ice.ok !== false && sfsHealth.status !== 'Unavailable', ice, sfs, sfsHealth };
+  return { ok: ice.ok !== false && sfsHealth.status !== 'Unavailable', ice, paperHedgeExpiry, sfs, sfsHealth };
 }

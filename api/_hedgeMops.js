@@ -1,4 +1,5 @@
 const NUMBER_PATTERN = '(-?\\d+(?:\\.\\d+)?)'
+const MOPS_PRICE_FIELDS = ['s380', 's05', 'sgo']
 
 const MONTH_NUMBER = Object.fromEntries([
   ['jan', 1], ['january', 1], ['feb', 2], ['february', 2], ['mar', 3], ['march', 3],
@@ -187,5 +188,48 @@ export function parseMopsText(text = '', options = {}) {
     forward_estimate: parseForwardEstimate(rawInput, priceDate, parsedPrices),
     source: 'Parsed',
     raw_input: rawInput,
+  }
+}
+
+function finitePrice(value) {
+  return value !== null && value !== '' && Number.isFinite(Number(value))
+}
+
+export function verifyMopsSourceMessage(record = {}, rawInput = '', options = {}) {
+  const sourceMessage = String(rawInput || '').trim()
+  if (!sourceMessage) {
+    return { verified: false, issues: ['Paste the third-party MOPS message used to verify this price.'], parsed: null }
+  }
+
+  const parsed = parseMopsText(sourceMessage, options)
+  const issues = []
+  if (!parsed.price_date) issues.push('The third-party message does not contain a recognizable publication date.')
+  else if (String(parsed.price_date) !== String(record.price_date || '')) {
+    issues.push(`The message date ${parsed.price_date} does not match the saved price date ${record.price_date || 'not set'}.`)
+  }
+
+  for (const field of MOPS_PRICE_FIELDS) {
+    if (!finitePrice(record[field])) {
+      issues.push(`${field.toUpperCase()} must be entered before this MOPS row can be verified.`)
+      continue
+    }
+    if (!finitePrice(parsed[field])) {
+      issues.push(`The third-party message does not contain ${field.toUpperCase()}.`)
+      continue
+    }
+    if (Math.abs(Number(record[field]) - Number(parsed[field])) >= 0.005) {
+      issues.push(`${field.toUpperCase()} in the message does not match the saved price.`)
+    }
+  }
+
+  return {
+    verified: issues.length === 0,
+    issues,
+    parsed: {
+      price_date: parsed.price_date,
+      s380: parsed.s380,
+      s05: parsed.s05,
+      sgo: parsed.sgo,
+    },
   }
 }

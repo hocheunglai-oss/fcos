@@ -1804,6 +1804,30 @@
   line-height: 1.35;
 }
 
+.hedge-desk-root .app-mops-finality {
+  display: flex;
+  align-items: center;
+  margin-top: 15px;
+  padding: 10px 12px;
+  gap: 10px;
+  border: 1px solid var(--app-border);
+  border-left: 3px solid var(--app-amber);
+  border-radius: 6px;
+  background: var(--app-surface-soft);
+  color: var(--app-text-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.hedge-desk-root .app-mops-finality.is-ready {
+  border-left-color: var(--app-teal);
+}
+
+.hedge-desk-root .app-mops-finality > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .hedge-desk-root .app-table--mops {
   min-width: 970px;
 }
@@ -2073,6 +2097,29 @@
 .hedge-desk-root .app-counterparty-settlement__net .app-money {
   font-size: 17px;
 }
+
+.hedge-desk-root .app-payment-direction {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--app-border);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--app-surface-soft);
+}
+
+.hedge-desk-root .app-payment-direction span {
+  color: var(--app-text-muted);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hedge-desk-root .app-payment-direction strong { font-size: 15px; }
+.hedge-desk-root .app-payment-direction small { color: var(--app-text-secondary); font-size: 11px; }
+.hedge-desk-root .app-payment-direction--receivable { border-left-color: var(--app-green); }
+.hedge-desk-root .app-payment-direction--payable { border-left-color: var(--app-amber); }
 
 .hedge-desk-root .app-invoice-summary {
   display: grid;

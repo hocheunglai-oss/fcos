@@ -18,6 +18,9 @@ const SETTLEMENT_VARIABLES = [
   ['Attention', '{attn}'],
   ['Net amount', '{netAmount}'],
   ['Payment direction', '{direction}'],
+  ['Payer', '{payer}'],
+  ['Payee', '{payee}'],
+  ['Beneficiary', '{beneficiary}'],
   ['Issue date', '{issueDate}'],
   ['Due date', '{dueDate}'],
 ].map(([label, token]) => ({ label, token }));
@@ -41,6 +44,9 @@ const PREVIEW_VALUES = {
   attn: 'Accounts Department',
   netAmount: '125,000.00',
   direction: 'payable to',
+  payer: 'FCBHK',
+  payee: 'Sample Counterparty',
+  beneficiary: 'Sample Counterparty',
   issueDate: '02 Aug 2026',
   dueDate: '09 Aug 2026',
 };

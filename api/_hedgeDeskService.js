@@ -1,14 +1,22 @@
+import { createHash } from 'node:crypto';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
+import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
+import { verifyMopsSourceMessage } from './_hedgeMops.js';
+import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
-  'netAmount', 'direction', 'issueDate', 'dueDate',
+  'netAmount', 'direction', 'payer', 'payee', 'beneficiary', 'issueDate', 'dueDate',
 ]);
 
 const COMMON_FIELDS = [
   'id', 'legacy_source_id', 'created_date', 'updated_date', 'created_by',
   'created_by_id', 'updated_by_id', 'revision',
 ];
+
+const MOPS_SERVER_FIELDS = new Set([
+  'verification_status', 'verification_snapshot', 'verification_hash', 'verified_at', 'verified_by_id',
+]);
 
 const ENTITY_CONFIG = {
   PhysicalTrade: {
@@ -100,6 +108,7 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
   const relationships = {};
   const clean = {};
   for (const [field, value] of Object.entries(payload || {})) {
+    if (MOPS_SERVER_FIELDS.has(field)) continue;
     if (['id', 'created_date', 'updated_date', 'created_by', 'created_by_id', 'updated_by_id', 'revision', 'legacy_source_id'].includes(field)) continue;
     assertedField(config, field);
     if (config.relationshipFields?.includes(field)) relationships[field] = value;
@@ -133,6 +142,66 @@ function sanitizeAppConfigPayload(payload, configKey) {
       email_subject: subject,
       email_body: emailBody,
     },
+  };
+}
+
+function sanitizeInvoicePayload(payload, current = null) {
+  const subtotal = Number(payload?.subtotal ?? current?.subtotal);
+  if (!Number.isFinite(subtotal)) throw httpError('A signed settlement amount is required for an FCBHK invoice.', 400);
+  const counterparty = String(payload?.counterparty ?? current?.counterparty ?? '').trim();
+  if (!counterparty) throw httpError('A counterparty is required for an FCBHK invoice.', 400);
+  const paymentDirection = hedgeSettlementPaymentDirection(subtotal, counterparty);
+  const sanitized = { ...payload, invoice_type: paymentDirection.invoiceType };
+  if (payload?.pdf_payload && typeof payload.pdf_payload === 'object') {
+    sanitized.pdf_payload = {
+      ...payload.pdf_payload,
+      netAmount: paymentDirection.signedAmount,
+      isReceivable: paymentDirection.isReceivable,
+    };
+  }
+  return sanitized;
+}
+
+function sanitizeSwapPayload(payload, { creating = false } = {}) {
+  const sanitized = { ...(payload || {}) };
+  delete sanitized.is_expired;
+  if (creating) sanitized.is_expired = false;
+  return sanitized;
+}
+
+function sanitizeMopsPayload(payload, current, profile) {
+  const merged = { ...(current || {}), ...(payload || {}) };
+  if (merged.is_estimate === true) {
+    return {
+      verification_status: 'not_applicable',
+      verification_snapshot: null,
+      verification_hash: null,
+      verified_at: null,
+      verified_by_id: null,
+    };
+  }
+
+  const sourceMessage = String(merged.raw_input || '').trim();
+  if (!sourceMessage) {
+    return {
+      verification_status: 'unverified',
+      verification_snapshot: null,
+      verification_hash: null,
+      verified_at: null,
+      verified_by_id: null,
+    };
+  }
+
+  const verification = verifyMopsSourceMessage(merged, sourceMessage);
+  if (!verification.verified) {
+    throw httpError(`The third-party MOPS message could not verify this row: ${verification.issues.join(' ')}`, 400, 'HEDGE_MOPS_VERIFICATION_FAILED', { issues: verification.issues });
+  }
+  return {
+    verification_status: 'verified',
+    verification_snapshot: verification.parsed,
+    verification_hash: createHash('sha256').update(sourceMessage).digest('hex'),
+    verified_at: new Date().toISOString(),
+    verified_by_id: profile.id,
   };
 }
 
@@ -332,12 +401,13 @@ async function recentEvents(client) {
 }
 
 export async function loadHedgeDeskSnapshot({ client, capabilities }) {
+  const expiryAutomation = await reconcilePaperHedgeExpiry(client);
   const entries = await Promise.all(SNAPSHOT_ENTITIES.map(async ([key, entity, limit]) => [
     key,
     await listRows(client, entity, configFor(entity), { limit }),
   ]));
   const auditLogs = await recentEvents(client);
-  return { ...Object.fromEntries(entries), auditLogs, capabilities };
+  return { ...Object.fromEntries(entries), auditLogs, capabilities, expiryAutomation };
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
@@ -365,13 +435,18 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
   await requireWriteCapability(capabilities, writeConfig);
 
   if (action === 'create') {
+    if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload) };
+    if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload, { creating: true }) };
+    const mopsServerFields = entity === 'MopsPrice' ? sanitizeMopsPayload(body.payload, null, profile) : null;
     const { clean, relationships } = cleanPayload(config, body.payload, profile, { creating: true });
+    if (mopsServerFields) Object.assign(clean, mopsServerFields);
     const { data, error } = await client.from(config.table).insert(clean).select('*').single();
     if (error) throw httpError(`Hedge Desk record could not be created: ${error.message}`, 502);
     try {
       await replaceRelationships(client, entity, data.id, relationships);
       const record = await loadOne(client, entity, config, data.id);
       await writeEvent(client, { eventType: 'record_created', entity, record, profile, label: body.label || null });
+      if (entity === 'MopsPrice') await reconcilePaperHedgeExpiry(client, { profile });
       return record;
     } catch (errorAfterInsert) {
       await client.from(config.table).delete().eq('id', data.id);
@@ -385,13 +460,18 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
     if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(before.revision)) {
       throw httpError('This Hedge Desk record changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT', { current: before });
     }
+    if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload, before) };
+    if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload) };
+    const mopsServerFields = entity === 'MopsPrice' ? sanitizeMopsPayload(body.payload, before, profile) : null;
     const { clean, relationships } = cleanPayload(config, body.payload, profile);
+    if (mopsServerFields) Object.assign(clean, mopsServerFields);
     const { data, error } = await client.from(config.table).update(clean).eq('id', before.id).eq('revision', expectedRevision).select('*').maybeSingle();
     if (error) throw httpError(`Hedge Desk record could not be updated: ${error.message}`, 502);
     if (!data) throw httpError('This Hedge Desk record changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT');
     await replaceRelationships(client, entity, before.id, relationships);
     const record = await loadOne(client, entity, config, before.id);
     await writeEvent(client, { eventType: 'record_updated', entity, record, before, profile, label: body.label || null });
+    if (entity === 'MopsPrice') await reconcilePaperHedgeExpiry(client, { profile });
     return record;
   }
 
@@ -413,6 +493,7 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
 export async function handleHedgeMarkets(body, profile, { client, capabilities }) {
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
+    const expiryAutomation = await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult] = await Promise.all([
       listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),
@@ -428,6 +509,7 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
         forwardSpreadsRevision: Number(settings.fwd_spreads?.revision || 0),
       },
       capabilities: { hedge_book_manage: capabilities?.hedge_book_manage === true },
+      expiryAutomation,
     };
   }
 

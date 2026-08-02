@@ -35,6 +35,7 @@ import {
   hktToday,
   isPlattsDay,
   latestMops,
+  mopsMonthFinality,
   tradingDaysInMonth,
 } from "../lib/domain";
 import { useActions } from "../data/ActionsContext";
@@ -177,8 +178,10 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       total: scheduled.length,
       actual: scheduled.filter((date) => actual.has(date)).length,
       estimated: scheduled.filter((date) => !actual.has(date) && estimated.has(date)).length,
+      verified: scheduled.filter((date) => data.mops.some((row) => row.price_date === date && !row.is_estimate && row.verification_status === "verified")).length,
     };
   }, [data.mops, selectedMonth]);
+  const monthFinality = useMemo(() => mopsMonthFinality(selectedMonth, data.mops), [data.mops, selectedMonth]);
   const curve = useMemo(() => forwardCurveState(settings.forwardSpreads), [settings.forwardSpreads]);
   const chartData = useMemo(() => {
     const now = new Date(`${hktToday()}T00:00:00`);
@@ -445,6 +448,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           <div className="app-mops-publication-progress">
             <CalendarDays size={17} aria-hidden="true" />
             <span><strong>{publicationProgress.actual}</strong> actual</span>
+            <span><strong>{publicationProgress.verified}</strong> verified</span>
             <span><strong>{publicationProgress.estimated}</strong> estimated</span>
             <span><strong>{publicationProgress.total}</strong> scheduled</span>
           </div>
@@ -460,6 +464,16 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
               </div>
             );
           })}
+        </div>
+        <div className={`app-mops-finality ${monthFinality.ready ? "is-ready" : "is-pending"}`}>
+          <StatusBadge tone={monthFinality.ready ? "positive" : "warning"}>{monthFinality.ready ? "Final and verified" : "Not final"}</StatusBadge>
+          <span>{monthFinality.ready
+            ? `All ${monthFinality.total} publication days are verified. Paper hedges for this month expire automatically.`
+            : !monthFinality.calendarSupported
+              ? "The approved Platts publication calendar is unavailable for this year."
+              : !monthFinality.reachedLastTradingDay
+                ? `Final trading day: ${formatDate(monthFinality.lastTradingDay)}. FCOS will not expire paper hedges before then.`
+                : `${monthFinality.verified} of ${monthFinality.total} publication days are complete and source-verified.`}</span>
         </div>
       </Panel>
 
@@ -481,7 +495,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
                       <><a className="app-table-source" href={PLATTS_PUBLICATION_SOURCE.url} target="_blank" rel="noreferrer">S&amp;P Global Platts</a><small>Publication calendar</small></>
                     )}
                   </td>
-                  <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge></td>
+                  <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge>{record && !record.is_estimate ? <small>{record.verification_status === "verified" ? `Source verified ${formatDateTime(record.verified_at)} HKT` : "Source message not verified"}</small> : null}</td>
                   <td>{record && !readOnly ? <div className="app-row-actions"><IconButton label="Edit price" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete price" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></div> : null}</td>
                 </tr>
               );
@@ -501,10 +515,11 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
         {error && <InlineError error={error} />}
         <section className="app-form-section">
           <div className="app-form-section__title">Published bulletin capture</div>
-          <Field label="Raw MOPS line" hint="Paste an S&P Global line or email excerpt">
+          <Field label="Third-party MOPS message" hint="Paste the original dated message; FCOS compares its date and all three prices with the saved row">
             <textarea className="app-input app-textarea" rows="5" value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder="07-Apr-2026 S380: 421.50 S0.5: 492.25 SGO: 73.45" />
           </Field>
           <Button icon={Bot} onClick={parseRaw} disabled={parsing || !rawText.trim()}>{parsing ? "Parsing..." : "Parse values"}</Button>
+          <div className="app-callout app-callout--neutral">An actual MOPS row is verified only when the pasted third-party message contains the same date, S380, S0.5, and SGO values. Manual rows without evidence remain unverified and cannot finalize the month.</div>
         </section>
         {drawer?.mode === "create" && (
           <section className="app-form-section app-form-section--indication">

@@ -26,6 +26,7 @@ export const PAGE_METHODOLOGIES = {
       "A buy hedge gains when market exceeds trade price; a sell hedge gains when trade price exceeds market.",
       "Monthly, balance-today, and balance-tomorrow averages use only the applicable Platts publication dates.",
       "Spread trades value the buy and sell legs independently before combining their results.",
+      "Expiry is server-controlled: each contract month must reach its final Platts trading day and every scheduled MOPS row must match its pasted third-party source message.",
       "Estimated net P&L deducts configured broker, exchange, clearing, settlement, venue, and commission charges.",
     ],
   },
@@ -34,6 +35,8 @@ export const PAGE_METHODOLOGIES = {
     steps: [
       "Projected monthly averages use recorded actual or estimated values and carry the latest available price through each remaining publication day.",
       "The publication ledger includes every weekday in the selected month except Singapore Platts holidays, alongside any saved source and record type.",
+      "An actual row is source-verified only when its manually pasted third-party message contains the same date and all three saved product prices.",
+      "A paper hedge expires automatically after every contract month reaches its final trading day and all scheduled MOPS rows are actual, complete, and source-verified.",
       "Forward prices equal the latest actual spot MOPS plus the saved product adjustment. Positive adjustments indicate contango; negative adjustments indicate backwardation.",
       "Assisted capture parses published MOPS bulletins. Market-indication capture creates an editable estimate for today and can derive the nearest future MOC adjustment.",
     ],
@@ -47,8 +50,10 @@ export const PAGE_METHODOLOGIES = {
     steps: [
       "Each hedge is valued for the selected settlement month using its applicable MOPS average and direction.",
       "Counterparty net settlement combines hedge P&L and configured charges, then determines debit or credit direction.",
+      "A positive FCBHK net means the counterparty pays FCBHK; a negative FCBHK net means FCBHK pays the counterparty. The payee is always the document beneficiary.",
+      "Payable documents use the counterparty's maintained bank instructions. Missing instructions are identified explicitly and never replaced with FCBHK banking details.",
       "Broker and ICE summaries aggregate fees from qualifying trades and avoid duplicating automatically posted records.",
-      "Closing a month records its control state; generated invoices preserve the month, counterparty, amount, PDF, and delivery status.",
+      "Closing a month records its control state; generated FCBHK invoices and credit notes preserve the month, counterparty, amount, PDF, and delivery status.",
     ],
   },
   Counterparties: {

@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.77';
+export const APP_VERSION = '2.0.78';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.78',
+    releasedAt: '2026-08-02',
+    title: 'Hedge settlement payment direction',
+    changes: [
+      'Made every Hedge settlement document and screen state the payer, payee, beneficiary, and absolute settlement amount explicitly.',
+      'Corrected payable FCBS credit notes so FCBS is the beneficiary and missing FCBS bank details never fall back to the FCBHK account.',
+      'Renamed the Settlement invoice view to FCBHK Invoices and added payer-to-beneficiary information to every invoice row.',
+      'Paper hedges now expire automatically only after the final Platts trading day and complete daily MOPS verification against manually pasted third-party messages.',
+    ],
+  },
   {
     version: '2.0.77',
     releasedAt: '2026-08-02',

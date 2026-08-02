@@ -237,7 +237,7 @@ export const DEFAULT_EMAIL_SETTINGS = {
   email_cc: "",
   email_bcc: "",
   email_subject: "{invoiceNumber} - {invoiceType} for {settlementMonth} Swap Settlement",
-  email_body: "<p>Dear <strong>{counterparty}</strong>,</p><p>Please find attached our <strong>{invoiceType}</strong> No. <strong>{invoiceNumber}</strong> in respect of the swap settlement for <strong>{settlementMonth}</strong>.</p><p>Net Amount {direction} {counterparty}: <strong>USD {netAmount}</strong></p><p>Kindly acknowledge receipt and revert with any queries.</p><p>Best regards,<br>Fratelli Cosulich Bunkers (HK) Ltd</p>",
+  email_body: "<p>Dear <strong>{counterparty}</strong>,</p><p>Please find attached our <strong>{invoiceType}</strong> No. <strong>{invoiceNumber}</strong> in respect of the swap settlement for <strong>{settlementMonth}</strong>.</p><p><strong>Payment direction: {payer} pays {payee}.</strong><br>Beneficiary: {beneficiary}<br>Net amount: <strong>USD {netAmount}</strong></p><p>Kindly acknowledge receipt and revert with any queries.</p><p>Best regards,<br>Fratelli Cosulich Bunkers (HK) Ltd</p>",
 };
 
 export const ICE_IM_FALLBACK = {
@@ -368,6 +368,83 @@ export function tradingDaysInMonth(yearMonth) {
   const count = new Date(year, month, 0).getDate();
   return Array.from({ length: count }, (_, index) => `${yearMonth}-${String(index + 1).padStart(2, "0")}`)
     .filter(isPlattsDay);
+}
+
+function hktDateFrom(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return hktToday()
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+function mopsRowTimestamp(row) {
+  return String(row?.updated_date || row?.created_date || row?.id || '')
+}
+
+export function mopsMonthFinality(yearMonth, records = [], now = new Date()) {
+  const scheduledDates = tradingDaysInMonth(yearMonth)
+  const calendarSupported = hasPlattsPublicationCalendar(yearMonth)
+  const lastTradingDay = scheduledDates.at(-1) || null
+  const today = hktDateFrom(now)
+  const rowsByDate = new Map()
+
+  for (const row of records || []) {
+    if (!scheduledDates.includes(String(row?.price_date || ''))) continue
+    const existing = rowsByDate.get(row.price_date)
+    if (!existing || (existing.is_estimate && !row.is_estimate) || (Boolean(existing.is_estimate) === Boolean(row.is_estimate) && mopsRowTimestamp(row) > mopsRowTimestamp(existing))) {
+      rowsByDate.set(row.price_date, row)
+    }
+  }
+
+  const actualRows = scheduledDates.map((date) => rowsByDate.get(date)).filter((row) => row && !row.is_estimate)
+  const completeRows = actualRows.filter((row) => ['s380', 's05', 'sgo'].every((field) => row[field] !== null && row[field] !== '' && Number.isFinite(Number(row[field]))))
+  const verifiedRows = completeRows.filter((row) => row.verification_status === 'verified')
+  const missingDates = scheduledDates.filter((date) => !rowsByDate.get(date) || rowsByDate.get(date).is_estimate)
+  const incompleteDates = scheduledDates.filter((date) => {
+    const row = rowsByDate.get(date)
+    return row && !row.is_estimate && !completeRows.includes(row)
+  })
+  const unverifiedDates = scheduledDates.filter((date) => {
+    const row = rowsByDate.get(date)
+    return row && !row.is_estimate && completeRows.includes(row) && row.verification_status !== 'verified'
+  })
+  const reachedLastTradingDay = Boolean(lastTradingDay && today >= lastTradingDay)
+  const ready = calendarSupported
+    && reachedLastTradingDay
+    && scheduledDates.length > 0
+    && verifiedRows.length === scheduledDates.length
+
+  return {
+    month: yearMonth,
+    ready,
+    calendarSupported,
+    today,
+    lastTradingDay,
+    reachedLastTradingDay,
+    total: scheduledDates.length,
+    actual: actualRows.length,
+    complete: completeRows.length,
+    verified: verifiedRows.length,
+    missingDates,
+    incompleteDates,
+    unverifiedDates,
+  }
+}
+
+export function paperHedgeContractMonths(swap = {}) {
+  const months = swap.trade_type === 'SPREAD'
+    ? [swap.leg1_month, swap.leg2_month]
+    : [swap.swap_month]
+  return [...new Set(months.filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))))]
+}
+
+export function paperHedgeExpiryStatus(swap = {}, records = [], now = new Date()) {
+  const contractMonths = paperHedgeContractMonths(swap)
+  const months = contractMonths.map((month) => mopsMonthFinality(month, records, now))
+  return {
+    ready: contractMonths.length > 0 && months.every((month) => month.ready),
+    contractMonths,
+    months,
+  }
 }
 
 export function forwardCurveState(spreads = {}) {
@@ -751,6 +828,50 @@ export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, 
     totalFees: roundMoney(totalFees),
     net: roundMoney(mtm - totalFees),
     isFinal,
+  };
+}
+
+export const FCBHK_SETTLEMENT_PARTY = Object.freeze({
+  shortName: "FCBHK",
+  fullName: "FRATELLI COSULICH BUNKERS (HK) LTD",
+  bankName: "UBS AG, Singapore",
+  bankSwift: "UBSWSGSG",
+  accountNumber: "0546-150117-01",
+});
+
+function settlementParty(counterparty) {
+  if (counterparty && typeof counterparty === "object") {
+    return {
+      shortName: String(counterparty.short_name || counterparty.shortName || counterparty.full_name || "Counterparty"),
+      fullName: String(counterparty.full_name || counterparty.fullName || counterparty.short_name || "Counterparty"),
+      bankName: String(counterparty.bank_name || counterparty.bankName || ""),
+      bankSwift: String(counterparty.bank_swift || counterparty.bankSwift || ""),
+      intermediaryBank: String(counterparty.intermediary_bank || counterparty.intermediaryBank || ""),
+      intermediarySwift: String(counterparty.intermediary_swift || counterparty.intermediarySwift || ""),
+      accountNumber: String(counterparty.account_number || counterparty.accountNumber || ""),
+    };
+  }
+  const name = String(counterparty || "Counterparty");
+  return { shortName: name, fullName: name, bankName: "", bankSwift: "", intermediaryBank: "", intermediarySwift: "", accountNumber: "" };
+}
+
+export function hedgeSettlementPaymentDirection(netAmount, counterparty) {
+  const signedAmount = roundMoney(netAmount);
+  const externalParty = settlementParty(counterparty);
+  const isReceivable = signedAmount >= 0;
+  const payer = isReceivable ? externalParty : FCBHK_SETTLEMENT_PARTY;
+  const payee = isReceivable ? FCBHK_SETTLEMENT_PARTY : externalParty;
+  return {
+    signedAmount,
+    amount: Math.abs(signedAmount),
+    isReceivable,
+    invoiceType: isReceivable ? "Debit Note" : "Credit Note",
+    payer,
+    payee,
+    beneficiary: payee,
+    label: `${payer.shortName} pays ${payee.shortName}`,
+    detail: `${payer.fullName} pays ${payee.fullName}`,
+    beneficiaryBankConfigured: Boolean(payee.bankName && payee.accountNumber),
   };
 }
 
