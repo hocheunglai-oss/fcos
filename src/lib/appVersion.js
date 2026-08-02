@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.83';
+export const APP_VERSION = '2.0.84';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.84',
+    releasedAt: '2026-08-02',
+    title: 'Partial CIA payment evidence',
+    changes: [
+      'Classified an open buyer payment as Partial CIA only when its Salesforce received date is earlier than the STEM earliest ETA; equal, later, or unavailable ETA dates display Partial Payment.',
+    ],
+  },
   {
     version: '2.0.83',
     releasedAt: '2026-08-02',

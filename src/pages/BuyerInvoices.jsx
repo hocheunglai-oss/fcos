@@ -45,6 +45,7 @@ import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
+import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
@@ -2399,6 +2400,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       receivableBalance: live.item.verifiedReceivableBalance ?? row.receivableBalance,
       collection: live.item,
       latestPayment: live.latestPayment || live.item.latestPaymentSnapshot || row.latestPayment || null,
+      earliestEtaDate: live.earliestEtaDate || row.earliestEtaDate || null,
+      paymentEvidence: live.paymentEvidence || row.paymentEvidence || null,
       collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
     };
   }), [reconciliationByStem, rows]);
@@ -2448,6 +2451,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       collection: entry.item,
       collectionEvents: entry.event ? [entry.event] : [],
       latestPayment: entry.latestPayment || entry.item.latestPaymentSnapshot || null,
+      earliestEtaDate: entry.earliestEtaDate || null,
+      paymentEvidence: entry.paymentEvidence || null,
       status: 'Settled',
       daysUntilDue: null,
       paymentReminderEligible: false,
@@ -3127,6 +3132,14 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                   {filteredRows.map((row, idx) => {
                     const reminderSentToday = wasPaymentReminderSentToday(row);
                     const rowCopied = copiedRowIds.has(row.id);
+                    const latestBuyerPayment = row.collection?.latestPaymentSnapshot || row.latestPayment || null;
+                    const paymentEvidence = row.paymentEvidence || (latestBuyerPayment
+                      ? classifyBuyerPaymentEvidence({
+                          paymentDate: latestBuyerPayment.paymentDate,
+                          etaStartDate: row.earliestEtaDate,
+                          isPartial: row.collection?.reconciliationState === 'partial_payment',
+                        })
+                      : null);
                     return (
                       <tr key={row.id} className={`border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}>
                       <td className="px-4 py-3 text-foreground">
@@ -3170,16 +3183,16 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                       <td className="px-4 py-3 text-xs text-muted-foreground">
                         {row.collection?.adviceReceivedDate ? (
                           <div><span className="font-medium text-cyan-800">Advice {fmtDate(row.collection.adviceReceivedDate)}</span><div>{row.currency || ''} {Number(row.collection.adviceAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
-                        ) : row.collection?.latestPaymentSnapshot || row.latestPayment ? (
+                        ) : latestBuyerPayment ? (
                           <div>
                             <span className={row.collection?.reconciliationState === 'payment_pending_posting' ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
-                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : 'Buyer payment'}
+                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : paymentEvidence?.label || 'Buyer payment'}
                             </span>
                             <div>
-                              {(row.collection?.latestPaymentSnapshot || row.latestPayment)?.amount != null
-                                ? `${fmtMoney((row.collection?.latestPaymentSnapshot || row.latestPayment).amount)} · `
+                              {latestBuyerPayment.amount != null
+                                ? `${fmtMoney(latestBuyerPayment.amount)} · `
                                 : ''}
-                              {fmtDate((row.collection?.latestPaymentSnapshot || row.latestPayment)?.paymentDate)}
+                              {fmtDate(latestBuyerPayment.paymentDate)}
                             </div>
                           </div>
                         ) : '-'}

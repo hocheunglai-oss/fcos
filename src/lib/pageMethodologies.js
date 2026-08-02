@@ -197,6 +197,10 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'A promise requires a date and amount. Payment Advice Received requires an advice date, positive amount, verification date, and buyer reference or Salesforce document. Advice pauses reminders until verification but never proves settlement by itself.',
       },
       {
+        title: 'Partial-payment timing',
+        body: 'An open buyer payment received before the earliest available Salesforce ETA date is labelled Partial CIA. A payment received on or after that ETA, or where either comparison date is unavailable, is labelled Partial Payment.',
+      },
+      {
         title: 'Reminder safety',
         body: 'Before sending, FCOS bypasses caches and revalidates the live Salesforce balance, payment evidence, reminder policy, routing, and recipient eligibility. Fully paid or restricted selections are rejected rather than sent.',
       },

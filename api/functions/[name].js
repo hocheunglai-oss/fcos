@@ -4,6 +4,7 @@ import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, re
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
+import { classifyBuyerPaymentEvidence, earliestEtaDate } from '../../src/lib/paymentCollectionEvidence.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
@@ -3801,6 +3802,8 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
       'KeyStem__c',
       'Payment_Date__c',
       'CurrencyIsoCode',
+      'ETA_Start_Date__c',
+      'ETA_End_Date__c',
       'Delivery_Date__c',
       'Delivery_Date_Or_Expected__c',
       'Expected_Delivery_Date__c',
@@ -3951,6 +3954,14 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
     if (!stem) continue;
     const latestPayment = live.latestPayments[item.stem_id] || null;
     const decision = buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today);
+    const paymentEvidence = latestPayment
+      ? classifyBuyerPaymentEvidence({
+          paymentDate: latestPayment.paymentDate,
+          etaStartDate: stem.ETA_Start_Date__c,
+          etaEndDate: stem.ETA_End_Date__c,
+          isPartial: decision.state === 'partial_payment',
+        })
+      : null;
     const nowIso = new Date().toISOString();
     const updates = {
       status: decision.status,
@@ -3979,6 +3990,7 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
             verifiedReceivableBalance: decision.balance,
             fullyPaidThreshold: threshold,
             latestPayment,
+            paymentEvidence,
             reconciliationState: decision.state,
           },
         },
@@ -4051,6 +4063,8 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       buyerInvoiceDueDate: calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate((live.dueFields || []).map((field) => stem[field])),
       currency: stem.CurrencyIsoCode || latestPayment?.currency || 'USD',
       latestPayment,
+      earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
+      paymentEvidence,
     };
     reconciled.push(serialized);
     if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(decision.state)) exceptions.push(serialized);
@@ -7890,6 +7904,8 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (fieldNames.includes('Delivery_Date__c')) fields.push('Delivery_Date__c');
   if (fieldNames.includes('Delivery_Date_Or_Expected__c')) fields.push('Delivery_Date_Or_Expected__c');
   if (fieldNames.includes('Expected_Delivery_Date__c')) fields.push('Expected_Delivery_Date__c');
+  if (fieldNames.includes('ETA_Start_Date__c')) fields.push('ETA_Start_Date__c');
+  if (fieldNames.includes('ETA_End_Date__c')) fields.push('ETA_End_Date__c');
   if (fieldNames.includes('Payment_Term__c')) fields.push('Payment_Term__c');
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
   if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
@@ -8126,6 +8142,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
         receivableBalance: stem.Receivable_Balance__c ?? null,
         buyerInvoiceDueDate: dueDate,
         deliveryDate: stem.Delivery_Date__c || null,
+        earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
         buyerTraderInCharge: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
         buyerAccountsEmail: account.Accounts_Email__c || null,
         buyerTraderEmail: buyerTraderEmails.join(', ') || null,

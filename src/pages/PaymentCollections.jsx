@@ -132,7 +132,9 @@ export default function PaymentCollections() {
                         <td className="px-4 py-3">{entry.item.status}</td>
                         <td className="px-4 py-3"><Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{reconciliationLabel(entry.item.reconciliationState)}</Badge></td>
                         <td className="px-4 py-3 text-right tabular-nums">{money(entry.item.verifiedReceivableBalance)}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{entry.latestPayment?.paymentDate || '-'}{entry.latestPayment?.amount != null ? ` · ${money(entry.latestPayment.amount)}` : ''}</td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {entry.latestPayment ? <><span className="font-medium text-foreground">{entry.paymentEvidence?.label || 'Buyer payment'}</span><br />{entry.latestPayment.paymentDate || '-'}{entry.latestPayment.amount != null ? ` · ${money(entry.latestPayment.amount)}` : ''}</> : '-'}
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">Open the Collection Queue, review the live STEM, and record the next follow-up.</td>
                       </tr>
                     ))}
