@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.80';
+export const APP_VERSION = '2.0.81';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.81',
+    releasedAt: '2026-08-02',
+    title: 'Calendar-safe MOPS month queries',
+    changes: [
+      'Corrected MOPS verification, SFS reporting, and Salesforce hedge finalization to use valid next-month date boundaries instead of assuming every month has 31 days.',
+    ],
+  },
   {
     version: '2.0.80',
     releasedAt: '2026-08-02',

@@ -8,7 +8,7 @@ import {
   physicalMidQuantity,
   roundMoney,
 } from '../src/hedge/lib/domain.js';
-import { decorateMopsMonthVerifications } from './_hedgeMops.js';
+import { decorateMopsMonthVerifications, mopsMonthDateBounds } from './_hedgeMops.js';
 import { getSfsMopsCompleteness } from '../src/hedge/lib/sfsReport.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags } from './_runtimeCache.js';
@@ -214,9 +214,11 @@ async function loadFinalFinancials(client, inputs) {
   if (!months.length) issues.push('The paper hedge has no valid contract month.');
   const firstMonth = [...months].sort()[0];
   const lastMonth = [...months].sort().at(-1);
+  const firstMonthBounds = months.length ? mopsMonthDateBounds(firstMonth) : null;
+  const lastMonthBounds = months.length ? mopsMonthDateBounds(lastMonth) : null;
   const [priceResult, verificationResult] = months.length
     ? await Promise.all([
-      client.from('hedge_market_prices').select('*').gte('price_date', `${firstMonth}-01`).lte('price_date', `${lastMonth}-31`).order('price_date'),
+      client.from('hedge_market_prices').select('*').gte('price_date', firstMonthBounds.start).lt('price_date', lastMonthBounds.endExclusive).order('price_date'),
       client.from('hedge_mops_month_verifications').select('*').in('contract_month', months),
     ])
     : [{ data: [], error: null }, { data: [], error: null }];

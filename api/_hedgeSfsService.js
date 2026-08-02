@@ -8,6 +8,7 @@ import {
 import { DEFAULT_GENERAL, DEFAULT_RATES } from '../src/hedge/lib/domain.js';
 import { generateSfsReportCsv, generateSfsReportPdfBuffer, sfsReportFilename } from './_hedgeSfsDocuments.js';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
+import { mopsMonthDateBounds } from './_hedgeMops.js';
 
 function error(message, statusCode = 500, code = null) {
   const next = new Error(message);
@@ -45,9 +46,10 @@ function hongKongMonth(now = new Date(), offset = 0) {
 }
 
 async function inputs(client, month) {
+  const monthBounds = mopsMonthDateBounds(month);
   const [swapResult, priceResult, configResult] = await Promise.all([
     client.from('hedge_swap_hedges').select('*').eq('venue', 'ICE').or(`swap_month.eq.${month},leg1_month.eq.${month},leg2_month.eq.${month}`).limit(5000),
-    client.from('hedge_market_prices').select('*').gte('price_date', `${month}-01`).lte('price_date', `${month}-31`).limit(5000),
+    client.from('hedge_market_prices').select('*').gte('price_date', monthBounds.start).lt('price_date', monthBounds.endExclusive).limit(5000),
     client.from('hedge_settings').select('key,value').in('key', ['rates', 'general']),
   ]);
   const databaseError = swapResult.error || priceResult.error || configResult.error;

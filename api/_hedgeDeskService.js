@@ -1,6 +1,6 @@
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
-import { decorateMopsMonthVerifications, prepareManualMopsVerification } from './_hedgeMops.js';
+import { decorateMopsMonthVerifications, mopsMonthDateBounds, prepareManualMopsVerification } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
@@ -492,9 +492,10 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
     const sourceMessage = String(body?.sourceMessage || '').trim();
     if (!sourceMessage) throw httpError('Paste the third-party final monthly-average message.', 400);
     if (sourceMessage.length > 50000) throw httpError('The third-party message is too long.', 400);
+    const monthBounds = mopsMonthDateBounds(month);
 
     const [pricesResult, currentResult] = await Promise.all([
-      client.from('hedge_market_prices').select('*').gte('price_date', `${month}-01`).lte('price_date', `${month}-31`).order('price_date'),
+      client.from('hedge_market_prices').select('*').gte('price_date', monthBounds.start).lt('price_date', monthBounds.endExclusive).order('price_date'),
       client.from('hedge_mops_month_verifications').select('*').eq('contract_month', month).maybeSingle(),
     ]);
     const validationError = pricesResult.error || currentResult.error;

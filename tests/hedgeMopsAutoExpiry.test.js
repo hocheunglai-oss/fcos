@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   decorateMopsMonthVerifications,
+  mopsMonthDateBounds,
   prepareManualMopsVerification,
 } from '../api/_hedgeMops.js';
 import {
@@ -23,6 +24,20 @@ function completeMonth(month) {
     updated_date: `${priceDate}T12:00:00Z`,
   }));
 }
+
+test('MOPS database ranges use the next month boundary instead of an invalid day 31', async () => {
+  assert.deepEqual(mopsMonthDateBounds('2026-02'), { start: '2026-02-01', endExclusive: '2026-03-01' });
+  assert.deepEqual(mopsMonthDateBounds('2026-06'), { start: '2026-06-01', endExclusive: '2026-07-01' });
+  assert.deepEqual(mopsMonthDateBounds('2026-12'), { start: '2026-12-01', endExclusive: '2027-01-01' });
+  assert.throws(() => mopsMonthDateBounds('2026-13'), /valid MOPS contract month/i);
+
+  const paths = ['../api/_hedgeDeskService.js', '../api/_hedgeSfsService.js', '../api/_hedgeSalesforce.js'];
+  const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
+  for (const source of sources) {
+    assert.doesNotMatch(source, /\$\{(?:month|lastMonth)\}-31/);
+    assert.match(source, /\.lt\('price_date'/);
+  }
+});
 
 function verifiedAverage(month, records) {
   const averages = finalMopsMonthlyAverages(month, records);

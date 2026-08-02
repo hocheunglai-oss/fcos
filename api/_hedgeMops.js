@@ -209,6 +209,19 @@ export function parseMopsContractMonth(text) {
   return null
 }
 
+export function mopsMonthDateBounds(yearMonth) {
+  const match = String(yearMonth || '').match(/^(\d{4})-(0[1-9]|1[0-2])$/)
+  if (!match) throw new Error('A valid MOPS contract month is required.')
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const nextYear = month === 12 ? year + 1 : year
+  const nextMonth = month === 12 ? 1 : month + 1
+  return {
+    start: `${yearMonth}-01`,
+    endExclusive: `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`,
+  }
+}
+
 export function mopsMonthInputFingerprint(yearMonth, records = []) {
   const calculated = finalMopsMonthlyAverages(yearMonth, records)
   return calculated
