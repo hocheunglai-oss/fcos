@@ -59,6 +59,7 @@ test('settlement UI and documents make the payment route explicit', async () => 
   assert.match(view, /Payment direction/);
   assert.match(view, /Beneficiary:/);
   assert.match(view, /FCBS bank instructions are not configured/);
+  assert.doesNotMatch(view, /Money value=\{paymentDirection\.amount\}/);
   assert.match(documents, /PAYMENT DIRECTION:/);
   assert.match(documents, /Obtain directly from the beneficiary/);
   assert.doesNotMatch(documents, /Beneficiary: FRATELLI COSULICH BUNKERS \(HK\) LTD/);
