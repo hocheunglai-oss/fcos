@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.84';
+export const APP_VERSION = '2.0.85';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.85',
+    releasedAt: '2026-08-02',
+    title: 'Complete CIA payment classification',
+    changes: [
+      'Classified partial and fully settled buyer receipts as CIA when received on or before either the earliest ETA or actual delivery date, with inclusive date boundaries.',
+      'Added received-versus-delivery comparison details, multi-payment CIA and other-payment totals, expandable payment evidence, and evidence filters with counters in Payment Collections.',
+    ],
+  },
   {
     version: '2.0.84',
     releasedAt: '2026-08-02',

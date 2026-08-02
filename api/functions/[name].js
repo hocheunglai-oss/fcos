@@ -4,7 +4,7 @@ import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, re
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
-import { classifyBuyerPaymentEvidence, earliestEtaDate } from '../../src/lib/paymentCollectionEvidence.js';
+import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
@@ -3779,7 +3779,7 @@ function collectionPaymentSnapshot(payment, { dateField, amountField, referenceF
 
 async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
   const ids = [...new Set((stemIds || []).map((id) => String(id || '').trim()).filter(isSalesforceId))];
-  if (!ids.length) return { stems: {}, latestPayments: {}, warnings: [] };
+  if (!ids.length) return { stems: {}, buyerPayments: {}, latestPayments: {}, warnings: [] };
   const [stemDescribe, paymentDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c' }),
     salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({ fields: [] })),
@@ -3830,7 +3830,7 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
   const paymentFields = paymentDescribe.fields || [];
   const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
   if (!paymentFieldNames.has('STEM__c')) {
-    return { stems, latestPayments: {}, warnings: ['Payment__c.STEM__c is unavailable; balances remain authoritative but payment evidence cannot be linked.'] };
+    return { stems, buyerPayments: {}, latestPayments: {}, warnings: ['Payment__c.STEM__c is unavailable; balances remain authoritative but payment evidence cannot be linked.'] };
   }
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
   const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
@@ -3860,9 +3860,9 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
     limit: 5000,
     softFail: true,
   })))).flat();
-  const latestPayments = {};
+  const buyerPayments = {};
   for (const payment of paymentRows) {
-    if (!payment.STEM__c || latestPayments[payment.STEM__c]) continue;
+    if (!payment.STEM__c) continue;
     if (incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields)) continue;
     if (incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields])) continue;
     const paymentType = incomingPaymentTypeFromContext(payment, {
@@ -3875,9 +3875,20 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
       statusFields,
     });
     if (paymentType !== 'Buyer Payment') continue;
-    latestPayments[payment.STEM__c] = collectionPaymentSnapshot(payment, { dateField, amountField, referenceFields });
+    const snapshot = collectionPaymentSnapshot(payment, { dateField, amountField, referenceFields });
+    if (!(Number(snapshot?.amount) > 0) || !snapshot?.paymentDate) continue;
+    if (!buyerPayments[payment.STEM__c]) buyerPayments[payment.STEM__c] = [];
+    buyerPayments[payment.STEM__c].push(snapshot);
   }
-  return { stems, latestPayments, warnings: [], dueFields };
+  const latestPayments = {};
+  for (const [stemId, payments] of Object.entries(buyerPayments)) {
+    payments.sort((left, right) => (
+      String(left.paymentDate).localeCompare(String(right.paymentDate))
+      || String(left.paymentId || '').localeCompare(String(right.paymentId || ''))
+    ));
+    latestPayments[stemId] = payments.at(-1) || null;
+  }
+  return { stems, buyerPayments, latestPayments, warnings: [], dueFields };
 }
 
 function buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today) {
@@ -3952,16 +3963,17 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
   for (const item of items) {
     const stem = live.stems[item.stem_id];
     if (!stem) continue;
+    const buyerPayments = live.buyerPayments[item.stem_id] || [];
     const latestPayment = live.latestPayments[item.stem_id] || null;
     const decision = buyerCollectionReconciliationDecision(item, stem, latestPayment, threshold, today);
-    const paymentEvidence = latestPayment
-      ? classifyBuyerPaymentEvidence({
-          paymentDate: latestPayment.paymentDate,
-          etaStartDate: stem.ETA_Start_Date__c,
-          etaEndDate: stem.ETA_End_Date__c,
-          isPartial: decision.state === 'partial_payment',
-        })
-      : null;
+    const paymentEvidenceSummary = summarizeBuyerPaymentEvidence({
+      payments: buyerPayments,
+      etaStartDate: stem.ETA_Start_Date__c,
+      etaEndDate: stem.ETA_End_Date__c,
+      deliveryDate: stem.Delivery_Date__c,
+      isFullyPaid: decision.balance != null && decision.balance <= threshold,
+    });
+    const paymentEvidence = paymentEvidenceSummary.latestEvidence;
     const nowIso = new Date().toISOString();
     const updates = {
       status: decision.status,
@@ -3991,6 +4003,14 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
             fullyPaidThreshold: threshold,
             latestPayment,
             paymentEvidence,
+            paymentEvidenceSummary: {
+              paymentCount: paymentEvidenceSummary.paymentCount,
+              totalReceivedAmount: paymentEvidenceSummary.totalReceivedAmount,
+              ciaReceivedAmount: paymentEvidenceSummary.ciaReceivedAmount,
+              otherReceivedAmount: paymentEvidenceSummary.otherReceivedAmount,
+              earliestEtaDate: paymentEvidenceSummary.earliestEtaDate,
+              actualDeliveryDate: paymentEvidenceSummary.actualDeliveryDate,
+            },
             reconciliationState: decision.state,
           },
         },
@@ -4064,7 +4084,9 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       currency: stem.CurrencyIsoCode || latestPayment?.currency || 'USD',
       latestPayment,
       earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
+      actualDeliveryDate: stem.Delivery_Date__c || null,
       paymentEvidence,
+      paymentEvidenceSummary,
     };
     reconciled.push(serialized);
     if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_pending_posting', 'reopened'].includes(decision.state)) exceptions.push(serialized);

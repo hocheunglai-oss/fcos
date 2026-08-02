@@ -25,6 +25,22 @@ function money(value) {
   return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function collectionDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(date);
+}
+
+function evidenceComparisonText(evidence) {
+  if (!evidence?.receivedDate) return '';
+  return [
+    `Received ${collectionDate(evidence.receivedDate)}`,
+    evidence.earliestEtaDate ? `Earliest ETA ${collectionDate(evidence.earliestEtaDate)}` : null,
+    evidence.actualDeliveryDate ? `Delivered ${collectionDate(evidence.actualDeliveryDate)}` : null,
+  ].filter(Boolean).join(' · ');
+}
+
 function reconciliationLabel(value) {
   if (value === 'payment_pending_posting') return 'Pending Salesforce posting';
   return String(value || 'not_checked').replaceAll('_', ' ');
@@ -133,7 +149,18 @@ export default function PaymentCollections() {
                         <td className="px-4 py-3"><Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{reconciliationLabel(entry.item.reconciliationState)}</Badge></td>
                         <td className="px-4 py-3 text-right tabular-nums">{money(entry.item.verifiedReceivableBalance)}</td>
                         <td className="px-4 py-3 text-muted-foreground">
-                          {entry.latestPayment ? <><span className="font-medium text-foreground">{entry.paymentEvidence?.label || 'Buyer payment'}</span><br />{entry.latestPayment.paymentDate || '-'}{entry.latestPayment.amount != null ? ` · ${money(entry.latestPayment.amount)}` : ''}</> : '-'}
+                          {entry.latestPayment ? (
+                            <>
+                              <span className="font-medium text-foreground">{entry.paymentEvidence?.label || 'Buyer payment'}</span>
+                              <br />{entry.latestPayment.amount != null ? `${entry.currency || ''} ${money(entry.latestPayment.amount)}` : '-'}
+                              <div className="mt-0.5 text-[11px]">{evidenceComparisonText(entry.paymentEvidence) || collectionDate(entry.latestPayment.paymentDate)}</div>
+                              {entry.paymentEvidenceSummary?.paymentCount > 1 && (
+                                <div className="mt-1 text-[11px]">
+                                  {entry.paymentEvidenceSummary.paymentCount} payments · CIA {money(entry.paymentEvidenceSummary.ciaReceivedAmount)} · Other {money(entry.paymentEvidenceSummary.otherReceivedAmount)}
+                                </div>
+                              )}
+                            </>
+                          ) : '-'}
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">Open the Collection Queue, review the live STEM, and record the next follow-up.</td>
                       </tr>

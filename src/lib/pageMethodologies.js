@@ -197,8 +197,8 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'A promise requires a date and amount. Payment Advice Received requires an advice date, positive amount, verification date, and buyer reference or Salesforce document. Advice pauses reminders until verification but never proves settlement by itself.',
       },
       {
-        title: 'Partial-payment timing',
-        body: 'An open buyer payment received before the earliest available Salesforce ETA date is labelled Partial CIA. A payment received on or after that ETA, or where either comparison date is unavailable, is labelled Partial Payment.',
+        title: 'CIA payment timing',
+        body: 'A buyer receipt made on or before either the earliest available Salesforce ETA date or the actual delivery date is CIA. Open balances display Partial CIA; a live Salesforce balance within the fully-paid threshold displays Full CIA. Later receipts display Partial Payment or Full Payment. Each row shows the comparison dates, and multiple receipts are split into CIA and other-payment totals.',
       },
       {
         title: 'Reminder safety',

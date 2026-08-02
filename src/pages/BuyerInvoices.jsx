@@ -52,6 +52,12 @@ const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
+const PAYMENT_EVIDENCE_FILTERS = [
+  ['partial_cia', 'Partial CIA'],
+  ['partial_payment', 'Partial Payment'],
+  ['full_cia', 'Full CIA'],
+  ['full_payment', 'Full Payment'],
+];
 const PAYMENT_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
@@ -202,6 +208,52 @@ const fmtDate = (value) => {
     return textValue(value);
   }
 };
+
+function paymentEvidenceCodes(row) {
+  const scheduleCodes = (row?.paymentEvidenceSummary?.payments || [])
+    .map((payment) => payment?.evidence?.code)
+    .filter(Boolean);
+  return new Set(scheduleCodes.length ? scheduleCodes : [row?.paymentEvidence?.code].filter(Boolean));
+}
+
+function paymentComparisonText(evidence) {
+  if (!evidence?.receivedDate) return '';
+  return [
+    `Received ${fmtDate(evidence.receivedDate)}`,
+    evidence.earliestEtaDate ? `Earliest ETA ${fmtDate(evidence.earliestEtaDate)}` : null,
+    evidence.actualDeliveryDate ? `Delivered ${fmtDate(evidence.actualDeliveryDate)}` : null,
+    !evidence.earliestEtaDate && !evidence.actualDeliveryDate ? 'CIA boundary unavailable' : null,
+  ].filter(Boolean).join(' · ');
+}
+
+function PaymentEvidenceDisplay({ latestPayment, evidence, summary, pendingPosting = false }) {
+  if (!latestPayment) return '-';
+  const payments = summary?.payments || [];
+  return (
+    <div className="min-w-[230px]">
+      <span className={pendingPosting ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
+        {pendingPosting ? 'Pending Salesforce posting' : evidence?.label || 'Buyer payment'}
+      </span>
+      <div>{latestPayment.amount != null ? fmtMoney(latestPayment.amount) : '-'}</div>
+      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{paymentComparisonText(evidence) || fmtDate(latestPayment.paymentDate)}</div>
+      {payments.length > 1 && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-primary">
+            {payments.length} payments · CIA {fmtMoney(summary.ciaReceivedAmount)} · Other {fmtMoney(summary.otherReceivedAmount)}
+          </summary>
+          <div className="mt-1 space-y-1 border-l-2 border-border pl-2 text-[11px] leading-4">
+            {payments.map((payment) => (
+              <div key={payment.paymentId || `${payment.paymentDate}:${payment.amount}`}>
+                <span className="font-medium text-foreground">{payment.evidence?.label || 'Buyer payment'}</span>
+                {' · '}{fmtMoney(payment.amount)} · {fmtDate(payment.paymentDate)}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
 
 const fmtDateTime = (value) => {
   if (!value) return '-';
@@ -2369,6 +2421,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [invoiceKeyword, setInvoiceKeyword] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [followUpFilter, setFollowUpFilter] = useState('all');
+  const [paymentEvidenceFilter, setPaymentEvidenceFilter] = useState('all');
   const [queueView, setQueueView] = useState(defaultQueueView);
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
@@ -2401,7 +2454,9 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       collection: live.item,
       latestPayment: live.latestPayment || live.item.latestPaymentSnapshot || row.latestPayment || null,
       earliestEtaDate: live.earliestEtaDate || row.earliestEtaDate || null,
+      actualDeliveryDate: live.actualDeliveryDate || row.actualDeliveryDate || row.deliveryDate || null,
       paymentEvidence: live.paymentEvidence || row.paymentEvidence || null,
+      paymentEvidenceSummary: live.paymentEvidenceSummary || row.paymentEvidenceSummary || null,
       collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
     };
   }), [reconciliationByStem, rows]);
@@ -2452,7 +2507,9 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       collectionEvents: entry.event ? [entry.event] : [],
       latestPayment: entry.latestPayment || entry.item.latestPaymentSnapshot || null,
       earliestEtaDate: entry.earliestEtaDate || null,
+      actualDeliveryDate: entry.actualDeliveryDate || null,
       paymentEvidence: entry.paymentEvidence || null,
+      paymentEvidenceSummary: entry.paymentEvidenceSummary || null,
       status: 'Settled',
       daysUntilDue: null,
       paymentReminderEligible: false,
@@ -2484,6 +2541,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     }
     if (followUpFilter === 'due') next = next.filter((row) => isFollowUpDue(row, today));
     if (followUpFilter === 'scheduled') next = next.filter((row) => Boolean(row.collection?.nextFollowUpDate));
+    if (paymentEvidenceFilter !== 'all') next = next.filter((row) => paymentEvidenceCodes(row).has(paymentEvidenceFilter));
     if (queueView === 'needs-action') next = next.filter((row) => isNeedsAction(row, today));
     if (queueView === 'needs-action') {
       next = [...next].sort((a, b) => {
@@ -2499,7 +2557,17 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       });
     }
     return next;
-  }, [buyerTraderOptions, closedRows, collectionRows, followUpFilter, invoiceKeyword, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+  }, [buyerTraderOptions, closedRows, collectionRows, followUpFilter, invoiceKeyword, paymentEvidenceFilter, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+
+  const paymentEvidenceCounts = useMemo(() => {
+    const sourceRows = queueView === 'closed'
+      ? closedRows
+      : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
+    return Object.fromEntries(PAYMENT_EVIDENCE_FILTERS.map(([code]) => [
+      code,
+      sourceRows.filter((row) => paymentEvidenceCodes(row).has(code)).length,
+    ]));
+  }, [closedRows, collectionRows, queueView]);
 
   const loadRows = async (options = {}) => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
@@ -2904,6 +2972,19 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
               <option value="scheduled">Follow-up scheduled</option>
             </select>
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Payment Evidence</Label>
+            <div className="flex flex-wrap rounded-md border border-input bg-background p-0.5">
+              <Button type="button" size="sm" variant={paymentEvidenceFilter === 'all' ? 'default' : 'ghost'} className="h-8" onClick={() => setPaymentEvidenceFilter('all')}>
+                All
+              </Button>
+              {PAYMENT_EVIDENCE_FILTERS.map(([code, label]) => (
+                <Button key={code} type="button" size="sm" variant={paymentEvidenceFilter === code ? 'default' : 'ghost'} className="h-8" onClick={() => setPaymentEvidenceFilter(code)}>
+                  {label} {paymentEvidenceCounts[code] || 0}
+                </Button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3137,7 +3218,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                       ? classifyBuyerPaymentEvidence({
                           paymentDate: latestBuyerPayment.paymentDate,
                           etaStartDate: row.earliestEtaDate,
-                          isPartial: row.collection?.reconciliationState === 'partial_payment',
+                          deliveryDate: row.actualDeliveryDate || row.deliveryDate,
+                          isFull: row.collection?.reconciliationState === 'settled' || collectionStatus(row) === 'Paid / Closed',
                         })
                       : null);
                     return (
@@ -3184,17 +3266,12 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                         {row.collection?.adviceReceivedDate ? (
                           <div><span className="font-medium text-cyan-800">Advice {fmtDate(row.collection.adviceReceivedDate)}</span><div>{row.currency || ''} {Number(row.collection.adviceAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
                         ) : latestBuyerPayment ? (
-                          <div>
-                            <span className={row.collection?.reconciliationState === 'payment_pending_posting' ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
-                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : paymentEvidence?.label || 'Buyer payment'}
-                            </span>
-                            <div>
-                              {latestBuyerPayment.amount != null
-                                ? `${fmtMoney(latestBuyerPayment.amount)} · `
-                                : ''}
-                              {fmtDate(latestBuyerPayment.paymentDate)}
-                            </div>
-                          </div>
+                          <PaymentEvidenceDisplay
+                            latestPayment={latestBuyerPayment}
+                            evidence={paymentEvidence}
+                            summary={row.paymentEvidenceSummary}
+                            pendingPosting={row.collection?.reconciliationState === 'payment_pending_posting'}
+                          />
                         ) : '-'}
                       </td>
                       <td className="px-4 py-3">

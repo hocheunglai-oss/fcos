@@ -1,49 +1,94 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { classifyBuyerPaymentEvidence, earliestEtaDate } from '../src/lib/paymentCollectionEvidence.js';
+import {
+  ciaComparisonBoundary,
+  classifyBuyerPaymentEvidence,
+  earliestEtaDate,
+  summarizeBuyerPaymentEvidence,
+} from '../src/lib/paymentCollectionEvidence.js';
 
-test('classifies a partial payment before the earliest ETA as Partial CIA', () => {
+test('uses the later available ETA or delivery boundary for the inclusive CIA rule', () => {
+  assert.equal(earliestEtaDate('2026-07-08', '2026-07-06'), '2026-07-06');
   assert.deepEqual(
-    classifyBuyerPaymentEvidence({
-      paymentDate: '2026-07-05',
+    ciaComparisonBoundary({
       etaStartDate: '2026-07-06',
       etaEndDate: '2026-07-08',
-      isPartial: true,
+      deliveryDate: '2026-07-07',
     }),
     {
-      code: 'partial_cia',
-      label: 'Partial CIA',
-      receivedDate: '2026-07-05',
       earliestEtaDate: '2026-07-06',
-      receivedBeforeEarliestEta: true,
+      actualDeliveryDate: '2026-07-07',
+      ciaBoundaryDate: '2026-07-07',
     },
   );
 });
 
-test('classifies equal, later, or missing ETA dates as Partial Payment', () => {
+test('classifies a partial receipt on either qualifying boundary as Partial CIA', () => {
   for (const input of [
     { paymentDate: '2026-07-06', etaStartDate: '2026-07-06' },
-    { paymentDate: '2026-07-07', etaStartDate: '2026-07-06' },
-    { paymentDate: '2026-07-05', etaStartDate: null },
+    { paymentDate: '2026-07-07', etaStartDate: '2026-07-06', deliveryDate: '2026-07-07' },
+    { paymentDate: '2026-07-06', etaStartDate: '2026-07-07', deliveryDate: '2026-07-05' },
   ]) {
-    const result = classifyBuyerPaymentEvidence({ ...input, isPartial: true });
-    assert.equal(result.code, 'partial_payment');
-    assert.equal(result.label, 'Partial Payment');
-    assert.equal(result.receivedBeforeEarliestEta, false);
+    const result = classifyBuyerPaymentEvidence(input);
+    assert.equal(result.code, 'partial_cia');
+    assert.equal(result.label, 'Partial CIA');
+    assert.equal(result.isCia, true);
   }
 });
 
-test('uses the earliest available ETA boundary and leaves non-partial evidence as Buyer payment', () => {
-  assert.equal(earliestEtaDate('2026-07-08', '2026-07-06'), '2026-07-06');
-  assert.equal(classifyBuyerPaymentEvidence({
-    paymentDate: '2026-07-05',
-    etaStartDate: '2026-07-06',
-    isPartial: false,
-  }).label, 'Buyer payment');
+test('classifies a receipt after both boundaries or without a boundary as Partial Payment', () => {
+  for (const input of [
+    { paymentDate: '2026-07-08', etaStartDate: '2026-07-06', deliveryDate: '2026-07-07' },
+    { paymentDate: '2026-07-05' },
+  ]) {
+    const result = classifyBuyerPaymentEvidence(input);
+    assert.equal(result.code, 'partial_payment');
+    assert.equal(result.label, 'Partial Payment');
+    assert.equal(result.isCia, false);
+  }
 });
 
-test('Payment Collections derives the classification from live Salesforce payment and ETA dates', async () => {
+test('labels a settled collection as Full CIA or Full Payment using the same date rule', () => {
+  assert.equal(classifyBuyerPaymentEvidence({
+    paymentDate: '2026-07-06',
+    etaStartDate: '2026-07-06',
+    isFull: true,
+  }).label, 'Full CIA');
+  assert.equal(classifyBuyerPaymentEvidence({
+    paymentDate: '2026-07-07',
+    etaStartDate: '2026-07-06',
+    isFull: true,
+  }).label, 'Full Payment');
+});
+
+test('summarizes every positive buyer receipt and marks only the settling receipt as full', () => {
+  const result = summarizeBuyerPaymentEvidence({
+    payments: [
+      { paymentId: 'p3', paymentDate: '2026-07-09', amount: 200 },
+      { paymentId: 'p1', paymentDate: '2026-07-05', amount: 300 },
+      { paymentId: 'p2', paymentDate: '2026-07-07', amount: 500 },
+      { paymentId: 'ignored', paymentDate: '2026-07-04', amount: -25 },
+    ],
+    etaStartDate: '2026-07-06',
+    deliveryDate: '2026-07-07',
+    isFullyPaid: true,
+  });
+
+  assert.equal(result.paymentCount, 3);
+  assert.equal(result.totalReceivedAmount, 1000);
+  assert.equal(result.ciaReceivedAmount, 800);
+  assert.equal(result.otherReceivedAmount, 200);
+  assert.deepEqual(result.payments.map((payment) => payment.evidence.code), [
+    'partial_cia',
+    'partial_cia',
+    'full_payment',
+  ]);
+  assert.equal(result.latestPayment.paymentId, 'p3');
+  assert.equal(result.latestEvidence.label, 'Full Payment');
+});
+
+test('Payment Collections derives classifications and totals from live Salesforce dates and payments', async () => {
   const [server, page, methodology] = await Promise.all([
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
     readFile(new URL('../src/pages/BuyerInvoices.jsx', import.meta.url), 'utf8'),
@@ -51,8 +96,12 @@ test('Payment Collections derives the classification from live Salesforce paymen
   ]);
   assert.match(server, /'ETA_Start_Date__c'/);
   assert.match(server, /'ETA_End_Date__c'/);
-  assert.match(server, /isPartial: decision\.state === 'partial_payment'/);
-  assert.match(server, /paymentEvidence,/);
-  assert.match(page, /paymentEvidence\?\.label \|\| 'Buyer payment'/);
-  assert.match(methodology, /received before the earliest available Salesforce ETA date is labelled Partial CIA/);
+  assert.match(server, /'Delivery_Date__c'/);
+  assert.match(server, /summarizeBuyerPaymentEvidence/);
+  assert.match(server, /decision\.balance != null && decision\.balance <= threshold/);
+  assert.match(server, /paymentEvidenceSummary,/);
+  assert.match(page, /PAYMENT_EVIDENCE_FILTERS/);
+  assert.match(page, /Earliest ETA/);
+  assert.match(page, /CIA \{fmtMoney\(summary\.ciaReceivedAmount\)\}/);
+  assert.match(methodology, /on or before either the earliest available Salesforce ETA date or the actual delivery date/);
 });
