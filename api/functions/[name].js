@@ -115,6 +115,23 @@ import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js
 import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce } from '../_hedgeSalesforce.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import {
+  emailRouterActionHandler as nativeEmailRouterAction,
+  emailRouterAdvisorHandler as nativeEmailRouterAdvisor,
+  emailRouterAttachmentUrlHandler as nativeEmailRouterAttachmentUrl,
+  emailRouterDeltaHandler as nativeEmailRouterDelta,
+  emailRouterDetailHandler as nativeEmailRouterDetail,
+  emailRouterDirectoryHandler as nativeEmailRouterDirectory,
+  emailRouterListHandler as nativeEmailRouterList,
+  emailRouterOutboxHandler as nativeEmailRouterOutbox,
+  emailRouterPresetsHandler as nativeEmailRouterPresets,
+  emailRouterRetryHandler as nativeEmailRouterRetry,
+  emailRouterSettingsHandler as nativeEmailRouterSettings,
+  emailRouterSettingsSaveHandler as nativeEmailRouterSettingsSave,
+  emailRouterSubscriptionHandler as nativeEmailRouterSubscription,
+  emailRouterUndoHandler as nativeEmailRouterUndo,
+} from '../_emailRouterHandlers.js';
+import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -983,7 +1000,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['adminBootstrap', 'outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'emailRouterMaintenanceCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -1017,6 +1034,21 @@ const HANDLER_MODULE_ACCESS = {
   navigationPreferencesGet: [],
   navigationPreferencesSave: [],
   navigationPreferencesReset: [],
+  emailRouterList: [],
+  emailRouterDetail: [],
+  emailRouterDirectory: [],
+  emailRouterPresets: [],
+  emailRouterAction: [],
+  emailRouterUndo: [],
+  emailRouterRetry: [],
+  emailRouterAttachmentUrl: [],
+  emailRouterAdvisor: [],
+  emailRouterSettings: [],
+  emailRouterSettingsSave: [],
+  emailRouterOutbox: [],
+  emailRouterDelta: [],
+  emailRouterSubscription: [],
+  emailRouterMaintenanceCron: [],
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
   hedgeDeskParseMops: ['hedge_desk', 'markets'],
@@ -1977,7 +2009,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows] = await Promise.all([
+  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2170,9 +2202,23 @@ async function universalAuditTrail(body, req) {
       summary: compactAuditSummary([normalizedAuditAction(row.purpose_key), row.reason]),
       metadata: row.metadata || {},
     })),
+    safeAuditRows(client.schema('emailrouter').from('events').select('id,event_type,entity_type,entity_id,actor_user_id,created_at,user_profiles(full_name)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `email-router:${row.id}`,
+      source: 'Email Router',
+      module: 'Email Router',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: (Array.isArray(row.user_profiles) ? row.user_profiles[0]?.full_name : row.user_profiles?.full_name) || (row.actor_user_id ? 'FCOS user' : 'System'),
+      target: row.entity_type || 'Email Router',
+      summary: compactAuditSummary([normalizedAuditAction(row.entity_type), normalizedAuditAction(row.event_type)]),
+      metadata: {
+        entityType: row.entity_type,
+        hasEntityReference: Boolean(row.entity_id),
+      },
+    })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -3553,10 +3599,10 @@ async function reportExportDownload(body, req, accessContext = null) {
 
 const NAVIGATION_SECTION_DEFAULTS = Object.freeze({
   personal: ['my_commitments', 'growth_coaching', 'projects_tasks'],
-  trading: ['dashboard', 'buyers_administrator'],
+  trading: ['dashboard', 'buyers_administrator', 'markets', 'special_terms', 'hedge_desk'],
   cross_functions: ['payment_collections', 'disputes', 'unofficial_compensation', 'brokers'],
   finance: ['cashflow_forecast'],
-  tools: ['review', 'pnl', 'report_archive'],
+  tools: ['email_router', 'review', 'pnl', 'report_archive'],
 });
 const NAVIGATION_ITEM_IDS = new Set(Object.values(NAVIGATION_SECTION_DEFAULTS).flat());
 const NAVIGATION_DEFAULT_HIDDEN_IDS = ['review', 'pnl', 'report_archive'];
@@ -3576,6 +3622,7 @@ function normalizeNavigationSectionOrders(value = {}) {
         : [];
     const allowed = new Set(defaults);
     const ordered = [...new Set(requested.map((id) => String(id || '').trim()).filter((id) => allowed.has(id)))];
+    if (section === 'tools' && !ordered.includes('email_router')) ordered.unshift('email_router');
     ordered.push(...defaults.filter((itemId) => !ordered.includes(itemId)));
     return [section, ordered];
   }));
@@ -3816,6 +3863,7 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
       'Payment_Term__c',
       'Buyer_Name__c',
       'Buyer__c',
+      'Dispute_Status__c',
     ]),
     ...dueFields,
   ];
@@ -4150,6 +4198,7 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       buyerAccountId: stem.Account__c || null,
       buyerName: incomingPaymentBuyerName(stem),
       buyerGroupName: incomingPaymentBuyerGroup(stem),
+      disputeStatus: stem.Dispute_Status__c || null,
       buyerInvoiceDueDate: calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate((live.dueFields || []).map((field) => stem[field])),
       currency: stem.CurrencyIsoCode || latestPayment?.currency || 'USD',
       latestPayment,
@@ -5967,6 +6016,73 @@ async function hedgeDeskHealthRow() {
   }, result);
 }
 
+async function emailRouterHealthRow() {
+  const configured = Boolean(
+    process.env.FCOS_MICROSOFT_TENANT_ID
+    && process.env.FCOS_MICROSOFT_CLIENT_ID
+    && process.env.FCOS_EMAIL_ROUTER_WEBHOOK_URL
+    && process.env.FCOS_EMAIL_ROUTER_WEBHOOK_CLIENT_STATE
+    && process.env.FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET,
+  );
+  const result = configured ? await timedCheck(async () => {
+    const client = createEmailRouterServiceClient();
+    const mailbox = await currentEmailRouterMailbox(client);
+    await emailRouterGraphFetch(`/users/${encodeURIComponent(mailbox.emailAddress)}/mailFolders/inbox?$select=id`);
+    const schema = client.schema('emailrouter');
+    const [subscriptions, pendingActions, uncertainActions, alerts, delta] = await Promise.all([
+      schema.from('mailbox_subscriptions').select('resource_key,state,expires_at').eq('mailbox_id', mailbox.id),
+      schema.from('mail_action_outbox').select('id', { count: 'exact', head: true }).in('state', ['reserved', 'draft_created', 'submitted']),
+      schema.from('mail_action_outbox').select('id', { count: 'exact', head: true }).eq('state', 'uncertain'),
+      schema.from('alerts').select('id', { count: 'exact', head: true }).in('state', ['open', 'acknowledged']),
+      schema.from('mailbox_delta_state').select('folder_key,sync_state,last_synced_at,failure_code').eq('mailbox_id', mailbox.id),
+    ]);
+    const databaseError = [subscriptions, pendingActions, uncertainActions, alerts, delta].find((item) => item.error)?.error;
+    if (databaseError) throw databaseError;
+    const expiringSubscriptions = (subscriptions.data || []).filter((item) => item.state !== 'active' || new Date(item.expires_at || 0).getTime() < Date.now() + 12 * 60 * 60 * 1000);
+    return {
+      mailboxLabel: mailbox.label,
+      mailboxVerification: mailbox.verificationState,
+      subscriptionCount: subscriptions.data?.length || 0,
+      subscriptionWarnings: expiringSubscriptions.map((item) => item.resource_key),
+      pendingActions: pendingActions.count || 0,
+      uncertainActions: uncertainActions.count || 0,
+      openAlerts: alerts.count || 0,
+      folderSync: delta.data || [],
+      healthStatus: expiringSubscriptions.length || uncertainActions.count || alerts.count ? 'warning' : 'online',
+    };
+  }) : null;
+  return healthRow({
+    id: 'email-router',
+    name: 'Native Email Router',
+    category: 'Tools',
+    purpose: 'Microsoft 365 mailbox reading, routing actions, Sent Items confirmation, folder synchronization, and subscriptions.',
+    scope: 'server',
+    provider: 'Microsoft Graph',
+    endpoint: '/email-router',
+    authType: 'FCOS session and Vercel OIDC to Microsoft OAuth',
+    configured,
+    configuredEnv: configuredEnv([
+      'FCOS_MICROSOFT_TENANT_ID',
+      'FCOS_MICROSOFT_CLIENT_ID',
+      'FCOS_EMAIL_ROUTER_WEBHOOK_URL',
+      'FCOS_EMAIL_ROUTER_WEBHOOK_CLIENT_STATE',
+      'FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET',
+    ]),
+    missingEnv: [
+      ...(!process.env.FCOS_MICROSOFT_TENANT_ID ? ['FCOS_MICROSOFT_TENANT_ID'] : []),
+      ...(!process.env.FCOS_MICROSOFT_CLIENT_ID ? ['FCOS_MICROSOFT_CLIENT_ID'] : []),
+      ...(!process.env.FCOS_EMAIL_ROUTER_WEBHOOK_URL ? ['FCOS_EMAIL_ROUTER_WEBHOOK_URL'] : []),
+      ...(!process.env.FCOS_EMAIL_ROUTER_WEBHOOK_CLIENT_STATE ? ['FCOS_EMAIL_ROUTER_WEBHOOK_CLIENT_STATE'] : []),
+      ...(!process.env.FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET ? ['FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET'] : []),
+    ],
+    notes: [
+      'The probe verifies mailbox-scoped Mail.ReadWrite access without sending email.',
+      'Submitted messages become Confirmed only after Sent Items reconciliation.',
+      'Uncertain submissions require human review and are never automatically resent.',
+    ],
+  }, result);
+}
+
 async function outlookCalendarHealthRow() {
   const required = ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'];
   const configured = missingEnv(required).length === 0;
@@ -6136,6 +6252,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('operational-mail', 5 * 60, force, operationalMailHealthRow),
     cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
     cachedHealthCheck('hedge-desk', 60, force, hedgeDeskHealthRow),
+    cachedHealthCheck('email-router', 60, force, emailRouterHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
   ]);
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
@@ -8107,6 +8224,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (fieldNames.includes('Buyer__c')) fields.push('Buyer__c');
   if (fieldNames.includes('Total_Invoice_Amount__c')) fields.push('Total_Invoice_Amount__c');
   if (fieldNames.includes('Receivable_Balance__c')) fields.push('Receivable_Balance__c');
+  if (fieldNames.includes('Dispute_Status__c')) fields.push('Dispute_Status__c');
   if (fieldNames.includes('PSPRS__c')) fields.push('PSPRS__c');
   if (fieldNames.includes('Account__c')) {
     fields.push('Account__c', 'Account__r.Name');
@@ -8334,6 +8452,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
         currency: stem.CurrencyIsoCode || 'USD',
         receivableBalance: stem.Receivable_Balance__c ?? null,
+        disputeStatus: stem.Dispute_Status__c || null,
         buyerInvoiceDueDate: dueDate,
         deliveryDate: stem.Delivery_Date__c || null,
         earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
@@ -15856,6 +15975,90 @@ async function specialTermRuleDelete(body = {}, req = null, accessContext = null
   return deleteSpecialTermRule(context.client, context.profile, body);
 }
 
+function nativeEmailRouterDependencies(accessContext) {
+  return { client: accessContext.client, profile: accessContext.profile };
+}
+
+async function emailRouterList(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterList(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterDetail(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterDetail(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterDirectory(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterDirectory(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterPresets(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterPresets(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterAction(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterAction(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterUndo(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterUndo(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterRetry(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterRetry(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterAttachmentUrl(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterAttachmentUrl(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterAdvisor(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterAdvisor(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterSettings(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterSettings(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterSettingsSave(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterSettingsSave(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterOutbox(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterOutbox(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterDelta(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterDelta(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterSubscription(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterSubscription(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterMaintenanceCron(_body = {}, req = null) {
+  requireCronAuthorization(req);
+  const client = createEmailRouterServiceClient();
+  const mailbox = await currentEmailRouterMailbox(client);
+  const outbox = await processEmailRouterOutbox({ client, mailbox, limit: 25 });
+  const synchronization = {};
+  for (const folder of ['inbox', 'sentitems', 'archive']) {
+    synchronization[folder] = await syncEmailRouterFolderFromStoredCursor({ client, mailbox, folder, maxPages: 10 });
+  }
+  let subscriptions = [];
+  try {
+    subscriptions = await maintainEmailRouterSubscriptions({ client, mailbox });
+  } catch (error) {
+    await recordEmailRouterAlert(client, { mailboxId: mailbox.id, code: error.code || 'email_router_subscription_failed', severity: 'critical', dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
+    throw error;
+  }
+  return {
+    ok: true,
+    outbox,
+    synchronization: Object.fromEntries(Object.entries(synchronization).map(([folder, result]) => [folder, { synced: result.synced, removed: result.removed, pages: result.pages, complete: !result.nextLink }])),
+    subscriptions: subscriptions.map((item) => ({ folder: item.folder, state: item.state, expiresAt: item.expiresAt })),
+  };
+}
+
 const handlers = {
   authContext,
   portalApplicationsList,
@@ -15890,6 +16093,21 @@ const handlers = {
   navigationPreferencesGet,
   navigationPreferencesSave,
   navigationPreferencesReset,
+  emailRouterList,
+  emailRouterDetail,
+  emailRouterDirectory,
+  emailRouterPresets,
+  emailRouterAction,
+  emailRouterUndo,
+  emailRouterRetry,
+  emailRouterAttachmentUrl,
+  emailRouterAdvisor,
+  emailRouterSettings,
+  emailRouterSettingsSave,
+  emailRouterOutbox,
+  emailRouterDelta,
+  emailRouterSubscription,
+  emailRouterMaintenanceCron,
   hedgeDeskEntity,
   hedgeMarkets,
   hedgeDeskParseMops,

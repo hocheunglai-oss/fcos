@@ -109,11 +109,7 @@ export default function AppSelector({ confirmPortalNavigation }) {
               title={application.blockingReason || undefined}
               onSelect={() => openApplication(application)}
             >
-              <span className={`grid h-7 w-7 place-items-center rounded-md ${
-                application.id === 'emailrouter'
-                  ? 'bg-emerald-50 text-emerald-700'
-                  : 'bg-blue-50 text-blue-700'
-              }`}>
+              <span className={`grid h-7 w-7 place-items-center rounded-md ${application.kind === 'external' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
                 <Icon className="h-3.5 w-3.5" />
               </span>
               <span className="min-w-0 flex-1">

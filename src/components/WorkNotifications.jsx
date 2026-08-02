@@ -18,6 +18,7 @@ const SOURCE_LABELS = {
   growth_coaching: "Growth & Coaching",
   growth: "Growth & Coaching",
   coaching: "Growth & Coaching",
+  email_router: "Email Router",
 };
 
 function formatNotificationTime(value) {
@@ -40,6 +41,7 @@ function sourceLabel(source) {
 }
 
 function sourceBadgeClass(source) {
+  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10";
   return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10" : "bg-blue-50 text-blue-800 ring-blue-700/10";
 }
 
@@ -203,6 +205,7 @@ export default function WorkNotifications() {
               <SelectItem value="all">All work</SelectItem>
               <SelectItem value="collaboration">Projects & Tasks</SelectItem>
               <SelectItem value="growth_coaching">Growth & Coaching</SelectItem>
+              <SelectItem value="email_router">Email Router</SelectItem>
             </SelectContent>
           </Select>
         </div>

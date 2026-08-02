@@ -341,4 +341,20 @@
   .app-workspace-shell .rounded-2xl {
     border-radius: 8px;
   }
+
+  .email-router-content {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .email-router-content img {
+    height: auto;
+    max-width: 100%;
+  }
+
+  .email-router-content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
 }

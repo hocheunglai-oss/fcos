@@ -189,6 +189,10 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'Collection work is managed once per Salesforce STEM. Status represents the current collection stage; reminders, calls, notes, promises, advice, payments, ownership changes, and reconciliation outcomes remain timeline events.',
       },
       {
+        title: 'Dispute visibility',
+        body: 'A STEM with a Salesforce Dispute Status other than No Dispute is marked in the STEM column. Active disputes use an amber indicator, closed disputes retain a neutral history indicator, and an unfamiliar status is flagged for review. The marker and dispute filter are informational and do not alter collection priority or reminder eligibility.',
+      },
+      {
         title: 'Needs Action priority',
         body: 'Reconciliation problems rank first, followed by overdue unverified advice, missed promises, overdue follow-ups, overdue invoices not yet contacted, and due-today or upcoming actions. Older overdue days and larger receivable balances break remaining ties.',
       },
@@ -368,11 +372,11 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Email and external actions',
-        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. Saving a setting does not send an email.',
+        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders, while the Email Router tab manages its native directory, groups, routing presets, subscriptions, and mailbox synchronization. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. Saving a setting does not send an email.',
       },
       {
         title: 'AI configuration',
-        body: 'Administrators select from server-allowlisted interpretation models and can review estimated API cost. Prompts are interpreted server-side and never authorize arbitrary Salesforce queries.',
+        body: 'Administrators select server-allowlisted models for Dashboard AI Search, the Hedge Desk Trading Assistant, and Email Router Advisor in one AI Models tab and can review estimated API cost by purpose. Email Router recommendations are read-only, use minimum live message text, store no email content, and never receive mail-action tools.',
       },
       {
         title: 'System health',

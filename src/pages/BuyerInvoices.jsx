@@ -16,6 +16,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Scale,
   Upload,
   X,
 } from 'lucide-react';
@@ -46,6 +47,7 @@ import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSetti
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
+import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } from '@/lib/paymentCollectionDisputes';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 
 const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
@@ -711,8 +713,17 @@ function isCopyCandidate(row, selected) {
 function matchesInvoiceKeyword(row, keyword) {
   const terms = String(keyword || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
-  const searchable = `${row?.stemName || ''} ${row?.buyerName || ''}`.toLowerCase();
+  const dispute = disputePresentation(row?.disputeStatus);
+  const searchable = `${row?.stemName || ''} ${row?.buyerName || ''} ${row?.disputeStatus || ''} ${dispute.state.replace('-', ' ')} ${dispute.label || ''}`.toLowerCase();
   return terms.every((term) => searchable.includes(term));
+}
+
+function disputePresentation(status) {
+  const state = paymentCollectionDisputeState(status);
+  if (state === 'active') return { state, label: 'Dispute open', accent: 'border-l-amber-400', badge: 'border-amber-300 bg-amber-50 text-amber-800' };
+  if (state === 'closed') return { state, label: 'Dispute history', accent: 'border-l-slate-400', badge: 'border-slate-300 bg-slate-100 text-slate-700' };
+  if (state === 'issue') return { state, label: 'Status issue', accent: 'border-l-red-400', badge: 'border-red-300 bg-red-50 text-red-700' };
+  return { state, label: null, accent: 'border-l-transparent', badge: '' };
 }
 
 function brokerRoutingLabel(mode) {
@@ -2432,6 +2443,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [severityFilter, setSeverityFilter] = useState('all');
   const [followUpFilter, setFollowUpFilter] = useState('all');
   const [paymentEvidenceFilter, setPaymentEvidenceFilter] = useState('all');
+  const [disputeFilter, setDisputeFilter] = useState('all');
   const [queueView, setQueueView] = useState(defaultQueueView);
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
@@ -2469,6 +2481,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       actualDeliveryDate: live.actualDeliveryDate || row.actualDeliveryDate || row.deliveryDate || null,
       paymentEvidence: live.paymentEvidence || row.paymentEvidence || null,
       paymentEvidenceSummary: live.paymentEvidenceSummary || row.paymentEvidenceSummary || null,
+      disputeStatus: live.disputeStatus || row.disputeStatus || null,
       collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
       paymentReminderEligible: postingReminderPaused ? false : row.paymentReminderEligible,
       paymentReminderBlockingReason: postingReminderPaused
@@ -2526,6 +2539,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       actualDeliveryDate: entry.actualDeliveryDate || null,
       paymentEvidence: entry.paymentEvidence || null,
       paymentEvidenceSummary: entry.paymentEvidenceSummary || null,
+      disputeStatus: entry.disputeStatus || null,
       status: 'Settled',
       daysUntilDue: null,
       paymentReminderEligible: false,
@@ -2558,6 +2572,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     if (followUpFilter === 'due') next = next.filter((row) => isFollowUpDue(row, today));
     if (followUpFilter === 'scheduled') next = next.filter((row) => Boolean(row.collection?.nextFollowUpDate));
     if (paymentEvidenceFilter !== 'all') next = next.filter((row) => paymentEvidenceCodes(row).has(paymentEvidenceFilter));
+    if (disputeFilter !== 'all') next = next.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, disputeFilter));
     if (queueView === 'needs-action') next = next.filter((row) => isNeedsAction(row, today));
     if (queueView === 'needs-action') {
       next = [...next].sort((a, b) => {
@@ -2573,7 +2588,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       });
     }
     return next;
-  }, [buyerTraderOptions, closedRows, collectionRows, followUpFilter, invoiceKeyword, paymentEvidenceFilter, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+  }, [buyerTraderOptions, closedRows, collectionRows, disputeFilter, followUpFilter, invoiceKeyword, paymentEvidenceFilter, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
 
   const paymentEvidenceCounts = useMemo(() => {
     const sourceRows = queueView === 'closed'
@@ -2583,6 +2598,16 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       code,
       sourceRows.filter((row) => paymentEvidenceCodes(row).has(code)).length,
     ]));
+  }, [closedRows, collectionRows, queueView]);
+
+  const disputeCounts = useMemo(() => {
+    const sourceRows = queueView === 'closed'
+      ? closedRows
+      : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
+    return {
+      withDispute: sourceRows.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, 'with-dispute')).length,
+      noDispute: sourceRows.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, 'no-dispute')).length,
+    };
   }, [closedRows, collectionRows, queueView]);
 
   const loadRows = async (options = {}) => {
@@ -2877,14 +2902,14 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="invoice-keyword" className="text-xs text-muted-foreground">Search STEM / Buyer</Label>
+            <Label htmlFor="invoice-keyword" className="text-xs text-muted-foreground">Search STEM / Buyer / Dispute</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 id="invoice-keyword"
                 value={invoiceKeyword}
                 onChange={(event) => setInvoiceKeyword(event.target.value)}
-                placeholder="Stem name or buyer name"
+                placeholder="Stem, buyer, or dispute status"
                 className="h-9 w-72 pl-8 pr-8"
               />
               {invoiceKeyword && (
@@ -3003,6 +3028,20 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                   {label} {paymentEvidenceCounts[code] || 0}
                 </Button>
               ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Dispute</Label>
+            <div className="flex flex-wrap rounded-md border border-input bg-background p-0.5">
+              <Button type="button" size="sm" variant={disputeFilter === 'all' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('all')}>
+                All
+              </Button>
+              <Button type="button" size="sm" variant={disputeFilter === 'with-dispute' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('with-dispute')}>
+                With dispute {disputeCounts.withDispute}
+              </Button>
+              <Button type="button" size="sm" variant={disputeFilter === 'no-dispute' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('no-dispute')}>
+                No dispute {disputeCounts.noDispute}
+              </Button>
             </div>
           </div>
         </div>
@@ -3233,6 +3272,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                   {filteredRows.map((row, idx) => {
                     const reminderSentToday = wasPaymentReminderSentToday(row);
                     const rowCopied = copiedRowIds.has(row.id);
+                    const dispute = disputePresentation(row.disputeStatus);
                     const latestBuyerPayment = row.collection?.latestPaymentSnapshot || row.latestPayment || null;
                     const paymentEvidence = row.paymentEvidence || (latestBuyerPayment
                       ? classifyBuyerPaymentEvidence({
@@ -3244,8 +3284,18 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                       : null);
                     return (
                       <tr key={row.id} className={`border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}>
-                      <td className="px-4 py-3 text-foreground">
-                        <StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink>
+                      <td className={cn('border-l-4 px-4 py-3 text-foreground', dispute.accent)} data-dispute-state={dispute.state}>
+                        <div><StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink></div>
+                        {dispute.label && (
+                          <span
+                            className={cn('mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium', dispute.badge)}
+                            title={`Salesforce dispute status: ${row.disputeStatus}`}
+                          >
+                            <Scale className="h-3 w-3" />
+                            {dispute.label}
+                            <span className="sr-only">: {row.disputeStatus}</span>
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         <div>{row.buyerName || '-'}</div>

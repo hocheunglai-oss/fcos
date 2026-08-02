@@ -9,6 +9,7 @@ const PURPOSE_KEYS = new Set([
   'fcos_updates',
   'hedge_settlement',
   'hedge_sfs_reports',
+  'email_router_mailbox',
 ]);
 
 const transportCache = new Map();

@@ -13,6 +13,7 @@ import {
   FileText,
   Loader2,
   Mail,
+  MailSearch,
   Minus,
   RefreshCw,
   Server,
@@ -39,6 +40,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
+import EmailRouterSettings from '@/components/email-router/EmailRouterSettings';
+import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SETTINGS_TAB_KEY = 'settings:active-tab';
@@ -48,6 +51,7 @@ const MAX_HEALTH_SAMPLES = 5;
 
 const SETTINGS_TABS = [
   { id: 'email', label: 'Email Senders', icon: Mail },
+  { id: 'email-router', label: 'Email Router', icon: MailSearch },
   { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
   { id: 'documents', label: 'STEM Documents', icon: FileText },
   { id: 'ai', label: 'AI Models', icon: Sparkles },
@@ -1017,6 +1021,10 @@ export default function SettingsPage({ methodologyAction = null }) {
           </SettingsPanel>
         </TabsContent>
 
+        <TabsContent value="email-router" className="mt-0">
+          <EmailRouterSettings />
+        </TabsContent>
+
         <TabsContent value="documents" className="mt-0">
           <SettingsPanel
             icon={FileText}
@@ -1210,6 +1218,7 @@ export default function SettingsPage({ methodologyAction = null }) {
             )}
           </SettingsPanel>
           <HedgeAssistantAiSettings />
+          <EmailRouterAdvisorAiSettings />
           </div>
         </TabsContent>
 

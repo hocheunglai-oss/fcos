@@ -29,6 +29,7 @@ const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
 const HedgeDesk = lazy(() => import('@/pages/HedgeDesk'));
 const Markets = lazy(() => import('@/pages/Markets'));
 const SpecialTerms = lazy(() => import('@/pages/SpecialTerms'));
+const EmailRouter = lazy(() => import('@/pages/EmailRouter'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -91,6 +92,7 @@ const AuthenticatedApp = () => {
             <Route path="/my-commitments" element={<MyCommitments />} />
             <Route path="/growth-coaching" element={<GrowthCoaching />} />
             <Route path="/projects-tasks" element={<ProjectsTasks />} />
+            <Route path="/email-router" element={<EmailRouter />} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
             <Route path="/settings" element={<ModuleGateAny moduleIds={['settings', 'admin']}><SettingsWorkspace /></ModuleGateAny>} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />

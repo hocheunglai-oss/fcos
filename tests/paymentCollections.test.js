@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { buyerReminderEligibility } from '../api/_buyerInvoiceReminderRules.js';
+import {
+  hasPaymentCollectionDispute,
+  matchesPaymentCollectionDisputeFilter,
+  paymentCollectionDisputeState,
+} from '../src/lib/paymentCollectionDisputes.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260731175320_personalized_navigation_payment_collections.sql', import.meta.url);
 const postingMigrationUrl = new URL('../supabase/migrations/20260802154311_payment_collection_posting_reconciliation.sql', import.meta.url);
@@ -23,6 +28,18 @@ test('payment advice pauses reminders until verification and settlement always b
   const paid = buyerReminderEligibility({ ...baseRow, collection: { status: 'Paid / Closed' } }, standardRule, true);
   assert.equal(paid.eligible, false);
   assert.match(paid.blockingReason, /settled/i);
+});
+
+test('Payment Collections distinguishes active disputes, closed history, and unexpected statuses', () => {
+  assert.equal(paymentCollectionDisputeState('No Dispute'), 'none');
+  assert.equal(paymentCollectionDisputeState('No Disputes'), 'none');
+  assert.equal(paymentCollectionDisputeState('Opened'), 'active');
+  assert.equal(paymentCollectionDisputeState('Approved - Pending Accounting'), 'active');
+  assert.equal(paymentCollectionDisputeState('Closed with Supplier only'), 'closed');
+  assert.equal(paymentCollectionDisputeState('Unexpected Salesforce Value'), 'issue');
+  assert.equal(hasPaymentCollectionDispute('Closed'), true);
+  assert.equal(matchesPaymentCollectionDisputeFilter('Opened', 'with-dispute'), true);
+  assert.equal(matchesPaymentCollectionDisputeFilter('No Dispute', 'no-dispute'), true);
 });
 
 test('collection migration preserves history and installs service-only personalized navigation', async () => {
@@ -94,7 +111,11 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(buyerPage, /status === 'Promise to Pay'[\s\S]*promisedAmount: current\.promisedAmount \|\| promiseAmountFromReceivable\(row\)/);
   assert.match(buyerPage, /Promised Amount[\s\S]*type="text" inputMode="decimal"/);
   assert.doesNotMatch(buyerPage, /Promised Amount[\s\S]{0,200}type="number"/);
+  assert.match(buyerPage, /Dispute open/);
+  assert.match(buyerPage, /Dispute history/);
+  assert.match(buyerPage, /With dispute/);
   assert.match(server, /async function buyerInvoicePaymentAdviceSave/);
+  assert.match(server, /disputeStatus: stem\.Dispute_Status__c \|\| null/);
   assert.match(server, /Payment Collections requires STEM__c\.Receivable_Balance__c/);
   assert.match(server, /eventType: 'auto_closed'/);
   assert.match(server, /eventType: 'auto_reopened'/);

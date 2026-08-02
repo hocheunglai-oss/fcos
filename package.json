@@ -12,6 +12,8 @@
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "migrate:hedge-desk": "node scripts/migrate-hedge-desk.mjs",
+    "migrate:email-router": "node scripts/migrate-email-router.mjs",
+    "reconcile:email-router": "node scripts/reconcile-email-router.mjs",
     "migrate:account-managers": "node --env-file=.env.local scripts/migrate-account-managers.mjs",
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview"

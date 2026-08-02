@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 const ASSERTION_ALGORITHM = 'ES256';
 const ASSERTION_LIFETIME_SECONDS = 60;
+const NATIVE_APPLICATION_IDS = new Set(['emailrouter']);
 const TARGET_REQUEST_TIMEOUT_MS = 10_000;
 const OUTBOX_STALE_LOCK_MS = 5 * 60_000;
 const PORTAL_OPERATIONS = new Set(['sync_access', 'launch', 'health', 'revoke_sessions']);
@@ -361,7 +362,7 @@ export async function reconcilePortalEntitlementsForProfile(
   const existing = await loadUserEntitlements(client, profile.id);
   const byApplication = new Map(existing.map((row) => [row.application_id, row]));
   const reconciled = [];
-  for (const application of catalog.filter((item) => item.application_kind === 'external')) {
+  for (const application of catalog.filter((item) => item.application_kind === 'external' && !NATIVE_APPLICATION_IDS.has(item.id))) {
     const row = await reconcileOneEntitlement(
       client,
       profile,
@@ -403,6 +404,7 @@ export async function listPortalApplicationsForUser({
     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');
 
   return catalog.flatMap((application) => {
+    if (NATIVE_APPLICATION_IDS.has(application.id)) return [];
     if (application.application_kind === 'internal') {
       if (!hasFcosAccess) return [];
       return [{
@@ -908,7 +910,7 @@ export async function savePortalExplicitAccess({
 
 export async function portalAdminModel({ client, profiles, env = process.env }) {
   const catalog = await loadPortalCatalog(client);
-  const externalApplications = catalog.filter((application) => application.application_kind === 'external');
+  const externalApplications = catalog.filter((application) => application.application_kind === 'external' && !NATIVE_APPLICATION_IDS.has(application.id));
   const userIds = profiles.map((profile) => profile.id);
   const { data: entitlements, error } = userIds.length
     ? await client.from('portal_user_app_entitlements').select('*').in('user_id', userIds)

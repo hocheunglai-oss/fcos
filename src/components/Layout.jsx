@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   ListTodo,
   LogOut,
+  MailSearch,
   Pencil,
   RotateCcw,
   Save,
@@ -82,6 +83,7 @@ const navGroups = [
     id: 'tools',
     label: 'Tools',
     items: [
+      { id: 'email_router', to: '/email-router', label: 'Email Router', icon: MailSearch },
       { id: 'review', to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
       { id: 'pnl', to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
       { id: 'report_archive', to: '/brokers?tab=archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
@@ -120,6 +122,7 @@ function normalizedNavigationPreferences(value = {}) {
           : [];
       const allowed = new Set(group.items.map((item) => item.id));
       const ordered = [...new Set(requested.filter((id) => allowed.has(id)))];
+      if (group.id === 'tools' && !ordered.includes('email_router')) ordered.unshift('email_router');
       const missing = group.items.map((item) => item.id).filter((id) => !ordered.includes(id));
       ordered.push(...missing);
       return [group.id, ordered];

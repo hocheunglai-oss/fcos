@@ -50,11 +50,13 @@ covering every approved mailbox. Do not also grant an unscoped Entra `Mail.Send`
 application permission because Entra and Exchange grants are additive. This
 Microsoft Graph route is the only FCOS email-delivery path.
 
-### Universal application portal
+### Universal application portal and Email Router
 
-FCOS is the login and entitlement authority for registered applications. The
-portal signs short-lived ES256 assertions; it never shares FCOS browser tokens
-or the Supabase service role with a target application.
+FCOS remains the login and entitlement authority for registered external
+applications. The portal signs short-lived ES256 assertions; it never shares
+FCOS browser tokens or the Supabase service role with a target application.
+Email Router is native FCOS functionality and does not use the portal handoff,
+a second Supabase Auth session, or target-application entitlements.
 
 Configure these server-only values in FCOS:
 
@@ -62,15 +64,21 @@ Configure these server-only values in FCOS:
 FCOS_PORTAL_ISSUER=https://fcos.fcuno.com
 FCOS_PORTAL_SIGNING_KEY_ID=fcos-portal-2026-01
 FCOS_PORTAL_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
-FCOS_PORTAL_EMAILROUTER_URL=https://emailrouter.vercel.app
 ```
 
-Configure the matching public key, issuer, and key ID in EmailRouter. Stage its
-optional next public key before rotating the FCOS private key and `kid`.
-Application entitlements, synchronization failures, and logout retries are
-stored only in service-role tables. FCOS retries small outbox batches during
-normal portal traffic and runs a daily safety retry compatible with the Vercel
-Hobby cron limit.
+External targets configure the matching public key, issuer, and key ID and may
+stage a next public key before private-key rotation. Application entitlements,
+synchronization failures, and logout retries are stored only in service-role
+tables.
+
+The native Email Router uses the same FCOS Microsoft Entra application and
+Vercel OIDC trust as Graph-only email delivery. Its connected mailbox is stored
+in the protected Graph mailbox registry and must have mailbox-scoped
+`Application Mail.ReadWrite` and `Application Mail.Send` Exchange RBAC roles.
+Message bodies, MIME, full recipient lists, and attachment bytes remain in
+Microsoft 365; Supabase stores only operational metadata and durable action
+state. Redirect, Reply, and Forward create a Graph draft before submission and
+are not confirmed until the resulting item is reconciled in Sent Items.
 
 The optional FCOS Backbone shadow bridge is server-only and does not replace a live FCOS read. Configure the same high-entropy secret in both Vercel projects only when the bridge is ready for identity and projection UAT:
 

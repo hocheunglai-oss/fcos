@@ -65,5 +65,6 @@ test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', 
     { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
     { path: '/api/functions/growthCoachingDailyCron', schedule: '30 0 * * 1-5' },
     { path: '/api/functions/hedgeDeskMaintenanceCron', schedule: '30 0 * * *' },
+    { path: '/api/functions/emailRouterMaintenanceCron', schedule: '*/5 * * * *' },
   ]);
 });

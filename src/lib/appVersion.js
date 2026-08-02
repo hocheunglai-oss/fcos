@@ -1,6 +1,26 @@
-export const APP_VERSION = '2.0.86';
+export const APP_VERSION = '2.0.88';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.88',
+    releasedAt: '2026-08-03',
+    title: 'Native FCOS Email Router',
+    changes: [
+      'Integrated Inbox, Sent, Archive, message review, attachment preview, Redirect, Reply, Forward, Archive, Delete, Undo, and controlled uncertain-send review directly into FCOS.',
+      'Moved Email Router directory, groups, presets, mailbox health, and AI Advisor controls into FCOS Settings while granting every active user operator access.',
+      'Replaced portal handoff and standalone identity with FCOS authentication, metadata-only Supabase storage, immutable Microsoft Graph synchronization, and mailbox-scoped Graph actions.',
+      'Added durable draft, submitted, confirmed, failed, and uncertain action states so Graph acceptance is never presented as completed delivery before Sent Items confirmation.',
+    ],
+  },
+  {
+    version: '2.0.87',
+    releasedAt: '2026-08-03',
+    title: 'Payment Collection dispute visibility',
+    changes: [
+      'Highlighted disputed STEMs in Payment Collections with distinct active-dispute, closed-history, and status-review indicators while preserving existing overdue colours.',
+      'Added dispute status to Payment Collection search and a With dispute / No dispute filter without changing reminder or collection workflow rules.',
+    ],
+  },
   {
     version: '2.0.86',
     releasedAt: '2026-08-02',

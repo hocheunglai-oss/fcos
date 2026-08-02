@@ -34,6 +34,23 @@ function growthNotification(row) {
   };
 }
 
+function emailRouterNotification(row, state = {}) {
+  const title = row.severity === 'critical' ? 'Email Router action needs review' : 'Email Router warning';
+  return {
+    id: `email_router:${row.id}`,
+    source: 'email_router',
+    sourceId: row.id,
+    type: row.alert_code,
+    title,
+    message: String(row.alert_code || 'mailbox_warning').replaceAll('_', ' ').replaceAll('.', ' '),
+    link: '/email-router',
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: row.created_at,
+  };
+}
+
 function notificationVisible(row, body, now) {
   const state = String(body.state || 'active');
   const snoozed = row.snoozedUntil && row.snoozedUntil > now;
@@ -55,7 +72,8 @@ export async function workNotificationsList(body = {}, accessContext) {
   const limit = Math.max(10, Math.min(Number(body.limit) || 50, 100));
   const queryLimit = Math.min(200, limit * 4);
   const now = new Date().toISOString();
-  const [collaborationResult, growthResult, collaborationCount, growthCount] = await Promise.all([client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit), client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit), client.from('collaboration_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`), client.from('growth_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`)]);
+  const router = client.schema('emailrouter');
+  const [collaborationResult, growthResult, collaborationCount, growthCount, emailRouterAlerts, emailRouterStates] = await Promise.all([client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit), client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit), client.from('collaboration_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`), client.from('growth_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`), router.from('alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(queryLimit), router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id)]);
 
   const unavailableSources = [];
   if (collaborationResult.error) {
@@ -68,15 +86,23 @@ export async function workNotificationsList(body = {}, accessContext) {
   }
   if (collaborationCount.error && !unavailableTable(collaborationCount.error)) throw collaborationCount.error;
   if (growthCount.error && !unavailableTable(growthCount.error)) throw growthCount.error;
+  if (emailRouterAlerts.error) {
+    if (!unavailableTable(emailRouterAlerts.error)) throw emailRouterAlerts.error;
+    unavailableSources.push('Email Router');
+  }
+  if (emailRouterStates.error && !unavailableTable(emailRouterStates.error)) throw emailRouterStates.error;
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification)]
+  const routerStateByAlert = new Map((emailRouterStates.data || []).map((row) => [row.alert_id, row]));
+  const routerNotifications = (emailRouterAlerts.data || []).map((row) => emailRouterNotification(row, routerStateByAlert.get(row.id)));
+
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...routerNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0),
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + routerNotifications.filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',
@@ -91,6 +117,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
   const ids = cleanIds(body.notificationIds);
   const collaborationIds = ids.filter((value) => value.startsWith('collaboration:')).map((value) => value.slice('collaboration:'.length));
   const growthIds = ids.filter((value) => value.startsWith('growth:')).map((value) => value.slice('growth:'.length));
+  let emailRouterIds = ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length));
   const readAt = new Date().toISOString();
 
   const updateTable = async (table, selectedIds) => {
@@ -103,7 +130,23 @@ export async function workNotificationsRead(body = {}, accessContext) {
     if (error && !unavailableTable(error)) throw error;
   };
 
-  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds)]);
+  if (!ids.length) {
+    const { data, error } = await client.schema('emailrouter').from('alerts').select('id').in('state', ['open', 'acknowledged']);
+    if (error && !unavailableTable(error)) throw error;
+    emailRouterIds = (data || []).map((row) => row.id);
+  }
+  const markEmailRouterRead = async () => {
+    if (!emailRouterIds.length) return;
+    const { error } = await client.schema('emailrouter').from('alert_notification_states').upsert(emailRouterIds.map((alertId) => ({
+      alert_id: alertId,
+      user_id: profile.id,
+      read_at: readAt,
+      updated_at: readAt,
+    })), { onConflict: 'alert_id,user_id' });
+    if (error && !unavailableTable(error)) throw error;
+  };
+
+  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), markEmailRouterRead()]);
   return workNotificationsList({ limit: body.limit }, accessContext);
 }
 
@@ -136,10 +179,26 @@ export async function workNotificationsState(body = {}, accessContext) {
   const groups = [
     ['collaboration', ids.filter((value) => value.startsWith('collaboration:')).map((value) => value.slice(14))],
     ['growth', ids.filter((value) => value.startsWith('growth:')).map((value) => value.slice(7))],
+    ['email_router', ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length))],
   ];
   let updated = 0;
   for (const [source, sourceIds] of groups) {
     if (!sourceIds.length) continue;
+    if (source === 'email_router') {
+      const current = new Date().toISOString();
+      const values = sourceIds.map((alertId) => ({
+        alert_id: alertId,
+        user_id: profile.id,
+        read_at: state === 'unread' ? null : current,
+        handled_at: state === 'handled' ? current : state === 'unhandled' ? null : undefined,
+        snoozed_until: state === 'snoozed' ? snoozedUntil : null,
+        updated_at: current,
+      })).map((row) => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined)));
+      const { error } = await client.schema('emailrouter').from('alert_notification_states').upsert(values, { onConflict: 'alert_id,user_id' });
+      if (error) throw error;
+      updated += values.length;
+      continue;
+    }
     const { data, error } = await client.rpc('set_work_notification_state', {
       p_source: source,
       p_notification_ids: sourceIds,

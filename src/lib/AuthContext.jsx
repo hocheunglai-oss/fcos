@@ -31,21 +31,6 @@ const LOCAL_APPLICATIONS = [
     available: true,
     blockingReason: null,
   },
-  {
-    id: 'emailrouter',
-    name: 'EmailRouter',
-    description: 'Human-controlled Microsoft 365 mailbox triage and routing.',
-    iconKey: 'mail',
-    kind: 'external',
-    launchPath: null,
-    openMode: 'new_tab',
-    roleId: 'owner',
-    roleLabel: 'Owner',
-    accessSource: 'administrator_default',
-    status: 'active',
-    available: false,
-    blockingReason: 'Secure launch is unavailable in local administrator mode.',
-  },
 ];
 
 function loginFailureMessage(error) {
