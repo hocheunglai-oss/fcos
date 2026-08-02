@@ -50,7 +50,6 @@ import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWher
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { emailSenderStatus as configuredEmailSenderStatus } from '../_emailSenderStatus.js';
 import {
-  bootstrapGraphEmailRegistry,
   graphEmailApplicationConfig,
   listGraphEmailRegistry,
   resolveGraphEmailSender,
@@ -1114,7 +1113,6 @@ const HANDLER_MODULE_ACCESS = {
   emailSenderStatus: ['settings'],
   emailSenderMailboxSave: ['admin'],
   emailSenderRouteSave: ['admin'],
-  emailSenderRegistryBootstrap: ['admin'],
   systemHealth: ['settings'],
   dashboardAiSettingsGet: ['settings'],
   dashboardAiSettingsSave: ['settings'],
@@ -5165,11 +5163,6 @@ async function emailSenderRouteSave(body = {}, req = null, accessContext = null)
   const context = accessContext || (await requireActiveUser(req));
   const route = await saveGraphEmailRoute(context.client, context.profile, body);
   return { route, registry: await listGraphEmailRegistry(context.client) };
-}
-
-async function emailSenderRegistryBootstrap(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return bootstrapGraphEmailRegistry(context.client, context.profile, process.env);
 }
 
 function maskValue(value, visibleStart = 3, visibleEnd = 3) {
@@ -15716,7 +15709,6 @@ const handlers = {
   emailSenderStatus,
   emailSenderMailboxSave,
   emailSenderRouteSave,
-  emailSenderRegistryBootstrap,
   systemHealth,
   backboneBridgeIdentity,
   backboneTradeProjection,

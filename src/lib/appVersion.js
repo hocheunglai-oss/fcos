@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.75';
+export const APP_VERSION = '2.0.76';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.76',
+    releasedAt: '2026-08-02',
+    title: 'Graph mailbox registry enforcement',
+    changes: [
+      'Removed the obsolete environment-based mailbox import endpoint so every active sender address is managed only in the protected Graph mailbox registry.',
+      'Extended the Graph-only regression guard to block environment-backed mailbox bootstrap compatibility from returning.',
+    ],
+  },
   {
     version: '2.0.75',
     releasedAt: '2026-08-02',

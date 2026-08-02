@@ -688,15 +688,6 @@ export default function SettingsPage({ methodologyAction = null }) {
     setEmailSenderBusy(false);
   };
 
-  const bootstrapEmailSenders = async () => {
-    setEmailSenderBusy(true);
-    setEmailSendersError('');
-    const response = await appClient.functions.invoke('emailSenderRegistryBootstrap');
-    if (response.data?.error) setEmailSendersError(response.data.error);
-    else await loadEmailSenders();
-    setEmailSenderBusy(false);
-  };
-
   const settingsDraftValue = useMemo(() => ({
     exchangeRateSettings,
     documentSettings,
@@ -847,11 +838,6 @@ export default function SettingsPage({ methodologyAction = null }) {
                   </div>
                   {isAdministrator && (
                     <div className="flex gap-2">
-                      {!emailSenders?.mailboxes?.length && (
-                        <Button type="button" variant="outline" size="sm" onClick={bootstrapEmailSenders} disabled={emailSenderBusy}>
-                          Import current routes
-                        </Button>
-                      )}
                       <Button type="button" size="sm" onClick={() => openMailboxEditor()} disabled={emailSenderBusy}>
                         Add mailbox
                       </Button>

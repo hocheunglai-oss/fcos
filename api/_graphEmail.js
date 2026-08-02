@@ -151,58 +151,6 @@ export async function saveGraphEmailRoute(client, profile, body = {}) {
   return { purposeKey: data.purpose_key, mailboxId: data.mailbox_id, revision: Number(data.revision), updatedAt: data.updated_at };
 }
 
-async function ensureBootstrapMailbox(client, profile, email, label) {
-  if (!email) return null;
-  const { data: existing, error } = await client
-    .from('email_sender_mailboxes')
-    .select('*')
-    .eq('email_address', email)
-    .maybeSingle();
-  if (error) throw error;
-  if (existing) return existing;
-  const mailbox = await saveGraphEmailMailbox(client, profile, {
-    emailAddress: email,
-    label,
-    active: true,
-    reason: 'Bootstrap existing production Microsoft Graph sender.',
-  });
-  return {
-    id: mailbox.id,
-    email_address: mailbox.emailAddress,
-    active: mailbox.active,
-  };
-}
-
-export async function bootstrapGraphEmailRegistry(client, profile, env = process.env) {
-  const operationalEmail = normalizedEmail(env.FCOS_GRAPH_BOOTSTRAP_OPERATIONAL_MAILBOX);
-  const updatesEmail = normalizedEmail(env.FCOS_GRAPH_BOOTSTRAP_UPDATES_MAILBOX);
-  const hedgeEmail = normalizedEmail(env.FCOS_GRAPH_BOOTSTRAP_HEDGE_MAILBOX);
-  if (!operationalEmail && !updatesEmail && !hedgeEmail) {
-    throw graphEmailError('No existing Microsoft Graph mailbox configuration was found to bootstrap.', 400, 'EMAIL_BOOTSTRAP_EMPTY');
-  }
-  const operational = await ensureBootstrapMailbox(client, profile, operationalEmail, 'Operational email sender');
-  const updates = await ensureBootstrapMailbox(client, profile, updatesEmail, 'FCOS Updates sender');
-  const hedge = await ensureBootstrapMailbox(client, profile, hedgeEmail, 'Hedge Desk sender');
-  const { data: routes, error } = await client.from('email_sender_routes').select('purpose_key,mailbox_id,revision');
-  if (error) throw error;
-  for (const route of routes || []) {
-    if (route.mailbox_id) continue;
-    const mailboxId = route.purpose_key === 'fcos_updates'
-      ? updates?.id
-      : route.purpose_key.startsWith('hedge_')
-        ? hedge?.id
-        : operational?.id;
-    if (!mailboxId) continue;
-    await saveGraphEmailRoute(client, profile, {
-      purposeKey: route.purpose_key,
-      mailboxId,
-      expectedRevision: route.revision,
-      reason: 'Bootstrap existing production Microsoft Graph sender route.',
-    });
-  }
-  return listGraphEmailRegistry(client, env);
-}
-
 export async function resolveGraphEmailSender(client, purposeKeyValue, { mailboxSnapshot = null, env = process.env } = {}) {
   const purposeKey = assertPurposeKey(purposeKeyValue);
   const config = graphEmailApplicationConfig(env);

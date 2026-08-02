@@ -13,6 +13,7 @@ const BLOCKED_RUNTIME_PATTERNS = [
   { label: 'legacy SMTP environment variable', pattern: /SMTP_[A-Z0-9_]+/i },
   { label: 'SMTP package or transport', pattern: /nodemailer|createSmtpTransport|createTransport\s*\(/i },
   { label: 'workflow Send As compatibility field', pattern: /requiresSendAs|FCOS_UPDATE_SEND_AS/i },
+  { label: 'environment-backed mailbox bootstrap', pattern: /FCOS_GRAPH_BOOTSTRAP_|bootstrapGraphEmailRegistry|emailSenderRegistryBootstrap/i },
 ];
 
 async function sourceFiles(directory) {
@@ -49,4 +50,5 @@ test('Graph application configuration uses only generic FCOS variables', async (
   assert.match(graphEmail, /env\.FCOS_MICROSOFT_TENANT_ID/);
   assert.match(graphEmail, /env\.FCOS_MICROSOFT_CLIENT_ID/);
   assert.doesNotMatch(graphEmail, /FCOS_UPDATE_MICROSOFT_(?:TENANT|CLIENT)_ID/);
+  assert.doesNotMatch(graphEmail, /FCOS_GRAPH_BOOTSTRAP_/);
 });

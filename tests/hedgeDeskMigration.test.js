@@ -79,8 +79,8 @@ test('Graph mailbox purposes are independent and service controlled', async () =
   assert.match(graphServer, /\/users\/\$\{encodeURIComponent\(config\.mailbox\)\}\/sendMail|createMicrosoftGraphMailTransport/);
   assert.match(graphServer, /resolveGraphEmailSender/);
   assert.match(graphServer, /senderSnapshot/);
-  assert.match(graphServer, /route\.purpose_key === 'fcos_updates'[\s\S]*\? updates\?\.id[\s\S]*route\.purpose_key\.startsWith\('hedge_'\)[\s\S]*\? hedge\?\.id[\s\S]*: operational\?\.id/);
-  assert.doesNotMatch(graphServer, /updates\?\.id \|\||operational\?\.id \|\||hedge\?\.id \|\|/);
+  assert.match(graphServer, /from\('email_sender_routes'\)/);
+  assert.doesNotMatch(graphServer, /FCOS_GRAPH_BOOTSTRAP_|bootstrapGraphEmailRegistry/);
   assert.doesNotMatch(graphServer, /nodemailer|createSmtpTransport|SMTP_/i);
   assert.doesNotMatch(packageJson, /nodemailer/i);
 });
