@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
-import { verifyMopsSourceMessage } from './_hedgeMops.js';
+import { decorateMopsMonthVerifications, verifyMopsMonthlyAverage } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
@@ -13,10 +12,6 @@ const COMMON_FIELDS = [
   'id', 'legacy_source_id', 'created_date', 'updated_date', 'created_by',
   'created_by_id', 'updated_by_id', 'revision',
 ];
-
-const MOPS_SERVER_FIELDS = new Set([
-  'verification_status', 'verification_snapshot', 'verification_hash', 'verified_at', 'verified_by_id',
-]);
 
 const ENTITY_CONFIG = {
   PhysicalTrade: {
@@ -108,7 +103,6 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
   const relationships = {};
   const clean = {};
   for (const [field, value] of Object.entries(payload || {})) {
-    if (MOPS_SERVER_FIELDS.has(field)) continue;
     if (['id', 'created_date', 'updated_date', 'created_by', 'created_by_id', 'updated_by_id', 'revision', 'legacy_source_id'].includes(field)) continue;
     assertedField(config, field);
     if (config.relationshipFields?.includes(field)) relationships[field] = value;
@@ -167,42 +161,6 @@ function sanitizeSwapPayload(payload, { creating = false } = {}) {
   delete sanitized.is_expired;
   if (creating) sanitized.is_expired = false;
   return sanitized;
-}
-
-function sanitizeMopsPayload(payload, current, profile) {
-  const merged = { ...(current || {}), ...(payload || {}) };
-  if (merged.is_estimate === true) {
-    return {
-      verification_status: 'not_applicable',
-      verification_snapshot: null,
-      verification_hash: null,
-      verified_at: null,
-      verified_by_id: null,
-    };
-  }
-
-  const sourceMessage = String(merged.raw_input || '').trim();
-  if (!sourceMessage) {
-    return {
-      verification_status: 'unverified',
-      verification_snapshot: null,
-      verification_hash: null,
-      verified_at: null,
-      verified_by_id: null,
-    };
-  }
-
-  const verification = verifyMopsSourceMessage(merged, sourceMessage);
-  if (!verification.verified) {
-    throw httpError(`The third-party MOPS message could not verify this row: ${verification.issues.join(' ')}`, 400, 'HEDGE_MOPS_VERIFICATION_FAILED', { issues: verification.issues });
-  }
-  return {
-    verification_status: 'verified',
-    verification_snapshot: verification.parsed,
-    verification_hash: createHash('sha256').update(sourceMessage).digest('hex'),
-    verified_at: new Date().toISOString(),
-    verified_by_id: profile.id,
-  };
 }
 
 function applySort(query, config, sort) {
@@ -400,14 +358,22 @@ async function recentEvents(client) {
   }));
 }
 
+async function loadMopsMonthVerifications(client, mops) {
+  const { data, error } = await client.from('hedge_mops_month_verifications').select('*').order('contract_month', { ascending: false }).limit(240);
+  if (error) throw httpError(`Monthly MOPS verification could not be loaded: ${error.message}`, 502);
+  return decorateMopsMonthVerifications(data || [], mops || []);
+}
+
 export async function loadHedgeDeskSnapshot({ client, capabilities }) {
   const expiryAutomation = await reconcilePaperHedgeExpiry(client);
   const entries = await Promise.all(SNAPSHOT_ENTITIES.map(async ([key, entity, limit]) => [
     key,
     await listRows(client, entity, configFor(entity), { limit }),
   ]));
+  const entityData = Object.fromEntries(entries);
+  const mopsMonthVerifications = await loadMopsMonthVerifications(client, entityData.mops);
   const auditLogs = await recentEvents(client);
-  return { ...Object.fromEntries(entries), auditLogs, capabilities, expiryAutomation };
+  return { ...entityData, mopsMonthVerifications, auditLogs, capabilities, expiryAutomation };
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
@@ -437,9 +403,7 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
   if (action === 'create') {
     if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload) };
     if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload, { creating: true }) };
-    const mopsServerFields = entity === 'MopsPrice' ? sanitizeMopsPayload(body.payload, null, profile) : null;
     const { clean, relationships } = cleanPayload(config, body.payload, profile, { creating: true });
-    if (mopsServerFields) Object.assign(clean, mopsServerFields);
     const { data, error } = await client.from(config.table).insert(clean).select('*').single();
     if (error) throw httpError(`Hedge Desk record could not be created: ${error.message}`, 502);
     try {
@@ -462,9 +426,7 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
     }
     if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload, before) };
     if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload) };
-    const mopsServerFields = entity === 'MopsPrice' ? sanitizeMopsPayload(body.payload, before, profile) : null;
     const { clean, relationships } = cleanPayload(config, body.payload, profile);
-    if (mopsServerFields) Object.assign(clean, mopsServerFields);
     const { data, error } = await client.from(config.table).update(clean).eq('id', before.id).eq('revision', expectedRevision).select('*').maybeSingle();
     if (error) throw httpError(`Hedge Desk record could not be updated: ${error.message}`, 502);
     if (!data) throw httpError('This Hedge Desk record changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT');
@@ -499,9 +461,11 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),
     ]);
     if (settingsResult.error) throw httpError(`Market settings could not be loaded: ${settingsResult.error.message}`, 502);
+    const mopsMonthVerifications = await loadMopsMonthVerifications(client, mops);
     const settings = Object.fromEntries((settingsResult.data || []).map((row) => [row.key, row]));
     return {
       mops,
+      mopsMonthVerifications,
       settings: {
         general: settings.general?.value || {},
         forwardSpreads: settings.fwd_spreads?.value || {},
@@ -519,6 +483,44 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
     const payload = { key: 'fwd_spreads', value: body.value || {}, label: 'fwd_spreads' };
     if (!current.data) return handleHedgeDeskEntity({ action: 'create', entity: 'AppConfig', payload }, profile, { client, capabilities });
     return handleHedgeDeskEntity({ action: 'update', entity: 'AppConfig', id: current.data.id, expectedRevision: body.expectedRevision, payload }, profile, { client, capabilities });
+  }
+
+  if (action === 'verify_month') {
+    await requireWriteCapability(capabilities, configFor('MopsPrice'));
+    const month = String(body?.month || '');
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw httpError('Choose a valid MOPS contract month.', 400);
+    const sourceMessage = String(body?.sourceMessage || '').trim();
+    if (!sourceMessage) throw httpError('Paste the third-party final monthly-average message.', 400);
+    if (sourceMessage.length > 50000) throw httpError('The third-party message is too long.', 400);
+
+    const [pricesResult, currentResult] = await Promise.all([
+      client.from('hedge_market_prices').select('*').gte('price_date', `${month}-01`).lte('price_date', `${month}-31`).order('price_date'),
+      client.from('hedge_mops_month_verifications').select('*').eq('contract_month', month).maybeSingle(),
+    ]);
+    const validationError = pricesResult.error || currentResult.error;
+    if (validationError) throw httpError(`Monthly MOPS verification could not be prepared: ${validationError.message}`, 502);
+    const expectedRevision = Number(body?.expectedRevision || 0);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(currentResult.data?.revision || 0)) {
+      throw httpError('This monthly MOPS verification changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT', { current: currentResult.data || null });
+    }
+
+    const verification = verifyMopsMonthlyAverage(month, pricesResult.data || [], sourceMessage);
+    if (!verification.verified) {
+      throw httpError(`The final monthly average could not be verified: ${verification.issues.join(' ')}`, 400, 'HEDGE_MOPS_MONTH_VERIFICATION_FAILED', { issues: verification.issues });
+    }
+    const saved = await client.rpc('verify_mops_month_with_audit', {
+      p_contract_month: month,
+      p_expected_revision: expectedRevision,
+      p_calculated_snapshot: verification.calculatedSnapshot,
+      p_source_snapshot: verification.sourceSnapshot,
+      p_input_fingerprint: verification.inputFingerprint,
+      p_source_hash: verification.sourceHash,
+      p_actor_user_id: profile.id,
+      p_actor_email: String(profile.email || '').toLowerCase(),
+    });
+    if (saved.error) throw httpError(`Monthly MOPS verification could not be saved: ${saved.error.message}`, 502);
+    const expiryAutomation = await reconcilePaperHedgeExpiry(client, { profile });
+    return { verification: { ...(saved.data || {}), is_current: true }, expiryAutomation };
   }
 
   if (String(body?.entity || '') !== 'MopsPrice') throw httpError('Markets may access only market-price records.', 403);

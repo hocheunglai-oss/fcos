@@ -1,4 +1,5 @@
 import { paperHedgeExpiryStatus } from '../src/hedge/lib/domain.js'
+import { decorateMopsMonthVerifications } from './_hedgeMops.js'
 
 function expiryError(message, statusCode = 502) {
   const error = new Error(message)
@@ -7,16 +8,18 @@ function expiryError(message, statusCode = 502) {
 }
 
 export async function reconcilePaperHedgeExpiry(client, { now = new Date(), dryRun = false, profile = null } = {}) {
-  const [swapsResult, mopsResult] = await Promise.all([
+  const [swapsResult, mopsResult, verificationResult] = await Promise.all([
     client.from('hedge_swap_hedges').select('*').eq('is_expired', false).limit(5000),
     client.from('hedge_market_prices').select('*').order('price_date', { ascending: true }).limit(10000),
+    client.from('hedge_mops_month_verifications').select('*').limit(240),
   ])
-  const databaseError = swapsResult.error || mopsResult.error
+  const databaseError = swapsResult.error || mopsResult.error || verificationResult.error
   if (databaseError) throw expiryError(`Paper-hedge expiry could not be evaluated: ${databaseError.message}`)
+  const monthlyVerifications = decorateMopsMonthVerifications(verificationResult.data || [], mopsResult.data || [])
 
   const candidates = (swapsResult.data || []).map((swap) => ({
     swap,
-    status: paperHedgeExpiryStatus(swap, mopsResult.data || [], now),
+    status: paperHedgeExpiryStatus(swap, mopsResult.data || [], now, monthlyVerifications),
   })).filter((item) => item.status.ready)
 
   if (dryRun) {
@@ -38,7 +41,7 @@ export async function reconcilePaperHedgeExpiry(client, { now = new Date(), dryR
       p_metadata: {
         contractMonths: status.months.map((month) => month.month),
         lastTradingDays: status.months.map((month) => month.lastTradingDay),
-        verificationRecordCount: status.months.reduce((sum, month) => sum + month.verified, 0),
+        verifiedMonthlyAverages: status.months.map((month) => month.month),
       },
     })
     if (update.error) throw expiryError(`Paper hedge ${swap.id} could not be expired automatically: ${update.error.message}`)

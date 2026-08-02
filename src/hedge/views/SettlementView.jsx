@@ -104,11 +104,6 @@ function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth,
     address_line2: counterpartyRecord.address_line2,
     address_line3: counterpartyRecord.address_line3,
     attention: counterpartyRecord.attention,
-    bank_name: counterpartyRecord.bank_name,
-    bank_swift: counterpartyRecord.bank_swift,
-    intermediary_bank: counterpartyRecord.intermediary_bank,
-    intermediary_swift: counterpartyRecord.intermediary_swift,
-    account_number: counterpartyRecord.account_number,
   } : { short_name: group.counterparty, full_name: group.counterparty };
   const paymentDirection = hedgeSettlementPaymentDirection(group.net, counterparty);
   const lineItems = group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => ({
@@ -320,11 +315,6 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
             address_line2: counterpartyRecord.address_line2,
             address_line3: counterpartyRecord.address_line3,
             attention: counterpartyRecord.attention,
-            bank_name: counterpartyRecord.bank_name,
-            bank_swift: counterpartyRecord.bank_swift,
-            intermediary_bank: counterpartyRecord.intermediary_bank,
-            intermediary_swift: counterpartyRecord.intermediary_swift,
-            account_number: counterpartyRecord.account_number,
           } : storedPayload.counterparty || { short_name: invoice.counterparty, full_name: invoice.counterparty },
         };
         const result = await generateOtcInvoice(payload);
@@ -526,7 +516,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
         <section className="app-form-section"><div className="app-form-grid app-form-grid--2"><Field label="Invoice number" required><input className="app-input" value={invoiceForm.number} onChange={(event) => setInvoiceForm((current) => ({ ...current, number: event.target.value }))} /></Field><Field label="Invoice date" required><input className="app-input" type="date" value={invoiceForm.date} onChange={(event) => setInvoiceForm((current) => ({ ...current, date: event.target.value }))} /></Field></div></section>
         {invoiceDrawer && (() => {
           const paymentDirection = paymentDirectionFor(invoiceDrawer.net, invoiceDrawer.counterparty);
-          return <><div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}><span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small></div><div className="app-invoice-summary"><span><small>Payer</small><strong>{paymentDirection.payer.shortName}</strong></span><span><small>Beneficiary</small><strong>{paymentDirection.beneficiary.shortName}</strong></span><span><small>Amount</small><strong>{formatMoney(paymentDirection.amount, { digits: 2 })}</strong></span></div>{!paymentDirection.isReceivable && !paymentDirection.beneficiaryBankConfigured && <div className="app-callout app-callout--warning"><strong>FCBS bank instructions are not configured.</strong> The document will name FCBS as beneficiary and will not display FCBHK bank details. Confirm FCBS payment instructions separately or maintain them under Counterparties.</div>}</>;
+          return <><div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}><span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small></div><div className="app-invoice-summary"><span><small>Payer</small><strong>{paymentDirection.payer.shortName}</strong></span><span><small>Beneficiary</small><strong>{paymentDirection.beneficiary.shortName}</strong></span><span><small>Amount</small><strong>{formatMoney(paymentDirection.amount, { digits: 2 })}</strong></span></div></>;
         })()}
       </Drawer>
 

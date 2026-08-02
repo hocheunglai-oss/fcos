@@ -5,6 +5,7 @@ const EMPTY_DATA = {
   physicals: [],
   swaps: [],
   mops: [],
+  mopsMonthVerifications: [],
   clearing: [],
   counterparties: [],
   invoices: [],

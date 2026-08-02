@@ -8,6 +8,7 @@ import {
   physicalMidQuantity,
   roundMoney,
 } from '../src/hedge/lib/domain.js';
+import { decorateMopsMonthVerifications } from './_hedgeMops.js';
 import { getSfsMopsCompleteness } from '../src/hedge/lib/sfsReport.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags } from './_runtimeCache.js';
@@ -213,16 +214,20 @@ async function loadFinalFinancials(client, inputs) {
   if (!months.length) issues.push('The paper hedge has no valid contract month.');
   const firstMonth = [...months].sort()[0];
   const lastMonth = [...months].sort().at(-1);
-  const priceResult = months.length
-    ? await client.from('hedge_market_prices').select('*').gte('price_date', `${firstMonth}-01`).lte('price_date', `${lastMonth}-31`).order('price_date')
-    : { data: [], error: null };
-  if (priceResult.error) throw failure(`Final MOPS records could not be loaded: ${priceResult.error.message}`, 502);
-  const expiryStatus = paperHedgeExpiryStatus(swap, priceResult.data || []);
-  if (swap.is_expired !== true) issues.push('The paper hedge has not expired automatically. Complete and verify every scheduled MOPS source message after the final trading day.');
+  const [priceResult, verificationResult] = months.length
+    ? await Promise.all([
+      client.from('hedge_market_prices').select('*').gte('price_date', `${firstMonth}-01`).lte('price_date', `${lastMonth}-31`).order('price_date'),
+      client.from('hedge_mops_month_verifications').select('*').in('contract_month', months),
+    ])
+    : [{ data: [], error: null }, { data: [], error: null }];
+  if (priceResult.error || verificationResult.error) throw failure(`Final MOPS records could not be loaded: ${(priceResult.error || verificationResult.error).message}`, 502);
+  const monthlyVerifications = decorateMopsMonthVerifications(verificationResult.data || [], priceResult.data || []);
+  const expiryStatus = paperHedgeExpiryStatus(swap, priceResult.data || [], new Date(), monthlyVerifications);
+  if (swap.is_expired !== true) issues.push('The paper hedge has not expired automatically. Complete all scheduled MOPS values and verify the final monthly average after the final trading day.');
   for (const monthStatus of expiryStatus.months) {
     if (!monthStatus.calendarSupported) issues.push(`The Platts publication calendar for ${monthStatus.month.slice(0, 4)} has not been approved.`);
     if (!monthStatus.reachedLastTradingDay) issues.push(`${monthStatus.month} has not reached its final trading day ${monthStatus.lastTradingDay || 'not available'}.`);
-    if (monthStatus.unverifiedDates.length) issues.push(`MOPS source verification is missing for ${monthStatus.unverifiedDates.length} publication day(s) in ${monthStatus.month}.`);
+    if (!monthStatus.averageVerified) issues.push(`The final MOPS monthly average has not been source-verified for ${monthStatus.month}.`);
   }
   for (const month of months) {
     const completeness = getSfsMopsCompleteness(month, priceResult.data || []);

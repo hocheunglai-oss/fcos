@@ -1823,7 +1823,8 @@
   border-left-color: var(--app-teal);
 }
 
-.hedge-desk-root .app-mops-finality > span:last-child {
+.hedge-desk-root .app-mops-finality > span:nth-child(2) {
+  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
 }

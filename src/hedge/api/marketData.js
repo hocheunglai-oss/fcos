@@ -28,3 +28,7 @@ export function loadMarketSnapshot() {
 export function saveForwardSpreads(value, expectedRevision) {
   return request({ action: 'save_spreads', value, expectedRevision });
 }
+
+export function verifyMopsMonth(month, sourceMessage, expectedRevision = 0) {
+  return request({ action: 'verify_month', month, sourceMessage, expectedRevision });
+}

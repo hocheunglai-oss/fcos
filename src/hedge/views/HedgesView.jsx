@@ -293,14 +293,14 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
             <tbody>
               {rows.map((record) => {
                 const live = isSwapLive(record);
-                const expiry = paperHedgeExpiryStatus(record, data.mops);
+                const expiry = paperHedgeExpiryStatus(record, data.mops, new Date(), data.mopsMonthVerifications || []);
                 const pendingMonth = expiry.months.find((item) => !item.ready);
                 const mtm = calcSwapMtm(record, data.mops, settings.general.sgo_bbl_per_mt);
                 const fees = calcSwapFees(record, settings.rates);
                 const totalFees = fees.total + (!live ? fees.iceSettlement : 0);
                 return (
                   <tr key={record.id}>
-                    <td><StatusBadge tone={live ? "positive" : "neutral"}>{live ? "Live" : "Expired"}</StatusBadge><small>{live ? pendingMonth ? `${pendingMonth.verified}/${pendingMonth.total} MOPS verified` : "Awaiting final MOPS" : "Final MOPS verified"}</small></td>
+                    <td><StatusBadge tone={live ? "positive" : "neutral"}>{live ? "Live" : "Expired"}</StatusBadge><small>{live ? pendingMonth ? pendingMonth.complete !== pendingMonth.total ? `${pendingMonth.complete}/${pendingMonth.total} MOPS complete` : pendingMonth.verification && !pendingMonth.verification.is_current ? "Monthly verification stale" : "Monthly average verification pending" : "Awaiting final MOPS" : "Final monthly average verified"}</small></td>
                     <td><strong>{formatDate(record.trade_date)}</strong><small>{record.trade_type === "SPREAD" ? "Calendar spread" : "Outright swap"}</small></td>
                     <td><ProductBadge product={record.product} /></td>
                     <td><strong className={record.trade_type === "SPREAD" ? "app-text-violet" : record.direction === "BUY" ? "app-text-positive" : "app-text-negative"}>{record.trade_type === "SPREAD" ? "SPREAD" : record.direction}</strong><small>{record.trade_type === "SPREAD" ? `${formatMonth(record.leg1_month)} / ${formatMonth(record.leg2_month)}` : formatMonth(record.swap_month)}</small></td>
@@ -365,7 +365,7 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
           <div className="app-form-section__title">Control</div>
           <Field label="Notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field>
           <label className="app-check"><input type="checkbox" checked={Boolean(form.round_trip)} onChange={(event) => setField("round_trip", event.target.checked)} /><span>Round trip fees</span></label>
-          <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day and every scheduled MOPS row is complete and verified from the pasted third-party message.</div>
+          <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day, every scheduled MOPS row is complete, and the one final monthly average is verified against the pasted third-party message.</div>
         </section>
       </Drawer>
 

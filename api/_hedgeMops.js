@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { finalMopsMonthlyAverages, mopsMonthFinality } from '../src/hedge/lib/domain.js'
+
 const NUMBER_PATTERN = '(-?\\d+(?:\\.\\d+)?)'
 const MOPS_PRICE_FIELDS = ['s380', 's05', 'sgo']
 
@@ -195,41 +198,84 @@ function finitePrice(value) {
   return value !== null && value !== '' && Number.isFinite(Number(value))
 }
 
-export function verifyMopsSourceMessage(record = {}, rawInput = '', options = {}) {
-  const sourceMessage = String(rawInput || '').trim()
-  if (!sourceMessage) {
-    return { verified: false, issues: ['Paste the third-party MOPS message used to verify this price.'], parsed: null }
+export function parseMopsContractMonth(text) {
+  const input = String(text || '')
+  let match = input.match(/\b(20\d{2})[-/](0?[1-9]|1[0-2])\b/)
+  if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}`
+
+  match = input.match(/\b([A-Za-z]{3,9})[\s'/-]+(\d{2}|(?:19|20)\d{2})\b/i)
+  if (match && MONTH_NUMBER[match[1].toLowerCase()]) {
+    return `${normalizeYear(match[2])}-${String(MONTH_NUMBER[match[1].toLowerCase()]).padStart(2, '0')}`
   }
 
-  const parsed = parseMopsText(sourceMessage, options)
-  const issues = []
-  if (!parsed.price_date) issues.push('The third-party message does not contain a recognizable publication date.')
-  else if (String(parsed.price_date) !== String(record.price_date || '')) {
-    issues.push(`The message date ${parsed.price_date} does not match the saved price date ${record.price_date || 'not set'}.`)
+  match = input.match(/\b(\d{2}|(?:19|20)\d{2})[\s'/-]+([A-Za-z]{3,9})\b/i)
+  if (match && MONTH_NUMBER[match[2].toLowerCase()]) {
+    return `${normalizeYear(match[1])}-${String(MONTH_NUMBER[match[2].toLowerCase()]).padStart(2, '0')}`
   }
+  return null
+}
+
+export function mopsMonthInputFingerprint(yearMonth, records = []) {
+  const calculated = finalMopsMonthlyAverages(yearMonth, records)
+  return calculated
+    ? createHash('sha256').update(`${yearMonth}|${calculated.inputSignature}`).digest('hex')
+    : null
+}
+
+export function decorateMopsMonthVerifications(verifications = [], records = []) {
+  return (verifications || []).map((verification) => {
+    const currentFingerprint = mopsMonthInputFingerprint(verification.contract_month, records)
+    return {
+      ...verification,
+      is_current: Boolean(currentFingerprint && currentFingerprint === verification.input_fingerprint),
+    }
+  })
+}
+
+export function verifyMopsMonthlyAverage(yearMonth, records = [], rawInput = '', options = {}) {
+  const sourceMessage = String(rawInput || '').trim()
+  const now = options.now || new Date()
+  const finality = mopsMonthFinality(yearMonth, records, now)
+  const issues = []
+  if (!finality.calendarSupported) issues.push(`The approved Platts publication calendar is unavailable for ${String(yearMonth).slice(0, 4)}.`)
+  if (!finality.reachedLastTradingDay) issues.push(`The final trading day ${finality.lastTradingDay || 'is unavailable'} has not been reached.`)
+  if (finality.complete !== finality.total) issues.push(`All ${finality.total} scheduled publication days must contain complete actual MOPS values first.`)
+  if (!sourceMessage) issues.push('Paste the third-party final monthly-average message.')
+
+  const sourceMonth = sourceMessage ? parseMopsContractMonth(sourceMessage) : null
+  const parsed = sourceMessage ? parseMopsText(sourceMessage, options) : null
+  const calculated = finality.calculatedAverages
+  if (sourceMessage && !sourceMonth) issues.push('The third-party message does not contain a recognizable contract month and year.')
+  else if (sourceMonth && sourceMonth !== yearMonth) issues.push(`The message month ${sourceMonth} does not match ${yearMonth}.`)
 
   for (const field of MOPS_PRICE_FIELDS) {
-    if (!finitePrice(record[field])) {
-      issues.push(`${field.toUpperCase()} must be entered before this MOPS row can be verified.`)
+    if (!calculated || !finitePrice(calculated[field])) continue
+    if (!finitePrice(parsed?.[field])) {
+      issues.push(`The third-party message does not contain the final ${field.toUpperCase()} monthly average.`)
       continue
     }
-    if (!finitePrice(parsed[field])) {
-      issues.push(`The third-party message does not contain ${field.toUpperCase()}.`)
-      continue
-    }
-    if (Math.abs(Number(record[field]) - Number(parsed[field])) >= 0.005) {
-      issues.push(`${field.toUpperCase()} in the message does not match the saved price.`)
+    if (Math.abs(Number(calculated[field]) - Number(parsed[field])) >= 0.0005) {
+      issues.push(`${field.toUpperCase()} in the message does not match FCOS's final monthly average of ${Number(calculated[field]).toFixed(3)}.`)
     }
   }
 
   return {
     verified: issues.length === 0,
     issues,
-    parsed: {
-      price_date: parsed.price_date,
+    calculatedSnapshot: calculated ? {
+      contract_month: yearMonth,
+      publication_days: calculated.publicationDays,
+      s380: calculated.s380,
+      s05: calculated.s05,
+      sgo: calculated.sgo,
+    } : null,
+    sourceSnapshot: parsed ? {
+      contract_month: sourceMonth,
       s380: parsed.s380,
       s05: parsed.s05,
       sgo: parsed.sgo,
-    },
+    } : null,
+    inputFingerprint: mopsMonthInputFingerprint(yearMonth, records),
+    sourceHash: sourceMessage ? createHash('sha256').update(sourceMessage).digest('hex') : null,
   }
 }

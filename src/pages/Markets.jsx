@@ -4,12 +4,12 @@ import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { MarketsView } from '@/hedge/views/MarketsView';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
-import { loadMarketSnapshot, MarketPrice, saveForwardSpreads } from '@/hedge/api/marketData';
+import { loadMarketSnapshot, MarketPrice, saveForwardSpreads, verifyMopsMonth } from '@/hedge/api/marketData';
 import PageMethodology from '@/components/common/PageMethodology';
 import { MARKETS_METHODOLOGY } from '@/lib/pageMethodologies';
 import '@/hedge/styles.css';
 
-const EMPTY = { mops: [], settings: {}, capabilities: {} };
+const EMPTY = { mops: [], mopsMonthVerifications: [], settings: {}, capabilities: {} };
 
 export default function Markets() {
   const [snapshot, setSnapshot] = useState(EMPTY);
@@ -58,10 +58,15 @@ export default function Markets() {
         {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketsView
-          data={{ mops: snapshot.mops || [] }}
+          data={{ mops: snapshot.mops || [], mopsMonthVerifications: snapshot.mopsMonthVerifications || [] }}
           settings={settings}
           priceEntity={MarketPrice}
           readOnly={snapshot.capabilities?.hedge_book_manage !== true}
+          verifyMonth={async (month, sourceMessage, expectedRevision) => {
+            const result = await verifyMopsMonth(month, sourceMessage, expectedRevision);
+            await reload({ silent: true });
+            return result;
+          }}
           methodologyAction={<PageMethodology {...MARKETS_METHODOLOGY} />}
         />
       </div>

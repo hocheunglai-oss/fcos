@@ -117,7 +117,7 @@ function MopsTooltip({ active, payload, label }) {
   );
 }
 
-export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, methodologyAction = null }) {
+export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, verifyMonth = null, methodologyAction = null }) {
   const actions = useActions();
   const [range, setRange] = useState("3m");
   const [drawer, setDrawer] = useState(null);
@@ -133,6 +133,9 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
   const [spreadDraft, setSpreadDraft] = useState(() => ({ ...settings.forwardSpreads }));
   const [filterYear, setFilterYear] = useState(() => hktThisMonth().slice(0, 4));
   const [filterMonth, setFilterMonth] = useState(() => hktThisMonth().slice(5, 7));
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationText, setVerificationText] = useState("");
+  const [verificationError, setVerificationError] = useState(null);
 
   React.useEffect(() => setSpreadDraft({ ...settings.forwardSpreads }), [settings.forwardSpreads]);
   React.useEffect(() => {
@@ -178,10 +181,9 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       total: scheduled.length,
       actual: scheduled.filter((date) => actual.has(date)).length,
       estimated: scheduled.filter((date) => !actual.has(date) && estimated.has(date)).length,
-      verified: scheduled.filter((date) => data.mops.some((row) => row.price_date === date && !row.is_estimate && row.verification_status === "verified")).length,
     };
   }, [data.mops, selectedMonth]);
-  const monthFinality = useMemo(() => mopsMonthFinality(selectedMonth, data.mops), [data.mops, selectedMonth]);
+  const monthFinality = useMemo(() => mopsMonthFinality(selectedMonth, data.mops, new Date(), data.mopsMonthVerifications || []), [data.mops, data.mopsMonthVerifications, selectedMonth]);
   const curve = useMemo(() => forwardCurveState(settings.forwardSpreads), [settings.forwardSpreads]);
   const chartData = useMemo(() => {
     const now = new Date(`${hktToday()}T00:00:00`);
@@ -350,6 +352,22 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
     }
   };
 
+  const saveMonthlyVerification = async () => {
+    if (!verifyMonth || !verificationText.trim()) return;
+    setSaving(true);
+    setVerificationError(null);
+    try {
+      await verifyMonth(selectedMonth, verificationText, monthFinality.verification?.revision || 0);
+      setVerificationOpen(false);
+      setVerificationText("");
+      actions.notify({ message: `${formatMonth(selectedMonth)} final MOPS average verified` });
+    } catch (nextError) {
+      setVerificationError(nextError);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="app-page">
       <PageHeader
@@ -442,13 +460,12 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       <Panel className="app-mops-average-panel">
         <div className="app-mops-average-panel__header">
           <div>
-            <div className="app-mops-average-panel__title">Estimated monthly average | {formatMonth(selectedMonth)}</div>
-            <p>Latest available price is carried through every remaining publication day.</p>
+            <div className="app-mops-average-panel__title">{monthFinality.complete === monthFinality.total && monthFinality.total ? "Final" : "Estimated"} monthly average | {formatMonth(selectedMonth)}</div>
+            <p>{monthFinality.complete === monthFinality.total && monthFinality.total ? "Calculated from every scheduled publication day." : "Latest available price is carried through every remaining publication day."}</p>
           </div>
           <div className="app-mops-publication-progress">
             <CalendarDays size={17} aria-hidden="true" />
             <span><strong>{publicationProgress.actual}</strong> actual</span>
-            <span><strong>{publicationProgress.verified}</strong> verified</span>
             <span><strong>{publicationProgress.estimated}</strong> estimated</span>
             <span><strong>{publicationProgress.total}</strong> scheduled</span>
           </div>
@@ -466,14 +483,23 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           })}
         </div>
         <div className={`app-mops-finality ${monthFinality.ready ? "is-ready" : "is-pending"}`}>
-          <StatusBadge tone={monthFinality.ready ? "positive" : "warning"}>{monthFinality.ready ? "Final and verified" : "Not final"}</StatusBadge>
+          <StatusBadge tone={monthFinality.ready ? "positive" : "warning"}>{monthFinality.ready ? "Final average verified" : "Not final"}</StatusBadge>
           <span>{monthFinality.ready
-            ? `All ${monthFinality.total} publication days are verified. Paper hedges for this month expire automatically.`
+            ? `The completed monthly average is source-verified. Paper hedges for this month expire automatically.`
             : !monthFinality.calendarSupported
               ? "The approved Platts publication calendar is unavailable for this year."
               : !monthFinality.reachedLastTradingDay
                 ? `Final trading day: ${formatDate(monthFinality.lastTradingDay)}. FCOS will not expire paper hedges before then.`
-                : `${monthFinality.verified} of ${monthFinality.total} publication days are complete and source-verified.`}</span>
+                : monthFinality.complete !== monthFinality.total
+                  ? `${monthFinality.complete} of ${monthFinality.total} publication days contain complete actual values.`
+                  : monthFinality.verification && !monthFinality.verification.is_current
+                    ? "The saved monthly verification is stale because the underlying MOPS values changed. Verify the final average again."
+                    : "All daily values are complete. Verify the final monthly average against the third-party message."}</span>
+          {!readOnly && verifyMonth ? <Button
+            variant="primary"
+            disabled={!monthFinality.reachedLastTradingDay || monthFinality.complete !== monthFinality.total}
+            onClick={() => { setVerificationText(""); setVerificationError(null); setVerificationOpen(true); }}
+          >{monthFinality.verification ? "Verify again" : "Verify final average"}</Button> : null}
         </div>
       </Panel>
 
@@ -495,7 +521,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
                       <><a className="app-table-source" href={PLATTS_PUBLICATION_SOURCE.url} target="_blank" rel="noreferrer">S&amp;P Global Platts</a><small>Publication calendar</small></>
                     )}
                   </td>
-                  <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge>{record && !record.is_estimate ? <small>{record.verification_status === "verified" ? `Source verified ${formatDateTime(record.verified_at)} HKT` : "Source message not verified"}</small> : null}</td>
+                  <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge>{record && !record.is_estimate ? <small>Included in monthly average</small> : null}</td>
                   <td>{record && !readOnly ? <div className="app-row-actions"><IconButton label="Edit price" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete price" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></div> : null}</td>
                 </tr>
               );
@@ -515,11 +541,11 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
         {error && <InlineError error={error} />}
         <section className="app-form-section">
           <div className="app-form-section__title">Published bulletin capture</div>
-          <Field label="Third-party MOPS message" hint="Paste the original dated message; FCOS compares its date and all three prices with the saved row">
+          <Field label="Published MOPS message" hint="Optional assisted capture for this publication day">
             <textarea className="app-input app-textarea" rows="5" value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder="07-Apr-2026 S380: 421.50 S0.5: 492.25 SGO: 73.45" />
           </Field>
           <Button icon={Bot} onClick={parseRaw} disabled={parsing || !rawText.trim()}>{parsing ? "Parsing..." : "Parse values"}</Button>
-          <div className="app-callout app-callout--neutral">An actual MOPS row is verified only when the pasted third-party message contains the same date, S380, S0.5, and SGO values. Manual rows without evidence remain unverified and cannot finalize the month.</div>
+          <div className="app-callout app-callout--neutral">This message is used only to extract the daily values. Source verification happens once, against the completed final monthly average.</div>
         </section>
         {drawer?.mode === "create" && (
           <section className="app-form-section app-form-section--indication">
@@ -596,6 +622,27 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
             </label>
           </section>
         )}
+      </Drawer>
+
+      <Drawer
+        open={verificationOpen}
+        onClose={() => setVerificationOpen(false)}
+        title={`Verify ${formatMonth(selectedMonth)} final average`}
+        description="Paste the third-party message that states the final monthly averages. FCOS compares all three products with its calculated result."
+        width="medium"
+        footer={<><Button onClick={() => setVerificationOpen(false)} disabled={saving}>Cancel</Button><Button variant="primary" onClick={saveMonthlyVerification} disabled={saving || !verificationText.trim()}>{saving ? "Verifying..." : "Verify monthly average"}</Button></>}
+      >
+        {verificationError && <InlineError error={verificationError} />}
+        <section className="app-form-section">
+          <div className="app-form-section__title">FCOS calculated final average</div>
+          <div className="app-mops-average-values">
+            {MOPS_PRODUCTS.map((product) => <div key={product.field}><span>{product.label}</span><strong>{formatMoney(monthFinality.calculatedAverages?.[product.field], { digits: 3 })}</strong><small>{product.unit}</small></div>)}
+          </div>
+          <Field label="Third-party final monthly-average message" required hint={`The message must identify ${formatMonth(selectedMonth)} and state S380, S0.5, and SGO averages.`}>
+            <textarea className="app-input app-textarea" rows="8" value={verificationText} onChange={(event) => setVerificationText(event.target.value)} placeholder={`Jul 2026\nMOPS Average\nS380: 421.500\nS0.5: 492.250\nSGO: 73.450`} />
+          </Field>
+          <div className="app-callout app-callout--neutral">Only a cryptographic hash and the compared monthly values are retained as verification evidence. The pasted message is not stored.</div>
+        </section>
       </Drawer>
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete MOPS price?" description={deleteTarget ? formatDate(deleteTarget.price_date) : ""} />

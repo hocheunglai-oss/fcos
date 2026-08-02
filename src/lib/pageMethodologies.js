@@ -332,11 +332,11 @@ export const MARKETS_METHODOLOGY = {
   sections: [
     {
       title: 'Market records',
-      body: 'Actual and estimated Singapore MOPS observations are kept separately. An actual row is verified only when its manually pasted third-party message contains the same publication date and all three saved product prices.',
+      body: 'Actual and estimated Singapore MOPS observations are kept separately. Daily publication rows provide the calculation inputs and do not require individual source verification.',
     },
     {
       title: 'Automatic hedge expiry',
-      body: 'FCOS expires a paper hedge automatically only after every contract month reaches its final Platts trading day and every scheduled MOPS row is actual, complete, and source-verified. Spread hedges wait for both contract months. The manual expiry control has been removed.',
+      body: 'FCOS expires a paper hedge automatically only after every contract month reaches its final Platts trading day, every scheduled MOPS row contains complete actual values, and the one final monthly average matches the manually pasted third-party message. Spread hedges wait for both contract months. A daily-value change makes the monthly verification stale.',
     },
     {
       title: 'Forward adjustments',

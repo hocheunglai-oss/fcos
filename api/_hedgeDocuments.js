@@ -174,9 +174,9 @@ export function generateHedgeInvoicePdf(input = {}) {
   y += 14;
   doc.setFontSize(8);
   doc.text(`Beneficiary: ${invoice.paymentDirection.beneficiary.fullName}`, margin, y);
-  y += 5;
-  doc.setFont('helvetica', 'normal');
-  if (invoice.paymentDirection.beneficiaryBankConfigured) {
+  if (invoice.paymentDirection.isReceivable) {
+    y += 5;
+    doc.setFont('helvetica', 'normal');
     doc.text(`Bank: ${invoice.paymentDirection.beneficiary.bankName} | SWIFT: ${invoice.paymentDirection.beneficiary.bankSwift || 'Not provided'}`, margin, y);
     y += 5;
     doc.text(`Account: ${invoice.paymentDirection.beneficiary.accountNumber}`, margin, y);
@@ -184,8 +184,6 @@ export function generateHedgeInvoicePdf(input = {}) {
       y += 5;
       doc.text(`Intermediary: ${invoice.paymentDirection.beneficiary.intermediaryBank}${invoice.paymentDirection.beneficiary.intermediarySwift ? ` | SWIFT: ${invoice.paymentDirection.beneficiary.intermediarySwift}` : ''}`, margin, y);
     }
-  } else {
-    doc.text('Payment instructions: Obtain directly from the beneficiary; banking details are not configured in FCOS.', margin, y);
   }
   doc.setFontSize(7);
   doc.setTextColor(100, 100, 105);
@@ -207,10 +205,10 @@ async function invoiceCounterparty(client, shortName) {
   if (!shortName) return null;
   const { data, error } = await client
     .from('hedge_counterparties')
-    .select('short_name,full_name,address_line1,address_line2,address_line3,attention,bank_name,bank_swift,intermediary_bank,intermediary_swift,account_number')
+    .select('short_name,full_name,address_line1,address_line2,address_line3,attention')
     .eq('short_name', String(shortName))
     .maybeSingle();
-  if (error) throw hedgeDocumentError(`Counterparty payment details could not be loaded: ${error.message}`, 502);
+  if (error) throw hedgeDocumentError(`Counterparty invoice details could not be loaded: ${error.message}`, 502);
   return data || null;
 }
 

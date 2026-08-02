@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.78';
+export const APP_VERSION = '2.0.79';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.79',
+    releasedAt: '2026-08-02',
+    title: 'Final monthly MOPS verification',
+    changes: [
+      'Corrected paper-hedge expiry so daily MOPS rows must be complete but do not require individual verification.',
+      'Added one controlled verification of the calculated final S380, S0.5, and SGO monthly averages against a manually pasted third-party message.',
+      'Made changes to underlying daily MOPS values invalidate the monthly verification until the final average is verified again.',
+      'Removed counterparty banking details and missing-bank warnings from payable FCBHK settlement documents; payment instructions come from the counterparty invoice.',
+    ],
+  },
   {
     version: '2.0.78',
     releasedAt: '2026-08-02',

@@ -380,7 +380,34 @@ function mopsRowTimestamp(row) {
   return String(row?.updated_date || row?.created_date || row?.id || '')
 }
 
-export function mopsMonthFinality(yearMonth, records = [], now = new Date()) {
+export function finalMopsMonthlyAverages(yearMonth, records = []) {
+  const scheduledDates = tradingDaysInMonth(yearMonth)
+  const rowsByDate = new Map()
+
+  for (const row of records || []) {
+    if (!scheduledDates.includes(String(row?.price_date || ''))) continue
+    const existing = rowsByDate.get(row.price_date)
+    if (!existing || (existing.is_estimate && !row.is_estimate) || (Boolean(existing.is_estimate) === Boolean(row.is_estimate) && mopsRowTimestamp(row) > mopsRowTimestamp(existing))) {
+      rowsByDate.set(row.price_date, row)
+    }
+  }
+
+  const rows = scheduledDates.map((date) => rowsByDate.get(date)).filter((row) => row && !row.is_estimate)
+  const completeRows = rows.filter((row) => ['s380', 's05', 'sgo'].every((field) => row[field] !== null && row[field] !== '' && Number.isFinite(Number(row[field]))))
+  if (!scheduledDates.length || completeRows.length !== scheduledDates.length) return null
+
+  const averages = Object.fromEntries(['s380', 's05', 'sgo'].map((field) => [
+    field,
+    Math.round((completeRows.reduce((sum, row) => sum + Number(row[field]), 0) / completeRows.length) * 1000) / 1000,
+  ]))
+  const inputSignature = completeRows
+    .map((row) => `${row.price_date}:${['s380', 's05', 'sgo'].map((field) => Number(row[field]).toString()).join(':')}`)
+    .join('|')
+
+  return { month: yearMonth, ...averages, publicationDays: scheduledDates.length, inputSignature }
+}
+
+export function mopsMonthFinality(yearMonth, records = [], now = new Date(), monthlyVerifications = []) {
   const scheduledDates = tradingDaysInMonth(yearMonth)
   const calendarSupported = hasPlattsPublicationCalendar(yearMonth)
   const lastTradingDay = scheduledDates.at(-1) || null
@@ -397,21 +424,20 @@ export function mopsMonthFinality(yearMonth, records = [], now = new Date()) {
 
   const actualRows = scheduledDates.map((date) => rowsByDate.get(date)).filter((row) => row && !row.is_estimate)
   const completeRows = actualRows.filter((row) => ['s380', 's05', 'sgo'].every((field) => row[field] !== null && row[field] !== '' && Number.isFinite(Number(row[field]))))
-  const verifiedRows = completeRows.filter((row) => row.verification_status === 'verified')
   const missingDates = scheduledDates.filter((date) => !rowsByDate.get(date) || rowsByDate.get(date).is_estimate)
   const incompleteDates = scheduledDates.filter((date) => {
     const row = rowsByDate.get(date)
     return row && !row.is_estimate && !completeRows.includes(row)
   })
-  const unverifiedDates = scheduledDates.filter((date) => {
-    const row = rowsByDate.get(date)
-    return row && !row.is_estimate && completeRows.includes(row) && row.verification_status !== 'verified'
-  })
+  const calculatedAverages = finalMopsMonthlyAverages(yearMonth, records)
+  const verification = (monthlyVerifications || []).find((row) => row.contract_month === yearMonth) || null
+  const averageVerified = Boolean(verification?.is_current === true && calculatedAverages)
   const reachedLastTradingDay = Boolean(lastTradingDay && today >= lastTradingDay)
   const ready = calendarSupported
     && reachedLastTradingDay
     && scheduledDates.length > 0
-    && verifiedRows.length === scheduledDates.length
+    && completeRows.length === scheduledDates.length
+    && averageVerified
 
   return {
     month: yearMonth,
@@ -423,10 +449,11 @@ export function mopsMonthFinality(yearMonth, records = [], now = new Date()) {
     total: scheduledDates.length,
     actual: actualRows.length,
     complete: completeRows.length,
-    verified: verifiedRows.length,
+    averageVerified,
+    verification,
+    calculatedAverages,
     missingDates,
     incompleteDates,
-    unverifiedDates,
   }
 }
 
@@ -437,9 +464,9 @@ export function paperHedgeContractMonths(swap = {}) {
   return [...new Set(months.filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))))]
 }
 
-export function paperHedgeExpiryStatus(swap = {}, records = [], now = new Date()) {
+export function paperHedgeExpiryStatus(swap = {}, records = [], now = new Date(), monthlyVerifications = []) {
   const contractMonths = paperHedgeContractMonths(swap)
-  const months = contractMonths.map((month) => mopsMonthFinality(month, records, now))
+  const months = contractMonths.map((month) => mopsMonthFinality(month, records, now, monthlyVerifications))
   return {
     ready: contractMonths.length > 0 && months.every((month) => month.ready),
     contractMonths,
@@ -844,15 +871,10 @@ function settlementParty(counterparty) {
     return {
       shortName: String(counterparty.short_name || counterparty.shortName || counterparty.full_name || "Counterparty"),
       fullName: String(counterparty.full_name || counterparty.fullName || counterparty.short_name || "Counterparty"),
-      bankName: String(counterparty.bank_name || counterparty.bankName || ""),
-      bankSwift: String(counterparty.bank_swift || counterparty.bankSwift || ""),
-      intermediaryBank: String(counterparty.intermediary_bank || counterparty.intermediaryBank || ""),
-      intermediarySwift: String(counterparty.intermediary_swift || counterparty.intermediarySwift || ""),
-      accountNumber: String(counterparty.account_number || counterparty.accountNumber || ""),
     };
   }
   const name = String(counterparty || "Counterparty");
-  return { shortName: name, fullName: name, bankName: "", bankSwift: "", intermediaryBank: "", intermediarySwift: "", accountNumber: "" };
+  return { shortName: name, fullName: name };
 }
 
 export function hedgeSettlementPaymentDirection(netAmount, counterparty) {
@@ -871,7 +893,6 @@ export function hedgeSettlementPaymentDirection(netAmount, counterparty) {
     beneficiary: payee,
     label: `${payer.shortName} pays ${payee.shortName}`,
     detail: `${payer.fullName} pays ${payee.fullName}`,
-    beneficiaryBankConfigured: Boolean(payee.bankName && payee.accountNumber),
   };
 }
 

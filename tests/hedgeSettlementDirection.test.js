@@ -14,7 +14,7 @@ test('a negative FCBHK settlement makes FCBS the beneficiary', () => {
   assert.equal(direction.label, 'FCBHK pays FCBS');
   assert.equal(direction.invoiceType, 'Credit Note');
   assert.equal(direction.beneficiary.fullName, fcbs.full_name);
-  assert.equal(direction.beneficiaryBankConfigured, false);
+  assert.equal(Object.hasOwn(direction.beneficiary, 'bankName'), false);
 });
 
 test('a positive FCBHK settlement makes FCBHK the beneficiary', () => {
@@ -22,7 +22,7 @@ test('a positive FCBHK settlement makes FCBHK the beneficiary', () => {
   assert.equal(direction.label, 'FCBS pays FCBHK');
   assert.equal(direction.invoiceType, 'Debit Note');
   assert.equal(direction.beneficiary.fullName, 'FRATELLI COSULICH BUNKERS (HK) LTD');
-  assert.equal(direction.beneficiaryBankConfigured, true);
+  assert.equal(direction.beneficiary.bankName, 'UBS AG, Singapore');
 });
 
 test('PDF normalization ignores a forged receivable flag and follows the signed amount', () => {
@@ -58,10 +58,11 @@ test('settlement UI and documents make the payment route explicit', async () => 
   assert.match(view, /label: "FCBHK Invoices"/);
   assert.match(view, /Payment direction/);
   assert.match(view, /Beneficiary:/);
-  assert.match(view, /FCBS bank instructions are not configured/);
+  assert.doesNotMatch(view, /FCBS bank instructions are not configured/);
   assert.doesNotMatch(view, /Money value=\{paymentDirection\.amount\}/);
   assert.match(documents, /PAYMENT DIRECTION:/);
-  assert.match(documents, /Obtain directly from the beneficiary/);
+  assert.doesNotMatch(documents, /Obtain directly from the beneficiary/);
+  assert.match(documents, /if \(invoice\.paymentDirection\.isReceivable\)/);
   assert.doesNotMatch(documents, /Beneficiary: FRATELLI COSULICH BUNKERS \(HK\) LTD/);
   assert.match(documents, /authoritativeInvoicePayload/);
   for (const variable of ['payer', 'payee', 'beneficiary']) {

@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { verifyMopsSourceMessage } from '../api/_hedgeMops.js';
 import {
+  decorateMopsMonthVerifications,
+  verifyMopsMonthlyAverage,
+} from '../api/_hedgeMops.js';
+import {
+  finalMopsMonthlyAverages,
   mopsMonthFinality,
   paperHedgeExpiryStatus,
   tradingDaysInMonth,
 } from '../src/hedge/lib/domain.js';
 
-function verifiedMonth(month) {
+function completeMonth(month) {
   return tradingDaysInMonth(month).map((priceDate, index) => ({
     id: `${month}-${index}`,
     price_date: priceDate,
@@ -16,39 +20,58 @@ function verifiedMonth(month) {
     s05: 500 + index,
     sgo: 70 + index,
     is_estimate: false,
-    verification_status: 'verified',
     updated_date: `${priceDate}T12:00:00Z`,
   }));
 }
 
-test('third-party source verification requires matching date and all three prices', () => {
-  const record = { price_date: '2026-07-31', s380: 421.5, s05: 492.25, sgo: 73.45 };
-  const verified = verifyMopsSourceMessage(record, '31-Jul-2026\nMOPS\nS380: 421.50\nS0.5: 492.25\nSGO: 73.45');
+function verifiedAverage(month, records) {
+  const averages = finalMopsMonthlyAverages(month, records);
+  const verified = verifyMopsMonthlyAverage(month, records, `${month}\nMOPS Average\nS380: ${averages.s380.toFixed(3)}\nS0.5: ${averages.s05.toFixed(3)}\nSGO: ${averages.sgo.toFixed(3)}`, { now: new Date(`${tradingDaysInMonth(month).at(-1)}T12:00:00Z`) });
+  assert.equal(verified.verified, true);
+  return decorateMopsMonthVerifications([{
+    contract_month: month,
+    input_fingerprint: verified.inputFingerprint,
+    calculated_snapshot: verified.calculatedSnapshot,
+    source_snapshot: verified.sourceSnapshot,
+  }], records);
+}
+
+test('third-party source verification compares one final monthly average', () => {
+  const month = '2026-07';
+  const records = completeMonth(month);
+  const averages = finalMopsMonthlyAverages(month, records);
+  const verified = verifyMopsMonthlyAverage(month, records, `Jul 2026\nMOPS Average\nS380: ${averages.s380.toFixed(3)}\nS0.5: ${averages.s05.toFixed(3)}\nSGO: ${averages.sgo.toFixed(3)}`, { now: new Date('2026-07-31T12:00:00Z') });
   assert.equal(verified.verified, true);
 
-  const mismatch = verifyMopsSourceMessage(record, '31-Jul-2026\nMOPS\nS380: 421.50\nS0.5: 492.20\nSGO: 73.45');
+  const mismatch = verifyMopsMonthlyAverage(month, records, `Jul 2026\nMOPS Average\nS380: ${averages.s380.toFixed(3)}\nS0.5: ${(averages.s05 - 0.001).toFixed(3)}\nSGO: ${averages.sgo.toFixed(3)}`, { now: new Date('2026-07-31T12:00:00Z') });
   assert.equal(mismatch.verified, false);
-  assert.match(mismatch.issues.join(' '), /S05.*does not match/i);
+  assert.match(mismatch.issues.join(' '), /S05.*final monthly average/i);
 });
 
-test('a MOPS month becomes final only on its last trading day with every row verified', () => {
+test('a MOPS month becomes final only on its last trading day with complete rows and one verified average', () => {
   const month = '2026-07';
-  const records = verifiedMonth(month);
+  const records = completeMonth(month);
+  const verification = verifiedAverage(month, records);
   assert.equal(tradingDaysInMonth(month).at(-1), '2026-07-31');
-  assert.equal(mopsMonthFinality(month, records, new Date('2026-07-30T12:00:00Z')).ready, false);
-  assert.equal(mopsMonthFinality(month, records, new Date('2026-07-31T12:00:00Z')).ready, true);
+  assert.equal(mopsMonthFinality(month, records, new Date('2026-07-30T12:00:00Z'), verification).ready, false);
+  assert.equal(mopsMonthFinality(month, records, new Date('2026-07-31T12:00:00Z'), verification).ready, true);
 
-  records[0] = { ...records[0], verification_status: 'unverified' };
-  const unverified = mopsMonthFinality(month, records, new Date('2026-07-31T12:00:00Z'));
-  assert.equal(unverified.ready, false);
-  assert.deepEqual(unverified.unverifiedDates, [records[0].price_date]);
+  records[0] = { ...records[0], s380: records[0].s380 + 1, updated_date: '2026-08-01T00:00:00Z' };
+  const staleVerification = decorateMopsMonthVerifications(verification, records);
+  const stale = mopsMonthFinality(month, records, new Date('2026-07-31T12:00:00Z'), staleVerification);
+  assert.equal(stale.ready, false);
+  assert.equal(stale.verification.is_current, false);
 });
 
 test('spread hedge expiry waits for both contract months', () => {
   const swap = { trade_type: 'SPREAD', leg1_month: '2026-06', leg2_month: '2026-07' };
-  const juneOnly = verifiedMonth('2026-06');
-  assert.equal(paperHedgeExpiryStatus(swap, juneOnly, new Date('2026-07-31T12:00:00Z')).ready, false);
-  assert.equal(paperHedgeExpiryStatus(swap, [...juneOnly, ...verifiedMonth('2026-07')], new Date('2026-07-31T12:00:00Z')).ready, true);
+  const june = completeMonth('2026-06');
+  const july = completeMonth('2026-07');
+  const records = [...june, ...july];
+  const juneVerification = verifiedAverage('2026-06', june);
+  const julyVerification = verifiedAverage('2026-07', july);
+  assert.equal(paperHedgeExpiryStatus(swap, records, new Date('2026-07-31T12:00:00Z'), juneVerification).ready, false);
+  assert.equal(paperHedgeExpiryStatus(swap, records, new Date('2026-07-31T12:00:00Z'), [...juneVerification, ...julyVerification]).ready, true);
 });
 
 test('expiry is server-controlled and persisted verification fields are private', async () => {
@@ -56,17 +79,18 @@ test('expiry is server-controlled and persisted verification fields are private'
     readFile(new URL('../src/hedge/views/HedgesView.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../api/_hedgeDeskService.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_hedgeExpiry.js', import.meta.url), 'utf8'),
-    readFile(new URL('../supabase/migrations/20260802083037_hedge_mops_verification_auto_expiry.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260802113000_hedge_monthly_mops_verification.sql', import.meta.url), 'utf8'),
     readFile(new URL('../api/_hedgeSalesforce.js', import.meta.url), 'utf8'),
   ]);
   assert.doesNotMatch(hedges, /Mark as expired/);
   assert.match(hedges, /Expiry is automatic/);
   assert.match(service, /delete sanitized\.is_expired/);
-  assert.match(service, /verifyMopsSourceMessage/);
+  assert.match(service, /verifyMopsMonthlyAverage/);
   assert.match(expiry, /expire_paper_hedge_with_audit/);
-  assert.match(migration, /verification_status text not null default 'unverified'/);
+  assert.match(migration, /create table if not exists public\.hedge_mops_month_verifications/);
+  assert.match(migration, /verify_mops_month_with_audit/);
+  assert.doesNotMatch(migration, /drop column/);
   assert.match(migration, /security invoker/);
-  assert.match(migration, /paper_hedge_auto_expired/);
-  assert.match(migration, /revoke all on table public\.hedge_market_prices from public, anon, authenticated/);
-  assert.match(salesforce, /MOPS source verification is missing/);
+  assert.match(migration, /revoke all on table public\.hedge_mops_month_verifications from public, anon, authenticated/);
+  assert.match(salesforce, /final MOPS monthly average has not been source-verified/);
 });
