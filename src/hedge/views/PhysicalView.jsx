@@ -1,7 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  CheckCircle2,
-  CloudUpload,
   Copy,
   Download,
   Edit3,
@@ -9,19 +7,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { PhysicalTrade } from "@/hedge/api/entities";
-import { pushHedgeToSalesforce } from "@/hedge/api/backendFunctions";
 import {
   calcPhysicalPnl,
-  calcSwapFees,
-  calcSwapMtm,
   downloadCsv,
   formatDate,
   formatMonth,
   formatQuantity,
   hktThisMonth,
   hktToday,
-  roundMoney,
-  swapShareForPhysical,
 } from "../lib/domain";
 import { useActions } from "../data/ActionsContext";
 import {
@@ -140,7 +133,6 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [sfPushing, setSfPushing] = useState(null);
 
   React.useEffect(() => {
     if (quickCreateSignal) {
@@ -222,49 +214,6 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
     rows.map((record) => [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, record.stem_number, record.is_closed ? "Yes" : "No"]),
   );
 
-  const pushSalesforce = async (record) => {
-    if (!record.stem_number) return;
-    setSfPushing(record.id);
-    try {
-      const linked = data.swaps.filter((swap) => (swap.physical_trade_ids || []).includes(record.id));
-      let iceMtm = 0;
-      let iceFees = 0;
-      let fcbsMtm = 0;
-      let fcbsFees = 0;
-      linked.forEach((swap) => {
-        const share = swapShareForPhysical(swap, record.id, data.physicals, settings.general.sgo_bbl_per_mt);
-        const mtm = (swap.is_expired && swap.current_margin != null ? Number(swap.current_margin) : calcSwapMtm(swap, data.mops, settings.general.sgo_bbl_per_mt)?.value || 0) * share;
-        const fees = calcSwapFees(swap, settings.rates);
-        if (swap.venue === "FCBS") {
-          fcbsMtm += mtm;
-          fcbsFees += fees.fcbsVenueFee * share;
-        } else {
-          iceMtm += mtm;
-          iceFees += (fees.broker + fees.ice + fees.iceClearing + fees.sfsCommission) * share;
-        }
-      });
-      const sign = String(record.counterparty || "").trim().toUpperCase() === "HSIN MING" ? 1 : -1;
-      const result = await pushHedgeToSalesforce({
-        action: "sf_push",
-        idempotencyKey: `salesforce:${record.id}:${record.updated_date || record.sf_record_id || "new"}`,
-        physicalTradeId: record.id,
-        expectedRevision: record.revision,
-        stem_number: record.stem_number,
-        lumpsum_ice: linked.some((swap) => swap.venue !== "FCBS") ? roundMoney(sign * (iceMtm - iceFees)) : null,
-        lumpsum_fcbs: linked.some((swap) => swap.venue === "FCBS") ? roundMoney(sign * (fcbsMtm - fcbsFees)) : null,
-        existing_sf_record_id: record.sf_record_id || null,
-      });
-      if (!result?.success) throw new Error(result?.error || result?.details || "Salesforce sync failed");
-      await PhysicalTrade.update(record.id, { sf_record_id: result.sf_record_id }, record.revision);
-      await data.reload({ silent: true });
-      actions.notify({ message: `${record.stem_number} synced to Salesforce` });
-    } catch (error) {
-      actions.notify({ message: error.message || "Salesforce sync failed" });
-    } finally {
-      setSfPushing(null);
-    }
-  };
-
   return (
     <div className="app-page">
       <PageHeader
@@ -317,7 +266,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                     <td><Money value={pnl} strong /></td>
                     <td>
                       <div className="app-row-actions">
-                        {!readOnly && <>{record.stem_number && closed && <IconButton label={record.sf_record_id ? "Update Salesforce" : "Send to Salesforce"} icon={record.sf_record_id ? CheckCircle2 : CloudUpload} variant="quiet" disabled={sfPushing === record.id} onClick={() => pushSalesforce(record)} />}<IconButton label="Duplicate physical trade" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit physical trade" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete physical trade" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}
+                        {!readOnly && <><IconButton label="Duplicate physical trade" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit physical trade" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete physical trade" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}
                       </div>
                     </td>
                   </tr>

@@ -299,6 +299,52 @@ export const BROKER_METHODOLOGIES = {
   },
 };
 
+export const SPECIAL_TERMS_METHODOLOGY = {
+  title: 'Special Terms',
+  description: 'How FCOS manages authoritative Salesforce wording and matching rules.',
+  sections: [
+    {
+      title: 'Salesforce authority',
+      body: 'Special Terms and their rules are read live from Salesforce. FCOS validates the required objects, field types, and lookup targets through Salesforce describe metadata and blocks the workspace when the schema is incompatible.',
+    },
+    {
+      title: 'Term wording',
+      body: 'Terms Text contains the contractual wording. Confirmation and Nomination controls determine whether the PDF is attached, while their rich-text remarks supply document-specific wording.',
+    },
+    {
+      title: 'Rule matching',
+      body: 'A rule applies to either Buyer or Supplier and may use Account, Port, Product, and Country dimensions. Salesforce remains responsible for evaluating those combinations. Account searches always show Account name and CL Key; inactive Accounts and Products are not offered for new rules.',
+    },
+    {
+      title: 'Priority',
+      body: 'Salesforce calculates rule priority from specificity when a rule is inserted. FCOS displays but never writes that value; editing a rule replaces it atomically so the existing Salesforce trigger recalculates priority.',
+    },
+    {
+      title: 'Controlled changes',
+      body: 'Users need Manage Special Terms capability to write. FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, and records idempotent operation history. Removing a term requires its exact name and an audit reason, then removes the term and all linked rules atomically.',
+    },
+  ],
+};
+
+export const MARKETS_METHODOLOGY = {
+  title: 'Markets',
+  description: 'How FCOS maintains MOPS market records and forward adjustments.',
+  sections: [
+    {
+      title: 'Market records',
+      body: 'Actual and estimated Singapore MOPS observations are kept separately. Actual publication records are used for final Hedge Desk settlement only when every scheduled publication day in the approved calendar is complete.',
+    },
+    {
+      title: 'Forward adjustments',
+      body: 'Forward adjustments supplement current market indications for open exposure views. They do not replace final published MOPS and are saved with revision protection.',
+    },
+    {
+      title: 'Access',
+      body: 'Every active FCOS user can view Markets. Only users with Manage Hedge Book permission may create, edit, or remove price records and change forward adjustments.',
+    },
+  ],
+};
+
 export const SETTINGS_METHODOLOGIES = {
   system: {
     title: 'System Settings',

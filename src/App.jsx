@@ -27,6 +27,8 @@ const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
 const GrowthCoaching = lazy(() => import('@/pages/GrowthCoaching'));
 const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
 const HedgeDesk = lazy(() => import('@/pages/HedgeDesk'));
+const Markets = lazy(() => import('@/pages/Markets'));
+const SpecialTerms = lazy(() => import('@/pages/SpecialTerms'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
@@ -103,6 +105,8 @@ const AuthenticatedApp = () => {
             <Route path="/brokers" element={<ModuleGateAny moduleIds={['brokers', 'report_archive']}><BrokerWorkspace /></ModuleGateAny>} />
             <Route path="/report-archive" element={<RedirectWithTab path="/brokers" tab="archive" />} />
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
+            <Route path="/markets" element={<ModuleGate moduleId="markets"><Markets /></ModuleGate>} />
+            <Route path="/special-terms" element={<ModuleGate moduleId="special_terms"><SpecialTerms /></ModuleGate>} />
             <Route path="/hedge-desk" element={<ModuleGate moduleId="hedge_desk"><HedgeDesk /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
             <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />

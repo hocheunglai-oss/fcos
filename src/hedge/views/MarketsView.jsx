@@ -116,7 +116,7 @@ function MopsTooltip({ active, payload, label }) {
   );
 }
 
-export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false }) {
+export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, methodologyAction = null }) {
   const actions = useActions();
   const [range, setRange] = useState("3m");
   const [drawer, setDrawer] = useState(null);
@@ -298,8 +298,8 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
         is_estimate: Boolean(form.is_estimate),
       };
       const label = `MOPS ${payload.price_date}${payload.is_estimate ? " estimate" : ""}`;
-      if (drawer?.mode === "edit") await actions.update({ entity: MopsPrice, entityName: "MopsPrice", id: drawer.record.id, payload, before: drawer.record, label });
-      else await actions.create({ entity: MopsPrice, entityName: "MopsPrice", payload, label });
+      if (drawer?.mode === "edit") await actions.update({ entity: priceEntity, entityName: "MopsPrice", id: drawer.record.id, payload, before: drawer.record, label });
+      else await actions.create({ entity: priceEntity, entityName: "MopsPrice", payload, label });
 
       if (forwardSuggestion?.apply) {
         const parsedAdjustments = Object.fromEntries(Object.entries(forwardSuggestion.adjustments || {})
@@ -327,7 +327,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
     if (!deleteTarget) return;
     setSaving(true);
     try {
-      await actions.remove({ entity: MopsPrice, entityName: "MopsPrice", record: deleteTarget, label: `MOPS ${deleteTarget.price_date}` });
+      await actions.remove({ entity: priceEntity, entityName: "MopsPrice", record: deleteTarget, label: `MOPS ${deleteTarget.price_date}` });
       setDeleteTarget(null);
     } finally {
       setSaving(false);
@@ -353,7 +353,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
         eyebrow="Market data"
         title="MOPS market"
         description="Track published Singapore prices, maintain forward adjustments, and control estimated versus actual entries."
-        actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add price</Button> : null}
+        actions={<>{methodologyAction}{!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add price</Button> : null}</>}
       />
 
       <div className="app-metric-grid app-metric-grid--4">

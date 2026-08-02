@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bot, BookOpen, Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { useDeskData } from '@/hedge/hooks/useDeskData';
@@ -6,7 +7,6 @@ import { useAppSettings } from '@/hedge/hooks/useAppSettings';
 import { OverviewView } from '@/hedge/views/OverviewView';
 import { PhysicalView } from '@/hedge/views/PhysicalView';
 import { HedgesView } from '@/hedge/views/HedgesView';
-import { MarketsView } from '@/hedge/views/MarketsView';
 import { SettlementView } from '@/hedge/views/SettlementView';
 import { CounterpartiesView } from '@/hedge/views/CounterpartiesView';
 import { AssistantPanel } from '@/hedge/components/AssistantPanel';
@@ -18,7 +18,6 @@ const TABS = [
   { id: 'overview', label: 'Overview', icon: Gauge },
   { id: 'physical', label: 'Physical Trades', icon: Handshake },
   { id: 'hedges', label: 'Paper Hedges', icon: ChartNoAxesCombined },
-  { id: 'markets', label: 'Markets', icon: FileSpreadsheet },
   { id: 'settlement', label: 'Settlement', icon: FileSpreadsheet },
   { id: 'counterparties', label: 'Counterparties', icon: Building2 },
   { id: 'methodology', label: 'Methodology', icon: BookOpen },
@@ -48,31 +47,31 @@ function MethodologyView() {
 }
 
 export default function HedgeDesk() {
+  const navigate = useNavigate();
   const data = useDeskData();
   const settings = useAppSettings();
   const [tab, setTab] = useState('overview');
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [quickCreateSignals] = useState({ physical: 0, hedges: 0, markets: 0 });
+  const [quickCreateSignals] = useState({ physical: 0, hedges: 0 });
   const capabilities = data.capabilities || {};
   const readOnly = !Object.values(capabilities).some(Boolean);
 
   const content = useMemo(() => {
     if (tab === 'physical') return <PhysicalView data={data} settings={settings} quickCreateSignal={quickCreateSignals.physical} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'hedges') return <HedgesView data={data} settings={settings} quickCreateSignal={quickCreateSignals.hedges} readOnly={!capabilities.hedge_book_manage} />;
-    if (tab === 'markets') return <MarketsView data={data} settings={settings} quickCreateSignal={quickCreateSignals.markets} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'settlement') return <SettlementView data={data} settings={settings} readOnly={!capabilities.hedge_settlement_manage} canClose={capabilities.hedge_close_approve === true} />;
     if (tab === 'counterparties') return <CounterpartiesView data={data} settings={settings} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'methodology') return <MethodologyView />;
-    return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => setTab(path === '/hedges' ? 'hedges' : path === '/markets' ? 'markets' : path === '/settlement' ? 'settlement' : 'overview')} />;
-  }, [capabilities, data, quickCreateSignals, readOnly, settings, tab]);
+    return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => { if (path === '/markets') navigate('/markets'); else setTab(path === '/hedges' ? 'hedges' : path === '/settlement' ? 'settlement' : path === '/audit' ? 'methodology' : 'overview'); }} />;
+  }, [capabilities, data, navigate, quickCreateSignals, readOnly, settings, tab]);
 
   if ((data.loading || settings.loading) && !data.physicals.length && !data.swaps.length) {
-    return <div className="hedge-desk-root app-shell"><EmptyState title="Loading Hedge Desk" description="Preparing the native trading book and shared configuration." icon={RefreshCw} /></div>;
+    return <div className="hedge-desk-root"><EmptyState title="Loading Hedge Desk" description="Preparing the native trading book and shared configuration." icon={RefreshCw} /></div>;
   }
 
   return (
     <ActionsProvider reload={data.reload}>
-      <div className="hedge-desk-root app-shell">
+      <div className="hedge-desk-root">
         <div className="hedge-desk-commandbar">
           <div>
             <strong>Hedge Desk</strong>

@@ -1,3 +1,10 @@
+import { richTextPlainLength, sanitizeRichText } from './_richText.js';
+
+const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
+  'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
+  'netAmount', 'direction', 'issueDate', 'dueDate',
+]);
+
 const COMMON_FIELDS = [
   'id', 'legacy_source_id', 'created_date', 'updated_date', 'created_by',
   'created_by_id', 'updated_by_id', 'revision',
@@ -104,6 +111,29 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
     clean.created_by_id = profile.id;
   }
   return { clean, relationships };
+}
+
+function sanitizeAppConfigPayload(payload, configKey) {
+  if (configKey !== 'email_settings') return payload;
+  const value = payload?.value && typeof payload.value === 'object' ? payload.value : {};
+  const subject = String(value.email_subject || '').trim().slice(0, 500);
+  const emailBody = sanitizeRichText(value.email_body, 100000);
+  if (!subject) throw httpError('Settlement email subject is required.');
+  if (!emailBody || richTextPlainLength(emailBody) < 3) throw httpError('Settlement email message is required.');
+  const templateText = `${subject} ${emailBody}`;
+  for (const match of templateText.matchAll(/\{([^{}]+)\}/g)) {
+    if (!SETTLEMENT_TEMPLATE_VARIABLES.has(match[1])) throw httpError(`Unknown settlement template variable: {${match[1]}}.`);
+  }
+  return {
+    ...payload,
+    value: {
+      email_to: String(value.email_to || '').trim().slice(0, 1000),
+      email_cc: String(value.email_cc || '').trim().slice(0, 1000),
+      email_bcc: String(value.email_bcc || '').trim().slice(0, 1000),
+      email_subject: subject,
+      email_body: emailBody,
+    },
+  };
 }
 
 function applySort(query, config, sort) {
@@ -330,6 +360,7 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
     }
     if (configKey === 'closed_months') writeConfig = { ...config, capability: 'hedge_close_approve' };
     if (configKey === 'fwd_spreads') writeConfig = { ...config, capability: 'hedge_book_manage' };
+    body = { ...body, payload: sanitizeAppConfigPayload(body.payload, configKey) };
   }
   await requireWriteCapability(capabilities, writeConfig);
 
@@ -377,6 +408,39 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
   }
 
   throw httpError('Unsupported Hedge Desk data action.', 400);
+}
+
+export async function handleHedgeMarkets(body, profile, { client, capabilities }) {
+  const action = String(body?.action || 'snapshot');
+  if (action === 'snapshot') {
+    const [mops, settingsResult] = await Promise.all([
+      listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
+      client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),
+    ]);
+    if (settingsResult.error) throw httpError(`Market settings could not be loaded: ${settingsResult.error.message}`, 502);
+    const settings = Object.fromEntries((settingsResult.data || []).map((row) => [row.key, row]));
+    return {
+      mops,
+      settings: {
+        general: settings.general?.value || {},
+        forwardSpreads: settings.fwd_spreads?.value || {},
+        forwardSpreadsUpdatedAt: settings.fwd_spreads?.updated_date || null,
+        forwardSpreadsRevision: Number(settings.fwd_spreads?.revision || 0),
+      },
+      capabilities: { hedge_book_manage: capabilities?.hedge_book_manage === true },
+    };
+  }
+
+  if (action === 'save_spreads') {
+    const current = await client.from('hedge_settings').select('id,key,value,revision').eq('key', 'fwd_spreads').maybeSingle();
+    if (current.error) throw httpError(`Forward adjustments could not be validated: ${current.error.message}`, 502);
+    const payload = { key: 'fwd_spreads', value: body.value || {}, label: 'fwd_spreads' };
+    if (!current.data) return handleHedgeDeskEntity({ action: 'create', entity: 'AppConfig', payload }, profile, { client, capabilities });
+    return handleHedgeDeskEntity({ action: 'update', entity: 'AppConfig', id: current.data.id, expectedRevision: body.expectedRevision, payload }, profile, { client, capabilities });
+  }
+
+  if (String(body?.entity || '') !== 'MopsPrice') throw httpError('Markets may access only market-price records.', 403);
+  return handleHedgeDeskEntity(body, profile, { client, capabilities });
 }
 
 export function hedgeEntityWriteCapability(entity) {

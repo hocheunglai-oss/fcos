@@ -38,6 +38,7 @@ import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/d
 import { useAuth } from '@/lib/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
+import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SETTINGS_TAB_KEY = 'settings:active-tab';
@@ -49,7 +50,7 @@ const SETTINGS_TABS = [
   { id: 'email', label: 'Email Senders', icon: Mail },
   { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
   { id: 'documents', label: 'STEM Documents', icon: FileText },
-  { id: 'ai', label: 'AI Search', icon: Sparkles },
+  { id: 'ai', label: 'AI Models', icon: Sparkles },
   { id: 'hedge-desk', label: 'Hedge Desk', icon: ChartNoAxesCombined },
   { id: 'health', label: 'System Health', icon: Activity },
 ];
@@ -1050,6 +1051,7 @@ export default function SettingsPage({ methodologyAction = null }) {
         </TabsContent>
 
         <TabsContent value="ai" className="mt-0">
+          <div className="space-y-5">
           <SettingsPanel
             icon={Sparkles}
             title="Dashboard AI Search"
@@ -1207,6 +1209,8 @@ export default function SettingsPage({ methodologyAction = null }) {
               />
             )}
           </SettingsPanel>
+          <HedgeAssistantAiSettings />
+          </div>
         </TabsContent>
 
         <TabsContent value="health" className="mt-0">

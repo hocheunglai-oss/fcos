@@ -1,14 +1,53 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Bot, Database, Save, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Database, ExternalLink, GripVertical, Save, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { appClient } from '@/api/appClient';
 import { useAuth } from '@/lib/AuthContext';
 import { useAppSettings } from '@/hedge/hooks/useAppSettings';
+import { getHedgeSalesforceMapping } from '@/hedge/api/backendFunctions';
+
+const SETTLEMENT_VARIABLES = [
+  ['Invoice number', '{invoiceNumber}'],
+  ['Invoice type', '{invoiceType}'],
+  ['Settlement month', '{settlementMonth}'],
+  ['Counterparty', '{counterparty}'],
+  ['Attention', '{attn}'],
+  ['Net amount', '{netAmount}'],
+  ['Payment direction', '{direction}'],
+  ['Issue date', '{issueDate}'],
+  ['Due date', '{dueDate}'],
+].map(([label, token]) => ({ label, token }));
+
+const QUILL_MODULES = {
+  toolbar: [
+    [{ header: [false, 3, 4] }],
+    ['bold', 'italic', 'underline'],
+    [{ color: [] }, { background: [] }],
+    [{ list: 'ordered' }, { list: 'bullet' }],
+    ['link'],
+    ['clean'],
+  ],
+};
+
+const PREVIEW_VALUES = {
+  invoiceNumber: 'FCBHK_INV_OTC-2026-0088',
+  invoiceType: 'Settlement invoice',
+  settlementMonth: 'July 2026',
+  counterparty: 'Sample Counterparty',
+  attn: 'Accounts Department',
+  netAmount: '125,000.00',
+  direction: 'payable to',
+  issueDate: '02 Aug 2026',
+  dueDate: '09 Aug 2026',
+};
+
+function renderPreview(value) {
+  return String(value || '').replace(/\{([^{}]+)\}/g, (match, key) => PREVIEW_VALUES[key] || match);
+}
 
 function numericDraft(value) {
   return Object.fromEntries(Object.entries(value || {}).map(([key, item]) => [key, String(item ?? '')]));
@@ -45,11 +84,13 @@ export default function HedgeSettingsPanel() {
   const [rates, setRates] = useState({});
   const [lists, setLists] = useState({ products: '', brokers: '', venues: '', counterparts: '' });
   const [email, setEmail] = useState({ email_to: '', email_cc: '', email_bcc: '', email_subject: '', email_body: '' });
-  const [salesforce, setSalesforce] = useState({ productId: '', recordTypeId: '', iceSupplierId: '', fcbsSupplierId: '', icePaymentTerm: '', fcbsPaymentTerm: '' });
-  const [assistant, setAssistant] = useState(null);
-  const [assistantError, setAssistantError] = useState('');
+  const [salesforce, setSalesforce] = useState(null);
+  const [salesforceError, setSalesforceError] = useState('');
   const [saving, setSaving] = useState('');
   const [message, setMessage] = useState('');
+  const [activeTemplateField, setActiveTemplateField] = useState('body');
+  const subjectRef = useRef(null);
+  const bodyEditorRef = useRef(null);
 
   useEffect(() => {
     if (settings.loading) return;
@@ -63,24 +104,17 @@ export default function HedgeSettingsPanel() {
       email_subject: settings.email.email_subject || '',
       email_body: settings.email.email_body || '',
     });
-    setSalesforce({
-      productId: settings.salesforceMapping.productId || '',
-      recordTypeId: settings.salesforceMapping.recordTypeId || '',
-      iceSupplierId: settings.salesforceMapping.venues?.ICE?.supplierId || '',
-      fcbsSupplierId: settings.salesforceMapping.venues?.FCBS?.supplierId || '',
-      icePaymentTerm: settings.salesforceMapping.venues?.ICE?.paymentTerm || '',
-      fcbsPaymentTerm: settings.salesforceMapping.venues?.FCBS?.paymentTerm || '',
-    });
   }, [settings.loading]);
 
   useEffect(() => {
-    appClient.functions.invoke('hedgeDeskAssistantSettings', {}, { cache: false }).then(({ data }) => {
-      if (data?.error) throw new Error(data.error);
-      setAssistant(data);
-    }).catch((error) => setAssistantError(error.message));
+    let cancelled = false;
+    getHedgeSalesforceMapping().then((value) => {
+      if (!cancelled) setSalesforce(value);
+    }).catch((error) => {
+      if (!cancelled) setSalesforceError(error.message || 'Salesforce mapping could not be validated.');
+    });
+    return () => { cancelled = true; };
   }, []);
-
-  const totalUsage = useMemo(() => Object.values(assistant?.usage || {}).reduce((sum, row) => sum + Number(row.estimatedCostUsd || 0), 0), [assistant]);
 
   const saveKey = async (key, value, success) => {
     setSaving(key);
@@ -95,12 +129,34 @@ export default function HedgeSettingsPanel() {
     }
   };
 
+  const insertSubjectVariable = (token) => {
+    const input = subjectRef.current;
+    const start = input?.selectionStart ?? email.email_subject.length;
+    const end = input?.selectionEnd ?? start;
+    setEmail((current) => ({ ...current, email_subject: `${current.email_subject.slice(0, start)}${token}${current.email_subject.slice(end)}` }));
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(start + token.length, start + token.length);
+    });
+  };
+
+  const insertBodyVariable = (token) => {
+    const editor = bodyEditorRef.current?.getEditor();
+    if (!editor) return;
+    const selection = editor.getSelection(true);
+    const index = selection?.index ?? Math.max(0, editor.getLength() - 1);
+    editor.insertText(index, token, 'user');
+    editor.setSelection(index + token.length, 0, 'silent');
+  };
+
+  const droppedToken = (event) => event.dataTransfer.getData('application/x-template-variable') || event.dataTransfer.getData('text/plain');
+
   if (settings.loading) return <p className="text-sm text-muted-foreground">Loading Hedge Desk settings...</p>;
 
   return (
     <div className="space-y-6">
       {!isAdministrator && <Alert><AlertDescription>Hedge Desk configuration is read-only. Administrators and the General Manager manage these shared settings.</AlertDescription></Alert>}
-      {(message || settings.error || assistantError) && <Alert><AlertDescription>{message || settings.error?.message || assistantError}</AlertDescription></Alert>}
+      {(message || settings.error) && <Alert><AlertDescription>{message || settings.error?.message}</AlertDescription></Alert>}
 
       <Section title="Valuation controls" description="Shared conversion, margin, fee, and controlled-list inputs used by every Hedge Desk user." icon={SlidersHorizontal}>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -119,21 +175,74 @@ export default function HedgeSettingsPanel() {
         <div className="grid gap-4 md:grid-cols-3">
           {['email_to', 'email_cc', 'email_bcc'].map((key) => <div key={key} className="space-y-1.5"><Label htmlFor={`hedge-email-${key}`}>{key.replace('email_', '').toUpperCase()}</Label><Input id={`hedge-email-${key}`} value={email[key]} disabled={!isAdministrator} onChange={(event) => setEmail((current) => ({ ...current, [key]: event.target.value }))} /></div>)}
         </div>
-        <div className="mt-4 space-y-1.5"><Label htmlFor="hedge-email-subject">Subject template</Label><Input id="hedge-email-subject" value={email.email_subject} disabled={!isAdministrator} onChange={(event) => setEmail((current) => ({ ...current, email_subject: event.target.value }))} /></div>
-        <div className="mt-4 space-y-1.5"><Label htmlFor="hedge-email-body">Message template</Label><Textarea id="hedge-email-body" rows={8} value={email.email_body} disabled={!isAdministrator} onChange={(event) => setEmail((current) => ({ ...current, email_body: event.target.value }))} /></div>
+        <div className="mt-4 space-y-2">
+          <Label>Template variables</Label>
+          <p className="text-xs text-muted-foreground">Drag a variable into the subject or message, or click it to insert it into the message.</p>
+          <div className="flex flex-wrap gap-2">
+            {SETTLEMENT_VARIABLES.map((variable) => (
+              <button
+                key={variable.token}
+                type="button"
+                draggable={isAdministrator}
+                disabled={!isAdministrator}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:cursor-default disabled:opacity-60"
+                onClick={() => activeTemplateField === 'subject' ? insertSubjectVariable(variable.token) : insertBodyVariable(variable.token)}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'copy';
+                  event.dataTransfer.setData('text/plain', variable.token);
+                  event.dataTransfer.setData('application/x-template-variable', variable.token);
+                }}
+                title={`Insert ${variable.label}`}
+              >
+                <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                {variable.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4 space-y-1.5">
+          <Label htmlFor="hedge-email-subject">Subject template</Label>
+          <Input
+            ref={subjectRef}
+            id="hedge-email-subject"
+            value={email.email_subject}
+            disabled={!isAdministrator}
+            onChange={(event) => setEmail((current) => ({ ...current, email_subject: event.target.value }))}
+            onFocus={() => setActiveTemplateField('subject')}
+            onDragOver={(event) => { if (isAdministrator) event.preventDefault(); }}
+            onDrop={(event) => { if (!isAdministrator) return; event.preventDefault(); insertSubjectVariable(droppedToken(event)); }}
+          />
+        </div>
+        <div className="mt-4 space-y-1.5">
+          <Label>Message template</Label>
+          <div
+            className="rounded-md bg-background [&_.ql-container]:min-h-52 [&_.ql-editor]:min-h-52"
+            onDragOver={(event) => { if (isAdministrator) event.preventDefault(); }}
+            onDrop={(event) => { if (!isAdministrator) return; event.preventDefault(); insertBodyVariable(droppedToken(event)); }}
+          >
+            <ReactQuill ref={bodyEditorRef} theme="snow" value={email.email_body} readOnly={!isAdministrator} modules={QUILL_MODULES} onFocus={() => setActiveTemplateField('body')} onChange={(email_body) => setEmail((current) => ({ ...current, email_body }))} />
+          </div>
+        </div>
+        <div className="mt-4 rounded-md border border-border bg-muted/20 p-4">
+          <Label>Rendered preview</Label>
+          <p className="mt-2 border-b border-border pb-3 text-sm font-semibold">{renderPreview(email.email_subject) || 'No subject'}</p>
+          <div className="mt-3 [&_.ql-container]:border-0 [&_.ql-editor]:min-h-24 [&_.ql-editor]:p-0"><ReactQuill theme="bubble" readOnly value={renderPreview(email.email_body)} modules={{ toolbar: false }} /></div>
+        </div>
         {isAdministrator && <Button className="mt-4" disabled={Boolean(saving)} onClick={() => saveKey('email_settings', email, 'Settlement communication defaults saved.')}><Save className="mr-2 h-4 w-4" />Save communication</Button>}
       </Section>
 
-      <Section title="Salesforce mapping" description="FCOS uses its shared Salesforce authentication. These record IDs identify the existing SWAPS product, suppliers, and optional record type." icon={Database}>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {Object.entries(salesforce).map(([key, value]) => <div key={key} className="space-y-1.5"><Label htmlFor={`hedge-sf-${key}`}>{key.replace(/([a-z])([A-Z])/g, '$1 $2')}</Label><Input id={`hedge-sf-${key}`} value={value} disabled={!isAdministrator} onChange={(event) => setSalesforce((current) => ({ ...current, [key]: event.target.value.trim() }))} /></div>)}
-        </div>
-        {isAdministrator && <Button className="mt-4" disabled={Boolean(saving)} onClick={() => saveKey('salesforce_mapping', { ...settings.salesforceMapping, productId: salesforce.productId, recordTypeId: salesforce.recordTypeId, venues: { ICE: { supplierId: salesforce.iceSupplierId, paymentTerm: salesforce.icePaymentTerm }, FCBS: { supplierId: salesforce.fcbsSupplierId, paymentTerm: salesforce.fcbsPaymentTerm } } }, 'Salesforce mapping saved.')}><Save className="mr-2 h-4 w-4" />Save Salesforce mapping</Button>}
-      </Section>
-
-      <Section title="Trading Assistant" description="A separate administrator-selected model and USD usage total for compact Hedge Desk book summaries." icon={Bot}>
-        {assistant ? <div className="grid gap-4 md:grid-cols-[minmax(0,320px)_1fr] md:items-end"><div className="space-y-1.5"><Label>Interpretation model</Label><Select value={assistant.modelId} disabled={!isAdministrator || Boolean(saving)} onValueChange={(value) => setAssistant((current) => ({ ...current, modelId: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{assistant.models.map((model) => <SelectItem key={model.id} value={model.id}>{model.label} · {model.costTier}</SelectItem>)}</SelectContent></Select></div><div className="text-sm"><strong>${totalUsage.toFixed(6)}</strong><span className="ml-2 text-xs text-muted-foreground">estimated total recorded usage</span></div></div> : <p className="text-sm text-muted-foreground">Loading model and usage...</p>}
-        {assistant && isAdministrator && <Button className="mt-4" disabled={Boolean(saving)} onClick={async () => { await saveKey('assistant_model', assistant.modelId, 'Trading Assistant model saved.'); const { data } = await appClient.functions.invoke('hedgeDeskAssistantSettings', {}, { cache: false }); if (!data?.error) setAssistant(data); }}><Save className="mr-2 h-4 w-4" />Save model</Button>}
+      <Section title="Salesforce mapping" description="FCOS validates the approved Product, record type, and supplier Accounts against live Salesforce metadata. Raw record IDs are not editable." icon={Database}>
+        {salesforceError && <Alert><AlertDescription>{salesforceError}</AlertDescription></Alert>}
+        {!salesforce && !salesforceError && <p className="text-sm text-muted-foreground">Validating Salesforce mapping...</p>}
+        {salesforce && <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            {[{ label: 'Product', value: salesforce.product.name, id: salesforce.product.id }, { label: 'Record type', value: salesforce.recordType.name, id: salesforce.recordType.id }].map((item) => <a key={item.label} href={`${salesforce.instanceUrl}/${item.id}`} target="_blank" rel="noreferrer" className="rounded-md border border-border bg-background p-3 hover:bg-muted/40"><span className="text-xs font-medium text-muted-foreground">{item.label}</span><strong className="mt-1 flex items-center gap-2 text-sm"><ShieldCheck className="h-4 w-4 text-emerald-600" />{item.value}<ExternalLink className="h-3.5 w-3.5 text-muted-foreground" /></strong></a>)}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {Object.entries(salesforce.venues || {}).map(([venue, route]) => <a key={venue} href={`${salesforce.instanceUrl}/${route.supplier.id}`} target="_blank" rel="noreferrer" className="rounded-md border border-border bg-background p-3 hover:bg-muted/40"><span className="text-xs font-medium text-muted-foreground">{venue} supplier</span><strong className="mt-1 flex items-center gap-2 text-sm"><ShieldCheck className="h-4 w-4 text-emerald-600" />{route.supplier.name}<ExternalLink className="h-3.5 w-3.5 text-muted-foreground" /></strong><small className="mt-1 block text-muted-foreground">{route.supplier.clKey || 'No CL Key'} · new records use {route.newRecordPaymentTerm}; existing payment terms are preserved</small></a>)}
+          </div>
+          <p className="text-xs text-muted-foreground">Mapping revision {salesforce.mappingRevision}. Changes require a validated deployment rather than browser-entered Salesforce IDs.</p>
+        </div>}
       </Section>
     </div>
   );

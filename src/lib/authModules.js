@@ -24,7 +24,9 @@ export const APP_MODULES = [
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/brokers?tab=archive', sortOrder: 75 },
   { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
-  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 87 },
+  { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
+  { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
+  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
@@ -40,6 +42,7 @@ export const APP_CAPABILITIES = [
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage settlement, invoices, and clearing entries.' },
   { id: 'hedge_close_approve', label: 'Approve Hedge Close', description: 'Close or reopen months and approve SFS reports.' },
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
+  { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
 ];
 
 export const FULL_CAPABILITIES = Object.fromEntries(APP_CAPABILITIES.map((capability) => [capability.id, true]));

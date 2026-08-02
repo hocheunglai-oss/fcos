@@ -56,7 +56,9 @@ test('browser authentication loads protected profile data through the server API
   assert.match(appClientSource, /responseIsJson/);
   assert.match(appClientSource, /The FCOS server API is unavailable/);
   assert.match(loginSource, /visibleError/);
-  assert.equal(JSON.parse(packageSource).scripts.dev, 'vercel dev');
+  const scripts = JSON.parse(packageSource).scripts;
+  assert.equal(scripts.dev, 'vite');
+  assert.equal(scripts['dev:full'], 'vercel dev');
 });
 
 test('report archive compensates cross-system failures', async () => {

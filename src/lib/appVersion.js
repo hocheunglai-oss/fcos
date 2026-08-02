@@ -1,6 +1,19 @@
-export const APP_VERSION = '2.0.76';
+export const APP_VERSION = '2.0.77';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.77',
+    releasedAt: '2026-08-02',
+    title: 'Unified AI settings, Markets, and Salesforce Special Terms',
+    changes: [
+      'Combined Dashboard AI Search and Hedge Desk Trading Assistant model selection and estimated USD usage in one AI Models settings tab.',
+      'Moved Markets into a standalone Trading page available to every active user by default while retaining controlled market-price editing.',
+      'Replaced Hedge settlement HTML-source editing with a rich-text editor and draggable settlement variables.',
+      'Aligned the Hedge Desk theme, colors, spacing, and application shell behavior with the rest of FCOS.',
+      'Moved Salesforce SWAPS synchronization to expired paper hedges with final-MOPS validation, server-calculated net P&L, one allocation per linked STEM, and an all-or-none previewed transaction.',
+      'Added Salesforce-authoritative Special Terms wording and rule management with schema validation, stale-write protection, Salesforce-calculated priority, and controlled deletion.',
+    ],
+  },
   {
     version: '2.0.76',
     releasedAt: '2026-08-02',

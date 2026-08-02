@@ -105,13 +105,14 @@ import {
   validateAgreedCompensationClaimLink,
 } from '../_unofficialCompensationService.js';
 import { canManageUnofficialCompensationStatus } from '../_unofficialCompensation.js';
-import { handleHedgeDeskEntity } from '../_hedgeDeskService.js';
+import { handleHedgeDeskEntity, handleHedgeMarkets } from '../_hedgeDeskService.js';
 import { parseMopsText } from '../_hedgeMops.js';
 import { generateHedgeInvoicePdf, saveHedgeInvoicePdf, sendHedgeInvoiceEmailIdempotent } from '../_hedgeDocuments.js';
 import { approveAndSendHedgeSfsReport, getHedgeSfsFile, getHedgeSfsMonthReport, hedgeSfsHealth } from '../_hedgeSfsService.js';
 import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js';
-import { pushHedgeSalesforce } from '../_hedgeSalesforce.js';
+import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce } from '../_hedgeSalesforce.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -182,7 +183,9 @@ const ADMIN_APP_MODULES = [
     path: '/account-managers',
     sortOrder: 85,
   },
-  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 87 },
+  { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
+  { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
+  { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];
@@ -238,6 +241,7 @@ const ADMIN_CAPABILITIES = [
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage clearing entries, settlement invoices, and settlement notices.' },
   { id: 'hedge_close_approve', label: 'Approve Hedge Close and Reports', description: 'Close or reopen months and approve SFS reports.' },
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration, integrations, and Trading Assistant model.' },
+  { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
@@ -310,6 +314,8 @@ const FALLBACK_TYPE_PERMISSIONS = {
     report_archive: true,
     buyers_administrator: false,
     hedge_desk: true,
+    markets: true,
+    special_terms: true,
     settings: true,
     admin: false,
   },
@@ -326,6 +332,8 @@ const FALLBACK_TYPE_PERMISSIONS = {
     report_archive: true,
     buyers_administrator: false,
     hedge_desk: true,
+    markets: true,
+    special_terms: true,
     settings: false,
     admin: false,
   },
@@ -342,6 +350,8 @@ const FALLBACK_TYPE_PERMISSIONS = {
     report_archive: false,
     buyers_administrator: false,
     hedge_desk: false,
+    markets: true,
+    special_terms: true,
     settings: false,
     admin: false,
   },
@@ -358,6 +368,8 @@ const FALLBACK_TYPE_PERMISSIONS = {
     report_archive: false,
     buyers_administrator: false,
     hedge_desk: false,
+    markets: true,
+    special_terms: true,
     settings: false,
     admin: false,
   },
@@ -374,6 +386,8 @@ const FALLBACK_TYPE_PERMISSIONS = {
     report_archive: false,
     buyers_administrator: false,
     hedge_desk: false,
+    markets: true,
+    special_terms: true,
     settings: false,
     admin: false,
   },
@@ -390,6 +404,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_settlement_manage: false,
     hedge_close_approve: false,
     hedge_admin: false,
+    special_terms_manage: true,
   },
   finance: {
     disputes_approve: false,
@@ -400,6 +415,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_settlement_manage: true,
     hedge_close_approve: false,
     hedge_admin: false,
+    special_terms_manage: false,
   },
   operations: {
     disputes_approve: false,
@@ -410,6 +426,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_settlement_manage: false,
     hedge_close_approve: false,
     hedge_admin: false,
+    special_terms_manage: true,
   },
   interoffice: {
     disputes_approve: false,
@@ -420,6 +437,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_settlement_manage: false,
     hedge_close_approve: false,
     hedge_admin: false,
+    special_terms_manage: false,
   },
   viewer: {
     disputes_approve: false,
@@ -430,6 +448,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_settlement_manage: false,
     hedge_close_approve: false,
     hedge_admin: false,
+    special_terms_manage: false,
   },
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
@@ -993,7 +1012,8 @@ const HANDLER_MODULE_ACCESS = {
   navigationPreferencesSave: [],
   navigationPreferencesReset: [],
   hedgeDeskEntity: ['hedge_desk'],
-  hedgeDeskParseMops: ['hedge_desk'],
+  hedgeMarkets: ['markets'],
+  hedgeDeskParseMops: ['hedge_desk', 'markets'],
   hedgeDeskGenerateInvoice: ['hedge_desk'],
   hedgeDeskSaveInvoicePdf: ['hedge_desk'],
   hedgeDeskSendInvoiceEmail: ['hedge_desk'],
@@ -1001,9 +1021,17 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskSfsFile: ['hedge_desk'],
   hedgeDeskSfsSend: ['hedge_desk'],
   hedgeDeskSalesforcePush: ['hedge_desk'],
+  hedgeDeskSalesforcePreview: ['hedge_desk'],
+  hedgeDeskSalesforceMapping: ['hedge_desk'],
   hedgeDeskAssistant: ['hedge_desk'],
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
+  specialTermsWorkspace: ['special_terms'],
+  specialTermsOptions: ['special_terms'],
+  specialTermsSave: ['special_terms'],
+  specialTermsDelete: ['special_terms'],
+  specialTermRuleSave: ['special_terms'],
+  specialTermRuleDelete: ['special_terms'],
   paymentCollectionsReconcileCron: [],
   growthReportingLinesList: [],
   growthReportingLineSave: [],
@@ -1942,7 +1970,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, hedgeRows, emailSenderRows] = await Promise.all([
+  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2093,6 +2121,21 @@ async function universalAuditTrail(body, req) {
         errorCode: row.error_code,
       },
     })),
+    safeAuditRows(client.from('special_terms_operations').select('id,operation_type,operation_status,salesforce_object,error_code,actor_email,created_at,completed_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `special-terms:${row.id}`,
+      source: 'Special Terms',
+      module: 'Special Terms',
+      action: normalizedAuditAction(row.operation_type),
+      createdAt: row.completed_at || row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.salesforce_object || 'Special Terms',
+      summary: compactAuditSummary([normalizedAuditAction(row.operation_status), row.salesforce_object, row.error_code]),
+      metadata: {
+        status: row.operation_status,
+        salesforceObject: row.salesforce_object,
+        errorCode: row.error_code,
+      },
+    })),
     safeAuditRows(client.from('hedge_events').select('id,event_type,entity_type,entity_legacy_id,label,metadata,actor_email,source,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `hedge:${row.id}`,
       source: 'Hedge Desk',
@@ -2122,7 +2165,7 @@ async function universalAuditTrail(body, req) {
     })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...hedgeRows, ...emailSenderRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -15478,6 +15521,16 @@ async function hedgeDeskEntity(body = {}, req = null, accessContext = null) {
   };
 }
 
+async function hedgeMarkets(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return {
+    data: await handleHedgeMarkets(body, context.profile, {
+      client: context.client,
+      capabilities: await hedgeCapabilities(context),
+    }),
+  };
+}
+
 async function hedgeDeskParseMops(body = {}) {
   return { ok: true, ...parseMopsText(body.raw_input || body.text || body.input || '') };
 }
@@ -15526,6 +15579,19 @@ async function hedgeDeskSalesforcePush(body = {}, req = null, accessContext = nu
   return pushHedgeSalesforce(context.client, context.profile, body);
 }
 
+async function hedgeDeskSalesforcePreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required for Salesforce allocation previews.');
+  return previewHedgeSalesforce(context.client, context.profile, body);
+}
+
+async function hedgeDeskSalesforceMapping(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const capabilities = await hedgeCapabilities(context);
+  void body;
+  return { ...(await getHedgeSalesforceMapping(context.client)), canManage: capabilities.hedge_admin === true };
+}
+
 async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return runHedgeAssistant(context.client, context.profile, body);
@@ -15543,6 +15609,40 @@ async function hedgeDeskMaintenanceCron(body = {}, req = null) {
     forceIce: body.forceIce === true,
     dryRun: body.dryRun === true,
   });
+}
+
+async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return { ...(await listSpecialTerms({ force: body.force === true })), canManage: await userHasCapability(context.client, context.profile, 'special_terms_manage') };
+}
+
+async function specialTermsOptions(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return { options: await specialTermOptions(body) };
+}
+
+async function specialTermsSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return saveSpecialTerm(context.client, context.profile, body);
+}
+
+async function specialTermsDelete(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return deleteSpecialTerm(context.client, context.profile, body);
+}
+
+async function specialTermRuleSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return saveSpecialTermRule(context.client, context.profile, body);
+}
+
+async function specialTermRuleDelete(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return deleteSpecialTermRule(context.client, context.profile, body);
 }
 
 const handlers = {
@@ -15580,6 +15680,7 @@ const handlers = {
   navigationPreferencesSave,
   navigationPreferencesReset,
   hedgeDeskEntity,
+  hedgeMarkets,
   hedgeDeskParseMops,
   hedgeDeskGenerateInvoice,
   hedgeDeskSaveInvoicePdf,
@@ -15588,9 +15689,17 @@ const handlers = {
   hedgeDeskSfsFile,
   hedgeDeskSfsSend,
   hedgeDeskSalesforcePush,
+  hedgeDeskSalesforcePreview,
+  hedgeDeskSalesforceMapping,
   hedgeDeskAssistant,
   hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,
+  specialTermsWorkspace,
+  specialTermsOptions,
+  specialTermsSave,
+  specialTermsDelete,
+  specialTermRuleSave,
+  specialTermRuleDelete,
   growthReportingLinesList,
   growthReportingLineSave,
   growthReportingLinesSaveBatch,
