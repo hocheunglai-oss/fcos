@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.82';
+export const APP_VERSION = '2.0.83';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.83',
+    releasedAt: '2026-08-02',
+    title: 'Clear payment evidence and STEM links',
+    changes: [
+      'Added the buyer payment amount beside its Salesforce received date in Payment Collections so partial-payment evidence is clear.',
+      'Restricted STEM detail opening across operational tables to explicit links in STEM columns; clicking other row cells no longer opens STEM details.',
+    ],
+  },
   {
     version: '2.0.82',
     releasedAt: '2026-08-02',

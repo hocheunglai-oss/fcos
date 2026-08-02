@@ -8,6 +8,7 @@ import { format } from 'date-fns';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
@@ -266,7 +267,7 @@ export default function StemPnlReport() {
                 <tbody>
                   {filtered.map((row, i) => {
                     return (
-                      <tr key={row.Id || i} onClick={() => setSelectedStemId(row.Id)} className="border-b border-border/40 hover:bg-muted/20 transition-colors cursor-pointer">
+                      <tr key={row.Id || i} className="border-b border-border/40 hover:bg-muted/20 transition-colors">
                         {COLUMNS.map(col => {
                           const v = row[col.key];
                           let display;
@@ -282,7 +283,9 @@ export default function StemPnlReport() {
                           } else if (col.isDate) display = fmtDate(v);
                           else if (col.isPercent) display = fmt(v, true);
                           else if (col.num) display = fmt(v);
-                          else display = v ?? '—';
+                          else if (col.key === 'Key') {
+                            display = <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{v ?? '—'}</StemDetailLink>;
+                          } else display = v ?? '—';
 
                           const isProfit = ['Net_Profit', 'Qlik_Total_Profit'].includes(col.key);
                           const isDifference = col.key === 'Diff';

@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { format } from 'date-fns';
 import { BrokerTypeBadge } from './BrokerBadges';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import { numericValue, textValue } from '@/lib/displayValue';
 
 const fmtDate = (value) => {
@@ -110,7 +111,7 @@ function brokerSectionsFrom(rows) {
 
 export default function BrokerRegisterTable({
   rows,
-  onRowClick,
+  onStemClick,
   exchangeRate,
   exchangeRateLoading,
   exchangeRateError,
@@ -162,19 +163,18 @@ export default function BrokerRegisterTable({
                   {section.rows.map((row, idx) => {
                     const excluded = isExcluded(row);
                     return (
-                    <tr key={row.id} onClick={() => onRowClick(row.stemId)} className={`border-b border-border/40 cursor-pointer transition-colors ${excluded ? 'bg-slate-100/70 text-muted-foreground opacity-70 hover:bg-slate-100' : `hover:bg-muted/30 ${(rowOffset + idx) % 2 ? 'bg-muted/10' : ''}`}`}>
+                    <tr key={row.id} className={`border-b border-border/40 transition-colors ${excluded ? 'bg-slate-100/70 text-muted-foreground opacity-70 hover:bg-slate-100' : `hover:bg-muted/30 ${(rowOffset + idx) % 2 ? 'bg-muted/10' : ''}`}`}>
                       <td className="py-3 px-4">
                         <input
                           type="checkbox"
                           checked={!excluded}
-                          onClick={(event) => event.stopPropagation()}
                           onChange={() => onToggleExcluded?.(row.id)}
                           aria-label={`${excluded ? 'Include' : 'Exclude'} ${row.stemName || 'broker commission row'} in totals and export`}
                           className="h-4 w-4 rounded border-border"
                         />
                       </td>
                       <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
-                        <div>{textValue(row.stemName)}</div>
+                        <div><StemDetailLink stemId={row.stemId} onOpen={onStemClick}>{textValue(row.stemName)}</StemDetailLink></div>
                         {excluded && <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Excluded from totals/export</div>}
                       </td>
                       <td className="py-3 px-4"><ProductQuantityCell row={row} /></td>

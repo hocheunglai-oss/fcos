@@ -91,3 +91,28 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(server, /payment_pending_posting/);
   assert.match(server, /changed after they were opened[\s\S]*409/);
 });
+
+test('STEM details open only from explicit STEM-column links', async () => {
+  const paths = [
+    '../src/pages/BuyerInvoices.jsx',
+    '../src/pages/CashflowForecast.jsx',
+    '../src/pages/ReviewQueue.jsx',
+    '../src/pages/DisputeWorkflow.jsx',
+    '../src/pages/IncomingPayments.jsx',
+    '../src/pages/PaymentCollections.jsx',
+    '../src/pages/StemPnlReport.jsx',
+    '../src/components/dashboard/PnlTable.jsx',
+    '../src/components/brokers/BrokerRegisterTable.jsx',
+  ];
+  const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
+  const stemLink = await readFile(new URL('../src/components/common/StemDetailLink.jsx', import.meta.url), 'utf8');
+  const reorderableTable = await readFile(new URL('../src/components/common/ReorderableDataTable.jsx', import.meta.url), 'utf8');
+
+  for (const source of sources) {
+    assert.match(source, /StemDetailLink/);
+    assert.doesNotMatch(source, /<tr[^>]*onClick=\{[^}]*setSelectedStemId/);
+    assert.doesNotMatch(source, /onRowClick/);
+  }
+  assert.match(stemLink, /aria-label={`Open STEM details for \$\{accessibleStemName\}`}/);
+  assert.doesNotMatch(reorderableTable, /onRowClick/);
+});

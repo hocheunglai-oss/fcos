@@ -25,6 +25,7 @@ import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import TableShell from '@/components/common/TableShell';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
@@ -3127,12 +3128,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                     const reminderSentToday = wasPaymentReminderSentToday(row);
                     const rowCopied = copiedRowIds.has(row.id);
                     return (
-                      <tr
-                        key={row.id}
-                        onClick={() => setSelectedStemId(row.stemId)}
-                        className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
-                      >
-                      <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '-'}</td>
+                      <tr key={row.id} className={`border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}>
+                      <td className="px-4 py-3 text-foreground">
+                        <StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink>
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         <div>{row.buyerName || '-'}</div>
                         {row.effectiveReminderPolicy === 'overdue_only' && (
@@ -3174,9 +3173,14 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                         ) : row.collection?.latestPaymentSnapshot || row.latestPayment ? (
                           <div>
                             <span className={row.collection?.reconciliationState === 'payment_pending_posting' ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
-                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : 'Payment detected'}
+                              {row.collection?.reconciliationState === 'payment_pending_posting' ? 'Pending Salesforce posting' : 'Buyer payment'}
                             </span>
-                            <div>{fmtDate((row.collection?.latestPaymentSnapshot || row.latestPayment)?.paymentDate)}</div>
+                            <div>
+                              {(row.collection?.latestPaymentSnapshot || row.latestPayment)?.amount != null
+                                ? `${fmtMoney((row.collection?.latestPaymentSnapshot || row.latestPayment).amount)} · `
+                                : ''}
+                              {fmtDate((row.collection?.latestPaymentSnapshot || row.latestPayment)?.paymentDate)}
+                            </div>
                           </div>
                         ) : '-'}
                       </td>

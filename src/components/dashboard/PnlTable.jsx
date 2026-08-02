@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import { compactTextValue, numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 
@@ -12,6 +13,7 @@ const DELIVERY_FIELD = 'Delivery_Date__c';
 const FIELD_LABELS = {
   [BUYER_FIELD]: 'Buyer Invoice Amount',
   [SUPPLIER_FIELD]: 'Supplier Invoice Amount(s)',
+  'Name': 'STEM',
   'Receivable_Balance__c': 'Receivable Balance',
   'Buyer_Name__c': 'Buyer Name',
   '_Buyer_Group': 'Buyer Group',
@@ -133,7 +135,7 @@ const COL_ORDER = [
   '__pnl__',
 ];
 
-export default function PnlTable({ records = [], onRowClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
+export default function PnlTable({ records = [], onStemClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
   const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
   const [sortDir, setSortDir] = useState(-1);
   const firstRecord = records[0] || {};
@@ -211,11 +213,7 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
             const pnlPositive = pnl != null && pnl >= 0;
 
             return (
-              <tr
-                key={row.Id || i}
-                className="border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
-                onClick={() => onRowClick?.(row)}
-              >
+              <tr key={row.Id || i} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
                 {displayCols.map(col => {
                   if (col === '__pnl__') {
                     return (
@@ -315,6 +313,13 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                             ))}
                           </div>
                         ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === 'Name') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 whitespace-nowrap text-foreground">
+                        <StemDetailLink stemId={row.Id} onOpen={onStemClick}>{fmtVal(col, row[col])}</StemDetailLink>
                       </td>
                     );
                   }

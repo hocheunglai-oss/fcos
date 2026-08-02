@@ -6,6 +6,7 @@ import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -2090,13 +2091,11 @@ export default function DisputeWorkflow() {
                   const legacyReadOnly = workflow.case?.legacyReadOnly === true;
                   const needsPartySelection = !legacyReadOnly && row._Dispute_Parties?.candidateSchemaValid === true && row._Dispute_Parties?.selectionValid !== true;
                   return (
-                    <tr
-                      key={row.Id}
-                      className={cn('cursor-pointer border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}
-                      onClick={() => setSelectedStemId(row.Id)}
-                    >
+                    <tr key={row.Id} className={cn('border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}>
                       <td className="whitespace-nowrap px-3 py-2.5">
-                        <div className="font-medium text-foreground">{row._Display_Name || row.Name || '—'}</div>
+                        <div>
+                          <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{row._Display_Name || row.Name || '—'}</StemDetailLink>
+                        </div>
                         <div className="mt-0.5 text-[11px] text-muted-foreground">Delivery {fmtDate(row.Delivery_Date__c)}</div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5">

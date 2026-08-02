@@ -47,7 +47,6 @@ export default function ReorderableDataTable({
   emptyTitle = 'No records found',
   emptyDescription,
   isReorderEnabled = false,
-  onRowClick,
   rowClassName,
   headerClassName = 'sticky top-0 z-10 bg-card',
   bodyEmptyColSpan,
@@ -142,8 +141,7 @@ export default function ReorderableDataTable({
           {!loading && rows.map((row, index) => (
             <TableRow
               key={rowKey ? rowKey(row, index) : row.id || index}
-              className={cn(onRowClick && 'cursor-pointer', typeof rowClassName === 'function' ? rowClassName(row, index) : rowClassName)}
-              onClick={() => onRowClick?.(row)}
+              className={cn(typeof rowClassName === 'function' ? rowClassName(row, index) : rowClassName)}
             >
               {visibleColumns.map((column) => (
                 <TableCell key={column.id} className={column.cellClassName}>

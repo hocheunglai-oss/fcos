@@ -743,7 +743,7 @@ export default function BrokerRegister() {
         >
           <BrokerRegisterTable
             rows={sortedRows}
-            onRowClick={setSelectedStemId}
+            onStemClick={setSelectedStemId}
             exchangeRate={exchangeRate}
             exchangeRateLoading={exchangeRateLoading}
             exchangeRateError={exchangeRateError}

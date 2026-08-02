@@ -10,7 +10,9 @@ import { Button } from '@/components/ui/button';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import PageMethodology from '@/components/common/PageMethodology';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
+import StemDetailModal from '@/components/dashboard/StemDetailModal';
 
 const TABS = [
   { id: 'collections', label: 'Collection Queue', icon: ListChecks, moduleId: 'buyer_invoices' },
@@ -41,6 +43,7 @@ export default function PaymentCollections() {
   const [reconciliation, setReconciliation] = useState(null);
   const [reconciling, setReconciling] = useState(false);
   const [reconciliationError, setReconciliationError] = useState('');
+  const [selectedStemId, setSelectedStemId] = useState(null);
 
   const changeTab = (tab) => {
     const next = new URLSearchParams(searchParams);
@@ -123,7 +126,9 @@ export default function PaymentCollections() {
                   <tbody className="divide-y divide-border">
                     {reconciliation.exceptions.map((entry) => (
                       <tr key={entry.item.stemId} className="bg-card">
-                        <td className="px-4 py-3 font-semibold">{entry.stemName || entry.item.stemId}</td>
+                        <td className="px-4 py-3">
+                          <StemDetailLink stemId={entry.item.stemId} onOpen={setSelectedStemId}>{entry.stemName || entry.item.stemId}</StemDetailLink>
+                        </td>
                         <td className="px-4 py-3">{entry.item.status}</td>
                         <td className="px-4 py-3"><Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{reconciliationLabel(entry.item.reconciliationState)}</Badge></td>
                         <td className="px-4 py-3 text-right tabular-nums">{money(entry.item.verifiedReceivableBalance)}</td>
@@ -138,6 +143,7 @@ export default function PaymentCollections() {
           )}
         </div>
       )}
+      <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} />
     </div>
   );
 }

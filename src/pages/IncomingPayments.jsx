@@ -6,6 +6,7 @@ import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import ReorderableDataTable from '@/components/common/ReorderableDataTable';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
@@ -625,7 +626,12 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
       ),
     },
     { id: 'group', header: 'Group', cellClassName: 'min-w-[160px] text-sm', cell: (row) => row.buyerGroupName || '-' },
-    { id: 'stem', header: 'STEM', cellClassName: 'min-w-[240px] text-sm', cell: (row) => row.stemName || '-' },
+    {
+      id: 'stem',
+      header: 'STEM',
+      cellClassName: 'min-w-[240px] text-sm',
+      cell: (row) => <StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink>,
+    },
     {
       id: 'amount',
       header: 'Amount',
@@ -709,7 +715,12 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     { id: 'buyer', header: 'Buyer', cellClassName: 'min-w-[220px] text-sm font-medium', cell: (row) => row.buyerName || '-' },
     { id: 'group', header: 'Group', cellClassName: 'min-w-[180px] text-sm', cell: (row) => row.buyerGroupName || '-' },
     { id: 'buyerTrader', header: 'Buyer Trader', cellClassName: 'min-w-[160px] text-sm', cell: (row) => row.buyerTrader || '-' },
-    { id: 'stem', header: 'STEM', cellClassName: 'min-w-[240px] text-sm', cell: (row) => row.stemName || '-' },
+    {
+      id: 'stem',
+      header: 'STEM',
+      cellClassName: 'min-w-[240px] text-sm',
+      cell: (row) => <StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink>,
+    },
     {
       id: 'calculatedAmount',
       header: 'Calculated Amount',
@@ -744,7 +755,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         <>
           {(group.stems || []).map((stem) => (
             <div key={stem.stemId} className="py-0.5">
-              <span className="font-medium text-foreground">{stem.stemName}</span>
+              <StemDetailLink stemId={stem.stemId} onOpen={setSelectedStemId}>{stem.stemName}</StemDetailLink>
               <span className="ml-2 text-muted-foreground">{fmtMoney(stem.availableBalance)}</span>
             </div>
           ))}
@@ -1053,7 +1064,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
               rows={visibleBuyerCiaRows}
               rowKey={(row) => row.stemId}
               isReorderEnabled={isAdministrator}
-              onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
               rowClassName="hover:bg-muted/40"
             />
           </div>
@@ -1128,8 +1138,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                 emptyTitle="No payments found"
                 emptyDescription="Adjust the filters or refresh the Salesforce data."
                 isReorderEnabled={isAdministrator}
-                onRowClick={(row) => row.stemId && setSelectedStemId(row.stemId)}
-                rowClassName={(row) => cn('hover:bg-muted/40', row.stemId && 'cursor-pointer')}
+                rowClassName="hover:bg-muted/40"
               />
             </div>
           </TableShell>

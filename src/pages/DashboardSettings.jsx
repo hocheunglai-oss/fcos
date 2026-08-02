@@ -1121,7 +1121,7 @@ export default function DashboardSettings() {
                 records={tableRecords}
                 counterpartyMode={counterpartyMode}
                 scrollClassName="h-full min-h-0"
-                onRowClick={(row) => setSelectedStemId(row.Id)}
+                onStemClick={setSelectedStemId}
               />
             </TableShell>
           </div>

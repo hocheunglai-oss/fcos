@@ -26,6 +26,7 @@ import {
 } from 'recharts';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
@@ -528,11 +529,7 @@ export default function CashflowForecast() {
             </thead>
             <tbody>
               {sortedRows.map((row) => (
-                <tr
-                  key={row.id}
-                  className={cn('border-b border-border/70 hover:bg-muted/40', row.stemId && 'cursor-pointer')}
-                  onClick={() => row.stemId && setSelectedStemId(row.stemId)}
-                >
+                <tr key={row.id} className="border-b border-border/70 hover:bg-muted/40">
                   <td className="whitespace-nowrap px-3 py-2 font-medium">{fmtDate(row.forecastDate)}</td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <Badge className={row.direction === 'inflow' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' : 'bg-amber-100 text-amber-800 hover:bg-amber-100'}>
@@ -542,7 +539,9 @@ export default function CashflowForecast() {
                   <td className="whitespace-nowrap px-3 py-2">{row.type}</td>
                   <td className="min-w-[220px] px-3 py-2">{row.counterparty || '—'}</td>
                   <td className="min-w-[180px] px-3 py-2 text-muted-foreground">{row.buyerGroup || '—'}</td>
-                  <td className="min-w-[240px] px-3 py-2 font-medium">{row.stemName || '—'}</td>
+                  <td className="min-w-[240px] px-3 py-2">
+                    <StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '—'}</StemDetailLink>
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2">{fmtDate(row.sourceDueDate)}</td>
                   <td className="whitespace-nowrap px-3 py-2">{fmtDate(row.originalDate)}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-right font-semibold">{fmtMoney(row.amount, row.currency)}</td>

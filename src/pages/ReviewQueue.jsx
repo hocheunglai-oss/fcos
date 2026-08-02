@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import PageMethodology from '@/components/common/PageMethodology';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
@@ -484,7 +485,7 @@ export default function ReviewQueue() {
               </thead>
               <tbody>
                 {reviewRows.map(row => (
-                  <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className="cursor-pointer border-b border-border/50 hover:bg-muted/30 transition-colors">
+                  <tr key={row.Id} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <span className={cn(
                         'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase',
@@ -498,7 +499,9 @@ export default function ReviewQueue() {
                         {row.reviewReasons.map(reason => <ReasonBadge key={`${row.Id}-${reason.key}-${reason.label}`} reason={reason} />)}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{row.Name || '-'}</td>
+                    <td className="py-2.5 px-3 text-foreground whitespace-nowrap">
+                      <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{row.Name || '-'}</StemDetailLink>
+                    </td>
                     <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{row.Buyer_Name__c || row.Buyer__c || '-'}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       {row.Delivery_Date__c
@@ -525,10 +528,7 @@ export default function ReviewQueue() {
                         size="sm"
                         variant="outline"
                         className="gap-2"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openWorkflow(row);
-                        }}
+                        onClick={() => openWorkflow(row)}
                       >
                         <UserCog className="h-3.5 w-3.5" /> Manage
                       </Button>
