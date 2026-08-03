@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.94';
+export const APP_VERSION = '2.0.95';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.95',
+    releasedAt: '2026-08-03',
+    title: 'Exact settlement letterhead contact band',
+    changes: [
+      'Matched the settlement invoice contact band to the company reference by reducing the rule spacing to three millimetres and applying the sampled Fratelli blue to the company name, contact text, and both rules.',
+    ],
+  },
   {
     version: '2.0.94',
     releasedAt: '2026-08-03',

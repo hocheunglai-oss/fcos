@@ -94,23 +94,24 @@ export function generateHedgeInvoicePdf(input = {}) {
   const muted = [91, 102, 112];
   const border = [214, 220, 224];
   const soft = [246, 248, 249];
+  const brandBlue = [0, 65, 123];
   const compactSinglePage = invoice.lineItems.length < 12;
   let y = 0;
 
   const drawBrandHeader = (continued = false) => {
     if (continued) return 18;
     if (LOGO_DATA_URL) doc.addImage(LOGO_DATA_URL, 'JPEG', 74, 12, 62, 24);
-    doc.setTextColor(25, 31, 35);
+    doc.setTextColor(...brandBlue);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', pageWidth / 2, 41, { align: 'center' });
-    doc.setDrawColor(4, 50, 92);
+    doc.setDrawColor(...brandBlue);
     doc.setLineWidth(0.25);
-    doc.line(margin, 44, right, 44);
+    doc.line(margin, 45, right, 45);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.2);
-    doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK', pageWidth / 2, 48, { align: 'center' });
-    doc.line(margin, 50, right, 50);
+    doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK', pageWidth / 2, 47.4, { align: 'center' });
+    doc.line(margin, 48, right, 48);
     doc.setFillColor(180, 30, 30);
     doc.rect(0, 54, pageWidth, 11, 'F');
     doc.setTextColor(255, 255, 255);

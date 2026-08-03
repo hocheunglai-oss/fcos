@@ -87,8 +87,11 @@ test('settlement UI and documents make the payment route explicit', async () => 
   assert.match(documents, /FRATELLI COSULICH BUNKERS \(HK\) LTD', pageWidth \/ 2, 41, \{ align: 'center' \}/);
   assert.match(documents, /T \+852-25299138/);
   assert.match(documents, /GENERAL@COSULICH\.COM\.HK/);
-  assert.match(documents, /doc\.line\(margin, 44, right, 44\)/);
-  assert.match(documents, /doc\.line\(margin, 50, right, 50\)/);
+  assert.match(documents, /const brandBlue = \[0, 65, 123\]/);
+  assert.match(documents, /doc\.setTextColor\(\.\.\.brandBlue\)/);
+  assert.match(documents, /doc\.setDrawColor\(\.\.\.brandBlue\)/);
+  assert.match(documents, /doc\.line\(margin, 45, right, 45\)/);
+  assert.match(documents, /doc\.line\(margin, 48, right, 48\)/);
   assert.match(documents, /doc\.rect\(0, 54, pageWidth, 11, 'F'\)/);
   assert.doesNotMatch(documents, /FCBHK settlement document/);
   assert.doesNotMatch(documents, /paymentDirection\.(payer|payee)\.shortName/);
