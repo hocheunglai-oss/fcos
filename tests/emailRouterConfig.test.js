@@ -14,7 +14,6 @@ test('routing preset saves use the dedicated null-safe database function', async
   const operation = {
     type: 'preset_save',
     displayName: 'Operations',
-    presetKey: 'operations',
     destinations: [{ destinationId: 'destination-1', groupId: null, recipientKind: 'to', position: 1 }],
   };
 

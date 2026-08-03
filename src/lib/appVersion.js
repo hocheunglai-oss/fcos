@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.102';
+export const APP_VERSION = '2.0.103';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.103',
+    releasedAt: '2026-08-04',
+    title: 'Editable Email Router routing presets',
+    changes: [
+      'Changed routing presets into selectable labels that prefill numbered To, Cc, and Bcc recipients while keeping every recipient editable and switching off the preset label after an amendment.',
+      'Made the case-preserved preset name the only user-visible identifier, enforced case-insensitive name uniqueness, and replaced the preset editor with the same ordered recipient-label controls used by Redirect.',
+    ],
+  },
   {
     version: '2.0.102',
     releasedAt: '2026-08-04',

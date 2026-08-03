@@ -372,7 +372,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Email and external actions',
-        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders, while the Email Router tab manages its native directory, groups, routing presets, subscriptions, and mailbox synchronization. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. Saving a setting does not send an email.',
+        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders, while the Email Router tab manages its native directory, groups, routing presets, subscriptions, and mailbox synchronization. Each routing preset has one unique name and uses the same numbered To, Cc, and Bcc label controls as Redirect. Selecting a preset fills those recipients; amending them switches off the preset label without discarding the amendment. Templates, recipients, schedules, mailbox assignments, and delivery remain subject to the external-action safety gate. Saving a setting does not send an email.',
       },
       {
         title: 'AI configuration',

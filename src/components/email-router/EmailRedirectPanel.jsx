@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, Send, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import EmailRecipientPicker, { directorySelection, normaliseDirectoryEntries, selectionKey, splitRecipientSelections, valueList } from './EmailRecipientPicker';
+import EmailPresetPicker from './EmailPresetPicker';
+import EmailRecipientPicker, { directorySelection, normaliseDirectoryEntries, presetRecipientSelections, selectionKey, splitRecipientSelections, valueList } from './EmailRecipientPicker';
 
 const PRESELECT_CONFIDENCE = 0.6;
 
@@ -71,7 +71,17 @@ export default function EmailRedirectPanel({
   }, [presetId, recipientsTouched, recommendedSelections, selections.length]);
 
   const selectedPreset = presetOptions.find((item) => String(item.id || item.value) === presetId);
-  const canSend = Boolean(message) && !directoryLoading && !submitting && (selections.length > 0 || presetId !== 'none');
+  const canSend = Boolean(message) && !directoryLoading && !submitting && selections.length > 0;
+  const selectPreset = (value) => {
+    setPresetId(value);
+    setRecipientsTouched(true);
+    setAdvisorApplied(false);
+    if (value === 'none') return;
+    const preset = presetOptions.find((item) => String(item.id || item.value) === value);
+    const next = presetRecipientSelections(preset);
+    setSelections(next);
+    setBccVisible(next.some((selection) => selection.kind === 'bcc'));
+  };
   const applyAdvisor = () => {
     if (!recommendedSelections.length) return;
     setPresetId('none');
@@ -82,7 +92,9 @@ export default function EmailRedirectPanel({
   };
   const submit = () => {
     if (!canSend) return;
-    const recipients = splitRecipientSelections(selections);
+    const recipients = presetId === 'none'
+      ? splitRecipientSelections(selections)
+      : { destinationSelections: [], manualRecipients: [] };
     onSubmit({
       action: 'redirect',
       ...recipients,
@@ -100,18 +112,22 @@ export default function EmailRedirectPanel({
         <div className="space-y-1"><p className="text-xs font-medium text-muted-foreground">Selected message</p><p className="line-clamp-2 text-sm font-semibold">{message.subject || '(No subject)'}</p></div>
         {directoryError && <div className="flex gap-2 border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><p>{directoryError}</p></div>}
         <div className="space-y-2">
+          <Label>Routing preset</Label>
+          <EmailPresetPicker presets={presetOptions} selectedId={presetId} onSelect={selectPreset} disabled={submitting} />
+          {presetId !== 'none' && <p className="text-xs text-muted-foreground">{selectedPreset?.label || 'Preset'} is applied. Changing any recipient turns the preset label off and keeps your amended selection.</p>}
+        </div>
+        <div className="space-y-2">
           <Label>Recipients</Label>
           <EmailRecipientPicker
             directory={directory}
             selections={selections}
             onChange={(next) => { setPresetId('none'); setSelections(next); setRecipientsTouched(true); setAdvisorApplied(false); }}
-            disabled={presetId !== 'none' || submitting}
+            disabled={submitting}
             loading={directoryLoading}
             bccVisible={bccVisible}
             onBccVisibleChange={setBccVisible}
           />
         </div>
-        <div className="space-y-2"><Label htmlFor="email-router-redirect-preset">Routing preset</Label><Select value={presetId} onValueChange={(value) => { setPresetId(value); setSelections([]); setRecipientsTouched(true); setAdvisorApplied(false); setBccVisible(false); }} disabled={submitting}><SelectTrigger id="email-router-redirect-preset"><SelectValue placeholder="No preset" /></SelectTrigger><SelectContent><SelectItem value="none">No preset</SelectItem>{presetOptions.map((item) => { const value = String(item.id || item.value); return <SelectItem key={value} value={value}>{item.label || item.name || value}</SelectItem>; })}</SelectContent></Select></div>
         <Button className="w-full" size="lg" onClick={submit} disabled={!canSend}>{submitting ? <Loader2 className="animate-spin" /> : <Send />}{submitting ? 'Sending...' : 'Send Redirect'}</Button>
         <section className="border-t border-border pt-4">
           <div className="flex items-start justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />Email Router Advisor</h3><p className="mt-1 text-xs text-muted-foreground">Suggestions above 60% confidence are preselected for review. The advisor never sends email.</p></div><Button variant="outline" size="sm" onClick={onAdvisor} disabled={advisorLoading}>{advisorLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}{advisorLoading ? 'Reviewing' : advisor ? 'Review again' : 'Suggest'}</Button></div>

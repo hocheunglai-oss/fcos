@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import {
   AlertTriangle,
-  ArrowDown,
-  ArrowUp,
   Contact,
   GripVertical,
   Loader2,
@@ -23,8 +21,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import EmailRecipientPicker from './EmailRecipientPicker';
 
 function keyFromName(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 120);
@@ -41,16 +39,28 @@ function entryKey(entityType, id) {
 function blankEditor(type) {
   if (type === 'destination') return { type, id: null, displayName: '', emailAddress: '', nickname: '', included: true, active: true, expectedRevision: null };
   if (type === 'group') return { type, id: null, displayName: '', groupKey: '', included: true, active: true, destinationIds: [], expectedRevision: null };
-  return { type: 'preset', id: null, displayName: '', presetKey: '', description: '', active: true, sortOrder: 0, destinations: [], expectedRevision: null };
+  return { type: 'preset', id: null, displayName: '', description: '', active: true, sortOrder: 0, destinations: [], expectedRevision: null };
 }
 
-function move(items, index, delta) {
-  const target = index + delta;
-  if (target < 0 || target >= items.length) return items;
-  const next = [...items];
-  const [moved] = next.splice(index, 1);
-  next.splice(target, 0, moved);
-  return next.map((item, position) => ({ ...item, position: position + 1 }));
+function presetStorageSelections(selections) {
+  const positions = { to: 0, cc: 0, bcc: 0 };
+  return (Array.isArray(selections) ? selections : []).map((selection) => {
+    positions[selection.kind] += 1;
+    return {
+      destinationId: selection.destinationId || null,
+      groupId: selection.groupId || null,
+      recipientKind: selection.kind,
+      position: positions[selection.kind],
+    };
+  });
+}
+
+function presetPickerSelections(selections) {
+  return (Array.isArray(selections) ? selections : []).map((selection) => ({
+    destinationId: selection.destinationId || null,
+    groupId: selection.groupId || null,
+    kind: selection.recipientKind || selection.kind,
+  }));
 }
 
 function sortedDirectory(configuration) {
@@ -103,6 +113,10 @@ export default function EmailRouterSettings() {
   const directoryRows = useMemo(() => directoryOrder.map((key) => entryByKey.get(key)).filter(Boolean), [directoryOrder, entryByKey]);
   const includedDestinations = useMemo(() => destinations.filter((item) => routingDraft[entryKey('destination', item.id)]?.included === true), [destinations, routingDraft]);
   const includedGroups = useMemo(() => groups.filter((item) => routingDraft[entryKey('group', item.id)]?.included === true), [groups, routingDraft]);
+  const presetDirectory = useMemo(() => [
+    ...includedDestinations.map((item) => ({ id: item.id, kind: 'destination', label: routingDraft[entryKey('destination', item.id)]?.nickname || item.nickname })),
+    ...includedGroups.map((item) => ({ id: item.id, kind: 'group', label: item.displayName, memberCount: item.destinationIds?.length || 0 })),
+  ], [includedDestinations, includedGroups, routingDraft]);
 
   const baselineOrder = useMemo(() => sortedDirectory(configuration).map((row) => entryKey(row.entityType, row.id)), [configuration]);
   const directoryChanged = useMemo(() => {
@@ -152,7 +166,6 @@ export default function EmailRouterSettings() {
     type: 'preset',
     id: item.id,
     displayName: item.displayName,
-    presetKey: item.key,
     description: item.description,
     active: item.active,
     sortOrder: item.sortOrder,
@@ -262,19 +275,9 @@ export default function EmailRouterSettings() {
   const setName = (value) => setEditor((current) => ({
     ...current,
     displayName: value,
-    ...(current.id ? {} : current.type === 'group' ? { groupKey: keyFromName(value) } : current.type === 'preset' ? { presetKey: keyFromName(value) } : {}),
+    ...(current.id ? {} : current.type === 'group' ? { groupKey: keyFromName(value) } : {}),
   }));
   const toggleGroupMember = (id) => setEditor((current) => ({ ...current, destinationIds: current.destinationIds.includes(id) ? current.destinationIds.filter((value) => value !== id) : [...current.destinationIds, id] }));
-  const addPresetDestination = () => setEditor((current) => ({
-    ...current,
-    destinations: [...current.destinations, {
-      destinationId: includedDestinations[0]?.id || null,
-      groupId: includedDestinations.length ? null : includedGroups[0]?.id || null,
-      recipientKind: 'to',
-      position: current.destinations.length + 1,
-    }],
-  }));
-  const updatePresetDestination = (index, patch) => setEditor((current) => ({ ...current, destinations: current.destinations.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }));
   const presetSelectionAvailable = useCallback((item) => item.destinationId
     ? includedDestinations.some((destination) => destination.id === item.destinationId)
     : includedGroups.some((group) => group.id === item.groupId), [includedDestinations, includedGroups]);
@@ -284,8 +287,10 @@ export default function EmailRouterSettings() {
     if (editor.destinations.some((item) => !presetSelectionAvailable(item))) return 'Remove or replace unavailable recipients before saving.';
     const recipientKeys = editor.destinations.map((item) => item.destinationId ? `destination:${item.destinationId}` : `group:${item.groupId}`);
     if (new Set(recipientKeys).size !== recipientKeys.length) return 'Each person or group can appear only once in a routing preset.';
+    const normalizedName = editor.displayName.trim().toLocaleLowerCase();
+    if (presets.some((preset) => preset.id !== editor.id && preset.displayName.trim().toLocaleLowerCase() === normalizedName)) return 'Routing preset names must be unique.';
     return '';
-  }, [editor, presetSelectionAvailable]);
+  }, [editor, presetSelectionAvailable, presets]);
   const editorInvalid = !editor?.displayName?.trim()
     || (editor?.type === 'destination' && (!/^[A-Z0-9]{1,12}$/.test(editor.nickname) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editor.emailAddress)))
     || (editor?.type === 'group' && editor.included && !editor.destinationIds.length)
@@ -349,17 +354,26 @@ export default function EmailRouterSettings() {
     </div> : null}
 
     <Dialog open={Boolean(editor)} onOpenChange={(open) => !open && !busy && setEditor(null)}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle>{editor?.id ? 'Edit' : 'Add'} {editor?.type === 'destination' ? 'external contact' : editor?.type === 'group' ? 'group' : 'routing preset'}</DialogTitle><DialogDescription>Changes apply to future routing selections and are revision protected.</DialogDescription></DialogHeader>
         {editor && <div className="space-y-4">
-          <div className="space-y-2"><Label htmlFor="email-router-config-name">Name</Label><Input id="email-router-config-name" value={editor.displayName} onChange={(event) => setName(event.target.value)} maxLength={255} /></div>
+          <div className="space-y-2"><Label htmlFor="email-router-config-name">{editor.type === 'preset' ? 'Preset name' : 'Name'}</Label><Input id="email-router-config-name" value={editor.displayName} onChange={(event) => setName(event.target.value)} maxLength={255} /></div>
           {editor.type === 'destination' && <><div className="space-y-2"><Label htmlFor="email-router-contact-email">Email address</Label><Input id="email-router-contact-email" type="email" value={editor.emailAddress} onChange={(event) => setEditor((current) => ({ ...current, emailAddress: event.target.value.trim().toLowerCase() }))} maxLength={320} /></div><div className="space-y-2"><Label htmlFor="email-router-contact-label">Routing label</Label><Input id="email-router-contact-label" value={editor.nickname} onChange={(event) => setEditor((current) => ({ ...current, nickname: routingLabel(event.target.value) }))} maxLength={12} /><p className="text-xs text-muted-foreground">The short label shown on Redirect and Forward buttons.</p></div></>}
           {editor.type === 'group' && <><div className="space-y-2"><Label htmlFor="email-router-config-key">Group key</Label><Input id="email-router-config-key" value={editor.groupKey} onChange={(event) => setEditor((current) => ({ ...current, groupKey: keyFromName(event.target.value) }))} /></div><div><Label>Members</Label><div className="mt-2 max-h-64 divide-y divide-border overflow-y-auto border-y border-border">{includedDestinations.map((item) => <label key={item.id} className="flex items-center gap-3 py-2 text-sm"><Checkbox checked={editor.destinationIds.includes(item.id)} onCheckedChange={() => toggleGroupMember(item.id)} /><span className="min-w-0"><span className="block truncate font-semibold">{routingDraft[entryKey('destination', item.id)]?.nickname}</span><span className="block truncate text-xs text-muted-foreground">{item.displayName} · {item.emailAddress}</span></span></label>)}</div></div></>}
-          {editor.type === 'preset' && <><div className="space-y-2"><Label htmlFor="email-router-config-key">Preset key</Label><Input id="email-router-config-key" value={editor.presetKey} onChange={(event) => setEditor((current) => ({ ...current, presetKey: keyFromName(event.target.value) }))} /></div><div className="space-y-2"><Label htmlFor="email-router-config-description">Description</Label><Textarea id="email-router-config-description" value={editor.description} onChange={(event) => setEditor((current) => ({ ...current, description: event.target.value.slice(0, 1000) }))} /></div><div><div className="flex items-center justify-between gap-3"><Label>Ordered recipients</Label><Button size="sm" variant="outline" onClick={addPresetDestination} disabled={!includedDestinations.length && !includedGroups.length}><Plus />Add</Button></div>{presetValidationError && <p className="mt-2 flex items-center gap-2 text-xs font-medium text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />{presetValidationError}</p>}<div className="mt-2 space-y-2">{editor.destinations.map((item, index) => {
-            const selectionValue = item.destinationId ? `d:${item.destinationId}` : `g:${item.groupId}`;
-            const available = presetSelectionAvailable(item);
-            return <div key={`${index}-${item.destinationId || item.groupId}`} className={`grid gap-2 border-y py-2 sm:grid-cols-[90px_1fr_auto] ${available ? 'border-border' : 'border-amber-300 bg-amber-50 px-2'}`}><Select value={item.recipientKind} onValueChange={(value) => updatePresetDestination(index, { recipientKind: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="to">To</SelectItem><SelectItem value="cc">Cc</SelectItem><SelectItem value="bcc">Bcc</SelectItem></SelectContent></Select><Select value={selectionValue} onValueChange={(value) => updatePresetDestination(index, value.startsWith('d:') ? { destinationId: value.slice(2), groupId: null } : { destinationId: null, groupId: value.slice(2) })}><SelectTrigger><SelectValue placeholder={available ? 'Select destination' : 'Unavailable recipient'} /></SelectTrigger><SelectContent>{!available && <SelectItem value={selectionValue} disabled>Unavailable recipient</SelectItem>}{includedDestinations.map((option) => <SelectItem key={`d:${option.id}`} value={`d:${option.id}`}>{routingDraft[entryKey('destination', option.id)]?.nickname}</SelectItem>)}{includedGroups.map((option) => <SelectItem key={`g:${option.id}`} value={`g:${option.id}`}><Users className="mr-2 inline h-3.5 w-3.5" />{option.displayName}</SelectItem>)}</SelectContent></Select><div className="flex"><Button variant="ghost" size="icon" onClick={() => setEditor((current) => ({ ...current, destinations: move(current.destinations, index, -1) }))} disabled={index === 0} title="Move up" aria-label="Move up"><ArrowUp /></Button><Button variant="ghost" size="icon" onClick={() => setEditor((current) => ({ ...current, destinations: move(current.destinations, index, 1) }))} disabled={index === editor.destinations.length - 1} title="Move down" aria-label="Move down"><ArrowDown /></Button><Button variant="ghost" size="icon" onClick={() => setEditor((current) => ({ ...current, destinations: current.destinations.filter((_, itemIndex) => itemIndex !== index).map((entry, position) => ({ ...entry, position: position + 1 })) }))} title="Remove" aria-label="Remove"><Trash2 /></Button></div></div>;
-          })}</div></div></>}
+          {editor.type === 'preset' && <>
+            <div className="space-y-2"><Label htmlFor="email-router-config-description">Description</Label><Textarea id="email-router-config-description" value={editor.description} onChange={(event) => setEditor((current) => ({ ...current, description: event.target.value.slice(0, 1000) }))} /></div>
+            <div className="space-y-2">
+              <Label>Ordered recipients</Label>
+              <p className="text-xs text-muted-foreground">Select each person or group under To, Cc, or Bcc. The numbered labels show the recipient order.</p>
+              {presetValidationError && <p className="flex items-center gap-2 text-xs font-medium text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />{presetValidationError}</p>}
+              <EmailRecipientPicker
+                directory={presetDirectory}
+                selections={presetPickerSelections(editor.destinations)}
+                onChange={(next) => setEditor((current) => ({ ...current, destinations: presetStorageSelections(next) }))}
+                allowManual={false}
+              />
+            </div>
+          </>}
         </div>}
         <DialogFooter><Button variant="outline" onClick={() => setEditor(null)} disabled={busy}>Cancel</Button><Button onClick={saveEditor} disabled={busy || editorInvalid}>{busy ? <Loader2 className="animate-spin" /> : <Save />}{busy ? 'Saving' : 'Save'}</Button></DialogFooter>
       </DialogContent>

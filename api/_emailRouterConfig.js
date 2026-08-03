@@ -51,7 +51,7 @@ export async function emailRouterConfiguration(client) {
       .order('sort_order')
       .order('nickname'),
     table(client, 'destination_groups').select('id,group_key,display_name,active,redirect_enabled,sort_order,revision,updated_at,destination_group_members(destination_id)').eq('active', true).order('sort_order').order('display_name'),
-    table(client, 'routing_presets').select('id,preset_key,display_name,description,active,sort_order,revision,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').order('sort_order').order('display_name'),
+    table(client, 'routing_presets').select('id,display_name,description,active,sort_order,revision,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').order('sort_order').order('display_name'),
     table(client, 'settings').select('key,value,revision,updated_at').order('key'),
     table(client, 'mailbox_subscriptions').select('id,resource_key,state,expires_at,lifecycle_event,lifecycle_at,updated_at').eq('mailbox_id', mailbox.id).order('resource_key'),
     table(client, 'alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(50),
@@ -104,7 +104,6 @@ export async function emailRouterConfiguration(client) {
     })),
     presets: (presets.data || []).map((row) => ({
       id: row.id,
-      key: row.preset_key,
       displayName: row.display_name,
       description: row.description,
       active: row.active,
@@ -190,10 +189,13 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
       const detail = String(error.message || '');
       const stale = /revision conflict/i.test(detail);
       const unavailable = /unavailable (?:destination|group)/i.test(detail);
+      const duplicateName = /display_name|preset name|routing_presets_display_name/i.test(detail) && /duplicate|already|unique/i.test(detail);
       const message = stale
         ? 'This routing preset changed after it was loaded. Refresh and try again.'
         : unavailable
           ? 'A preset recipient is no longer included in the routing directory. Remove or replace it and try again.'
+          : duplicateName
+            ? 'This routing preset name is already in use. Choose a unique name.'
           : detail || 'The routing preset could not be saved.';
       throw configError(message, stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
     }

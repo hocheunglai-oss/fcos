@@ -10,6 +10,7 @@ const externalRestoreMigrationUrl = new URL('../supabase/migrations/202608031355
 const directoryEventMigrationUrl = new URL('../supabase/migrations/20260803162059_allow_emailrouter_routing_directory_events.sql', import.meta.url);
 const presetValidationMigrationUrl = new URL('../supabase/migrations/20260803165805_fix_emailrouter_preset_recipient_validation.sql', import.meta.url);
 const routingIntegrityMigrationUrl = new URL('../supabase/migrations/20260803172446_harden_emailrouter_routing_integrity.sql', import.meta.url);
+const simplifiedPresetMigrationUrl = new URL('../supabase/migrations/20260803182723_simplify_emailrouter_routing_presets.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -145,7 +146,7 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(settings, /draggableId=\{key\}/);
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.match(workspace, /<EmailRedirectPanel/);
-  assert.match(dialog, /const recipients = splitRecipientSelections\(selections\)/);
+  assert.match(dialog, /splitRecipientSelections\(selections\)/);
   assert.match(recipientPicker, /Manual \$\{kind\.toUpperCase\(\)\} email/);
   assert.match(redirectPanel, /splitRecipientSelections/);
 });
@@ -177,7 +178,39 @@ test('Email Router presets validate only the non-null recipient identity', async
   assert.match(migrationSql, /grant execute on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*to service_role/i);
   assert.match(configuration, /operation\.type === 'preset_save'[\s\S]*save_emailrouter_routing_change/i);
   assert.match(settings, /Remove or replace unavailable recipients before saving/);
-  assert.match(settings, /Unavailable recipient/);
+  assert.match(settings, /<EmailRecipientPicker/);
+  assert.match(settings, /allowManual=\{false\}/);
+});
+
+test('routing presets are editable recipient templates identified by a unique display name', async () => {
+  const [migrationSql, core, configuration, presetPicker, recipientPicker, redirectPanel, actionDialog, settings] = await Promise.all([
+    readFile(simplifiedPresetMigrationUrl, 'utf8'),
+    readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailPresetPicker.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRecipientPicker.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRedirectPanel.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migrationSql, /unique index[\s\S]*lower\(btrim\(display_name\)\)/i);
+  assert.doesNotMatch(migrationSql, /p_operation->>'presetKey'/i);
+  assert.match(migrationSql, /A unique preset name and at least one recipient are required/i);
+  assert.match(migrationSql, /security invoker/i);
+  assert.match(migrationSql, /revoke all on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
+  assert.match(migrationSql, /grant execute on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*to service_role/i);
+  assert.doesNotMatch(core, /select\('id,preset_key/);
+  assert.doesNotMatch(configuration, /select\('id,preset_key/);
+  assert.doesNotMatch(settings, /Preset key|presetKey/);
+  assert.match(settings, /Routing preset names must be unique/);
+  assert.match(presetPicker, /aria-pressed=\{selected\}/);
+  assert.match(recipientPicker, /presetRecipientSelections/);
+  assert.match(redirectPanel, /setSelections\(next\)/);
+  assert.match(redirectPanel, /onChange=\{\(next\) => \{ setPresetId\('none'\)/);
+  assert.doesNotMatch(redirectPanel, /disabled=\{presetId !== 'none'/);
+  assert.match(actionDialog, /setSelections\(presetRecipientSelections\(preset\)\)/);
+  assert.match(actionDialog, /onChange=\{\(next\) => \{ setPresetId\('none'\)/);
 });
 
 test('Email Router routing mutations preserve active group and preset integrity atomically', async () => {

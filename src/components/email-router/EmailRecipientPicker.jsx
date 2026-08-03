@@ -27,6 +27,20 @@ export function directorySelection(item, kind) {
     : { destinationId: item.id, groupId: null, kind };
 }
 
+export function presetRecipientSelections(preset) {
+  const kindOrder = new Map([['to', 0], ['cc', 1], ['bcc', 2]]);
+  return valueList(preset?.destinations)
+    .map((selection) => ({
+      destinationId: selection.destinationId || null,
+      groupId: selection.groupId || null,
+      kind: String(selection.kind || selection.recipientKind || '').toLowerCase(),
+      position: Number(selection.position || 0),
+    }))
+    .filter((selection) => RECIPIENT_KINDS.includes(selection.kind) && Boolean(selection.destinationId) !== Boolean(selection.groupId))
+    .sort((left, right) => (kindOrder.get(left.kind) ?? 99) - (kindOrder.get(right.kind) ?? 99) || left.position - right.position)
+    .map(({ position: _position, ...selection }) => selection);
+}
+
 export function selectionKey(selection) {
   if (selection?.groupId) return `group:${selection.groupId}`;
   if (selection?.destinationId) return `destination:${selection.destinationId}`;
@@ -51,7 +65,7 @@ export function toggleRecipientSelection(selections, destination, kind) {
   return [...selections, directorySelection(destination, kind)];
 }
 
-function RecipientPanel({ kind, destinations, selections, disabled, loading, onToggle, onAddManual, onRemoveManual }) {
+function RecipientPanel({ kind, destinations, selections, disabled, loading, allowManual, onToggle, onAddManual, onRemoveManual }) {
   const [manualAddress, setManualAddress] = useState('');
   const [manualError, setManualError] = useState('');
   const manualSelections = selections.filter((selection) => selection.kind === kind && selection.address);
@@ -72,7 +86,7 @@ function RecipientPanel({ kind, destinations, selections, disabled, loading, onT
 
   return <fieldset className="space-y-2 border-t border-border pt-3" disabled={disabled}>
     <legend className="px-1 text-xs font-semibold uppercase text-muted-foreground">{kind}</legend>
-    <div className="flex gap-2">
+    {allowManual && <div className="flex gap-2">
       <Input
         type="email"
         value={manualAddress}
@@ -83,7 +97,7 @@ function RecipientPanel({ kind, destinations, selections, disabled, loading, onT
         disabled={disabled}
       />
       <Button type="button" variant="outline" size="icon" onClick={addManual} disabled={disabled || !manualAddress.trim()} title={`Add manual ${kind.toUpperCase()} recipient`} aria-label={`Add manual ${kind.toUpperCase()} recipient`}><Plus /></Button>
-    </div>
+    </div>}
     {manualError && <p className="text-xs font-medium text-destructive">{manualError}</p>}
     {manualSelections.length > 0 && <div className="flex flex-wrap gap-2">{manualSelections.map((selection) => {
       const key = selectionKey(selection);
@@ -129,6 +143,7 @@ export default function EmailRecipientPicker({
   onChange,
   disabled = false,
   loading = false,
+  allowManual = true,
   bccVisible = true,
   onBccVisibleChange,
 }) {
@@ -139,13 +154,13 @@ export default function EmailRecipientPicker({
   const bccCount = selections.filter((selection) => selection.kind === 'bcc').length;
 
   return <div className="space-y-3">
-    <RecipientPanel kind="to" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
-    <RecipientPanel kind="cc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
+    <RecipientPanel kind="to" destinations={destinations} selections={selections} disabled={disabled} loading={loading} allowManual={allowManual} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
+    <RecipientPanel kind="cc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} allowManual={allowManual} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
     {onBccVisibleChange && <div className="flex justify-end border-t border-border pt-2">
       <Button type="button" variant="ghost" size="sm" onClick={() => onBccVisibleChange(!bccVisible)} disabled={disabled}>
         {bccVisible ? <EyeOff /> : <Eye />}{bccVisible ? 'Hide Bcc' : 'Show Bcc'}{!bccVisible && bccCount ? ` (${bccCount})` : ''}
       </Button>
     </div>}
-    {bccVisible && <RecipientPanel kind="bcc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />}
+    {bccVisible && <RecipientPanel kind="bcc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} allowManual={allowManual} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />}
   </div>;
 }

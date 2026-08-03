@@ -493,9 +493,9 @@ export async function listEmailRouterDirectory({ client, search = '' }) {
 }
 
 export async function listEmailRouterPresets(client) {
-  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.presets).select('id,preset_key,display_name,description,active,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').eq('active', true).order('display_name');
+  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.presets).select('id,display_name,description,active,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').eq('active', true).order('display_name');
   if (error) storageUnavailable(error);
-  return (data || []).map((preset) => ({ id: preset.id, key: preset.preset_key, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: sortEmailRouterPresetDestinations(preset.routing_preset_destinations).map(({ destination_id, group_id, recipient_kind, position }) => ({ destinationId: destination_id, groupId: group_id, kind: recipient_kind, position })) }));
+  return (data || []).map((preset) => ({ id: preset.id, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: sortEmailRouterPresetDestinations(preset.routing_preset_destinations).map(({ destination_id, group_id, recipient_kind, position }) => ({ destinationId: destination_id, groupId: group_id, kind: recipient_kind, position })) }));
 }
 
 const RECIPIENT_KIND_ORDER = new Map([['to', 0], ['cc', 1], ['bcc', 2]]);
