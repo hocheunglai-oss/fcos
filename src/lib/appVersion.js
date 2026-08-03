@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.103';
+export const APP_VERSION = '2.0.104';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.104',
+    releasedAt: '2026-08-04',
+    title: 'Case-sensitive Email Router labels',
+    changes: [
+      'Preserved uppercase and lowercase letters in Email Router directory labels and made label uniqueness use an exact case-sensitive comparison throughout Settings and server validation.',
+    ],
+  },
   {
     version: '2.0.103',
     releasedAt: '2026-08-04',

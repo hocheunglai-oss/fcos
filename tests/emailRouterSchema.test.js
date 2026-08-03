@@ -11,6 +11,7 @@ const directoryEventMigrationUrl = new URL('../supabase/migrations/2026080316205
 const presetValidationMigrationUrl = new URL('../supabase/migrations/20260803165805_fix_emailrouter_preset_recipient_validation.sql', import.meta.url);
 const routingIntegrityMigrationUrl = new URL('../supabase/migrations/20260803172446_harden_emailrouter_routing_integrity.sql', import.meta.url);
 const simplifiedPresetMigrationUrl = new URL('../supabase/migrations/20260803182723_simplify_emailrouter_routing_presets.sql', import.meta.url);
+const caseSensitiveLabelsMigrationUrl = new URL('../supabase/migrations/20260803185144_make_emailrouter_routing_labels_case_sensitive.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -160,6 +161,25 @@ test('Email Router audit events allow whole-directory ordering changes', async (
   assert.match(orderedSql, /'configuration\.routing_directory_save',[\s\S]*'routing_directory'/i);
   assert.match(directoryEventSql, /drop constraint if exists events_entity_type_check/i);
   assert.match(directoryEventSql, /add constraint events_entity_type_check[\s\S]*'routing_directory'/i);
+});
+
+test('Email Router routing labels preserve case and are unique by exact case', async () => {
+  const [sql, settings, workspace] = await Promise.all([
+    readFile(caseSensitiveLabelsMigrationUrl, 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(sql, /nickname ~ '\^\[A-Za-z0-9\]\{1,12\}\$'/);
+  assert.match(sql, /on emailrouter\.destinations \(nickname\)/i);
+  assert.doesNotMatch(sql, /lower\(existing\.nickname\)|distinct lower\([^)]*nickname/i);
+  assert.match(sql, /existing\.nickname = candidate/i);
+  assert.match(sql, /destination\.nickname = requested_nickname/i);
+  assert.match(sql, /count\(distinct btrim\(value->>'nickname'\)\)/i);
+  assert.match(settings, /replace\(\/\[\^A-Za-z0-9\]\/g, ''\)/);
+  assert.doesNotMatch(settings, /toUpperCase\(\)\.replace\(\/\[\^A-Z0-9\]/);
+  assert.match(settings, /case-sensitive unique routing label/i);
+  assert.match(workspace, /exact case-sensitive comparison/i);
 });
 
 test('Email Router presets validate only the non-null recipient identity', async () => {
