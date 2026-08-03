@@ -23,11 +23,11 @@ function valueList(data) {
   return Array.isArray(data) ? data : data?.items || data?.destinations || data?.presets || [];
 }
 
-function RecipientPanel({ kind, destinations, selections, disabled, onToggle }) {
+function RecipientPanel({ kind, destinations, selections, disabled, loading, onToggle }) {
   return <fieldset className="space-y-2 border-y border-border py-3" disabled={disabled}>
     <legend className="px-1 text-xs font-semibold uppercase text-muted-foreground">{kind}</legend>
     <div className="flex min-h-9 flex-wrap gap-2">
-      {destinations.length ? destinations.map((destination) => {
+      {loading ? <p className="flex items-center gap-2 py-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading included FCOS users...</p> : destinations.length ? destinations.map((destination) => {
         const assigned = selections.find((selection) => selection.destinationId === destination.id);
         const selectedHere = assigned?.kind === kind;
         const assignedElsewhere = Boolean(assigned && !selectedHere);
@@ -50,7 +50,7 @@ function RecipientPanel({ kind, destinations, selections, disabled, onToggle }) 
   </fieldset>;
 }
 
-export default function EmailActionDialog({ open, onOpenChange, action, message, directory, presets, submitting, initialDestinationId = '', onSubmit }) {
+export default function EmailActionDialog({ open, onOpenChange, action, message, directory, presets, directoryLoading = false, submitting, initialDestinationId = '', onSubmit }) {
   const [stage, setStage] = useState('form');
   const [selections, setSelections] = useState([]);
   const [presetId, setPresetId] = useState('none');
@@ -72,7 +72,7 @@ export default function EmailActionDialog({ open, onOpenChange, action, message,
   }, [action, initialDestinationId, message?.id, open]);
 
   const selectedPreset = presetOptions.find((item) => String(item.id || item.value) === presetId);
-  const canContinue = !needsDestination || selections.length > 0 || presetId !== 'none';
+  const canContinue = !directoryLoading && (!needsDestination || selections.length > 0 || presetId !== 'none');
   const changeOpen = (nextOpen) => {
     if (submitting) return;
     if (!nextOpen && dirty && !window.confirm('Discard the unsaved mail action?')) return;
@@ -106,7 +106,7 @@ export default function EmailActionDialog({ open, onOpenChange, action, message,
         <DialogHeader><DialogTitle>{stage === 'confirm' ? `Confirm ${actionLabel(action).toLowerCase()}` : copy.title}</DialogTitle><DialogDescription>{stage === 'confirm' ? 'Review every recipient before FCOS performs this action.' : copy.description}</DialogDescription></DialogHeader>
         {stage === 'form' ? (
           <div className="space-y-4">
-            {needsDestination && <div className="space-y-2"><Label>Recipients</Label>{RECIPIENT_KINDS.map((kind) => <RecipientPanel key={kind} kind={kind} destinations={destinations} selections={selections} disabled={presetId !== 'none'} onToggle={toggleDestination} />)}</div>}
+            {needsDestination && <div className="space-y-2"><Label>Recipients</Label>{RECIPIENT_KINDS.map((kind) => <RecipientPanel key={kind} kind={kind} destinations={destinations} selections={selections} disabled={presetId !== 'none'} loading={directoryLoading} onToggle={toggleDestination} />)}</div>}
             {supportsPreset && <div className="space-y-2"><Label htmlFor="email-router-preset">Routing preset</Label><Select value={presetId} onValueChange={(value) => { setPresetId(value); if (value !== 'none') setSelections([]); }}><SelectTrigger id="email-router-preset"><SelectValue placeholder="No preset" /></SelectTrigger><SelectContent><SelectItem value="none">No preset</SelectItem>{presetOptions.map((item) => { const value = String(item.id || item.value); return <SelectItem key={value} value={value}>{item.label || item.name || value}</SelectItem>; })}</SelectContent></Select></div>}
             {needsBody && <div className="space-y-2"><Label htmlFor="email-router-body">Message</Label><Textarea id="email-router-body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add a message" rows={7} /></div>}
             {['archive', 'delete'].includes(action) && <div className="flex gap-3 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><p>{action === 'delete' ? 'Deletion can be permanent depending on mailbox policy.' : 'Archived messages remain available from the Archive tab.'}</p></div>}

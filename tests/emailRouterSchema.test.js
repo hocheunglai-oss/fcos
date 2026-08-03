@@ -89,11 +89,12 @@ test('Email Router destination profiles do not rely on cross-schema PostgREST em
 });
 
 test('Email Router routing labels are active-user nicknames with service-only configuration', async () => {
-  const [sql, core, configuration, dialog] = await Promise.all([
+  const [sql, core, configuration, dialog, workspace] = await Promise.all([
     readFile(activeDirectoryMigrationUrl, 'utf8'),
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
   ]);
   assert.match(sql, /add column if not exists nickname text/i);
   assert.match(sql, /add column if not exists redirect_enabled boolean/i);
@@ -105,5 +106,7 @@ test('Email Router routing labels are active-user nicknames with service-only co
   assert.match(configuration, /operation\.type === 'routing_users_save'/);
   assert.match(dialog, /const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
   assert.match(dialog, /destinationSelections: selections/);
+  assert.match(dialog, /Loading included FCOS users/);
+  assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
 });

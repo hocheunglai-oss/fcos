@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.91';
+export const APP_VERSION = '2.0.92';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.92',
+    releasedAt: '2026-08-03',
+    title: 'Email Router recipient loading clarity',
+    changes: [
+      'Replaced the temporary empty-directory message in Redirect and Forward with an explicit loading state while FCOS retrieves the included users and routing presets.',
+    ],
+  },
   {
     version: '2.0.91',
     releasedAt: '2026-08-03',

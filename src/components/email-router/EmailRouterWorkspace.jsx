@@ -56,6 +56,7 @@ export default function EmailRouterWorkspace() {
   const [actionDialog, setActionDialog] = useState(null);
   const [directory, setDirectory] = useState([]);
   const [presets, setPresets] = useState([]);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [actionResult, setActionResult] = useState(null);
   const [advisor, setAdvisor] = useState(null);
@@ -130,6 +131,7 @@ export default function EmailRouterWorkspace() {
     if (!detail) return;
     setActionDialog({ action, undoResult, initialDestinationId });
     if (!['redirect', 'forward'].includes(action)) return;
+    setDirectoryLoading(true);
     try {
       const [directoryResponse, presetResponse] = await Promise.all([emailRouter.directory({}, { force: true }), emailRouter.presets({}, { force: true })]);
       if (!directoryResponse.data?.error) setDirectory(directoryResponse.data.directory || directoryResponse.data.destinations || directoryResponse.data.items || []);
@@ -140,6 +142,8 @@ export default function EmailRouterWorkspace() {
     } catch {
       setDirectory([]);
       setPresets([]);
+    } finally {
+      setDirectoryLoading(false);
     }
   };
 
@@ -260,6 +264,6 @@ export default function EmailRouterWorkspace() {
       <div className="hidden min-h-0 flex-1 overflow-y-auto lg:block"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} advisor={advisor} advisorLoading={advisorLoading} advisorError={advisorError} onAdvisor={loadAdvisor} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>
     </section>
     {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} advisor={advisor} advisorLoading={advisorLoading} advisorError={advisorError} onAdvisor={loadAdvisor} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} />}
-    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} submitting={submitting} initialDestinationId={actionDialog?.initialDestinationId} onSubmit={submitAction} />
+    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} initialDestinationId={actionDialog?.initialDestinationId} onSubmit={submitAction} />
   </div>;
 }
