@@ -58,18 +58,50 @@ export function emailRouterAdvisorRecommendationSchema(candidateIds) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['destinationIds', 'confidence', 'rationale', 'question'],
+    required: ['selections', 'confidence', 'rationale', 'question'],
     properties: {
-      destinationIds: {
+      selections: {
         type: 'array',
         minItems: 0,
         maxItems: 3,
-        items: { type: 'string', enum: candidateIds },
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['candidateId', 'recipientKind'],
+          properties: {
+            candidateId: { type: 'string', enum: candidateIds },
+            recipientKind: { type: 'string', enum: ['to', 'cc', 'bcc'] },
+          },
+        },
       },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       rationale: { type: 'string', maxLength: 500 },
       question: { anyOf: [{ type: 'string', maxLength: 300 }, { type: 'null' }] },
     },
+  };
+}
+
+export function normaliseEmailRouterAdvisorRecommendation(parsed, candidates) {
+  const byId = new Map(candidates.map((item) => [item.id, item]));
+  const confidence = Math.min(1, Math.max(0, Number(parsed?.confidence) || 0));
+  const seen = new Set();
+  const selections = [];
+  if (confidence > 0.6) {
+    for (const input of Array.isArray(parsed?.selections) ? parsed.selections : []) {
+      const candidate = byId.get(input?.candidateId);
+      const recipientKind = String(input?.recipientKind || '').toLowerCase();
+      if (!candidate || !['to', 'cc', 'bcc'].includes(recipientKind) || seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      selections.push({ ...candidate, recipientKind });
+      if (selections.length === 3) break;
+    }
+  }
+  return {
+    selections,
+    destinations: selections.map(({ recipientKind: _recipientKind, ...candidate }) => candidate),
+    confidence,
+    rationale: String(parsed?.rationale || '').trim().slice(0, 500),
+    question: parsed?.question ? String(parsed.question).trim().slice(0, 300) : null,
   };
 }
 
@@ -133,7 +165,12 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
     fetchEmailRouterDetail({ client, mailbox, messageId }, dependencies),
     listEmailRouterDirectory({ client }),
   ]);
-  const candidates = directory.slice(0, 100).map((item) => ({ id: item.id, label: item.label }));
+  const candidates = directory.slice(0, 100).map((item) => ({
+    id: item.id,
+    kind: item.kind === 'group' ? 'group' : 'destination',
+    label: item.label,
+    memberCount: Number(item.memberCount || 0),
+  }));
   if (!candidates.length) throw advisorError('No active Email Router destinations are available.', 409, 'EMAIL_ROUTER_ADVISOR_DIRECTORY_EMPTY');
   const startedAt = Date.now();
   let response;
@@ -150,7 +187,7 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
         input: [
           {
             role: 'system',
-            content: [{ type: 'input_text', text: 'You are FCOS Email Router Advisor. Recommend at most three approved routing destinations using only supplied candidate IDs. You are advisory only and cannot send, redirect, reply, forward, move, archive, or delete email. Do not quote or closely repeat the message. If confidence is below 0.50, return no destination and one concise optional clarification question.' }],
+            content: [{ type: 'input_text', text: 'You are FCOS Email Router Advisor. Recommend at most three approved routing candidates using only supplied candidate IDs and assign each to To, Cc, or Bcc. Preserve the intended order within each recipient role. Use Bcc only when the message clearly requires hidden distribution. You are advisory only and cannot send, redirect, reply, forward, move, archive, or delete email. Do not quote or closely repeat the message. If confidence is 0.60 or lower, return no selections and one concise optional clarification question.' }],
           },
           {
             role: 'user',
@@ -182,16 +219,8 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   const usage = await recordUsage(client, profile, mailbox, messageId, payload, settings.modelId, Date.now() - startedAt, 'success');
   let parsed;
   try { parsed = JSON.parse(outputText(payload)); } catch { throw advisorError('Email Router Advisor returned an invalid recommendation.', 502, 'EMAIL_ROUTER_ADVISOR_RESPONSE_INVALID'); }
-  const byId = new Map(candidates.map((item) => [item.id, item]));
-  const destinationIds = [...new Set(Array.isArray(parsed.destinationIds) ? parsed.destinationIds : [])].filter((id) => byId.has(id)).slice(0, 3);
-  const confidence = Math.min(1, Math.max(0, Number(parsed.confidence) || 0));
   return {
-    recommendation: {
-      destinations: confidence < 0.5 ? [] : destinationIds.map((id) => byId.get(id)),
-      confidence,
-      rationale: String(parsed.rationale || '').trim().slice(0, 500),
-      question: parsed.question ? String(parsed.question).trim().slice(0, 300) : null,
-    },
+    recommendation: normaliseEmailRouterAdvisorRecommendation(parsed, candidates),
     modelId: settings.modelId,
     usage: {
       inputTokens: usage.inputTokens,

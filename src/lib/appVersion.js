@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.97';
+export const APP_VERSION = '2.0.98';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.98',
+    releasedAt: '2026-08-03',
+    title: 'Fixed Email Router redirect workspace',
+    changes: [
+      'Moved Redirect into a permanent right-side composer with Bcc hidden by default, one explicit Send Redirect action, and the Email Router Advisor directly below Send.',
+      'Preselected the Advisor\'s ordered To, Cc, and Bcc recommendations only above 60% confidence while keeping every redirect under explicit user control.',
+      'Allowed retained inactive external routing contacts to be restored safely instead of failing with a duplicate-email error.',
+    ],
+  },
   {
     version: '2.0.97',
     releasedAt: '2026-08-03',

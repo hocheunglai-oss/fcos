@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabaseClient';
 import EmailActionDialog from './EmailActionDialog';
 import EmailMessageList from './EmailMessageList';
 import EmailMessageSheet, { EmailMessageDetail } from './EmailMessageSheet';
+import EmailRedirectPanel from './EmailRedirectPanel';
 
 const LIMIT = 30;
 const METHODOLOGY = {
@@ -19,8 +20,9 @@ const METHODOLOGY = {
   sections: [
     { title: 'Mailbox data', body: 'Inbox, Sent, and Archive are read from the connected mailbox service. The workspace preserves the server result and does not infer delivery or deletion outcomes.' },
     { title: 'Routing directory', body: 'Administrators and the General Manager maintain one ordered directory of active FCOS users, approved external contacts, and groups. The same order is used in Redirect and Forward, while short labels keep selections easy to scan.' },
-    { title: 'Recipient order', body: 'To, Cc, and Bcc selections are numbered independently. FCOS preserves each numbered sequence in the outgoing message so visible recipients see the same To and Cc order; Bcc order remains private.' },
-    { title: 'Controlled actions', body: 'Redirect, Reply, Forward, Archive, Delete, and Undo each require an explicit confirmation. FCOS records the submitted request and shows confirmed, failed, or uncertain outcomes returned by the service.' },
+    { title: 'Recipient order', body: 'The fixed Redirect window numbers To, Cc, and Bcc independently. Bcc stays hidden until requested. FCOS preserves each sequence in the outgoing message so visible recipients see the same To and Cc order, while Bcc remains private.' },
+    { title: 'Controlled actions', body: 'Redirect uses one explicit Send Redirect command from the fixed window and does not add a second confirmation. Reply, Forward, Archive, Delete, Undo, and uncertain-send review retain their confirmation safeguards. FCOS never retries a submitted message automatically.' },
+    { title: 'Routing advisor', body: 'The Advisor is read-only and remains below Send Redirect. Suggestions are preselected only when confidence is above 60%; the user must still review recipient roles and order and explicitly send the message.' },
     { title: 'Message safety', body: 'Message HTML is sanitized before display. Attachments are requested through a time-limited URL only when a user selects Download.' },
     { title: 'Availability', body: 'When the router backend is unavailable, FCOS keeps the workspace read-only and reports the service state instead of simulating mail activity.' },
   ],
@@ -40,7 +42,7 @@ function ResultNotice({ result }) {
 }
 
 export default function EmailRouterWorkspace() {
-  const [useDetailSheet, setUseDetailSheet] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024);
+  const [useDetailSheet, setUseDetailSheet] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1280);
   const [folder, setFolder] = useState('inbox');
   const [search, setSearch] = useState('');
   const [messages, setMessages] = useState([]);
@@ -58,6 +60,7 @@ export default function EmailRouterWorkspace() {
   const [directory, setDirectory] = useState([]);
   const [presets, setPresets] = useState([]);
   const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [actionResult, setActionResult] = useState(null);
   const [advisor, setAdvisor] = useState(null);
@@ -66,12 +69,40 @@ export default function EmailRouterWorkspace() {
   const requestId = useRef(0);
 
   useEffect(() => {
-    const query = window.matchMedia('(max-width: 1023px)');
+    const query = window.matchMedia('(max-width: 1279px)');
     const update = () => setUseDetailSheet(query.matches);
     query.addEventListener('change', update);
     update();
     return () => query.removeEventListener('change', update);
   }, []);
+
+  const loadRoutingOptions = useCallback(async ({ force = false } = {}) => {
+    setDirectoryLoading(true);
+    setDirectoryError('');
+    try {
+      const [directoryResponse, presetResponse] = await Promise.all([emailRouter.directory({}, { force }), emailRouter.presets({}, { force })]);
+      const directoryFailure = messageError(directoryResponse.data);
+      const presetFailure = messageError(presetResponse.data);
+      if (directoryFailure) {
+        setDirectory([]);
+        setDirectoryError(directoryFailure);
+      } else {
+        setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
+      }
+      if (!presetFailure) setPresets(presetResponse.data?.presets || presetResponse.data?.items || directoryResponse.data?.presets || []);
+      else setPresets([]);
+    } catch (error) {
+      setDirectory([]);
+      setPresets([]);
+      setDirectoryError(error?.message || 'The routing directory is unavailable.');
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRoutingOptions();
+  }, [loadRoutingOptions]);
 
   const loadList = async ({ cursor = null, history = [], foreground = true, force = false } = {}) => {
     const id = ++requestId.current;
@@ -128,24 +159,10 @@ export default function EmailRouterWorkspace() {
     return () => { active = false; };
   }, [selectedId, messages]);
 
-  const openAction = async (action, undoResult = null, initialDestinationId = '') => {
+  const openAction = async (action, undoResult = null) => {
     if (!detail) return;
-    setActionDialog({ action, undoResult, initialDestinationId });
-    if (!['redirect', 'forward'].includes(action)) return;
-    setDirectoryLoading(true);
-    try {
-      const [directoryResponse, presetResponse] = await Promise.all([emailRouter.directory({}, { force: true }), emailRouter.presets({}, { force: true })]);
-      if (!directoryResponse.data?.error) setDirectory(directoryResponse.data.directory || directoryResponse.data.destinations || directoryResponse.data.items || []);
-      else setDirectory([]);
-      if (!presetResponse.data?.error) setPresets(presetResponse.data.presets || presetResponse.data.items || []);
-      else if (!directoryResponse.data?.error) setPresets(directoryResponse.data.presets || []);
-      else setPresets([]);
-    } catch {
-      setDirectory([]);
-      setPresets([]);
-    } finally {
-      setDirectoryLoading(false);
-    }
+    setActionDialog({ action, undoResult });
+    if (action === 'forward') loadRoutingOptions({ force: true });
   };
 
   const loadAdvisor = async () => {
@@ -164,7 +181,7 @@ export default function EmailRouterWorkspace() {
   };
 
   const submitAction = async (payload) => {
-    if (!detail || !actionDialog) return;
+    if (!detail || (['undo', 'retry'].includes(payload.action) && !actionDialog)) return null;
     const operationId = newOperationId();
     const submitted = { status: 'submitted', action: payload.action, message: 'FCOS submitted the action request and is waiting for confirmation.' };
     setSubmitting(true);
@@ -181,9 +198,12 @@ export default function EmailRouterWorkspace() {
       setDetail((current) => current ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
       setActionDialog(null);
       if (result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
+      return result;
     } catch (error) {
-      setActionResult({ status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, message: error?.message || 'The action did not complete.' });
+      const result = { status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, message: error?.message || 'The action did not complete.' };
+      setActionResult(result);
       setActionDialog(null);
+      return result;
     } finally {
       setSubmitting(false);
     }
@@ -245,6 +265,20 @@ export default function EmailRouterWorkspace() {
     if (messageId !== selectedId) setActionResult(null);
     setSelectedId(messageId);
   };
+  const redirectPanel = (className = '') => <EmailRedirectPanel
+    message={detail}
+    directory={directory}
+    presets={presets}
+    directoryLoading={directoryLoading}
+    directoryError={directoryError}
+    submitting={submitting}
+    advisor={advisor}
+    advisorLoading={advisorLoading}
+    advisorError={advisorError}
+    onAdvisor={loadAdvisor}
+    onSubmit={submitAction}
+    className={className}
+  />;
 
   return <div className="space-y-4">
     <PageHeader
@@ -256,15 +290,15 @@ export default function EmailRouterWorkspace() {
       actions={<><PageMethodology {...METHODOLOGY} /><Button variant="outline" size="icon" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
     />
     <ResultNotice result={actionResult} />
-    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background lg:flex-row">
-      <div className="flex min-h-0 w-full flex-col border-b border-border lg:w-[420px] lg:shrink-0 lg:border-b-0 lg:border-r">
+    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-10rem)] xl:flex-row">
+      <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
         <div className="border-b border-border px-4 py-3"><Tabs value={folder} onValueChange={setFolder}><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="inbox" className="gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger></TabsList></Tabs></div>
         <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
         <EmailMessageList messages={messages} selectedId={selectedId} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onPrevious={previous} onNext={next} />
       </div>
-      <div className="hidden min-h-0 flex-1 overflow-y-auto lg:block"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} advisor={advisor} advisorLoading={advisorLoading} advisorError={advisorError} onAdvisor={loadAdvisor} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>
+      {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
     </section>
-    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} advisor={advisor} advisorLoading={advisorLoading} advisorError={advisorError} onAdvisor={loadAdvisor} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} />}
-    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} initialDestinationId={actionDialog?.initialDestinationId} onSubmit={submitAction} />
+    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
+    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />
   </div>;
 }

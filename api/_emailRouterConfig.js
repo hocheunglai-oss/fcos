@@ -165,8 +165,18 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
       p_actor: profile.id,
     });
     if (error) {
-      const stale = /revision conflict/i.test(error.message || '');
-      throw configError(stale ? 'This routing contact changed after it was loaded. Refresh and try again.' : error.message || 'The routing contact could not be saved.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
+      const detail = String(error.message || '');
+      const stale = /revision conflict/i.test(detail);
+      const duplicateEmail = /external_email_key|email address is already|already in the active routing directory|retained routing contact already uses this email/i.test(detail);
+      const duplicateLabel = /nickname|routing label/i.test(detail) && /duplicate|already|unique/i.test(detail);
+      const message = stale
+        ? 'This routing contact changed after it was loaded. Refresh and try again.'
+        : duplicateEmail
+          ? 'This email address already belongs to a routing contact. Refresh the directory and edit or restore that contact.'
+          : duplicateLabel
+            ? 'This routing label is already used by another active contact.'
+            : detail || 'The routing contact could not be saved.';
+      throw configError(message, stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
     }
     return data;
   }

@@ -6,6 +6,7 @@ const migrationUrl = new URL('../supabase/migrations/20260803090000_native_email
 const accessMigrationUrl = new URL('../supabase/migrations/20260803030109_email_router_module_access.sql', import.meta.url);
 const activeDirectoryMigrationUrl = new URL('../supabase/migrations/20260803041219_email_router_active_user_directory.sql', import.meta.url);
 const orderedDirectoryMigrationUrl = new URL('../supabase/migrations/20260803110944_email_router_ordered_directory.sql', import.meta.url);
+const externalRestoreMigrationUrl = new URL('../supabase/migrations/20260803135527_fix_email_router_external_reactivation.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -90,12 +91,15 @@ test('Email Router destination profiles do not rely on cross-schema PostgREST em
 });
 
 test('Email Router directory supports ordered users, external contacts, and groups through service-only configuration', async () => {
-  const [activeSql, orderedSql, core, configuration, dialog, messageSheet, settings, workspace] = await Promise.all([
+  const [activeSql, orderedSql, externalRestoreSql, core, configuration, dialog, recipientPicker, redirectPanel, messageSheet, settings, workspace] = await Promise.all([
     readFile(activeDirectoryMigrationUrl, 'utf8'),
     readFile(orderedDirectoryMigrationUrl, 'utf8'),
+    readFile(externalRestoreMigrationUrl, 'utf8'),
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRecipientPicker.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRedirectPanel.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
@@ -120,14 +124,23 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(core, /groupId: normalizedGroupId/);
   assert.match(configuration, /operation\.type === 'routing_directory_save'/);
   assert.match(configuration, /save_emailrouter_external_destination/);
-  assert.match(dialog, /const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
+  assert.match(recipientPicker, /export const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
   assert.match(dialog, /destinationSelections: selections/);
-  assert.match(dialog, /Loading routing directory/);
-  assert.match(dialog, /index \+ 1/);
-  assert.match(messageSheet, /<ArrowRight \/>Redirect/);
+  assert.match(recipientPicker, /Loading routing directory/);
+  assert.match(recipientPicker, /findIndex\([^\n]+\) \+ 1/);
+  assert.match(redirectPanel, /Send Redirect/);
+  assert.match(redirectPanel, /bccVisible, setBccVisible.*false/);
+  assert.match(redirectPanel, /Number\(advisor\?\.confidence\) <= PRESELECT_CONFIDENCE/);
+  assert.doesNotMatch(messageSheet, /Redirect message.*onAction/s);
+  assert.match(externalRestoreSql, /configuration\.destination_restore/);
+  assert.match(externalRestoreSql, /where destination\.email_address = requested_email[\s\S]*for update/i);
+  assert.match(externalRestoreSql, /delete from emailrouter\.destination_group_members[\s\S]*destination_row\.id/i);
+  assert.match(externalRestoreSql, /revoke all on function public\.save_emailrouter_external_destination\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
+  assert.match(externalRestoreSql, /grant execute on function public\.save_emailrouter_external_destination\(jsonb, uuid\)[\s\S]*to service_role/i);
   assert.match(settings, /DragDropContext/);
   assert.match(settings, /Add external contact/);
   assert.match(settings, /draggableId=\{key\}/);
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
+  assert.match(workspace, /<EmailRedirectPanel/);
   assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
 });
