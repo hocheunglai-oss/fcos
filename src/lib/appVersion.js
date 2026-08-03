@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.99';
+export const APP_VERSION = '2.0.100';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.100',
+    releasedAt: '2026-08-04',
+    title: 'Fixed Email Router preset recipients',
+    changes: [
+      'Corrected routing preset validation so a selected person is not rejected because its intentionally empty group field is present, and vice versa.',
+      'Made removed or excluded preset recipients visible and repairable before saving.',
+    ],
+  },
   {
     version: '2.0.99',
     releasedAt: '2026-08-04',

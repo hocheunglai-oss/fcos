@@ -191,6 +191,24 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
     }
     return data;
   }
+  if (operation.type === 'preset_save') {
+    const { data, error } = await client.rpc('save_emailrouter_preset', {
+      p_operation: operation,
+      p_actor: profile.id,
+    });
+    if (error) {
+      const detail = String(error.message || '');
+      const stale = /revision conflict/i.test(detail);
+      const unavailable = /unavailable (?:destination|group)/i.test(detail);
+      const message = stale
+        ? 'This routing preset changed after it was loaded. Refresh and try again.'
+        : unavailable
+          ? 'A preset recipient is no longer included in the routing directory. Remove or replace it and try again.'
+          : detail || 'The routing preset could not be saved.';
+      throw configError(message, stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
+    }
+    return data;
+  }
   if (operation.type === 'setting_save' && operation.key === 'advisor.model') {
     const modelId = operation.value?.modelId;
     if (!isAllowedDashboardAiModel(modelId)) throw configError('Select a supported Email Router Advisor model.');

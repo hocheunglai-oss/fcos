@@ -8,6 +8,7 @@ const activeDirectoryMigrationUrl = new URL('../supabase/migrations/202608030412
 const orderedDirectoryMigrationUrl = new URL('../supabase/migrations/20260803110944_email_router_ordered_directory.sql', import.meta.url);
 const externalRestoreMigrationUrl = new URL('../supabase/migrations/20260803135527_fix_email_router_external_reactivation.sql', import.meta.url);
 const directoryEventMigrationUrl = new URL('../supabase/migrations/20260803162059_allow_emailrouter_routing_directory_events.sql', import.meta.url);
+const presetValidationMigrationUrl = new URL('../supabase/migrations/20260803165805_fix_emailrouter_preset_recipient_validation.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -155,4 +156,23 @@ test('Email Router audit events allow whole-directory ordering changes', async (
   assert.match(orderedSql, /'configuration\.routing_directory_save',[\s\S]*'routing_directory'/i);
   assert.match(directoryEventSql, /drop constraint if exists events_entity_type_check/i);
   assert.match(directoryEventSql, /add constraint events_entity_type_check[\s\S]*'routing_directory'/i);
+});
+
+test('Email Router presets validate only the non-null recipient identity', async () => {
+  const [migrationSql, configuration, settings] = await Promise.all([
+    readFile(presetValidationMigrationUrl, 'utf8'),
+    readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migrationSql, /create or replace function public\.save_emailrouter_preset/i);
+  assert.match(migrationSql, /destination_id_value is not null and not exists/i);
+  assert.match(migrationSql, /group_id_value is not null and not exists/i);
+  assert.match(migrationSql, /destination\.redirect_enabled = true/i);
+  assert.match(migrationSql, /destination_group\.redirect_enabled = true/i);
+  assert.match(migrationSql, /revoke all on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
+  assert.match(migrationSql, /grant execute on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*to service_role/i);
+  assert.match(configuration, /operation\.type === 'preset_save'[\s\S]*save_emailrouter_preset/i);
+  assert.match(settings, /Remove or replace unavailable recipients before saving/);
+  assert.match(settings, /Unavailable recipient/);
 });
