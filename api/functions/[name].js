@@ -131,7 +131,7 @@ import {
   emailRouterSubscriptionHandler as nativeEmailRouterSubscription,
   emailRouterUndoHandler as nativeEmailRouterUndo,
 } from '../_emailRouterHandlers.js';
-import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
+import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -16047,6 +16047,7 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   let subscriptions = [];
   try {
     subscriptions = await maintainEmailRouterSubscriptions({ client, mailbox });
+    await resolveEmailRouterAlert(client, { dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
   } catch (error) {
     await recordEmailRouterAlert(client, { mailboxId: mailbox.id, code: error.code || 'email_router_subscription_failed', severity: 'critical', dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
     throw error;

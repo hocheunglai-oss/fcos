@@ -566,6 +566,16 @@ export async function recordEmailRouterAlert(client, { mailboxId = null, message
   if (error) console.warn('[email-router] Operational alert could not be recorded.', { code: error.code || 'EMAIL_ROUTER_ALERT_FAILED' });
 }
 
+export async function resolveEmailRouterAlert(client, { dedupeKey }) {
+  const normalizedDedupeKey = text(dedupeKey, 200);
+  if (!normalizedDedupeKey) return;
+  const { error } = await routerTable(client, 'alerts')
+    .update({ state: 'resolved', resolved_by: null, resolved_at: null })
+    .eq('dedupe_key', normalizedDedupeKey)
+    .in('state', ['open', 'acknowledged']);
+  if (error) storageUnavailable(error);
+}
+
 async function enqueueOutbox(client, values) {
   const { error } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox).insert(values);
   if (error) storageUnavailable(error);

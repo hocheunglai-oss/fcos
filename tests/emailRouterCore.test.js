@@ -10,6 +10,7 @@ import {
   processEmailRouterOutbox,
   requireEmailRouterConfigurationAuthority,
   requireEmailRouterConfigurationUser,
+  resolveEmailRouterAlert,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
   syncEmailRouterDelta,
@@ -103,6 +104,33 @@ test('current mailbox comes from the Supabase registry, not a caller supplied ad
 test('webhook notifications require a constant-time clientState match', () => {
   const notifications = validEmailRouterWebhookNotifications({ value: [{ subscriptionId: 'ok', clientState: 'expected' }, { subscriptionId: 'bad', clientState: 'wrong' }] }, 'expected');
   assert.deepEqual(notifications, [{ subscriptionId: 'ok', resource: '', changeType: '', lifecycleEvent: '', resourceId: '' }]);
+});
+
+test('successful subscription maintenance can resolve only its recovered alert', async () => {
+  let values;
+  let dedupeKey;
+  let states;
+  const query = {
+    update(input) { values = input; return this; },
+    eq(column, value) { assert.equal(column, 'dedupe_key'); dedupeKey = value; return this; },
+    in: async (column, input) => {
+      assert.equal(column, 'state');
+      states = input;
+      return { error: null };
+    },
+  };
+  const client = {
+    from(table) {
+      assert.equal(table, 'emailrouter.alerts');
+      return query;
+    },
+  };
+  await resolveEmailRouterAlert(client, { dedupeKey: 'mailbox:mailbox-1:subscriptions' });
+  assert.equal(dedupeKey, 'mailbox:mailbox-1:subscriptions');
+  assert.deepEqual(states, ['open', 'acknowledged']);
+  assert.equal(values.state, 'resolved');
+  assert.equal(values.resolved_by, null);
+  assert.equal(values.resolved_at, null);
 });
 
 test('Graph requests use immutable identifiers and a started outbox entry is reconciled without resubmission', async () => {
