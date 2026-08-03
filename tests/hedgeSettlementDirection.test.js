@@ -61,6 +61,11 @@ test('settlement UI and documents make the payment route explicit', async () => 
   assert.doesNotMatch(view, /FCBS bank instructions are not configured/);
   assert.doesNotMatch(view, /Money value=\{paymentDirection\.amount\}/);
   assert.match(documents, /PAYMENT DIRECTION:/);
+  assert.match(documents, /addImage\(LOGO_DATA_URL, 'JPEG', 74, 12, 62, 24\)/);
+  assert.match(documents, /FRATELLI COSULICH BUNKERS \(HK\) LTD', pageWidth \/ 2, 41, \{ align: 'center' \}/);
+  assert.match(documents, /UNITS 02-03, 23\/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG', pageWidth \/ 2, 46, \{ align: 'center' \}/);
+  assert.match(documents, /doc\.rect\(0, 54, pageWidth, 11, 'F'\)/);
+  assert.doesNotMatch(documents, /FCBHK settlement document/);
   assert.doesNotMatch(documents, /Obtain directly from the beneficiary/);
   assert.match(documents, /if \(invoice\.paymentDirection\.isReceivable\)/);
   assert.doesNotMatch(documents, /Beneficiary: FRATELLI COSULICH BUNKERS \(HK\) LTD/);

@@ -90,7 +90,6 @@ export function generateHedgeInvoicePdf(input = {}) {
   const margin = 16;
   const pageWidth = 210;
   const right = pageWidth - margin;
-  const red = [172, 27, 36];
   const ink = [28, 35, 42];
   const muted = [91, 102, 112];
   const border = [214, 220, 224];
@@ -98,51 +97,32 @@ export function generateHedgeInvoicePdf(input = {}) {
   let y = 0;
 
   const drawBrandHeader = (continued = false) => {
-    if (LOGO_DATA_URL) doc.addImage(LOGO_DATA_URL, 'JPEG', margin, 9, 41, 16);
-    doc.setTextColor(...ink);
+    if (continued) return 18;
+    if (LOGO_DATA_URL) doc.addImage(LOGO_DATA_URL, 'JPEG', 74, 12, 62, 24);
+    doc.setTextColor(25, 31, 35);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', right, 13, { align: 'right' });
-    doc.setTextColor(...muted);
+    doc.setFontSize(10);
+    doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', pageWidth / 2, 41, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.8);
-    doc.text('Units 02-03, 23/F, Plaza 228', right, 18, { align: 'right' });
-    doc.text('228 Wan Chai Road, Hong Kong', right, 22, { align: 'right' });
-    doc.setDrawColor(...red);
-    doc.setLineWidth(0.7);
-    doc.line(margin, 29, right, 29);
-    if (continued) {
-      doc.setTextColor(...muted);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7);
-      doc.text(`OTC SWAP SETTLEMENT  |  ${invoice.invoiceNumber}`, margin, 36);
-      return 41;
-    }
-    return 36;
+    doc.setFontSize(7);
+    doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG', pageWidth / 2, 46, { align: 'center' });
+    doc.setFillColor(180, 30, 30);
+    doc.rect(0, 54, pageWidth, 11, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(invoice.isReceivable ? 'DEBIT NOTE - OTC SWAP SETTLEMENT' : 'CREDIT NOTE - OTC SWAP SETTLEMENT', pageWidth / 2, 61, { align: 'center' });
+    return 73;
   };
 
   y = drawBrandHeader();
-  doc.setTextColor(...red);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.text('OTC SWAP SETTLEMENT', margin, y);
-  doc.setTextColor(...ink);
-  doc.setFontSize(19);
-  doc.text(invoice.isReceivable ? 'DEBIT NOTE' : 'CREDIT NOTE', margin, y + 9);
-  doc.setTextColor(...muted);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.text('FCBHK settlement document', margin, y + 15);
   doc.setTextColor(...ink);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text(invoice.invoiceNumber, right, y + 2, { align: 'right' });
+  doc.text(`No.: ${invoice.invoiceNumber}`, margin, y);
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(...muted);
-  doc.setFontSize(7.5);
-  doc.text(`Issue date  ${displayDate(invoice.invoiceDate)}`, right, y + 8, { align: 'right' });
-  doc.text(`Settlement  ${displayMonth(invoice.settlementMonth)}`, right, y + 13, { align: 'right' });
-  y += 23;
+  doc.text(`Date: ${displayDate(invoice.invoiceDate)}`, right, y, { align: 'right' });
+  y += 7;
 
   const leftCardWidth = 104;
   const cardGap = 5;
@@ -316,7 +296,7 @@ export function generateHedgeInvoicePdf(input = {}) {
     doc.setTextColor(...muted);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    doc.text('Computer-generated document. Registered in Hong Kong.', margin, 286);
+    doc.text('Computer generated document. Registered in Hong Kong.', pageWidth / 2, 286, { align: 'center' });
     doc.text(`${invoice.invoiceNumber}  |  Page ${page} of ${pageCount}`, right, 286, { align: 'right' });
   }
 

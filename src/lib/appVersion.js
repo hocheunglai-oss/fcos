@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.92';
+export const APP_VERSION = '2.0.93';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.93',
+    releasedAt: '2026-08-03',
+    title: 'Settlement invoice letterhead restoration',
+    changes: [
+      'Restored the original centred Fratelli Cosulich company letterhead, address, title band, and footer wording on Hedge Desk settlement invoices without changing payment-direction or beneficiary logic.',
+    ],
+  },
   {
     version: '2.0.92',
     releasedAt: '2026-08-03',
