@@ -36,10 +36,10 @@ export function ActionsProvider({ children, reload }) {
     return record;
   }, [reload, showToast]);
 
-  const remove = useCallback(async ({ entity, entityName, record, label }) => {
+  const remove = useCallback(async ({ entity, entityName, record, label, undoable = true }) => {
     await entity.delete(record.id, record.revision);
     await reload({ silent: true });
-    showToast({ message: `${label} deleted`, operation: { action: "delete", entity, entityName, record, label } });
+    showToast({ message: `${label} deleted`, operation: undoable ? { action: "delete", entity, entityName, record, label } : null });
   }, [reload, showToast]);
 
   const undo = useCallback(async () => {

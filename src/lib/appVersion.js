@@ -4,9 +4,10 @@ export const APP_VERSION_HISTORY = [
   {
     version: '2.0.90',
     releasedAt: '2026-08-03',
-    title: 'Email Router access display correction',
+    title: 'Access display and Hedge invoice deletion repair',
     changes: [
       'Corrected Users & Access so the protected Administrator and General Manager user types display their effective Email Router access as checked instead of showing a misleading unchecked box.',
+      'Fixed Hedge Desk invoice deletion when generated PDFs are linked by removing document metadata atomically, cleaning up private stored files, and clearly marking the deletion as permanent.',
     ],
   },
   {

@@ -408,7 +408,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
     setBusy(true);
     setError(null);
     try {
-      await actions.remove({ entity: Invoice, entityName: "Invoice", record: deleteTarget, label: deleteTarget.invoice_number || "Invoice" });
+      await actions.remove({ entity: Invoice, entityName: "Invoice", record: deleteTarget, label: deleteTarget.invoice_number || "Invoice", undoable: false });
       setDeleteTarget(null);
     } catch (nextError) {
       setError(nextError);
@@ -566,7 +566,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
         )}
       </Drawer>
 
-      <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={removeInvoice} busy={busy} title="Delete invoice?" description={deleteTarget?.invoice_number || ""} />
+      <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={removeInvoice} busy={busy} title="Delete invoice?" description={deleteTarget ? `${deleteTarget.invoice_number || "Invoice"}. Stored invoice PDFs will also be permanently deleted.` : ""} />
     </div>
   );
 }

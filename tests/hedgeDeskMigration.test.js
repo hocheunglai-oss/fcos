@@ -56,6 +56,24 @@ test('native Hedge Desk migration is private, revisioned, and source traceable',
   assert.match(sql, /'finance'[\s\S]*'hedge_settlement_manage'/);
 });
 
+test('invoice deletion removes linked documents atomically before storage cleanup', async () => {
+  const [sql, service, settlement, actions] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20260803120000_delete_hedge_invoice_documents.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeDeskService.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/hedge/views/SettlementView.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/hedge/data/ActionsContext.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /create or replace function public\.delete_hedge_invoice_with_documents/i);
+  assert.match(sql, /from public\.hedge_invoices[\s\S]*for update/i);
+  assert.match(sql, /delete from public\.hedge_documents[\s\S]*delete from public\.hedge_invoices/i);
+  assert.match(sql, /revoke all on function public\.delete_hedge_invoice_with_documents\(uuid, bigint\)[\s\S]*from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.delete_hedge_invoice_with_documents\(uuid, bigint\)[\s\S]*to service_role/i);
+  assert.match(service, /client\.rpc\('delete_hedge_invoice_with_documents'/);
+  assert.match(service, /storage\.from\('hedge-documents'\)\.remove\(storagePaths\)/);
+  assert.match(settlement, /undoable: false/);
+  assert.match(actions, /undoable = true/);
+});
+
 test('Graph mailbox purposes are independent and service controlled', async () => {
   const [sql, graphServer, packageJson] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260801191655_native_hedge_desk_graph_mail.sql', import.meta.url), 'utf8'),

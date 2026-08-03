@@ -325,6 +325,36 @@ async function replaceRelationships(client, entity, recordId, relationships) {
   }
 }
 
+async function deleteInvoiceWithDocuments(client, invoice, expectedRevision) {
+  const { data, error } = await client.rpc('delete_hedge_invoice_with_documents', {
+    p_invoice_id: invoice.id,
+    p_expected_revision: expectedRevision,
+  });
+  if (error) {
+    const stale = /changed after it was opened/i.test(error.message || '');
+    throw httpError(
+      stale
+        ? 'This Hedge Desk invoice changed after it was opened. Refresh before deleting.'
+        : `Hedge Desk invoice could not be deleted: ${error.message}`,
+      stale ? 409 : 502,
+      stale ? 'REVISION_CONFLICT' : 'HEDGE_INVOICE_DELETE_FAILED',
+    );
+  }
+
+  const storagePaths = Array.isArray(data?.storagePaths)
+    ? data.storagePaths.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  let storageCleanupFailed = false;
+  if (storagePaths.length) {
+    const removal = await client.storage.from('hedge-documents').remove(storagePaths);
+    storageCleanupFailed = Boolean(removal.error);
+  }
+  return {
+    removedDocumentCount: Number(data?.removedDocumentCount || storagePaths.length || 0),
+    storageCleanupFailed,
+  };
+}
+
 async function writeEvent(client, { eventType, entity, record, before = null, profile, label = null, metadata = {} }) {
   const { error } = await client.from('hedge_events').insert({
     event_type: eventType,
@@ -443,9 +473,14 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
     if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(before.revision)) {
       throw httpError('This Hedge Desk record changed after it was opened. Refresh before deleting.', 409, 'REVISION_CONFLICT', { current: before });
     }
-    const { error } = await client.from(config.table).delete().eq('id', before.id).eq('revision', expectedRevision);
-    if (error) throw httpError(`Hedge Desk record could not be deleted: ${error.message}`, 409);
-    await writeEvent(client, { eventType: 'record_deleted', entity, before, profile, label: body.label || null });
+    let deleteMetadata = {};
+    if (entity === 'Invoice') {
+      deleteMetadata = await deleteInvoiceWithDocuments(client, before, expectedRevision);
+    } else {
+      const { error } = await client.from(config.table).delete().eq('id', before.id).eq('revision', expectedRevision);
+      if (error) throw httpError(`Hedge Desk record could not be deleted: ${error.message}`, 409);
+    }
+    await writeEvent(client, { eventType: 'record_deleted', entity, before, profile, label: body.label || null, metadata: deleteMetadata });
     return true;
   }
 
