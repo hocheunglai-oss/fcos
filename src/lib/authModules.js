@@ -27,6 +27,7 @@ export const APP_MODULES = [
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
+  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 89 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
 ];

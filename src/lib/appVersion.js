@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.89';
+export const APP_VERSION = '2.0.90';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.90',
+    releasedAt: '2026-08-03',
+    title: 'Email Router access display correction',
+    changes: [
+      'Corrected Users & Access so the protected Administrator and General Manager user types display their effective Email Router access as checked instead of showing a misleading unchecked box.',
+    ],
+  },
   {
     version: '2.0.89',
     releasedAt: '2026-08-03',

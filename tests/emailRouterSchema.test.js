@@ -58,10 +58,11 @@ test('migration and configuration RPCs remain service-role only', async () => {
 });
 
 test('Email Router visibility is controlled by module access without removing current access', async () => {
-  const [sql, app, layout, server] = await Promise.all([
+  const [sql, app, layout, authModules, server] = await Promise.all([
     readFile(accessMigrationUrl, 'utf8'),
     readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/Layout.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/authModules.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
   ]);
   assert.match(sql, /values \('email_router', 'Email Router', '\/email-router', 89\)/);
@@ -69,6 +70,7 @@ test('Email Router visibility is controlled by module access without removing cu
   assert.match(sql, /select id, 'email_router', true\s+from public\.user_profiles\s+where use_type_defaults = false/);
   assert.match(app, /path="\/email-router" element=\{<ModuleGate moduleId="email_router">/);
   assert.match(layout, /id: 'email_router'[\s\S]*moduleId: 'email_router'/);
+  assert.match(authModules, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /emailRouterList: \['email_router'\]/);
   assert.match(server, /emailRouterSettingsSave: \['email_router'\]/);
