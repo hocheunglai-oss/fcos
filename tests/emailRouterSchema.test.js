@@ -5,6 +5,7 @@ import test from 'node:test';
 const migrationUrl = new URL('../supabase/migrations/20260803090000_native_emailrouter_schema.sql', import.meta.url);
 const accessMigrationUrl = new URL('../supabase/migrations/20260803030109_email_router_module_access.sql', import.meta.url);
 const activeDirectoryMigrationUrl = new URL('../supabase/migrations/20260803041219_email_router_active_user_directory.sql', import.meta.url);
+const orderedDirectoryMigrationUrl = new URL('../supabase/migrations/20260803110944_email_router_ordered_directory.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -88,25 +89,45 @@ test('Email Router destination profiles do not rely on cross-schema PostgREST em
   assert.match(configuration, /emailRouterProfilesById/);
 });
 
-test('Email Router routing labels are active-user nicknames with service-only configuration', async () => {
-  const [sql, core, configuration, dialog, workspace] = await Promise.all([
+test('Email Router directory supports ordered users, external contacts, and groups through service-only configuration', async () => {
+  const [activeSql, orderedSql, core, configuration, dialog, messageSheet, settings, workspace] = await Promise.all([
     readFile(activeDirectoryMigrationUrl, 'utf8'),
+    readFile(orderedDirectoryMigrationUrl, 'utf8'),
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(sql, /add column if not exists nickname text/i);
-  assert.match(sql, /add column if not exists redirect_enabled boolean/i);
-  assert.match(sql, /revoke all on function public\.save_emailrouter_routing_users\(jsonb, uuid\)\s+from public, anon, authenticated/i);
-  assert.match(sql, /grant execute on function public\.save_emailrouter_routing_users\(jsonb, uuid\)\s+to service_role/i);
-  assert.match(core, /\.eq\('destination_kind', 'fcos_profile'\)/);
+  assert.match(activeSql, /add column if not exists nickname text/i);
+  assert.match(activeSql, /add column if not exists redirect_enabled boolean/i);
+  assert.match(orderedSql, /alter table emailrouter\.destination_groups[\s\S]*add column if not exists redirect_enabled/i);
+  assert.match(orderedSql, /create or replace function public\.save_emailrouter_routing_directory/i);
+  assert.match(orderedSql, /create or replace function public\.save_emailrouter_external_destination/i);
+  assert.match(orderedSql, /create or replace function public\.save_emailrouter_group/i);
+  for (const signature of [
+    'public.save_emailrouter_routing_directory(jsonb, uuid)',
+    'public.save_emailrouter_external_destination(jsonb, uuid)',
+    'public.save_emailrouter_group(jsonb, uuid)',
+  ]) {
+    assert.match(orderedSql, new RegExp(`revoke all on function ${signature.replace(/[().]/g, '\\$&')}\\s+from public, anon, authenticated`, 'i'));
+    assert.match(orderedSql, new RegExp(`grant execute on function ${signature.replace(/[().]/g, '\\$&')}\\s+to service_role`, 'i'));
+  }
+  assert.match(core, /destination_kind === 'fcos_profile'/);
   assert.match(core, /\.eq\('redirect_enabled', true\)/);
-  assert.match(core, /\{ id: destination\.id, label: destination\.nickname \}/);
-  assert.match(configuration, /operation\.type === 'routing_users_save'/);
+  assert.match(core, /kind: 'group'/);
+  assert.match(core, /groupId: normalizedGroupId/);
+  assert.match(configuration, /operation\.type === 'routing_directory_save'/);
+  assert.match(configuration, /save_emailrouter_external_destination/);
   assert.match(dialog, /const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
   assert.match(dialog, /destinationSelections: selections/);
-  assert.match(dialog, /Loading included FCOS users/);
+  assert.match(dialog, /Loading routing directory/);
+  assert.match(dialog, /index \+ 1/);
+  assert.match(messageSheet, /<ArrowRight \/>Redirect/);
+  assert.match(settings, /DragDropContext/);
+  assert.match(settings, /Add external contact/);
+  assert.match(settings, /draggableId=\{key\}/);
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
 });

@@ -411,24 +411,53 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
 }
 
 export async function listEmailRouterDirectory({ client, search = '' }) {
-  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
-    .select('id,user_profile_id,nickname')
-    .eq('destination_kind', 'fcos_profile')
-    .eq('active', true)
-    .eq('redirect_enabled', true)
-    .order('nickname')
-    .limit(100);
-  if (error) storageUnavailable(error);
-  const profiles = await emailRouterProfilesById(client, (data || []).map((destination) => destination.user_profile_id));
+  const [destinationResult, groupResult] = await Promise.all([
+    routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
+      .select('id,destination_kind,user_profile_id,display_name,email_address,nickname,sort_order')
+      .eq('active', true)
+      .eq('redirect_enabled', true)
+      .order('sort_order')
+      .order('nickname')
+      .limit(500),
+    routerTable(client, 'destination_groups')
+      .select('id,display_name,sort_order,destination_group_members(destination_id)')
+      .eq('active', true)
+      .eq('redirect_enabled', true)
+      .order('sort_order')
+      .order('display_name')
+      .limit(500),
+  ]);
+  if (destinationResult.error) storageUnavailable(destinationResult.error);
+  if (groupResult.error) storageUnavailable(groupResult.error);
+  const destinations = destinationResult.data || [];
+  const profiles = await emailRouterProfilesById(client, destinations.map((destination) => destination.user_profile_id));
   const needle = text(search, 100).toLowerCase();
-  return (data || []).map((destination) => {
+  const availableDestinationItems = destinations.map((destination) => {
     const profile = profiles.get(destination.user_profile_id);
-    if (!profile?.active || !profile.email || !destination.nickname) return null;
-    const searchable = `${destination.nickname} ${profile.full_name || ''} ${profile.email}`.toLowerCase();
-    return !needle || searchable.includes(needle)
-      ? { id: destination.id, label: destination.nickname }
-      : null;
+    const isFcosUser = destination.destination_kind === 'fcos_profile';
+    const displayName = isFcosUser ? profile?.full_name : destination.display_name;
+    const emailAddress = isFcosUser ? profile?.email : destination.email_address;
+    if ((isFcosUser && !profile?.active) || !emailAddress || !destination.nickname) return null;
+    const searchable = `${destination.nickname} ${displayName || ''} ${emailAddress}`.toLowerCase();
+    return {
+      id: destination.id,
+      kind: 'destination',
+      label: destination.nickname,
+      sortOrder: destination.sort_order,
+      matchesSearch: !needle || searchable.includes(needle),
+    };
   }).filter(Boolean);
+  const availableDestinationIds = new Set(availableDestinationItems.map((item) => item.id));
+  const destinationItems = availableDestinationItems.filter((item) => item.matchesSearch);
+  const groupItems = (groupResult.data || []).map((group) => {
+    const memberCount = (group.destination_group_members || []).filter((member) => availableDestinationIds.has(member.destination_id)).length;
+    const searchable = `${group.display_name || ''} group`.toLowerCase();
+    if (!memberCount || (needle && !searchable.includes(needle))) return null;
+    return { id: group.id, kind: 'group', label: group.display_name, memberCount, sortOrder: group.sort_order };
+  }).filter(Boolean);
+  return [...destinationItems, ...groupItems]
+    .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.label.localeCompare(right.label))
+    .map(({ sortOrder: _sortOrder, matchesSearch: _matchesSearch, ...item }) => item);
 }
 
 export async function listEmailRouterPresets(client) {
@@ -615,21 +644,20 @@ async function destinationAddresses(client, destinationIds) {
   const ids = [...new Set((destinationIds || []).map((id) => safeId(id, 'destination identifier')))];
   if (!ids.length) return [];
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
-    .select('id,user_profile_id')
+    .select('id,destination_kind,user_profile_id,email_address')
     .in('id', ids)
-    .eq('destination_kind', 'fcos_profile')
     .eq('active', true)
     .eq('redirect_enabled', true);
   if (error) storageUnavailable(error);
   const profiles = await emailRouterProfilesById(client, (data || []).map((destination) => destination.user_profile_id));
   const found = new Map((data || []).map((destination) => {
     const profile = profiles.get(destination.user_profile_id);
-    return [destination.id, profile?.active ? profile.email : null];
+    return [destination.id, destination.destination_kind === 'fcos_profile' ? profile?.active ? profile.email : null : destination.email_address];
   }));
   return ids.map((id) => safeAddress(found.get(id) || ''));
 }
 
-function directDestinationSelections(input) {
+export function normalizeEmailRouterDestinationSelections(input) {
   const supplied = Array.isArray(input.destinationSelections)
     ? input.destinationSelections
     : Array.isArray(input.directoryIds)
@@ -641,18 +669,25 @@ function directDestinationSelections(input) {
     throw routerError('Too many routing destinations were selected.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
   }
   const seen = new Set();
+  const positions = { to: 0, cc: 0, bcc: 0 };
   return supplied.map((selection, index) => {
-    const destinationId = safeId(selection?.destinationId || selection?.id, 'destination identifier');
+    const destinationId = selection?.destinationId || (!selection?.groupId ? selection?.id : null);
+    const groupId = selection?.groupId || null;
+    if (Boolean(destinationId) === Boolean(groupId)) throw routerError('A routing selection must identify one destination or group.', 400, 'EMAIL_ROUTER_RECIPIENT_INVALID');
+    const normalizedDestinationId = destinationId ? safeId(destinationId, 'destination identifier') : null;
+    const normalizedGroupId = groupId ? safeId(groupId, 'group identifier') : null;
     const kind = text(selection?.kind || selection?.recipientKind, 10).toLowerCase();
     if (!RECIPIENT_KINDS.has(kind)) throw routerError('A routing recipient type is invalid.', 400, 'EMAIL_ROUTER_RECIPIENT_KIND_INVALID');
-    if (seen.has(destinationId)) throw routerError('A routing user can appear only once across To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
-    seen.add(destinationId);
-    return { destinationId, kind, position: index + 1 };
+    const selectionKey = normalizedDestinationId ? `destination:${normalizedDestinationId}` : `group:${normalizedGroupId}`;
+    if (seen.has(selectionKey)) throw routerError('A routing entry can appear only once across To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+    seen.add(selectionKey);
+    positions[kind] += 1;
+    return { destinationId: normalizedDestinationId, groupId: normalizedGroupId, kind, position: positions[kind], selectionIndex: index };
   });
 }
 
 function hasRecipientInput(input) {
-  return Boolean(input.presetId || directDestinationSelections(input).length);
+  return Boolean(input.presetId || normalizeEmailRouterDestinationSelections(input).length);
 }
 
 async function presetRecipients(client, presetId) {
@@ -663,17 +698,53 @@ async function presetRecipients(client, presetId) {
     .order('recipient_kind')
     .order('position');
   if (error) storageUnavailable(error);
-  const groups = (data || []).filter((row) => row.group_id);
-  if (!groups.length) return (data || []).map((row) => ({ destinationId: row.destination_id, kind: row.recipient_kind }));
-  const { data: members, error: memberError } = await routerTable(client, 'destination_group_members')
-    .select('group_id,destination_id')
-    .in('group_id', groups.map((row) => row.group_id));
-  if (memberError) storageUnavailable(memberError);
-  const kindByGroup = new Map(groups.map((row) => [row.group_id, row.recipient_kind]));
-  return [
-    ...(data || []).filter((row) => row.destination_id).map((row) => ({ destinationId: row.destination_id, kind: row.recipient_kind })),
-    ...(members || []).map((row) => ({ destinationId: row.destination_id, kind: kindByGroup.get(row.group_id) })),
-  ];
+  return (data || []).map((row) => ({
+    destinationId: row.destination_id || null,
+    groupId: row.group_id || null,
+    kind: row.recipient_kind,
+    position: row.position,
+  }));
+}
+
+async function expandRoutingSelections(client, selections) {
+  const groupIds = [...new Set(selections.map((selection) => selection.groupId).filter(Boolean))];
+  if (!groupIds.length) return selections;
+  const [groups, members] = await Promise.all([
+    routerTable(client, 'destination_groups')
+      .select('id')
+      .in('id', groupIds)
+      .eq('active', true)
+      .eq('redirect_enabled', true),
+    routerTable(client, 'destination_group_members')
+      .select('group_id,destination_id')
+      .in('group_id', groupIds),
+  ]);
+  if (groups.error) storageUnavailable(groups.error);
+  if (members.error) storageUnavailable(members.error);
+  if ((groups.data || []).length !== groupIds.length) throw routerError('A selected routing group is unavailable.', 409, 'EMAIL_ROUTER_GROUP_UNAVAILABLE');
+  const memberIds = [...new Set((members.data || []).map((member) => member.destination_id))];
+  const orderedMembers = memberIds.length
+    ? await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
+      .select('id,sort_order')
+      .in('id', memberIds)
+      .eq('active', true)
+      .eq('redirect_enabled', true)
+      .order('sort_order')
+      .order('nickname')
+    : { data: [], error: null };
+  if (orderedMembers.error) storageUnavailable(orderedMembers.error);
+  const memberOrder = new Map((orderedMembers.data || []).map((destination, index) => [destination.id, index]));
+  const byGroup = new Map(groupIds.map((groupId) => [groupId, []]));
+  for (const member of members.data || []) {
+    if (memberOrder.has(member.destination_id)) byGroup.get(member.group_id)?.push(member.destination_id);
+  }
+  for (const values of byGroup.values()) values.sort((left, right) => memberOrder.get(left) - memberOrder.get(right));
+  const expanded = selections.flatMap((selection) => selection.destinationId
+    ? [selection]
+    : (byGroup.get(selection.groupId) || []).map((destinationId) => ({ ...selection, destinationId, groupId: null })));
+  if (expanded.length > MAX_ROUTING_RECIPIENTS) throw routerError('The selected destinations expand to too many recipients.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
+  if (groupIds.some((groupId) => !(byGroup.get(groupId) || []).length)) throw routerError('A selected routing group has no available recipients.', 409, 'EMAIL_ROUTER_GROUP_EMPTY');
+  return expanded;
 }
 
 async function persistActionDestinations(client, actionId, input) {
@@ -684,11 +755,11 @@ async function persistActionDestinations(client, actionId, input) {
       .order('recipient_kind')
       .order('position')
     : {
-        data: directDestinationSelections(input).map((selection, index) => ({
-          destination_id: selection.destinationId,
-          group_id: null,
+        data: normalizeEmailRouterDestinationSelections(input).map((selection, index) => ({
+          destination_id: selection.destinationId || null,
+          group_id: selection.groupId || null,
           recipient_kind: selection.kind,
-          position: index + 1,
+          position: selection.position || index + 1,
         })),
         error: null,
       };
@@ -704,21 +775,21 @@ async function persistActionDestinations(client, actionId, input) {
   if (error) storageUnavailable(error);
 }
 
-async function actionRecipients(client, mailbox, input, dependencies) {
+export async function resolveEmailRouterActionRecipients(client, input) {
   const selected = input.presetId
     ? await presetRecipients(client, input.presetId)
-    : directDestinationSelections(input);
-  const destinationIds = [...new Set(selected.map((selection) => selection.destinationId))];
+    : normalizeEmailRouterDestinationSelections(input);
+  const expanded = await expandRoutingSelections(client, selected);
+  const destinationIds = [...new Set(expanded.map((selection) => selection.destinationId))];
   const addresses = await destinationAddresses(client, destinationIds);
   const addressByDestination = new Map(destinationIds.map((destinationId, index) => [destinationId, addresses[index]]));
-  const recipients = selected.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind }));
+  const recipients = expanded.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind }));
   return normalizedRecipients(recipients);
 }
 
 function requestFingerprint({ mailboxId, messageId, actionType, input }) {
-  const destinationSelections = directDestinationSelections(input)
-    .map(({ destinationId, kind }) => `${kind}:${destinationId}`)
-    .sort();
+  const destinationSelections = normalizeEmailRouterDestinationSelections(input)
+    .map(({ destinationId, groupId, kind, position }) => `${kind}:${position}:${destinationId ? `destination:${destinationId}` : `group:${groupId}`}`);
   return createHash('sha256').update(JSON.stringify({
     actionType,
     bodyHash: createHash('sha256').update(String(input.comment || input.body || ''), 'utf8').digest('hex'),
@@ -745,18 +816,29 @@ async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, 
   if (actionType === 'redirect') {
     const source = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/$value`), { headers: { accept: 'message/rfc822' } }, dependencies);
     const raw = new Uint8Array(await source.arrayBuffer());
-    const recipients = await actionRecipients(client, mailbox, input, dependencies);
+    const recipients = await resolveEmailRouterActionRecipients(client, input);
     const prepared = buildEmailRouterRedirectMime({ raw, mailboxAddress: mailbox.emailAddress, recipients });
     const response = await emailRouterGraphFetch(mailboxPath(mailbox, '/messages'), { method: 'POST', headers: { 'content-type': 'text/plain' }, body: prepared.raw.toString('base64') }, dependencies);
     const draft = await graphJson(response);
-    return safeId(draft?.id, 'draft identifier');
+    const draftId = safeId(draft?.id, 'draft identifier');
+    const bccRecipients = recipients
+      .filter((recipient) => recipient.kind === 'bcc')
+      .map((recipient) => ({ emailAddress: { address: recipient.address } }));
+    if (bccRecipients.length) {
+      await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bccRecipients }),
+      }, dependencies);
+    }
+    return draftId;
   }
   const route = actionType === 'reply' ? 'createReply' : 'createForward';
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/${route}`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comment: text(input.comment || input.body, 20_000) }) }, dependencies);
   const draft = await graphJson(response);
   const draftId = safeId(draft?.id, 'draft identifier');
   if (actionType === 'forward' && hasRecipientInput(input)) {
-    const recipients = await actionRecipients(client, mailbox, input, dependencies);
+    const recipients = await resolveEmailRouterActionRecipients(client, input);
     const graphRecipients = (kind) => recipients.filter((recipient) => recipient.kind === kind).map((recipient) => ({ emailAddress: { address: recipient.address } }));
     await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toRecipients: graphRecipients('to'), ccRecipients: graphRecipients('cc'), bccRecipients: graphRecipients('bcc') }) }, dependencies);
   }
@@ -769,7 +851,7 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   const source = safeId(sourceMessageId, 'message identifier');
   if (actionType === 'undo') return undoEmailRouterAction({ client, mailbox, sourceMessageId: source, profile }, dependencies);
   const indexed = await actionMessage(client, mailbox.id, source);
-  const directSelections = directDestinationSelections(input);
+  const directSelections = normalizeEmailRouterDestinationSelections(input);
   if (input.presetId && directSelections.length) {
     throw routerError('Choose either one routing preset or direct destinations.', 400, 'EMAIL_ROUTER_ROUTE_AMBIGUOUS');
   }

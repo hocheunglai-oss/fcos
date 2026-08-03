@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.96';
+export const APP_VERSION = '2.0.97';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.97',
+    releasedAt: '2026-08-03',
+    title: 'Ordered Email Router directory',
+    changes: [
+      'Combined FCOS users, approved external contacts, and routing groups into one Administrator-controlled directory with drag-and-drop ordering and revision-safe saving.',
+      'Made Redirect a prominent labeled action and numbered every To, Cc, and Bcc selection while preserving the same visible recipient sequence in the outgoing message.',
+    ],
+  },
   {
     version: '2.0.96',
     releasedAt: '2026-08-03',

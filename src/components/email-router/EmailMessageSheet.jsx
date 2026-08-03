@@ -106,9 +106,10 @@ export function EmailMessageDetail({ message, loading, error, actionResult, advi
         {message.cc.length > 0 && <div className="mt-2 flex gap-3"><span className="w-12 shrink-0 text-muted-foreground">Cc</span><span className="min-w-0 break-words">{formatAddresses(message.cc)}</span></div>}
       </div>
       <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
+        <Button size="sm" onClick={() => onAction('redirect')} aria-label="Redirect message"><ArrowRight />Redirect</Button>
+        <span className="mx-1 h-5 border-l border-border" />
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('reply')} aria-label="Reply"><Reply /></Button></TooltipTrigger><TooltipContent>Reply</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('forward')} aria-label="Forward"><Forward /></Button></TooltipTrigger><TooltipContent>Forward</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('redirect')} aria-label="Redirect"><ArrowRight /></Button></TooltipTrigger><TooltipContent>Redirect</TooltipContent></Tooltip>
         <span className="mx-1 h-5 border-l border-border" />
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('archive')} aria-label="Archive message"><Archive /></Button></TooltipTrigger><TooltipContent>Archive</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('delete')} aria-label="Delete message"><Trash2 /></Button></TooltipTrigger><TooltipContent>Delete</TooltipContent></Tooltip>

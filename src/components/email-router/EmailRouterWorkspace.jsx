@@ -18,7 +18,8 @@ const METHODOLOGY = {
   description: 'How FCOS retrieves messages and submits controlled mailbox actions.',
   sections: [
     { title: 'Mailbox data', body: 'Inbox, Sent, and Archive are read from the connected mailbox service. The workspace preserves the server result and does not infer delivery or deletion outcomes.' },
-    { title: 'Routing directory', body: 'Only active FCOS users explicitly included by an Administrator or the General Manager are available for routing. Redirect and Forward labels show only each user’s configured nickname, and To, Cc, and Bcc are selected independently.' },
+    { title: 'Routing directory', body: 'Administrators and the General Manager maintain one ordered directory of active FCOS users, approved external contacts, and groups. The same order is used in Redirect and Forward, while short labels keep selections easy to scan.' },
+    { title: 'Recipient order', body: 'To, Cc, and Bcc selections are numbered independently. FCOS preserves each numbered sequence in the outgoing message so visible recipients see the same To and Cc order; Bcc order remains private.' },
     { title: 'Controlled actions', body: 'Redirect, Reply, Forward, Archive, Delete, and Undo each require an explicit confirmation. FCOS records the submitted request and shows confirmed, failed, or uncertain outcomes returned by the service.' },
     { title: 'Message safety', body: 'Message HTML is sanitized before display. Attachments are requested through a time-limited URL only when a user selects Download.' },
     { title: 'Availability', body: 'When the router backend is unavailable, FCOS keeps the workspace read-only and reports the service state instead of simulating mail activity.' },

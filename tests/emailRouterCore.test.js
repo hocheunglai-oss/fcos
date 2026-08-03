@@ -8,9 +8,11 @@ import {
   emailRouterGraphFetch,
   fetchEmailRouterDetail,
   listEmailRouterDirectory,
+  normalizeEmailRouterDestinationSelections,
   processEmailRouterOutbox,
   requireEmailRouterConfigurationAuthority,
   requireEmailRouterConfigurationUser,
+  resolveEmailRouterActionRecipients,
   resolveEmailRouterAlert,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
@@ -19,23 +21,43 @@ import {
   verifyEmailRouterAttachmentToken,
 } from '../api/_emailRouterCore.js';
 
-test('directory profiles are loaded explicitly from public user profiles', async () => {
+test('direct routing selections preserve numbered order within To, Cc, and Bcc', () => {
+  const selections = normalizeEmailRouterDestinationSelections({
+    destinationSelections: [
+      { destinationId: 'destination-a', kind: 'to' },
+      { groupId: 'group-a', kind: 'cc' },
+      { destinationId: 'destination-b', kind: 'to' },
+      { destinationId: 'destination-c', kind: 'bcc' },
+    ],
+  });
+  assert.deepEqual(selections, [
+    { destinationId: 'destination-a', groupId: null, kind: 'to', position: 1, selectionIndex: 0 },
+    { destinationId: null, groupId: 'group-a', kind: 'cc', position: 1, selectionIndex: 1 },
+    { destinationId: 'destination-b', groupId: null, kind: 'to', position: 2, selectionIndex: 2 },
+    { destinationId: 'destination-c', groupId: null, kind: 'bcc', position: 1, selectionIndex: 3 },
+  ]);
+  assert.throws(() => normalizeEmailRouterDestinationSelections({
+    destinationSelections: [{ destinationId: 'destination-a', kind: 'to' }, { destinationId: 'destination-a', kind: 'cc' }],
+  }), (error) => error.code === 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+});
+
+test('directory combines active FCOS users, external contacts, and groups in configured order', async () => {
   const destinationRows = [
-    { id: 'destination-1', destination_kind: 'fcos_profile', user_profile_id: 'profile-1', nickname: 'AU' },
-    { id: 'destination-2', destination_kind: 'fcos_profile', user_profile_id: 'profile-2', nickname: 'IU' },
-    { id: 'destination-3', destination_kind: 'provider_directory', user_profile_id: null, nickname: null },
+    { id: 'destination-1', destination_kind: 'fcos_profile', user_profile_id: 'profile-1', nickname: 'AU', sort_order: 2 },
+    { id: 'destination-2', destination_kind: 'fcos_profile', user_profile_id: 'profile-2', nickname: 'IU', sort_order: 3 },
+    { id: 'destination-3', destination_kind: 'provider_directory', user_profile_id: null, display_name: 'External Desk', email_address: 'desk@example.net', nickname: 'ED', sort_order: 4 },
   ];
+  const groupRows = [{ id: 'group-1', display_name: 'Operations', sort_order: 1, destination_group_members: [{ destination_id: 'destination-1' }] }];
   const client = {
     schema(schema) {
       assert.equal(schema, 'emailrouter');
       return {
         from(table) {
-          assert.equal(table, 'destinations');
           return {
             select() { return this; },
             eq() { return this; },
             order() { return this; },
-            limit: async () => ({ data: destinationRows, error: null }),
+            limit: async () => ({ data: table === 'destinations' ? destinationRows : groupRows, error: null }),
           };
         },
       };
@@ -56,7 +78,48 @@ test('directory profiles are loaded explicitly from public user profiles', async
   };
   const directory = await listEmailRouterDirectory({ client });
   assert.deepEqual(directory, [
-    { id: 'destination-1', label: 'AU' },
+    { id: 'group-1', kind: 'group', label: 'Operations', memberCount: 1 },
+    { id: 'destination-1', kind: 'destination', label: 'AU' },
+    { id: 'destination-3', kind: 'destination', label: 'ED' },
+  ]);
+});
+
+test('routing groups expand external contacts in directory order', async () => {
+  const client = {
+    schema(schema) {
+      assert.equal(schema, 'emailrouter');
+      return {
+        from(table) {
+          const query = {
+            columns: '',
+            select(columns) { this.columns = columns; return this; },
+            in() { return this; },
+            eq() { return this; },
+            order() { return this; },
+            then(resolve) {
+              if (table === 'destination_groups') return resolve({ data: [{ id: 'group-a' }], error: null });
+              if (table === 'destination_group_members') return resolve({ data: [
+                { group_id: 'group-a', destination_id: 'external-b' },
+                { group_id: 'group-a', destination_id: 'external-a' },
+              ], error: null });
+              if (this.columns.includes('sort_order')) return resolve({ data: [{ id: 'external-a', sort_order: 1 }, { id: 'external-b', sort_order: 2 }], error: null });
+              return resolve({ data: [
+                { id: 'external-a', destination_kind: 'provider_directory', user_profile_id: null, email_address: 'first@example.net' },
+                { id: 'external-b', destination_kind: 'provider_directory', user_profile_id: null, email_address: 'second@example.net' },
+              ], error: null });
+            },
+          };
+          return query;
+        },
+      };
+    },
+  };
+  const recipients = await resolveEmailRouterActionRecipients(client, {
+    destinationSelections: [{ groupId: 'group-a', kind: 'to' }],
+  });
+  assert.deepEqual(recipients, [
+    { address: 'first@example.net', kind: 'to' },
+    { address: 'second@example.net', kind: 'to' },
   ]);
 });
 
@@ -85,6 +148,7 @@ test('redirect MIME keeps body bytes while removing unsafe transport headers and
   assert.match(headers, /To: <to@example.net>/);
   assert.doesNotMatch(headers, /hidden@example.net/);
   assert.doesNotMatch(headers, /^(?:Return-Path|Received):/im);
+  assert.deepEqual(result.envelopeRecipients, ['to@example.net', 'hidden@example.net']);
   assert.deepEqual(result.raw.subarray(split + 4), body);
 });
 
