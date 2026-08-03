@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.90';
+export const APP_VERSION = '2.0.91';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.91',
+    releasedAt: '2026-08-03',
+    title: 'Email Router active-user directory and recipient controls',
+    changes: [
+      'Restricted the Email Router routing directory to active FCOS users and added editable initial-based nicknames with Administrator-controlled inclusion.',
+      'Restored independent To, Cc, and Bcc recipient selection for Redirect and Forward while showing nickname-only routing labels.',
+      'Corrected the Email Router Advisor structured request and added clearer model, authentication, and API-limit failure messages.',
+    ],
+  },
   {
     version: '2.0.90',
     releasedAt: '2026-08-03',

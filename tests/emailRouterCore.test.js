@@ -21,9 +21,9 @@ import {
 
 test('directory profiles are loaded explicitly from public user profiles', async () => {
   const destinationRows = [
-    { id: 'destination-1', destination_kind: 'fcos_profile', user_profile_id: 'profile-1', display_name: null, email_address: null },
-    { id: 'destination-2', destination_kind: 'fcos_profile', user_profile_id: 'profile-2', display_name: null, email_address: null },
-    { id: 'destination-3', destination_kind: 'contact', user_profile_id: null, display_name: 'Accounts Desk', email_address: 'accounts@example.net' },
+    { id: 'destination-1', destination_kind: 'fcos_profile', user_profile_id: 'profile-1', nickname: 'AU' },
+    { id: 'destination-2', destination_kind: 'fcos_profile', user_profile_id: 'profile-2', nickname: 'IU' },
+    { id: 'destination-3', destination_kind: 'provider_directory', user_profile_id: null, nickname: null },
   ];
   const client = {
     schema(schema) {
@@ -56,8 +56,7 @@ test('directory profiles are loaded explicitly from public user profiles', async
   };
   const directory = await listEmailRouterDirectory({ client });
   assert.deepEqual(directory, [
-    { id: 'destination-1', label: 'Active User', address: 'active@example.net' },
-    { id: 'destination-3', label: 'Accounts Desk', address: 'accounts@example.net' },
+    { id: 'destination-1', label: 'AU' },
   ]);
 });
 
@@ -267,7 +266,7 @@ test('a repeated operation ID returns its existing state without another Graph r
     actionType: 'reply',
     bodyHash: createHash('sha256').update('', 'utf8').digest('hex'),
     destinationFolderId: null,
-    destinationIds: [],
+    destinationSelections: [],
     mailboxId,
     messageId: indexedMessageId,
     presetId: null,

@@ -54,7 +54,7 @@ async function advisorSettings(client) {
   };
 }
 
-function recommendationSchema(candidateIds) {
+export function emailRouterAdvisorRecommendationSchema(candidateIds) {
   return {
     type: 'object',
     additionalProperties: false,
@@ -64,7 +64,6 @@ function recommendationSchema(candidateIds) {
         type: 'array',
         minItems: 0,
         maxItems: 3,
-        uniqueItems: true,
         items: { type: 'string', enum: candidateIds },
       },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
@@ -72,6 +71,23 @@ function recommendationSchema(candidateIds) {
       question: { anyOf: [{ type: 'string', maxLength: 300 }, { type: 'null' }] },
     },
   };
+}
+
+function providerFailure(response, payload) {
+  const providerCode = String(payload?.error?.code || payload?.error?.type || '').toLowerCase();
+  if (response.status === 401 || response.status === 403) {
+    return advisorError('Email Router Advisor authentication is unavailable. Ask an Administrator to check the protected OpenAI configuration.', 503, 'EMAIL_ROUTER_ADVISOR_AUTHENTICATION_FAILED');
+  }
+  if (response.status === 429) {
+    return advisorError('Email Router Advisor is busy or has reached its current API limit. Try again later.', 503, 'EMAIL_ROUTER_ADVISOR_RATE_LIMITED');
+  }
+  if (response.status === 404 || providerCode.includes('model')) {
+    return advisorError('The selected Email Router Advisor model is unavailable. Choose another model in AI Models settings.', 503, 'EMAIL_ROUTER_ADVISOR_MODEL_UNAVAILABLE');
+  }
+  if (response.status === 400) {
+    return advisorError('The selected Email Router Advisor model rejected the structured request. Choose another model or contact an Administrator.', 502, 'EMAIL_ROUTER_ADVISOR_REQUEST_REJECTED');
+  }
+  return advisorError('Email Router Advisor is temporarily unavailable.', 502, 'EMAIL_ROUTER_ADVISOR_FAILED');
 }
 
 async function recordUsage(client, profile, mailbox, providerMessageId, payload, modelId, latencyMs, outcome, errorCode = null) {
@@ -128,7 +144,8 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
       body: JSON.stringify({
         model: settings.modelId,
         store: false,
-        max_output_tokens: 500,
+        max_output_tokens: 1_000,
+        ...(settings.modelId.startsWith('gpt-5') ? { reasoning: { effort: 'low' } } : {}),
         safety_identifier: createHash('sha256').update(String(profile.id)).digest('hex'),
         input: [
           {
@@ -145,19 +162,21 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
             type: 'json_schema',
             name: 'fcos_email_router_advisor',
             strict: true,
-            schema: recommendationSchema(candidates.map((item) => item.id)),
+            schema: emailRouterAdvisorRecommendationSchema(candidates.map((item) => item.id)),
           },
         },
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(45_000),
     });
   } catch {
     await recordUsage(client, profile, mailbox, messageId, null, settings.modelId, Date.now() - startedAt, 'error', 'email_router_advisor_unavailable');
     throw advisorError('Email Router Advisor is temporarily unavailable.', 503, 'EMAIL_ROUTER_ADVISOR_UNAVAILABLE');
   }
   if (!response.ok) {
-    await recordUsage(client, profile, mailbox, messageId, null, settings.modelId, Date.now() - startedAt, 'error', 'email_router_advisor_failed');
-    throw advisorError('Email Router Advisor is temporarily unavailable.', response.status === 429 ? 503 : 502, 'EMAIL_ROUTER_ADVISOR_FAILED');
+    const failure = await response.json().catch(() => null);
+    const error = providerFailure(response, failure);
+    await recordUsage(client, profile, mailbox, messageId, null, settings.modelId, Date.now() - startedAt, 'error', String(error.code || 'email_router_advisor_failed').toLowerCase());
+    throw error;
   }
   const payload = await response.json().catch(() => null);
   const usage = await recordUsage(client, profile, mailbox, messageId, payload, settings.modelId, Date.now() - startedAt, 'success');

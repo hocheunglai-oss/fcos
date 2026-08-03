@@ -45,7 +45,11 @@ function usageTotals(rows) {
 export async function emailRouterConfiguration(client) {
   const mailbox = await currentEmailRouterMailbox(client);
   const [destinations, groups, presets, settings, subscriptions, alerts, folderCountResults, actions, usage] = await Promise.all([
-    table(client, 'destinations').select('id,destination_kind,user_profile_id,display_name,email_address,active,sort_order,revision,updated_at').order('sort_order').order('display_name'),
+    table(client, 'destinations')
+      .select('id,destination_kind,user_profile_id,nickname,redirect_enabled,active,sort_order,revision,updated_at')
+      .eq('destination_kind', 'fcos_profile')
+      .eq('active', true)
+      .order('nickname'),
     table(client, 'destination_groups').select('id,group_key,display_name,active,revision,updated_at,destination_group_members(destination_id)').order('display_name'),
     table(client, 'routing_presets').select('id,preset_key,display_name,description,active,sort_order,revision,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').order('sort_order').order('display_name'),
     table(client, 'settings').select('key,value,revision,updated_at').order('key'),
@@ -77,9 +81,11 @@ export async function emailRouterConfiguration(client) {
         id: row.id,
         kind: row.destination_kind,
         userProfileId: row.user_profile_id,
-        displayName: row.destination_kind === 'fcos_profile' ? profile?.full_name || 'FCOS user' : row.display_name,
-        emailAddress: row.destination_kind === 'fcos_profile' ? profile?.email || null : row.email_address,
-        active: row.destination_kind === 'fcos_profile' ? row.active && profile?.active === true : row.active,
+        displayName: profile?.full_name || 'FCOS user',
+        emailAddress: profile?.email || null,
+        nickname: row.nickname,
+        included: row.redirect_enabled === true,
+        active: row.active && profile?.active === true,
         sortOrder: row.sort_order,
         revision: Number(row.revision),
         updatedAt: row.updated_at,
@@ -125,6 +131,22 @@ export async function emailRouterConfiguration(client) {
 
 export async function saveEmailRouterConfiguration(client, profile, operation = {}) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) throw configError('A configuration change is required.');
+  if (operation.type === 'routing_users_save') {
+    const items = Array.isArray(operation.items) ? operation.items : [];
+    if (!items.length) throw configError('At least one changed routing user is required.');
+    const { data, error } = await client.rpc('save_emailrouter_routing_users', {
+      p_items: items,
+      p_actor: profile.id,
+    });
+    if (error) {
+      const stale = /revision conflict/i.test(error.message || '');
+      throw configError(stale ? 'The routing directory changed after it was loaded. Refresh and try again.' : error.message || 'The routing directory could not be saved.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
+    }
+    return data;
+  }
+  if (operation.type === 'destination_save') {
+    throw configError('Only active FCOS users can be added to the routing directory.');
+  }
   if (operation.type === 'setting_save' && operation.key === 'advisor.model') {
     const modelId = operation.value?.modelId;
     if (!isAllowedDashboardAiModel(modelId)) throw configError('Select a supported Email Router Advisor model.');

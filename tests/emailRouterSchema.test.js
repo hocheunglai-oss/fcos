@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const migrationUrl = new URL('../supabase/migrations/20260803090000_native_emailrouter_schema.sql', import.meta.url);
 const accessMigrationUrl = new URL('../supabase/migrations/20260803030109_email_router_module_access.sql', import.meta.url);
+const activeDirectoryMigrationUrl = new URL('../supabase/migrations/20260803041219_email_router_active_user_directory.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -85,4 +86,24 @@ test('Email Router destination profiles do not rely on cross-schema PostgREST em
   assert.doesNotMatch(configuration, /\.select\([^\n]*user_profiles\(/);
   assert.match(core, /emailRouterProfilesById/);
   assert.match(configuration, /emailRouterProfilesById/);
+});
+
+test('Email Router routing labels are active-user nicknames with service-only configuration', async () => {
+  const [sql, core, configuration, dialog] = await Promise.all([
+    readFile(activeDirectoryMigrationUrl, 'utf8'),
+    readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_emailRouterConfig.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /add column if not exists nickname text/i);
+  assert.match(sql, /add column if not exists redirect_enabled boolean/i);
+  assert.match(sql, /revoke all on function public\.save_emailrouter_routing_users\(jsonb, uuid\)\s+from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.save_emailrouter_routing_users\(jsonb, uuid\)\s+to service_role/i);
+  assert.match(core, /\.eq\('destination_kind', 'fcos_profile'\)/);
+  assert.match(core, /\.eq\('redirect_enabled', true\)/);
+  assert.match(core, /\{ id: destination\.id, label: destination\.nickname \}/);
+  assert.match(configuration, /operation\.type === 'routing_users_save'/);
+  assert.match(dialog, /const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
+  assert.match(dialog, /destinationSelections: selections/);
+  assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
 });
