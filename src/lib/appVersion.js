@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.98';
+export const APP_VERSION = '2.0.99';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.99',
+    releasedAt: '2026-08-04',
+    title: 'Fixed Email Router directory saving',
+    changes: [
+      'Aligned Email Router audit validation with whole-directory ordering changes so adding, reordering, and saving contacts or groups no longer ends with an event constraint error.',
+    ],
+  },
   {
     version: '2.0.98',
     releasedAt: '2026-08-03',

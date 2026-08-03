@@ -7,6 +7,7 @@ const accessMigrationUrl = new URL('../supabase/migrations/20260803030109_email_
 const activeDirectoryMigrationUrl = new URL('../supabase/migrations/20260803041219_email_router_active_user_directory.sql', import.meta.url);
 const orderedDirectoryMigrationUrl = new URL('../supabase/migrations/20260803110944_email_router_ordered_directory.sql', import.meta.url);
 const externalRestoreMigrationUrl = new URL('../supabase/migrations/20260803135527_fix_email_router_external_reactivation.sql', import.meta.url);
+const directoryEventMigrationUrl = new URL('../supabase/migrations/20260803162059_allow_emailrouter_routing_directory_events.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -143,4 +144,15 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.match(workspace, /<EmailRedirectPanel/);
   assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
+});
+
+test('Email Router audit events allow whole-directory ordering changes', async () => {
+  const [orderedSql, directoryEventSql] = await Promise.all([
+    readFile(orderedDirectoryMigrationUrl, 'utf8'),
+    readFile(directoryEventMigrationUrl, 'utf8'),
+  ]);
+
+  assert.match(orderedSql, /'configuration\.routing_directory_save',[\s\S]*'routing_directory'/i);
+  assert.match(directoryEventSql, /drop constraint if exists events_entity_type_check/i);
+  assert.match(directoryEventSql, /add constraint events_entity_type_check[\s\S]*'routing_directory'/i);
 });
