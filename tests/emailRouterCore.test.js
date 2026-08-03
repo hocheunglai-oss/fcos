@@ -334,9 +334,12 @@ test('message detail loads attachments separately from the Graph body request', 
   const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'text', content: 'Body' }, hasAttachments: true };
   const fetchImpl = async (url) => {
     calls.push(String(url));
-    const payload = String(url).includes('/attachments?')
-      ? { value: [{ id: 'attachment-1', name: 'document.pdf', contentType: 'application/pdf', size: 100, isInline: false }] }
-      : message;
+    const requestedUrl = String(url);
+    const payload = requestedUrl.includes('/attachments/attachment-1?')
+      ? { id: 'attachment-1', name: 'logo.png', contentType: 'image/png', size: 100, isInline: true, contentId: 'inline-logo' }
+      : requestedUrl.includes('/attachments?')
+        ? { value: [{ id: 'attachment-1', name: 'logo.png', contentType: 'image/png', size: 100, isInline: true }] }
+        : message;
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const messageQuery = {
@@ -349,11 +352,43 @@ test('message detail loads attachments separately from the Graph body request', 
     mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' },
     messageId: message.id,
   }, { accessToken: 'access-token', fetchImpl });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.doesNotMatch(calls[0], /\$expand=/);
   assert.match(calls[1], /\/attachments\?/);
-  assert.match(calls[1], /contentId/);
+  assert.doesNotMatch(calls[1], /contentId/);
+  assert.match(calls[2], /\/attachments\/attachment-1\?/);
+  assert.match(calls[2], /contentId/);
   assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0].contentId, 'inline-logo');
+  assert.deepEqual(result.detailWarnings, []);
+});
+
+test('message detail remains available when Graph rejects the attachment collection', async () => {
+  const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'html', content: '<p>Full body</p>' }, hasAttachments: true };
+  const fetchImpl = async (url) => {
+    if (String(url).includes('/attachments?')) {
+      return new Response(JSON.stringify({ error: { code: 'BadRequest', message: 'Invalid attachment property' } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify(message), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const messageQuery = {
+    eq() { return this; },
+    maybeSingle: async () => ({ data: null, error: null }),
+  };
+  const client = { from: () => ({ select: () => messageQuery }) };
+
+  const result = await fetchEmailRouterDetail({
+    client,
+    mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' },
+    messageId: message.id,
+  }, { accessToken: 'access-token', fetchImpl });
+
+  assert.equal(result.body.content, '<p>Full body</p>');
+  assert.deepEqual(result.attachments, []);
+  assert.deepEqual(result.detailWarnings, ['Attachments could not be refreshed. The message body remains available.']);
 });
 
 test('Email Router settings fail closed when FCOS user synchronization fails', async () => {

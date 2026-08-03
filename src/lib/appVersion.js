@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.101';
+export const APP_VERSION = '2.0.102';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.102',
+    releasedAt: '2026-08-04',
+    title: 'Email Router message display repair',
+    changes: [
+      'Kept the full message body available when Microsoft Graph cannot return an attachment collection, and retrieved inline-image identifiers only from compatible attachment records.',
+      'Restored safe newsletter table formatting and HTTPS images while containing wide content inside the message viewer.',
+    ],
+  },
   {
     version: '2.0.101',
     releasedAt: '2026-08-04',

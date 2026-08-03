@@ -342,19 +342,30 @@
     border-radius: 8px;
   }
 
+  .email-router-content-shell {
+    max-width: 100%;
+    contain: inline-size;
+  }
+
   .email-router-content {
     max-width: 100%;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
   }
 
   .email-router-content img {
+    display: inline-block;
     height: auto;
     max-width: 100%;
   }
 
   .email-router-content table {
-    display: block;
+    border-collapse: collapse;
     max-width: 100%;
-    overflow-x: auto;
+  }
+
+  .email-router-content td,
+  .email-router-content th {
+    max-width: 100%;
+    overflow-wrap: break-word;
   }
 }

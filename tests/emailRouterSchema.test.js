@@ -193,3 +193,26 @@ test('Email Router routing mutations preserve active group and preset integrity 
   assert.match(sql, /revoke all on function public\.save_emailrouter_routing_change\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
   assert.match(sql, /grant execute on function public\.save_emailrouter_routing_change\(jsonb, uuid\)[\s\S]*to service_role/i);
 });
+
+test('Email Router viewer preserves safe newsletter layout without unsafe active content', async () => {
+  const [{ safeEmailImageSource, sanitizeEmailInlineStyle }, stylesheet, messageSheet] = await Promise.all([
+    import('../src/lib/emailContentSafety.js'),
+    readFile(new URL('../src/index.css', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  assert.equal(safeEmailImageSource('https://prices.example.net/chart.png'), 'https://prices.example.net/chart.png');
+  assert.equal(safeEmailImageSource('blob:https://fcos.fcuno.com/inline-image'), 'blob:https://fcos.fcuno.com/inline-image');
+  assert.equal(safeEmailImageSource('http://prices.example.net/tracker.png'), '');
+  assert.equal(safeEmailImageSource('javascript:alert(1)'), '');
+
+  const style = sanitizeEmailInlineStyle('width: 680px; text-align: center; color: #174f86; position: fixed; background: url(https://tracker.example.net/pixel)');
+  assert.match(style, /width: 680px/);
+  assert.match(style, /text-align: center/);
+  assert.match(style, /color: #174f86/);
+  assert.doesNotMatch(style, /position|url\s*\(/i);
+
+  assert.match(messageSheet, /email-router-content-shell/);
+  assert.match(stylesheet, /\.email-router-content-shell[\s\S]*overflow-wrap: break-word/);
+  assert.doesNotMatch(stylesheet, /\.email-router-content table\s*\{[^}]*display:\s*block/s);
+});

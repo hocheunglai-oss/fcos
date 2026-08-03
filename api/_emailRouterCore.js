@@ -336,20 +336,52 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
 
 export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dependencies = {}) {
   const id = safeId(messageId, 'message identifier');
+  const detailWarnings = [];
   const query = new URLSearchParams({
     '$select': 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,body,bodyPreview,receivedDateTime,sentDateTime,parentFolderId,hasAttachments,isRead,importance,internetMessageId',
   });
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {}, dependencies);
   const message = await graphJson(response);
   if (message?.hasAttachments) {
-    const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
-    const attachmentResponse = await emailRouterGraphFetch(
-      mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`),
-      {},
-      dependencies,
-    );
-    const attachmentPayload = await graphJson(attachmentResponse) || {};
-    message.attachments = Array.isArray(attachmentPayload.value) ? attachmentPayload.value : [];
+    try {
+      // contentId is subtype-specific and Graph rejects it on some attachment collections.
+      const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline' });
+      const attachmentResponse = await emailRouterGraphFetch(
+        mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`),
+        {},
+        dependencies,
+      );
+      const attachmentPayload = await graphJson(attachmentResponse) || {};
+      const attachments = Array.isArray(attachmentPayload.value) ? attachmentPayload.value : [];
+      const inlineIndexes = attachments
+        .map((attachment, index) => attachment?.isInline === true && attachment?.id ? index : -1)
+        .filter((index) => index >= 0)
+        .slice(0, 20);
+      const inlineDetails = await Promise.all(inlineIndexes.map(async (index) => {
+        const attachment = attachments[index];
+        const inlineQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
+        try {
+          const inlineResponse = await emailRouterGraphFetch(
+            mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachment.id)}?${inlineQuery}`),
+            {},
+            dependencies,
+          );
+          return [index, await graphJson(inlineResponse)];
+        } catch {
+          return [index, null];
+        }
+      }));
+      for (const [index, inlineDetail] of inlineDetails) {
+        if (inlineDetail) attachments[index] = { ...attachments[index], ...inlineDetail };
+      }
+      if (inlineIndexes.length < attachments.filter((attachment) => attachment?.isInline === true).length) {
+        detailWarnings.push('Some inline images were omitted because the message contains too many embedded items.');
+      }
+      message.attachments = attachments;
+    } catch {
+      message.attachments = [];
+      detailWarnings.push('Attachments could not be refreshed. The message body remains available.');
+    }
   } else if (message) {
     message.attachments = [];
   }
@@ -407,7 +439,7 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
       at: action.confirmed_at || action.submitted_at || action.draft_created_at || action.failed_at || action.uncertain_at || action.reserved_at,
     }));
   }
-  return { ...message, actionHistory };
+  return { ...message, actionHistory, detailWarnings };
 }
 
 export async function listEmailRouterDirectory({ client, search = '' }) {

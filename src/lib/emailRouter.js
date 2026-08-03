@@ -1,4 +1,5 @@
 import { appClient } from '@/api/appClient';
+import { safeEmailImageSource, sanitizeEmailInlineStyle } from './emailContentSafety';
 
 const ACTION_LABELS = {
   redirect: 'Redirect',
@@ -16,7 +17,10 @@ const ALLOWED_TAGS = new Set([
   'thead', 'tr', 'u', 'ul',
 ]);
 
-const ALLOWED_ATTRIBUTES = new Set(['alt', 'colspan', 'height', 'rowspan', 'title', 'width']);
+const ALLOWED_ATTRIBUTES = new Set([
+  'align', 'alt', 'bgcolor', 'border', 'cellpadding', 'cellspacing', 'colspan', 'height',
+  'role', 'rowspan', 'style', 'title', 'valign', 'width',
+]);
 
 function stringValue(value, fallback = '') {
   if (value == null) return fallback;
@@ -91,6 +95,7 @@ export function normaliseMessage(raw = {}) {
     bodyHtml: bodyType === 'html' ? stringValue(bodyContent) : stringValue(firstValue(raw, ['bodyHtml', 'html', 'contentHtml'])),
     bodyText: bodyType && bodyType !== 'html' ? stringValue(bodyContent) : stringValue(firstValue(raw, ['bodyText', 'text', 'contentText'])),
     actionHistory: arrayValue(firstValue(raw, ['actionHistory', 'history', 'actions'], [])),
+    detailWarnings: arrayValue(raw.detailWarnings).map((warning) => stringValue(warning)).filter(Boolean),
     raw,
   };
 }
@@ -154,15 +159,6 @@ function safeHref(value) {
   }
 }
 
-function safeImageSource(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'blob:' ? url.href : '';
-  } catch {
-    return '';
-  }
-}
-
 function fallbackSanitize(value) {
   return stringValue(value)
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
@@ -200,8 +196,14 @@ export function sanitizeEmailHtml(value) {
           continue;
         }
         if (tag === 'img' && name === 'src') {
-          const source = safeImageSource(attribute.value);
+          const source = safeEmailImageSource(attribute.value);
           if (source) child.setAttribute('src', source);
+          else child.removeAttribute(attribute.name);
+          continue;
+        }
+        if (name === 'style') {
+          const style = sanitizeEmailInlineStyle(attribute.value);
+          if (style) child.setAttribute('style', style);
           else child.removeAttribute(attribute.name);
           continue;
         }
@@ -210,6 +212,10 @@ export function sanitizeEmailHtml(value) {
       if (tag === 'a') {
         child.setAttribute('target', '_blank');
         child.setAttribute('rel', 'noreferrer noopener');
+      }
+      if (tag === 'img') {
+        child.setAttribute('loading', 'lazy');
+        child.setAttribute('referrerpolicy', 'no-referrer');
       }
       clean(child);
     }
