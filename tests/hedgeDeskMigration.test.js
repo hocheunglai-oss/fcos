@@ -75,9 +75,10 @@ test('invoice deletion removes linked documents atomically before storage cleanu
 });
 
 test('Graph mailbox purposes are independent and service controlled', async () => {
-  const [sql, graphServer, packageJson] = await Promise.all([
+  const [sql, graphServer, hedgeDocuments, packageJson] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260801191655_native_hedge_desk_graph_mail.sql', import.meta.url), 'utf8'),
     readFile(new URL('../api/_graphEmail.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeDocuments.js', import.meta.url), 'utf8'),
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
   ]);
 
@@ -100,6 +101,9 @@ test('Graph mailbox purposes are independent and service controlled', async () =
   assert.match(graphServer, /from\('email_sender_routes'\)/);
   assert.doesNotMatch(graphServer, /FCOS_GRAPH_BOOTSTRAP_|bootstrapGraphEmailRegistry/);
   assert.doesNotMatch(graphServer, /nodemailer|createSmtpTransport|SMTP_/i);
+  assert.match(sql, /create table if not exists public\.hedge_integration_operations[\s\S]*created_date timestamptz/);
+  assert.match(hedgeDocuments, /\.order\('created_date', \{ ascending: false \}\)/);
+  assert.doesNotMatch(hedgeDocuments, /hedge_integration_operations'[\s\S]{0,500}\.order\('created_at'/);
   assert.doesNotMatch(packageJson, /nodemailer/i);
 });
 

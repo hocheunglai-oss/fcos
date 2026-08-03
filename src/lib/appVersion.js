@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.95';
+export const APP_VERSION = '2.0.96';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.96',
+    releasedAt: '2026-08-03',
+    title: 'Hedge settlement delivery history repair',
+    changes: [
+      'Corrected the settlement-email duplicate-delivery check to use the Hedge operations table’s actual creation timestamp column, restoring safe email preparation before Microsoft Graph submission.',
+    ],
+  },
   {
     version: '2.0.95',
     releasedAt: '2026-08-03',

@@ -449,7 +449,7 @@ export async function sendHedgeInvoiceEmailIdempotent(client, profile, body = {}
       .eq('operation', 'hedge_invoice_email')
       .contains('response', { invoiceId: String(body.invoiceId) })
       .in('status', ['processing', 'uncertain', 'succeeded'])
-      .order('created_at', { ascending: false })
+      .order('created_date', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (prior.error) throw hedgeDocumentError(`Earlier email delivery could not be checked: ${prior.error.message}`, 502);
