@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.93';
+export const APP_VERSION = '2.0.94';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.94',
+    releasedAt: '2026-08-03',
+    title: 'Settlement invoice letterhead and layout refinement',
+    changes: [
+      'Added the company telephone number and general email between full-width letterhead rules, used full legal company names, integrated settlement totals into the payment-direction panel, simplified the footer, and compacted invoices with fewer than twelve trades onto one page where content permits.',
+    ],
+  },
   {
     version: '2.0.93',
     releasedAt: '2026-08-03',

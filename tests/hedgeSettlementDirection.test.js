@@ -48,6 +48,28 @@ test('PDF normalization ignores a forged receivable flag and follows the signed 
   assert.ok(generated.buffer.length > 1000);
 });
 
+test('settlement invoice keeps eleven trades on one page', () => {
+  const generated = generateHedgeInvoicePdf({
+    invoiceNumber: 'FCBHK_TEST_011',
+    invoiceDate: '2026-08-03',
+    settlementMonth: '2026-07',
+    netAmount: 11000,
+    counterparty: fcbs,
+    lineItems: Array.from({ length: 11 }, (_, index) => ({
+      product: `JUL 2026 SWAP ${index + 1}`,
+      direction: 'BUY',
+      quantity: 100,
+      unit: 'MT',
+      price: 1,
+      mtmValue: 1000,
+      handlingFee: 0,
+      netValue: 1000,
+    })),
+  });
+  const pageMarkers = generated.buffer.toString('latin1').match(/\/Type \/Page\b/g) || [];
+  assert.equal(pageMarkers.length, 1);
+});
+
 test('settlement UI and documents make the payment route explicit', async () => {
   const [view, documents, service, settings] = await Promise.all([
     readFile(new URL('../src/hedge/views/SettlementView.jsx', import.meta.url), 'utf8'),
@@ -63,9 +85,16 @@ test('settlement UI and documents make the payment route explicit', async () => 
   assert.match(documents, /PAYMENT DIRECTION:/);
   assert.match(documents, /addImage\(LOGO_DATA_URL, 'JPEG', 74, 12, 62, 24\)/);
   assert.match(documents, /FRATELLI COSULICH BUNKERS \(HK\) LTD', pageWidth \/ 2, 41, \{ align: 'center' \}/);
-  assert.match(documents, /UNITS 02-03, 23\/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG', pageWidth \/ 2, 46, \{ align: 'center' \}/);
+  assert.match(documents, /T \+852-25299138/);
+  assert.match(documents, /GENERAL@COSULICH\.COM\.HK/);
+  assert.match(documents, /doc\.line\(margin, 44, right, 44\)/);
+  assert.match(documents, /doc\.line\(margin, 50, right, 50\)/);
   assert.match(documents, /doc\.rect\(0, 54, pageWidth, 11, 'F'\)/);
   assert.doesNotMatch(documents, /FCBHK settlement document/);
+  assert.doesNotMatch(documents, /paymentDirection\.(payer|payee)\.shortName/);
+  assert.doesNotMatch(documents, /Registered in Hong Kong/);
+  assert.doesNotMatch(documents, /const totalsX/);
+  assert.match(documents, /compactSinglePage = invoice\.lineItems\.length < 12/);
   assert.doesNotMatch(documents, /Obtain directly from the beneficiary/);
   assert.match(documents, /if \(invoice\.paymentDirection\.isReceivable\)/);
   assert.doesNotMatch(documents, /Beneficiary: FRATELLI COSULICH BUNKERS \(HK\) LTD/);

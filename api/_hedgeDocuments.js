@@ -94,6 +94,7 @@ export function generateHedgeInvoicePdf(input = {}) {
   const muted = [91, 102, 112];
   const border = [214, 220, 224];
   const soft = [246, 248, 249];
+  const compactSinglePage = invoice.lineItems.length < 12;
   let y = 0;
 
   const drawBrandHeader = (continued = false) => {
@@ -103,16 +104,20 @@ export function generateHedgeInvoicePdf(input = {}) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', pageWidth / 2, 41, { align: 'center' });
+    doc.setDrawColor(4, 50, 92);
+    doc.setLineWidth(0.25);
+    doc.line(margin, 44, right, 44);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG', pageWidth / 2, 46, { align: 'center' });
+    doc.setFontSize(6.2);
+    doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK', pageWidth / 2, 48, { align: 'center' });
+    doc.line(margin, 50, right, 50);
     doc.setFillColor(180, 30, 30);
     doc.rect(0, 54, pageWidth, 11, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.text(invoice.isReceivable ? 'DEBIT NOTE - OTC SWAP SETTLEMENT' : 'CREDIT NOTE - OTC SWAP SETTLEMENT', pageWidth / 2, 61, { align: 'center' });
-    return 73;
+    return 70;
   };
 
   y = drawBrandHeader();
@@ -122,7 +127,7 @@ export function generateHedgeInvoicePdf(input = {}) {
   doc.text(`No.: ${invoice.invoiceNumber}`, margin, y);
   doc.setFont('helvetica', 'normal');
   doc.text(`Date: ${displayDate(invoice.invoiceDate)}`, right, y, { align: 'right' });
-  y += 7;
+  y += 6;
 
   const leftCardWidth = 104;
   const cardGap = 5;
@@ -135,7 +140,7 @@ export function generateHedgeInvoicePdf(input = {}) {
     invoice.counterparty.address_line3,
     invoice.counterparty.attention ? `Attention: ${invoice.counterparty.attention}` : null,
   ].filter(Boolean).flatMap((line) => doc.splitTextToSize(String(line), leftCardWidth - 8));
-  const cardHeight = Math.max(31, 13 + counterpartyLines.length * 4);
+  const cardHeight = Math.max(28, 11 + counterpartyLines.length * 3.5);
   doc.setFillColor(...soft);
   doc.setDrawColor(...border);
   doc.roundedRect(margin, y, leftCardWidth, cardHeight, 1.5, 1.5, 'FD');
@@ -149,7 +154,7 @@ export function generateHedgeInvoicePdf(input = {}) {
   doc.setFontSize(7.8);
   counterpartyLines.forEach((line, index) => {
     doc.setFont('helvetica', index === 0 ? 'bold' : 'normal');
-    doc.text(String(line), margin + 4, y + 12 + index * 4);
+    doc.text(String(line), margin + 4, y + 11 + index * 3.5);
   });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
@@ -159,22 +164,41 @@ export function generateHedgeInvoicePdf(input = {}) {
   doc.text(displayMonth(invoice.settlementMonth), right - 4, y + 19, { align: 'right' });
   doc.text('Document type', rightCardX + 4, y + 25);
   doc.text(invoice.paymentDirection.invoiceType, right - 4, y + 25, { align: 'right' });
-  y += cardHeight + 6;
+  y += cardHeight + 4;
 
-  const paymentFill = invoice.isReceivable ? [232, 246, 240] : [255, 246, 224];
-  doc.setFillColor(...paymentFill);
+  const paymentHeight = 32;
+  const paymentSummaryX = 128;
+  doc.setFillColor(255, 246, 224);
   doc.setDrawColor(...border);
-  doc.roundedRect(margin, y, right - margin, 18, 1.5, 1.5, 'FD');
+  doc.roundedRect(margin, y, right - margin, paymentHeight, 1.5, 1.5, 'FD');
   doc.setTextColor(...muted);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.5);
   doc.text('PAYMENT DIRECTION:', margin + 4, y + 5.5);
   doc.setTextColor(...ink);
-  doc.setFontSize(11);
-  doc.text(`${invoice.paymentDirection.payer.shortName} PAYS ${invoice.paymentDirection.payee.shortName}`, margin + 4, y + 12.5);
-  doc.setFontSize(10);
-  doc.text(`USD ${money(invoice.netAmount)}`, right - 4, y + 12.5, { align: 'right' });
-  y += 24;
+  doc.setFontSize(7.7);
+  doc.text(invoice.paymentDirection.payer.fullName, margin + 4, y + 12);
+  doc.setFontSize(6.5);
+  doc.text('PAYS', margin + 4, y + 18);
+  doc.setFontSize(7.7);
+  doc.text(invoice.paymentDirection.payee.fullName, margin + 4, y + 25);
+  doc.setDrawColor(226, 207, 164);
+  doc.setLineWidth(0.2);
+  doc.line(paymentSummaryX - 4, y + 4, paymentSummaryX - 4, y + paymentHeight - 4);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(...muted);
+  doc.text('Counterparty MTM', paymentSummaryX, y + 8);
+  doc.text(`USD ${signedMoney(invoice.totalMtm)}`, right - 4, y + 8, { align: 'right' });
+  doc.text('Fee impact', paymentSummaryX, y + 14);
+  doc.text(`USD ${signedMoney(invoice.totalHandling)}`, right - 4, y + 14, { align: 'right' });
+  doc.line(paymentSummaryX, y + 18, right - 4, y + 18);
+  doc.setTextColor(...ink);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.6);
+  doc.text('SETTLEMENT TOTAL', paymentSummaryX, y + 25);
+  doc.text(`USD ${money(invoice.netAmount)}`, right - 4, y + 25, { align: 'right' });
+  y += paymentHeight + 4;
 
   const columns = [
     { label: 'Product', x: 16, width: 29, align: 'left' },
@@ -187,21 +211,22 @@ export function generateHedgeInvoicePdf(input = {}) {
   ];
   const drawTableHeader = () => {
     doc.setFillColor(44, 53, 61);
-    doc.rect(margin, y, right - margin, 8, 'F');
+    const headerHeight = compactSinglePage ? 7 : 8;
+    doc.rect(margin, y, right - margin, headerHeight, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.8);
+    doc.setFontSize(compactSinglePage ? 6.4 : 6.8);
     for (const column of columns) {
       const x = column.align === 'right' ? column.x + column.width - 2 : column.x + 2;
-      doc.text(column.label, x, y + 5.2, { align: column.align });
+      doc.text(column.label, x, y + (compactSinglePage ? 4.7 : 5.2), { align: column.align });
     }
-    y += 8;
+    y += headerHeight;
   };
   drawTableHeader();
 
   invoice.lineItems.forEach((line, rowIndex) => {
     const productLines = doc.splitTextToSize(line.product || '-', columns[0].width - 4);
-    const rowHeight = Math.max(9, productLines.length * 3.6 + 4);
+    const rowHeight = compactSinglePage ? Math.max(6.5, productLines.length * 2.5 + 2) : Math.max(9, productLines.length * 3.6 + 4);
     if (y + rowHeight > 263) {
       doc.addPage();
       y = drawBrandHeader(true);
@@ -213,8 +238,8 @@ export function generateHedgeInvoicePdf(input = {}) {
     }
     doc.setTextColor(...ink);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.2);
-    doc.text(productLines, columns[0].x + 2, y + 5);
+    doc.setFontSize(compactSinglePage ? 6.4 : 7.2);
+    doc.text(productLines, columns[0].x + 2, y + (compactSinglePage ? 4.2 : 5));
     const values = [
       line.direction || '-',
       `${line.quantity.toLocaleString('en-US')} ${line.unit}`,
@@ -226,7 +251,7 @@ export function generateHedgeInvoicePdf(input = {}) {
     columns.slice(1).forEach((column, index) => {
       const x = column.align === 'right' ? column.x + column.width - 2 : column.x + 2;
       doc.setFont('helvetica', index === values.length - 1 ? 'bold' : 'normal');
-      doc.text(String(values[index]), x, y + 5, { align: column.align, maxWidth: column.width - 4 });
+      doc.text(String(values[index]), x, y + (compactSinglePage ? 4.2 : 5), { align: column.align, maxWidth: column.width - 4 });
     });
     doc.setDrawColor(...border);
     doc.setLineWidth(0.2);
@@ -234,35 +259,13 @@ export function generateHedgeInvoicePdf(input = {}) {
     y += rowHeight;
   });
 
-  if (y > 207) {
+  const beneficiaryHeight = invoice.paymentDirection.isReceivable ? 32 : 21;
+  if (y + 5 + beneficiaryHeight > 278) {
     doc.addPage();
     y = drawBrandHeader(true);
   } else {
-    y += 7;
+    y += 5;
   }
-
-  const totalsX = 111;
-  const totalsWidth = right - totalsX;
-  doc.setFillColor(...soft);
-  doc.setDrawColor(...border);
-  doc.roundedRect(totalsX, y, totalsWidth, 28, 1.5, 1.5, 'FD');
-  doc.setFontSize(7.5);
-  doc.setTextColor(...muted);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Counterparty MTM', totalsX + 4, y + 7);
-  doc.text(`USD ${signedMoney(invoice.totalMtm)}`, right - 4, y + 7, { align: 'right' });
-  doc.text('Fee impact', totalsX + 4, y + 13);
-  doc.text(`USD ${signedMoney(invoice.totalHandling)}`, right - 4, y + 13, { align: 'right' });
-  doc.setDrawColor(...border);
-  doc.line(totalsX + 4, y + 17, right - 4, y + 17);
-  doc.setTextColor(...ink);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('SETTLEMENT TOTAL', totalsX + 4, y + 24);
-  doc.text(`USD ${money(invoice.netAmount)}`, right - 4, y + 24, { align: 'right' });
-  y += 34;
-
-  const beneficiaryHeight = invoice.paymentDirection.isReceivable ? 32 : 21;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(...border);
   doc.roundedRect(margin, y, right - margin, beneficiaryHeight, 1.5, 1.5, 'D');
@@ -284,7 +287,7 @@ export function generateHedgeInvoicePdf(input = {}) {
   } else {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.2);
-    doc.text(`Settlement is payable by ${invoice.paymentDirection.payer.shortName} against the counterparty's invoice.`, margin + 4, y + 17);
+    doc.text(`Settlement is payable by ${invoice.paymentDirection.payer.fullName} against the counterparty's invoice.`, margin + 4, y + 17);
   }
 
   const pageCount = doc.getNumberOfPages();
@@ -296,7 +299,7 @@ export function generateHedgeInvoicePdf(input = {}) {
     doc.setTextColor(...muted);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    doc.text('Computer generated document. Registered in Hong Kong.', pageWidth / 2, 286, { align: 'center' });
+    doc.text('Computer generated document.', pageWidth / 2, 286, { align: 'center' });
     doc.text(`${invoice.invoiceNumber}  |  Page ${page} of ${pageCount}`, right, 286, { align: 'right' });
   }
 
