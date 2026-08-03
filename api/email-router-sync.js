@@ -77,7 +77,7 @@ export default async function handler(req, res) {
     if (updateError) throw updateError;
     const { error: eventError } = await schema.from('events').insert({
       event_type: 'migration.metadata_sync_completed',
-      entity_type: 'mailbox_connection',
+      entity_type: 'mailbox',
       entity_id: mailbox.id,
       idempotency_key: request.idempotencyKey,
     });

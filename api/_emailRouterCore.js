@@ -264,14 +264,21 @@ function encodeGraphCursor(value) {
 
 function validatedMailboxGraphUrl(value, mailbox, code = 'EMAIL_ROUTER_CURSOR_INVALID') {
   const raw = String(value || '');
-  const mailboxSegment = `/users/${encodeURIComponent(mailbox.emailAddress)}/mailFolders/`;
+  const mailboxAddress = String(mailbox.emailAddress || '').toLowerCase();
+  const validPath = (pathname) => {
+    let decodedPath;
+    try { decodedPath = decodeURIComponent(pathname).toLowerCase(); } catch { return false; }
+    const path = decodedPath.startsWith('/v1.0/') ? decodedPath.slice('/v1.0'.length) : decodedPath;
+    const mailboxRoot = `/users/${mailboxAddress}/mailfolders`;
+    return path.startsWith(`${mailboxRoot}/`) || path.startsWith(`${mailboxRoot}(`);
+  };
   if (raw.startsWith('/')) {
-    if (!raw.startsWith(mailboxSegment)) throw routerError('Mailbox cursor is invalid.', 400, code);
+    if (!validPath(raw)) throw routerError('Mailbox cursor is invalid.', 400, code);
     return raw;
   }
   let url;
   try { url = new URL(raw); } catch { throw routerError('Mailbox cursor is invalid.', 400, code); }
-  if (url.protocol !== 'https:' || url.hostname !== 'graph.microsoft.com' || !url.pathname.startsWith(`/v1.0${mailboxSegment}`)) {
+  if (url.protocol !== 'https:' || url.hostname !== 'graph.microsoft.com' || !validPath(url.pathname)) {
     throw routerError('Mailbox cursor is invalid.', 400, code);
   }
   return url.toString();
@@ -1007,7 +1014,7 @@ export async function enqueueEmailRouterWebhookNotifications(client, notificatio
     await routerTable(client, EMAIL_ROUTER_STORAGE.deltaState).upsert({
       mailbox_id: mailbox.id,
       folder_key: subscription.resource_key,
-      cursor_reference: mailboxPath(mailbox, `/mailFolders/${subscription.resource_key}/messages/delta?$select=${encodeURIComponent(GRAPH_SELECT)}&$top=50`),
+      cursor_reference: mailboxPath(mailbox, `/mailFolders/${subscription.resource_key}/messages/delta?$select=${encodeURIComponent(GRAPH_SELECT)}`),
       sync_state: 'resync_required',
       failure_code: String(syncError.code || 'email_router_delta_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120),
       updated_at: new Date().toISOString(),
@@ -1034,7 +1041,7 @@ export async function syncEmailRouterDelta({ client, mailbox, folder = 'inbox', 
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   let next = deltaLink
     ? validatedMailboxGraphUrl(deltaLink, mailbox, 'EMAIL_ROUTER_DELTA_CURSOR_INVALID')
-    : mailboxPath(mailbox, `/mailFolders/${folder}/messages/delta?$select=${encodeURIComponent(GRAPH_SELECT)}&$top=50`);
+    : mailboxPath(mailbox, `/mailFolders/${folder}/messages/delta?$select=${encodeURIComponent(GRAPH_SELECT)}`);
   let pages = 0;
   let cursor = null;
   const messages = [];

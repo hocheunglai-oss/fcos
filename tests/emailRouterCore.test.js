@@ -11,6 +11,7 @@ import {
   requireEmailRouterConfigurationUser,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
+  syncEmailRouterDelta,
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
 } from '../api/_emailRouterCore.js';
@@ -135,6 +136,31 @@ test('Graph requests use immutable identifiers and a started outbox entry is rec
   assert.doesNotMatch(calls[0].url, /\/send$/);
 });
 
+test('Graph delta cursors accept the mailbox-scoped URL shape returned by Microsoft', async () => {
+  const mailbox = { id: 'mailbox-1', emailAddress: 'router@example.net' };
+  const cursor = "https://graph.microsoft.com/v1.0/users/router@example.net/mailFolders('inbox')/messages/delta?$deltatoken=opaque";
+  let fetchedUrl = '';
+  const client = {
+    from(table) {
+      assert.equal(table, 'emailrouter.mailbox_delta_state');
+      return { upsert: async () => ({ error: null }) };
+    },
+  };
+  const result = await syncEmailRouterDelta({ client, mailbox, folder: 'inbox', deltaLink: cursor }, {
+    accessToken: 'access-token',
+    fetchImpl: async (url) => {
+      fetchedUrl = String(url);
+      return new Response(JSON.stringify({ value: [], '@odata.deltaLink': cursor }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.equal(fetchedUrl, cursor);
+  assert.equal(result.pages, 1);
+  await assert.rejects(
+    () => syncEmailRouterDelta({ client, mailbox, folder: 'inbox', deltaLink: cursor.replace('router@example.net', 'other@example.net') }, { accessToken: 'access-token' }),
+    (error) => error.code === 'EMAIL_ROUTER_DELTA_CURSOR_INVALID',
+  );
+});
+
 test('a repeated operation ID returns its existing state without another Graph request', async () => {
   const mailboxId = 'mailbox-1';
   const indexedMessageId = 'indexed-message-1';
@@ -204,6 +230,7 @@ test('the native router core has no SMTP dependency or sender input path', async
   const source = await (await import('node:fs/promises')).readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /nodemailer|smtp|createTransport|createSmtp/i);
   assert.doesNotMatch(source, /input\.from|body\.from|workflow.*mailbox/i);
+  assert.doesNotMatch(source, /messages\/delta[^`'\"]*\$top=50/);
   assert.match(source, /IdType="ImmutableId"/);
   assert.match(source, /mailFolders\/sentitems\/messages/);
 });
@@ -212,5 +239,7 @@ test('migration sync diagnostics expose only a bounded provider code', async () 
   const source = await (await import('node:fs/promises')).readFile(new URL('../api/email-router-sync.js', import.meta.url), 'utf8');
   assert.match(source, /replaceAll\(\/\[\^a-zA-Z0-9_.-\]\/g, '_'/);
   assert.match(source, /slice\(0, 120\)/);
+  assert.match(source, /entity_type: 'mailbox'/);
+  assert.doesNotMatch(source, /entity_type: 'mailbox_connection'/);
   assert.doesNotMatch(source, /stack|response\.text|access_token|client_assertion/i);
 });
