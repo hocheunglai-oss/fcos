@@ -2122,6 +2122,58 @@
 .hedge-desk-root .app-payment-direction--receivable { border-left-color: var(--app-green); }
 .hedge-desk-root .app-payment-direction--payable { border-left-color: var(--app-amber); }
 
+.hedge-desk-root .app-email-composer .ql-toolbar,
+.hedge-desk-root .app-email-composer .ql-container {
+  border-color: var(--app-border);
+  font-family: inherit;
+}
+
+.hedge-desk-root .app-email-composer .ql-toolbar {
+  border-radius: 6px 6px 0 0;
+  background: var(--app-surface-soft);
+}
+
+.hedge-desk-root .app-email-composer .ql-container {
+  min-height: 240px;
+  border-radius: 0 0 6px 6px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-size: 13px;
+}
+
+.hedge-desk-root .app-email-composer .ql-editor { min-height: 240px; line-height: 1.65; }
+
+.hedge-desk-root .app-email-preview {
+  overflow: hidden;
+  margin-top: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-surface);
+  box-shadow: 0 8px 24px rgba(14, 20, 18, 0.06);
+}
+
+.hedge-desk-root .app-email-preview dl {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-surface-soft);
+}
+
+.hedge-desk-root .app-email-preview dl > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.hedge-desk-root .app-email-preview dt { color: var(--app-text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.hedge-desk-root .app-email-preview dd { overflow-wrap: anywhere; margin: 0; color: var(--app-text); font-size: 12px; }
+.hedge-desk-root .app-email-preview__body { min-height: 250px; padding: 14px 18px; }
+.hedge-desk-root .app-email-preview__body .ql-container { border: 0; font-family: inherit; font-size: 13px; }
+.hedge-desk-root .app-email-preview__body .ql-editor { min-height: 220px; padding: 0; line-height: 1.65; }
+.hedge-desk-root .app-email-preview__attachment { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 11px 18px; border-top: 1px solid var(--app-border); background: var(--app-surface-soft); color: var(--app-text); font-size: 11px; font-weight: 700; }
+.hedge-desk-root .app-email-preview__attachment small { color: var(--app-text-muted); font-size: 10px; font-weight: 500; }
+
 .hedge-desk-root .app-invoice-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

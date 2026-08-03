@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { jsPDF } from 'jspdf';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
+import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
 
 const BUCKET = 'hedge-documents';
@@ -89,105 +90,235 @@ export function generateHedgeInvoicePdf(input = {}) {
   const margin = 16;
   const pageWidth = 210;
   const right = pageWidth - margin;
-  let y = 12;
+  const red = [172, 27, 36];
+  const ink = [28, 35, 42];
+  const muted = [91, 102, 112];
+  const border = [214, 220, 224];
+  const soft = [246, 248, 249];
+  let y = 0;
 
-  if (LOGO_DATA_URL) doc.addImage(LOGO_DATA_URL, 'JPEG', 74, y, 62, 24);
-  y += 29;
-  doc.setTextColor(25, 31, 35);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', pageWidth / 2, y, { align: 'center' });
-  y += 5;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG', pageWidth / 2, y, { align: 'center' });
-  y += 8;
-  doc.setFillColor(180, 30, 30);
-  doc.rect(0, y, pageWidth, 11, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text(invoice.isReceivable ? 'DEBIT NOTE - OTC SWAP SETTLEMENT' : 'CREDIT NOTE - OTC SWAP SETTLEMENT', pageWidth / 2, y + 7, { align: 'center' });
-  y += 19;
+  const drawBrandHeader = (continued = false) => {
+    if (LOGO_DATA_URL) doc.addImage(LOGO_DATA_URL, 'JPEG', margin, 9, 41, 16);
+    doc.setTextColor(...ink);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', right, 13, { align: 'right' });
+    doc.setTextColor(...muted);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.8);
+    doc.text('Units 02-03, 23/F, Plaza 228', right, 18, { align: 'right' });
+    doc.text('228 Wan Chai Road, Hong Kong', right, 22, { align: 'right' });
+    doc.setDrawColor(...red);
+    doc.setLineWidth(0.7);
+    doc.line(margin, 29, right, 29);
+    if (continued) {
+      doc.setTextColor(...muted);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.text(`OTC SWAP SETTLEMENT  |  ${invoice.invoiceNumber}`, margin, 36);
+      return 41;
+    }
+    return 36;
+  };
 
-  doc.setTextColor(30, 30, 35);
-  doc.setFontSize(9);
-  doc.text(`No.: ${invoice.invoiceNumber}`, margin, y);
-  doc.text(`Date: ${displayDate(invoice.invoiceDate)}`, right, y, { align: 'right' });
-  y += 6;
-  doc.text(`Settlement: ${displayMonth(invoice.settlementMonth)}`, right, y, { align: 'right' });
+  y = drawBrandHeader();
+  doc.setTextColor(...red);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.text('OTC SWAP SETTLEMENT', margin, y);
+  doc.setTextColor(...ink);
+  doc.setFontSize(19);
+  doc.text(invoice.isReceivable ? 'DEBIT NOTE' : 'CREDIT NOTE', margin, y + 9);
+  doc.setTextColor(...muted);
   doc.setFont('helvetica', 'normal');
-  doc.text(String(invoice.counterparty.full_name || 'COUNTERPARTY'), margin, y);
-  y += 5;
-  for (const address of [invoice.counterparty.address_line1, invoice.counterparty.address_line2, invoice.counterparty.address_line3].filter(Boolean)) {
-    doc.text(String(address), margin, y);
-    y += 4;
-  }
-  if (invoice.counterparty.attention) {
-    doc.text(`Attn: ${invoice.counterparty.attention}`, margin, y);
-    y += 5;
-  }
-  y += 2;
-  doc.setFillColor(invoice.isReceivable ? 230 : 255, invoice.isReceivable ? 245 : 244, invoice.isReceivable ? 238 : 220);
-  doc.rect(margin, y, right - margin, 14, 'F');
+  doc.setFontSize(8);
+  doc.text('FCBHK settlement document', margin, y + 15);
+  doc.setTextColor(...ink);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text(`PAYMENT DIRECTION: ${invoice.paymentDirection.payer.shortName} PAYS ${invoice.paymentDirection.payee.shortName}`, margin + 3, y + 5);
+  doc.text(invoice.invoiceNumber, right, y + 2, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...muted);
+  doc.setFontSize(7.5);
+  doc.text(`Issue date  ${displayDate(invoice.invoiceDate)}`, right, y + 8, { align: 'right' });
+  doc.text(`Settlement  ${displayMonth(invoice.settlementMonth)}`, right, y + 13, { align: 'right' });
+  y += 23;
+
+  const leftCardWidth = 104;
+  const cardGap = 5;
+  const rightCardX = margin + leftCardWidth + cardGap;
+  const rightCardWidth = right - rightCardX;
+  const counterpartyLines = [
+    invoice.counterparty.full_name || 'COUNTERPARTY',
+    invoice.counterparty.address_line1,
+    invoice.counterparty.address_line2,
+    invoice.counterparty.address_line3,
+    invoice.counterparty.attention ? `Attention: ${invoice.counterparty.attention}` : null,
+  ].filter(Boolean).flatMap((line) => doc.splitTextToSize(String(line), leftCardWidth - 8));
+  const cardHeight = Math.max(31, 13 + counterpartyLines.length * 4);
+  doc.setFillColor(...soft);
+  doc.setDrawColor(...border);
+  doc.roundedRect(margin, y, leftCardWidth, cardHeight, 1.5, 1.5, 'FD');
+  doc.roundedRect(rightCardX, y, rightCardWidth, cardHeight, 1.5, 1.5, 'FD');
+  doc.setTextColor(...muted);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.5);
+  doc.text('COUNTERPARTY', margin + 4, y + 6);
+  doc.text('DOCUMENT DETAILS', rightCardX + 4, y + 6);
+  doc.setTextColor(...ink);
+  doc.setFontSize(7.8);
+  counterpartyLines.forEach((line, index) => {
+    doc.setFont('helvetica', index === 0 ? 'bold' : 'normal');
+    doc.text(String(line), margin + 4, y + 12 + index * 4);
+  });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.text(`Beneficiary: ${invoice.paymentDirection.beneficiary.fullName}`, margin + 3, y + 10);
-  y += 19;
+  doc.text('Currency', rightCardX + 4, y + 13);
+  doc.text('USD', right - 4, y + 13, { align: 'right' });
+  doc.text('Settlement month', rightCardX + 4, y + 19);
+  doc.text(displayMonth(invoice.settlementMonth), right - 4, y + 19, { align: 'right' });
+  doc.text('Document type', rightCardX + 4, y + 25);
+  doc.text(invoice.paymentDirection.invoiceType, right - 4, y + 25, { align: 'right' });
+  y += cardHeight + 6;
 
-  const headers = ['Product', 'Side', 'Quantity', 'Price', 'MTM', 'Charges', 'Net'];
-  const widths = [29, 18, 27, 24, 27, 25, 28];
-  const starts = widths.reduce((result, width, index) => [...result, index ? result[index - 1] + widths[index - 1] : margin], []);
-  const drawHeader = () => {
-    doc.setFillColor(238, 242, 240);
-    doc.rect(margin, y, right - margin, 7, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
-    headers.forEach((header, index) => doc.text(header, starts[index] + 1, y + 4.7));
-    y += 7;
-  };
-  drawHeader();
-  doc.setFont('helvetica', 'normal');
-  for (const line of invoice.lineItems) {
-    if (y > 260) {
-      doc.addPage();
-      y = 18;
-      drawHeader();
-    }
-    const cells = [line.product, line.direction, `${line.quantity.toLocaleString('en-US')} ${line.unit}`, `$${money(line.price)}`, signedMoney(line.mtmValue), signedMoney(line.handlingFee), signedMoney(line.netValue)];
-    cells.forEach((cell, index) => doc.text(String(cell), starts[index] + 1, y + 4.8, { maxWidth: widths[index] - 2 }));
-    doc.setDrawColor(220, 224, 222);
-    doc.line(margin, y + 7, right, y + 7);
-    y += 8;
-  }
-  y += 5;
+  const paymentFill = invoice.isReceivable ? [232, 246, 240] : [255, 246, 224];
+  doc.setFillColor(...paymentFill);
+  doc.setDrawColor(...border);
+  doc.roundedRect(margin, y, right - margin, 18, 1.5, 1.5, 'FD');
+  doc.setTextColor(...muted);
   doc.setFont('helvetica', 'bold');
-  doc.text(`Counterparty MTM: USD ${signedMoney(invoice.totalMtm)}`, right, y, { align: 'right' });
-  y += 5;
-  doc.text(`Fee impact: USD ${signedMoney(invoice.totalHandling)}`, right, y, { align: 'right' });
-  y += 6;
+  doc.setFontSize(6.5);
+  doc.text('PAYMENT DIRECTION:', margin + 4, y + 5.5);
+  doc.setTextColor(...ink);
   doc.setFontSize(11);
-  doc.text(`${invoice.paymentDirection.payer.shortName} pays ${invoice.paymentDirection.payee.shortName}: USD ${money(invoice.netAmount)}`, right, y, { align: 'right' });
-  y += 14;
-  doc.setFontSize(8);
-  doc.text(`Beneficiary: ${invoice.paymentDirection.beneficiary.fullName}`, margin, y);
-  if (invoice.paymentDirection.isReceivable) {
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Bank: ${invoice.paymentDirection.beneficiary.bankName} | SWIFT: ${invoice.paymentDirection.beneficiary.bankSwift || 'Not provided'}`, margin, y);
-    y += 5;
-    doc.text(`Account: ${invoice.paymentDirection.beneficiary.accountNumber}`, margin, y);
-    if (invoice.paymentDirection.beneficiary.intermediaryBank) {
-      y += 5;
-      doc.text(`Intermediary: ${invoice.paymentDirection.beneficiary.intermediaryBank}${invoice.paymentDirection.beneficiary.intermediarySwift ? ` | SWIFT: ${invoice.paymentDirection.beneficiary.intermediarySwift}` : ''}`, margin, y);
+  doc.text(`${invoice.paymentDirection.payer.shortName} PAYS ${invoice.paymentDirection.payee.shortName}`, margin + 4, y + 12.5);
+  doc.setFontSize(10);
+  doc.text(`USD ${money(invoice.netAmount)}`, right - 4, y + 12.5, { align: 'right' });
+  y += 24;
+
+  const columns = [
+    { label: 'Product', x: 16, width: 29, align: 'left' },
+    { label: 'Side', x: 45, width: 16, align: 'left' },
+    { label: 'Quantity', x: 61, width: 27, align: 'right' },
+    { label: 'Price', x: 88, width: 24, align: 'right' },
+    { label: 'MTM', x: 112, width: 25, align: 'right' },
+    { label: 'Charges', x: 137, width: 24, align: 'right' },
+    { label: 'Net', x: 161, width: 33, align: 'right' },
+  ];
+  const drawTableHeader = () => {
+    doc.setFillColor(44, 53, 61);
+    doc.rect(margin, y, right - margin, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    for (const column of columns) {
+      const x = column.align === 'right' ? column.x + column.width - 2 : column.x + 2;
+      doc.text(column.label, x, y + 5.2, { align: column.align });
     }
+    y += 8;
+  };
+  drawTableHeader();
+
+  invoice.lineItems.forEach((line, rowIndex) => {
+    const productLines = doc.splitTextToSize(line.product || '-', columns[0].width - 4);
+    const rowHeight = Math.max(9, productLines.length * 3.6 + 4);
+    if (y + rowHeight > 263) {
+      doc.addPage();
+      y = drawBrandHeader(true);
+      drawTableHeader();
+    }
+    if (rowIndex % 2 === 1) {
+      doc.setFillColor(...soft);
+      doc.rect(margin, y, right - margin, rowHeight, 'F');
+    }
+    doc.setTextColor(...ink);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.text(productLines, columns[0].x + 2, y + 5);
+    const values = [
+      line.direction || '-',
+      `${line.quantity.toLocaleString('en-US')} ${line.unit}`,
+      `$${money(line.price)}`,
+      signedMoney(line.mtmValue),
+      signedMoney(line.handlingFee),
+      signedMoney(line.netValue),
+    ];
+    columns.slice(1).forEach((column, index) => {
+      const x = column.align === 'right' ? column.x + column.width - 2 : column.x + 2;
+      doc.setFont('helvetica', index === values.length - 1 ? 'bold' : 'normal');
+      doc.text(String(values[index]), x, y + 5, { align: column.align, maxWidth: column.width - 4 });
+    });
+    doc.setDrawColor(...border);
+    doc.setLineWidth(0.2);
+    doc.line(margin, y + rowHeight, right, y + rowHeight);
+    y += rowHeight;
+  });
+
+  if (y > 207) {
+    doc.addPage();
+    y = drawBrandHeader(true);
+  } else {
+    y += 7;
   }
-  doc.setFontSize(7);
-  doc.setTextColor(100, 100, 105);
-  doc.text('Computer generated document. Registered in Hong Kong.', pageWidth / 2, 288, { align: 'center' });
+
+  const totalsX = 111;
+  const totalsWidth = right - totalsX;
+  doc.setFillColor(...soft);
+  doc.setDrawColor(...border);
+  doc.roundedRect(totalsX, y, totalsWidth, 28, 1.5, 1.5, 'FD');
+  doc.setFontSize(7.5);
+  doc.setTextColor(...muted);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Counterparty MTM', totalsX + 4, y + 7);
+  doc.text(`USD ${signedMoney(invoice.totalMtm)}`, right - 4, y + 7, { align: 'right' });
+  doc.text('Fee impact', totalsX + 4, y + 13);
+  doc.text(`USD ${signedMoney(invoice.totalHandling)}`, right - 4, y + 13, { align: 'right' });
+  doc.setDrawColor(...border);
+  doc.line(totalsX + 4, y + 17, right - 4, y + 17);
+  doc.setTextColor(...ink);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('SETTLEMENT TOTAL', totalsX + 4, y + 24);
+  doc.text(`USD ${money(invoice.netAmount)}`, right - 4, y + 24, { align: 'right' });
+  y += 34;
+
+  const beneficiaryHeight = invoice.paymentDirection.isReceivable ? 32 : 21;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(...border);
+  doc.roundedRect(margin, y, right - margin, beneficiaryHeight, 1.5, 1.5, 'D');
+  doc.setTextColor(...muted);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.5);
+  doc.text('BENEFICIARY', margin + 4, y + 6);
+  doc.setTextColor(...ink);
+  doc.setFontSize(8);
+  doc.text(invoice.paymentDirection.beneficiary.fullName, margin + 4, y + 12);
+  if (invoice.paymentDirection.isReceivable) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.text(`Bank: ${invoice.paymentDirection.beneficiary.bankName}`, margin + 4, y + 18);
+    doc.text(`SWIFT: ${invoice.paymentDirection.beneficiary.bankSwift || '-'}  |  Account: ${invoice.paymentDirection.beneficiary.accountNumber}`, margin + 4, y + 23);
+    if (invoice.paymentDirection.beneficiary.intermediaryBank) {
+      doc.text(`Intermediary: ${invoice.paymentDirection.beneficiary.intermediaryBank}${invoice.paymentDirection.beneficiary.intermediarySwift ? `  |  SWIFT: ${invoice.paymentDirection.beneficiary.intermediarySwift}` : ''}`, margin + 4, y + 28);
+    }
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.text(`Settlement is payable by ${invoice.paymentDirection.payer.shortName} against the counterparty's invoice.`, margin + 4, y + 17);
+  }
+
+  const pageCount = doc.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    doc.setPage(page);
+    doc.setDrawColor(...border);
+    doc.setLineWidth(0.2);
+    doc.line(margin, 281, right, 281);
+    doc.setTextColor(...muted);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.text('Computer-generated document. Registered in Hong Kong.', margin, 286);
+    doc.text(`${invoice.invoiceNumber}  |  Page ${page} of ${pageCount}`, right, 286, { align: 'right' });
+  }
 
   const buffer = Buffer.from(doc.output('arraybuffer'));
   if (buffer.length > MAX_PDF_BYTES) throw hedgeDocumentError('The generated Hedge Desk invoice exceeds the 3 MB email limit.', 400);
@@ -272,13 +403,25 @@ export async function sendHedgeInvoiceEmail(client, profile, body = {}, { mailbo
   const invoice = body.invoiceId ? await invoiceRecord(client, body.invoiceId) : null;
   const documentPayload = await authoritativeInvoicePayload(client, invoice, body.pdfPayload || null);
   const generated = generateHedgeInvoicePdf(invoice ? documentPayload : body);
+  const sanitizedBody = sanitizeRichText(body.body || body.html || '', 32_768);
+  if (!sanitizedBody || richTextPlainLength(sanitizedBody) === 0) throw hedgeDocumentError('The settlement email message is required.', 400, 'HEDGE_EMAIL_BODY_REQUIRED');
+  const plainBody = sanitizedBody
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/p>|<\/li>|<\/h[34]>|<\/blockquote>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   const message = {
     to: body.to,
     cc: body.cc,
     bcc: body.bcc,
     subject: String(body.subject || generated.invoice.invoiceNumber),
-    html: String(body.body || body.html || ''),
-    text: String(body.text || ''),
+    html: sanitizedBody,
+    text: String(body.text || plainBody),
     attachments: [{ filename: generated.filename, contentType: 'application/pdf', contentBase64: generated.buffer.toString('base64') }],
   };
   const result = await sendGraphPurposeMail({ client, purposeKey: 'hedge_settlement', message, mailboxSnapshot });
@@ -314,16 +457,30 @@ export async function sendHedgeInvoiceEmailIdempotent(client, profile, body = {}
   })).digest('hex');
   const existing = await client.from('hedge_integration_operations').select('*').eq('idempotency_key', idempotencyKey).maybeSingle();
   if (existing.error) throw hedgeDocumentError(`Email reservation could not be checked: ${existing.error.message}`, 502);
-  if (existing.data) {
-    if (existing.data.request_hash !== requestHash) throw hedgeDocumentError('This email delivery key was already used for different content.', 409);
-    if (existing.data.status === 'succeeded') return { ...existing.data.response, idempotency_replayed: true };
-    if (existing.data.status === 'processing') throw hedgeDocumentError('This email delivery is already running.', 409);
-    if (existing.data.status === 'uncertain' && body.confirmUncertainResend !== true) {
+  let existingOperation = existing.data;
+  if (!existingOperation && body.invoiceId) {
+    const prior = await client
+      .from('hedge_integration_operations')
+      .select('*')
+      .eq('operation', 'hedge_invoice_email')
+      .contains('response', { invoiceId: String(body.invoiceId) })
+      .in('status', ['processing', 'uncertain', 'succeeded'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (prior.error) throw hedgeDocumentError(`Earlier email delivery could not be checked: ${prior.error.message}`, 502);
+    existingOperation = prior.data;
+  }
+  if (existingOperation) {
+    if (existingOperation.request_hash !== requestHash && existingOperation.status !== 'failed') throw hedgeDocumentError('This invoice already has a delivery attempt with different content. Review its delivery state before sending again.', 409);
+    if (existingOperation.status === 'succeeded') return { ...existingOperation.response, idempotency_replayed: true };
+    if (existingOperation.status === 'processing') throw hedgeDocumentError('This email delivery is already running.', 409);
+    if (existingOperation.status === 'uncertain' && body.confirmUncertainResend !== true) {
       throw hedgeDocumentError('This email may already have been delivered. Confirm the uncertain resend before trying again.', 409);
     }
   }
-  const mailboxSnapshot = existing.data?.sender_mailbox_snapshot
-    ? { id: existing.data.sender_mailbox_id || null, emailAddress: existing.data.sender_mailbox_snapshot }
+  const mailboxSnapshot = existingOperation?.sender_mailbox_snapshot
+    ? { id: existingOperation.sender_mailbox_id || null, emailAddress: existingOperation.sender_mailbox_snapshot }
     : await resolveGraphEmailSender(client, 'hedge_settlement').then((sender) => ({
         id: sender.mailboxId,
         emailAddress: sender.emailAddress,
@@ -338,14 +495,19 @@ export async function sendHedgeInvoiceEmailIdempotent(client, profile, body = {}
     sender_mailbox_snapshot: mailboxSnapshot.emailAddress,
     status: 'processing',
     error: null,
+    response: {
+      ...(existingOperation?.response || {}),
+      invoiceId: body.invoiceId ? String(body.invoiceId) : null,
+      invoiceNumber: String(body.invoiceNumber || ''),
+    },
   };
-  const saved = existing.data
-    ? await client.from('hedge_integration_operations').update(reservation).eq('id', existing.data.id).select('*').single()
+  const saved = existingOperation
+    ? await client.from('hedge_integration_operations').update(reservation).eq('id', existingOperation.id).select('*').single()
     : await client.from('hedge_integration_operations').insert(reservation).select('*').single();
   if (saved.error) throw hedgeDocumentError(`Email delivery could not be reserved: ${saved.error.message}`, 502);
   try {
     const result = await sendHedgeInvoiceEmail(client, profile, body, { mailboxSnapshot });
-    await client.from('hedge_integration_operations').update({ status: 'succeeded', response: result }).eq('id', saved.data.id);
+    await client.from('hedge_integration_operations').update({ status: 'succeeded', response: { ...result, invoiceId: body.invoiceId ? String(body.invoiceId) : null, invoiceNumber: String(body.invoiceNumber || result.invoiceNumber || '') } }).eq('id', saved.data.id);
     return result;
   } catch (sendError) {
     const uncertain = sendError.mailDeliveryUncertain === true || sendError.code === 'MICROSOFT_GRAPH_SEND_UNCERTAIN';

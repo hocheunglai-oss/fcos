@@ -50,13 +50,15 @@ covering every approved mailbox. Do not also grant an unscoped Entra `Mail.Send`
 application permission because Entra and Exchange grants are additive. This
 Microsoft Graph route is the only FCOS email-delivery path.
 
-### Universal application portal and Email Router
+### External application foundation and Email Router
 
-FCOS remains the login and entitlement authority for registered external
-applications. The portal signs short-lived ES256 assertions; it never shares
-FCOS browser tokens or the Supabase service role with a target application.
-Email Router is native FCOS functionality and does not use the portal handoff,
-a second Supabase Auth session, or target-application entitlements.
+FCOS retains a server-side federation foundation for future registered external
+applications. No application portal or app switcher is shown while FCOS is the
+only active application. The federation service signs short-lived ES256
+assertions and never shares FCOS browser tokens or the Supabase service role
+with a target application. Email Router is native FCOS functionality and does
+not use a portal handoff, a second Supabase Auth session, or target-application
+entitlements. Its page visibility is managed through Users & Access.
 
 Configure these server-only values in FCOS:
 

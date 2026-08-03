@@ -1,5 +1,5 @@
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, isAllowedDashboardAiModel } from './_dashboardAi.js';
-import { currentEmailRouterMailbox } from './_emailRouterCore.js';
+import { currentEmailRouterMailbox, emailRouterProfilesById } from './_emailRouterCore.js';
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -10,10 +10,6 @@ function configError(message, status = 400, code = 'EMAIL_ROUTER_CONFIGURATION_I
   error.status = status;
   error.code = code;
   return error;
-}
-
-function relation(value) {
-  return Array.isArray(value) ? value[0] || null : value || null;
 }
 
 function settingValue(rows, key, fallback) {
@@ -49,7 +45,7 @@ function usageTotals(rows) {
 export async function emailRouterConfiguration(client) {
   const mailbox = await currentEmailRouterMailbox(client);
   const [destinations, groups, presets, settings, subscriptions, alerts, folderCountResults, actions, usage] = await Promise.all([
-    table(client, 'destinations').select('id,destination_kind,user_profile_id,display_name,email_address,active,sort_order,revision,updated_at,user_profiles(email,full_name,active)').order('sort_order').order('display_name'),
+    table(client, 'destinations').select('id,destination_kind,user_profile_id,display_name,email_address,active,sort_order,revision,updated_at').order('sort_order').order('display_name'),
     table(client, 'destination_groups').select('id,group_key,display_name,active,revision,updated_at,destination_group_members(destination_id)').order('display_name'),
     table(client, 'routing_presets').select('id,preset_key,display_name,description,active,sort_order,revision,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').order('sort_order').order('display_name'),
     table(client, 'settings').select('key,value,revision,updated_at').order('key'),
@@ -68,6 +64,7 @@ export async function emailRouterConfiguration(client) {
   const folderCounts = Object.fromEntries(folderCountResults.map(({ folder, result }) => [folder, Number(result.count || 0)]));
   const actionCounts = {};
   for (const row of actions.data || []) actionCounts[row.state] = (actionCounts[row.state] || 0) + 1;
+  const profiles = await emailRouterProfilesById(client, (destinations.data || []).map((destination) => destination.user_profile_id));
   const advisorSetting = settingValue(settings.data, 'advisor.model', { modelId: DEFAULT_DASHBOARD_AI_MODEL });
   const enabledSetting = settingValue(settings.data, 'advisor.enabled', { enabled: true });
   return {
@@ -75,7 +72,7 @@ export async function emailRouterConfiguration(client) {
     folderCounts,
     actionCounts,
     destinations: (destinations.data || []).map((row) => {
-      const profile = relation(row.user_profiles);
+      const profile = profiles.get(row.user_profile_id);
       return {
         id: row.id,
         kind: row.destination_kind,

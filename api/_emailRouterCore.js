@@ -30,6 +30,17 @@ function routerTable(client, table) {
     : client.from(`emailrouter.${table}`);
 }
 
+export async function emailRouterProfilesById(client, profileIds = []) {
+  const ids = [...new Set((profileIds || []).filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const { data, error } = await client
+    .from('user_profiles')
+    .select('id,email,full_name,active')
+    .in('id', ids);
+  if (error) storageUnavailable(error);
+  return new Map((data || []).map((profile) => [profile.id, profile]));
+}
+
 function routerError(message, status = 500, code = 'EMAIL_ROUTER_ERROR') {
   const error = new Error(message);
   error.status = status;
@@ -399,14 +410,15 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
 
 export async function listEmailRouterDirectory({ client, search = '' }) {
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
-    .select('id,destination_kind,display_name,email_address,provider_directory_id,user_profiles(email,full_name,active)')
+    .select('id,destination_kind,user_profile_id,display_name,email_address,provider_directory_id')
     .eq('active', true)
     .order('display_name')
     .limit(100);
   if (error) storageUnavailable(error);
+  const profiles = await emailRouterProfilesById(client, (data || []).map((destination) => destination.user_profile_id));
   const needle = text(search, 100).toLowerCase();
   return (data || []).map((destination) => {
-    const profile = Array.isArray(destination.user_profiles) ? destination.user_profiles[0] : destination.user_profiles;
+    const profile = profiles.get(destination.user_profile_id);
     const address = destination.destination_kind === 'fcos_profile' && profile?.active ? profile.email : destination.email_address;
     return { id: destination.id, label: destination.display_name || profile?.full_name || address, address };
   }).filter((entry) => entry.address && (!needle || `${entry.label} ${entry.address}`.toLowerCase().includes(needle)));
@@ -596,12 +608,13 @@ async function destinationAddresses(client, destinationIds) {
   const ids = [...new Set((destinationIds || []).map((id) => safeId(id, 'destination identifier')))];
   if (!ids.length) return [];
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
-    .select('id,destination_kind,email_address,user_profiles(email,active)')
+    .select('id,destination_kind,user_profile_id,email_address')
     .in('id', ids)
     .eq('active', true);
   if (error) storageUnavailable(error);
+  const profiles = await emailRouterProfilesById(client, (data || []).map((destination) => destination.user_profile_id));
   const found = new Map((data || []).map((destination) => {
-    const profile = Array.isArray(destination.user_profiles) ? destination.user_profiles[0] : destination.user_profiles;
+    const profile = profiles.get(destination.user_profile_id);
     return [destination.id, destination.destination_kind === 'fcos_profile' && profile?.active ? profile.email : destination.email_address];
   }));
   return ids.map((id) => safeAddress(found.get(id) || ''));

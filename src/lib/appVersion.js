@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.88';
+export const APP_VERSION = '2.0.89';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.89',
+    releasedAt: '2026-08-03',
+    title: 'Email Router access and settlement delivery repair',
+    changes: [
+      'Made Email Router visibility configurable by user type or individual override in Users & Access while preserving access for every existing user during rollout.',
+      'Fixed Email Router Settings profile loading and the Hedge settlement Microsoft Graph tracking error that could appear after an accepted submission.',
+      'Added a readable rich-text settlement email preview, stable uncertain-send protection, and a redesigned professional settlement PDF with explicit payer and beneficiary details.',
+      'Removed the application selector and portal landing from the FCOS interface while retaining the dormant server-side federation foundation for future applications.',
+    ],
+  },
   {
     version: '2.0.88',
     releasedAt: '2026-08-03',

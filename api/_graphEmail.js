@@ -219,12 +219,16 @@ async function graphTransport(sender, dependencies = {}) {
 
 async function recordDelivery(client, sender, succeeded, error = null) {
   if (!sender.mailboxId) return;
-  await client.rpc('record_email_sender_delivery', {
-    p_purpose_key: sender.purposeKey,
-    p_mailbox_id: sender.mailboxId,
-    p_succeeded: succeeded,
-    p_error: error ? String(error.code || 'MICROSOFT_GRAPH_MAIL_ERROR') : null,
-  }).catch(() => {});
+  try {
+    await client.rpc('record_email_sender_delivery', {
+      p_purpose_key: sender.purposeKey,
+      p_mailbox_id: sender.mailboxId,
+      p_succeeded: succeeded,
+      p_error: error ? String(error.code || 'MICROSOFT_GRAPH_MAIL_ERROR') : null,
+    });
+  } catch {
+    // Delivery telemetry must never turn an accepted Graph submission into a UI failure.
+  }
 }
 
 export async function sendGraphPurposeMail({ client, purposeKey, message, mailboxSnapshot = null }, dependencies = {}) {

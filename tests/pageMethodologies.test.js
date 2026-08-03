@@ -6,7 +6,6 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 
 test('every authenticated FCOS workspace exposes a Methodology control', () => {
   const sharedControlPages = [
-    'src/pages/AppPortal.jsx',
     'src/pages/MyCommitments.jsx',
     'src/pages/DashboardSettings.jsx',
     'src/pages/StemPnlReport.jsx',

@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import ReactQuill from "react-quill-new";
+import "react-quill-new/dist/quill.snow.css";
 import {
   CheckCircle2,
   Copy,
@@ -49,6 +51,16 @@ import {
 } from "../components/ui";
 import { SfsReportPanel } from "../components/SfsReportPanel";
 import { generateOtcInvoice, saveInvoicePdf, sendInvoiceEmail } from "@/hedge/api/backendFunctions";
+
+const EMAIL_EDITOR_MODULES = {
+  toolbar: [
+    [{ header: [false, 3, 4] }],
+    ["bold", "italic", "underline"],
+    [{ list: "ordered" }, { list: "bullet" }],
+    ["link"],
+    ["clean"],
+  ],
+};
 
 function pdfBlob(result) {
   const bytes = Uint8Array.from(atob(result?.base64 || ''), (character) => character.charCodeAt(0));
@@ -144,6 +156,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const [pdfPreview, setPdfPreview] = useState(null);
   const [emailDrawer, setEmailDrawer] = useState(null);
   const [emailForm, setEmailForm] = useState({ to: "", cc: "", bcc: "", subject: "", body: "" });
+  const [emailView, setEmailView] = useState("preview");
   const [emailIdempotencyKey, setEmailIdempotencyKey] = useState("");
   const [confirmUncertainResend, setConfirmUncertainResend] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -348,8 +361,9 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       dueDate: due.toLocaleDateString("en-GB"),
     };
     setEmailDrawer({ ...invoice, paymentDirection });
+    setEmailView("preview");
     setConfirmUncertainResend(false);
-    setEmailIdempotencyKey(`email:${invoice.id}:${globalThis.crypto?.randomUUID?.() || Date.now()}`);
+    setEmailIdempotencyKey(`hedge-settlement:${invoice.id}:revision:${Number(invoice.revision || 0)}`);
     setEmailForm({
       to: counterparty?.emails || settings.email.email_to || "",
       cc: settings.email.email_cc || "",
@@ -524,10 +538,32 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
         {pdfPreview && <iframe className="app-pdf-frame" src={pdfPreview.url} title={`Invoice ${pdfPreview.invoiceNumber}`} />}
       </Modal>
 
-      <Drawer open={Boolean(emailDrawer)} onClose={() => setEmailDrawer(null)} title={`Send ${emailDrawer?.invoice_number || "invoice"}`} description={confirmUncertainResend ? "Microsoft Graph may already have accepted the earlier attempt. Check the sender mailbox and recipient before confirming a resend." : "The generated PDF will be attached automatically."} width="medium" footer={<><Button onClick={() => setEmailDrawer(null)} disabled={busy}>Cancel</Button><Button variant="primary" icon={Send} onClick={sendEmail} disabled={busy || !emailForm.to.trim()}>{busy ? "Sending..." : confirmUncertainResend ? "Confirm resend" : "Send email"}</Button></>}>
+      <Drawer open={Boolean(emailDrawer)} onClose={() => setEmailDrawer(null)} title={`Send ${emailDrawer?.invoice_number || "invoice"}`} description={confirmUncertainResend ? "Microsoft Graph may already have accepted the earlier attempt. Check the sender mailbox and recipient before confirming a resend." : "Review the message and attached settlement PDF before sending."} width="wide" footer={<><Button onClick={() => setEmailDrawer(null)} disabled={busy}>Cancel</Button><Button variant="primary" icon={Send} onClick={sendEmail} disabled={busy || !emailForm.to.trim()}>{busy ? "Sending..." : confirmUncertainResend ? "Confirm resend" : "Send email"}</Button></>}>
         {error && <InlineError error={error} />}
         {emailDrawer?.paymentDirection && <div className={`app-payment-direction app-payment-direction--${emailDrawer.paymentDirection.isReceivable ? "receivable" : "payable"}`}><span>Payment direction</span><strong>{emailDrawer.paymentDirection.label}</strong><small>Beneficiary: {emailDrawer.paymentDirection.beneficiary.fullName}</small></div>}
-        <section className="app-form-section"><div className="app-form-grid app-form-grid--2"><Field label="To" required className="app-field--span-2"><input className="app-input" value={emailForm.to} onChange={(event) => setEmailForm((current) => ({ ...current, to: event.target.value }))} /></Field><Field label="CC"><input className="app-input" value={emailForm.cc} onChange={(event) => setEmailForm((current) => ({ ...current, cc: event.target.value }))} /></Field><Field label="BCC"><input className="app-input" value={emailForm.bcc} onChange={(event) => setEmailForm((current) => ({ ...current, bcc: event.target.value }))} /></Field><Field label="Subject" className="app-field--span-2"><input className="app-input" value={emailForm.subject} onChange={(event) => setEmailForm((current) => ({ ...current, subject: event.target.value }))} /></Field><Field label="Message" className="app-field--span-2"><textarea className="app-input app-textarea" rows="12" value={emailForm.body.replace(/<[^>]+>/g, "")} onChange={(event) => setEmailForm((current) => ({ ...current, body: event.target.value.replace(/\n/g, "<br>") }))} /></Field></div></section>
+        <SegmentedControl value={emailView} onChange={setEmailView} label="Settlement email view" options={[{ value: "preview", label: "Preview" }, { value: "edit", label: "Edit message" }]} />
+        {emailView === "edit" ? (
+          <section className="app-form-section app-email-composer">
+            <div className="app-form-grid app-form-grid--2">
+              <Field label="To" required className="app-field--span-2"><input className="app-input" value={emailForm.to} onChange={(event) => setEmailForm((current) => ({ ...current, to: event.target.value }))} /></Field>
+              <Field label="CC"><input className="app-input" value={emailForm.cc} onChange={(event) => setEmailForm((current) => ({ ...current, cc: event.target.value }))} /></Field>
+              <Field label="BCC"><input className="app-input" value={emailForm.bcc} onChange={(event) => setEmailForm((current) => ({ ...current, bcc: event.target.value }))} /></Field>
+              <Field label="Subject" className="app-field--span-2"><input className="app-input" value={emailForm.subject} onChange={(event) => setEmailForm((current) => ({ ...current, subject: event.target.value }))} /></Field>
+              <Field label="Message" className="app-field--span-2"><ReactQuill theme="snow" value={emailForm.body} modules={EMAIL_EDITOR_MODULES} onChange={(body) => setEmailForm((current) => ({ ...current, body }))} /></Field>
+            </div>
+          </section>
+        ) : (
+          <section className="app-email-preview" aria-label="Settlement email preview">
+            <dl>
+              <div><dt>To</dt><dd>{emailForm.to || "Not set"}</dd></div>
+              {emailForm.cc && <div><dt>CC</dt><dd>{emailForm.cc}</dd></div>}
+              {emailForm.bcc && <div><dt>BCC</dt><dd>{emailForm.bcc}</dd></div>}
+              <div><dt>Subject</dt><dd>{emailForm.subject || "No subject"}</dd></div>
+            </dl>
+            <div className="app-email-preview__body"><ReactQuill theme="bubble" readOnly value={emailForm.body} modules={{ toolbar: false }} /></div>
+            <div className="app-email-preview__attachment"><FileText size={16} aria-hidden="true" /><span>{emailDrawer?.invoice_number || "Settlement invoice"}.pdf</span><small>Generated automatically</small></div>
+          </section>
+        )}
       </Drawer>
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={removeInvoice} busy={busy} title="Delete invoice?" description={deleteTarget?.invoice_number || ""} />

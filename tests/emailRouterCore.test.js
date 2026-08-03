@@ -7,6 +7,7 @@ import {
   currentEmailRouterMailbox,
   emailRouterGraphFetch,
   fetchEmailRouterDetail,
+  listEmailRouterDirectory,
   processEmailRouterOutbox,
   requireEmailRouterConfigurationAuthority,
   requireEmailRouterConfigurationUser,
@@ -17,6 +18,48 @@ import {
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
 } from '../api/_emailRouterCore.js';
+
+test('directory profiles are loaded explicitly from public user profiles', async () => {
+  const destinationRows = [
+    { id: 'destination-1', destination_kind: 'fcos_profile', user_profile_id: 'profile-1', display_name: null, email_address: null },
+    { id: 'destination-2', destination_kind: 'fcos_profile', user_profile_id: 'profile-2', display_name: null, email_address: null },
+    { id: 'destination-3', destination_kind: 'contact', user_profile_id: null, display_name: 'Accounts Desk', email_address: 'accounts@example.net' },
+  ];
+  const client = {
+    schema(schema) {
+      assert.equal(schema, 'emailrouter');
+      return {
+        from(table) {
+          assert.equal(table, 'destinations');
+          return {
+            select() { return this; },
+            eq() { return this; },
+            order() { return this; },
+            limit: async () => ({ data: destinationRows, error: null }),
+          };
+        },
+      };
+    },
+    from(table) {
+      assert.equal(table, 'user_profiles');
+      return {
+        select() { return this; },
+        in: async () => ({
+          data: [
+            { id: 'profile-1', email: 'active@example.net', full_name: 'Active User', active: true },
+            { id: 'profile-2', email: 'inactive@example.net', full_name: 'Inactive User', active: false },
+          ],
+          error: null,
+        }),
+      };
+    },
+  };
+  const directory = await listEmailRouterDirectory({ client });
+  assert.deepEqual(directory, [
+    { id: 'destination-1', label: 'Active User', address: 'active@example.net' },
+    { id: 'destination-3', label: 'Accounts Desk', address: 'accounts@example.net' },
+  ]);
+});
 
 test('redirect MIME keeps body bytes while removing unsafe transport headers and BCC visibility', () => {
   const body = Buffer.from([0x61, 0x00, 0xff, 0x0d, 0x0a]);

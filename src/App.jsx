@@ -22,7 +22,6 @@ const DisputeWorkflow = lazy(() => import('@/pages/DisputeWorkflow'));
 const Login = lazy(() => import('@/pages/Login'));
 const SettingsWorkspace = lazy(() => import('@/pages/SettingsWorkspace'));
 const AccountManagers = lazy(() => import('@/pages/AccountManagers'));
-const AppPortal = lazy(() => import('@/pages/AppPortal'));
 const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
 const GrowthCoaching = lazy(() => import('@/pages/GrowthCoaching'));
 const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
@@ -86,13 +85,13 @@ const AuthenticatedApp = () => {
       )}
       {!authError && isAuthenticated && (
         <>
-          <Route path="/apps" element={<AppPortal />} />
+          <Route path="/apps" element={<Navigate to="/" replace />} />
           <Route path="/v2/*" element={<RedirectLegacyWorkspace />} />
           <Route element={<Layout />}>
             <Route path="/my-commitments" element={<MyCommitments />} />
             <Route path="/growth-coaching" element={<GrowthCoaching />} />
             <Route path="/projects-tasks" element={<ProjectsTasks />} />
-            <Route path="/email-router" element={<EmailRouter />} />
+            <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
             <Route path="/settings" element={<ModuleGateAny moduleIds={['settings', 'admin']}><SettingsWorkspace /></ModuleGateAny>} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />

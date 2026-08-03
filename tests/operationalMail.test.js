@@ -42,6 +42,19 @@ function graphClient() {
   };
 }
 
+function graphClientWithThenableRpc() {
+  return {
+    ...graphClient(),
+    rpc() {
+      return {
+        then(resolve) {
+          resolve({ data: null, error: null });
+        },
+      };
+    },
+  };
+}
+
 test('operational mail uses the one Graph application without a transport fallback', () => {
   const config = operationalMailConfig(graphEnv);
   const status = operationalMailStatus(graphEnv);
@@ -86,4 +99,17 @@ test('email delivery fails closed when no purpose is supplied', async () => {
     () => sendOperationalMail({ to: 'buyer@example.com', subject: 'Reminder' }, { client: graphClient(), env: graphEnv }),
     (error) => error.code === 'EMAIL_PURPOSE_REQUIRED',
   );
+});
+
+test('Graph delivery succeeds when Supabase RPC is awaitable but has no catch method', async () => {
+  const result = await sendOperationalMail(
+    { to: 'buyer@example.com', subject: 'Reminder', html: '<p>Reminder</p>' },
+    {
+      client: graphClientWithThenableRpc(),
+      purposeKey: 'payment_reminders',
+      env: { ...graphEnv, FCOS_MICROSOFT_CLIENT_ID: 'client-id-thenable-rpc' },
+      transport: { sendMail: async () => ({ id: 'graph-accepted', accepted: ['buyer@example.com'], rejected: [] }) },
+    },
+  );
+  assert.equal(result.id, 'graph-accepted');
 });

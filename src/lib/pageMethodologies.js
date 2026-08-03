@@ -390,7 +390,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'User status and modules',
-        body: 'Only active FCOS profiles may use authenticated APIs. Module permissions control FCOS pages independently from external-application entitlements and are applied before personal navigation preferences.',
+        body: 'Only active FCOS profiles may use authenticated APIs. Module permissions, including Email Router visibility, are managed by user type or individual override and are applied before personal navigation preferences. Hiding a navigation item does not grant or remove module access.',
       },
       {
         title: 'Application entitlements',

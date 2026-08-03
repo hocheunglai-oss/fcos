@@ -235,9 +235,10 @@ test('portal routes use bearer assertions and preserve FCOS deep links', async (
   assert.match(functionSource, /async function portalApplicationLaunch/);
   assert.match(functionSource, /async function adminPortalAccessSave/);
   assert.match(functionSource, /assertAdministratorContinuity/);
-  assert.match(appSource, /path="\/apps"/);
+  assert.match(appSource, /path="\/apps" element=\{<Navigate to="\/" replace \/>\}/);
   assert.match(appSource, /path="\/"/);
   assert.match(appSource, /location\.pathname === '\/' \? undefined : \{ from: location \}/);
-  assert.match(loginSource, /const returnTo = from[\s\S]*: '\/apps'/);
+  assert.match(loginSource, /const returnTo = from[\s\S]*: '\/'/);
+  assert.doesNotMatch(appSource, /AppPortal/);
   assert.match(adminSource, /syncStatus: data\.syncError \? 'error' : \(returned\.sync_status \|\| 'synced'\)/);
 });

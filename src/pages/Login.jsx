@@ -33,7 +33,7 @@ export default function Login() {
     const from = location.state?.from;
     const returnTo = from
       ? `${from.pathname || '/'}${from.search || ''}${from.hash || ''}`
-      : '/apps';
+      : '/';
     return <Navigate to={returnTo} replace />;
   }
 
@@ -60,7 +60,7 @@ export default function Login() {
             </div>
             <div>
               <div className="text-sm font-semibold text-slate-950">FCOS</div>
-              <div className="text-xs text-slate-500">Application portal</div>
+              <div className="text-xs text-slate-500">Operations workspace</div>
             </div>
           </div>
           <h1 className="text-xl font-semibold text-foreground">Sign in</h1>
@@ -81,7 +81,7 @@ export default function Login() {
         )}
 
         {authMode === 'local' ? (
-          <Navigate to="/apps" replace />
+          <Navigate to="/" replace />
         ) : (
           <>
             <label className="mb-3 block">

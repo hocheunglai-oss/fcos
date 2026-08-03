@@ -38,7 +38,6 @@ import { appClient } from '@/api/appClient';
 import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import AppSelector from '@/components/AppSelector';
 import WorkNotifications from '@/components/WorkNotifications';
 
 const navGroups = [
@@ -83,7 +82,7 @@ const navGroups = [
     id: 'tools',
     label: 'Tools',
     items: [
-      { id: 'email_router', to: '/email-router', label: 'Email Router', icon: MailSearch },
+      { id: 'email_router', to: '/email-router', label: 'Email Router', moduleId: 'email_router', icon: MailSearch },
       { id: 'review', to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
       { id: 'pnl', to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
       { id: 'report_archive', to: '/brokers?tab=archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
@@ -398,7 +397,6 @@ export default function Layout() {
         </div>
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-auto px-3 py-4">
-          <AppSelector confirmPortalNavigation={confirmLeaveWithUnsavedChanges} />
           <div className="flex items-center justify-between px-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
             {!navigationEditing ? (
