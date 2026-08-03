@@ -82,7 +82,7 @@ export function normaliseMessage(raw = {}) {
     to: normaliseAddresses(firstValue(raw, ['to', 'recipients', 'toRecipients'], [])),
     cc: normaliseAddresses(raw.cc || raw.ccRecipients),
     bcc: normaliseAddresses(raw.bcc || raw.bccRecipients),
-    sentAt: firstValue(raw, ['sentAt', 'receivedAt', 'date', 'createdAt', 'received_at', 'sent_at'], null),
+    sentAt: firstValue(raw, ['sentAt', 'sentDateTime', 'receivedAt', 'receivedDateTime', 'date', 'createdAt', 'received_at', 'sent_at'], null),
     folder: stringValue(firstValue(raw, ['folder', 'mailbox', 'scope'], 'inbox')).toLowerCase(),
     isRead: Boolean(firstValue(raw, ['isRead', 'read', 'is_read'], flags.read ?? false)),
     isFlagged: Boolean(firstValue(raw, ['isFlagged', 'flagged'], flags.flagged ?? false)),

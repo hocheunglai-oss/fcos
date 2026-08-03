@@ -6,6 +6,7 @@ import {
   createEmailRouterAttachmentToken,
   currentEmailRouterMailbox,
   emailRouterGraphFetch,
+  fetchEmailRouterDetail,
   processEmailRouterOutbox,
   requireEmailRouterConfigurationAuthority,
   requireEmailRouterConfigurationUser,
@@ -161,6 +162,32 @@ test('Graph delta cursors accept the mailbox-scoped URL shape returned by Micros
   );
 });
 
+test('message detail loads attachments separately from the Graph body request', async () => {
+  const calls = [];
+  const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'text', content: 'Body' }, hasAttachments: true };
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    const payload = String(url).includes('/attachments?')
+      ? { value: [{ id: 'attachment-1', name: 'document.pdf', contentType: 'application/pdf', size: 100, isInline: false }] }
+      : message;
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const messageQuery = {
+    eq() { return this; },
+    maybeSingle: async () => ({ data: null, error: null }),
+  };
+  const client = { from: () => ({ select: () => messageQuery }) };
+  const result = await fetchEmailRouterDetail({
+    client,
+    mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' },
+    messageId: message.id,
+  }, { accessToken: 'access-token', fetchImpl });
+  assert.equal(calls.length, 2);
+  assert.doesNotMatch(calls[0], /\$expand=/);
+  assert.match(calls[1], /\/attachments\?/);
+  assert.equal(result.attachments.length, 1);
+});
+
 test('a repeated operation ID returns its existing state without another Graph request', async () => {
   const mailboxId = 'mailbox-1';
   const indexedMessageId = 'indexed-message-1';
@@ -228,11 +255,13 @@ test('uncertain outgoing actions cannot be retried without explicit human confir
 
 test('the native router core has no SMTP dependency or sender input path', async () => {
   const source = await (await import('node:fs/promises')).readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8');
+  const clientSource = await (await import('node:fs/promises')).readFile(new URL('../src/lib/emailRouter.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /nodemailer|smtp|createTransport|createSmtp/i);
   assert.doesNotMatch(source, /input\.from|body\.from|workflow.*mailbox/i);
   assert.doesNotMatch(source, /messages\/delta[^`'\"]*\$top=50/);
   assert.match(source, /IdType="ImmutableId"/);
   assert.match(source, /mailFolders\/sentitems\/messages/);
+  assert.match(clientSource, /'sentDateTime'.*'receivedDateTime'/);
 });
 
 test('migration sync diagnostics expose only a bounded provider code', async () => {

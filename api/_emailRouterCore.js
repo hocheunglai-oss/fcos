@@ -325,10 +325,21 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
   const id = safeId(messageId, 'message identifier');
   const query = new URLSearchParams({
     '$select': 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,body,bodyPreview,receivedDateTime,sentDateTime,parentFolderId,hasAttachments,isRead,importance,internetMessageId',
-    '$expand': 'attachments($select=id,name,contentType,size,isInline,contentId)',
   });
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {}, dependencies);
   const message = await graphJson(response);
+  if (message?.hasAttachments) {
+    const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline' });
+    const attachmentResponse = await emailRouterGraphFetch(
+      mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`),
+      {},
+      dependencies,
+    );
+    const attachmentPayload = await graphJson(attachmentResponse) || {};
+    message.attachments = Array.isArray(attachmentPayload.value) ? attachmentPayload.value : [];
+  } else if (message) {
+    message.attachments = [];
+  }
   const indexed = await actionMessage(client, mailbox.id, id).catch((error) => {
     if (error?.code === 'EMAIL_ROUTER_MESSAGE_NOT_INDEXED') return null;
     throw error;
