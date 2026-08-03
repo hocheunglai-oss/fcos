@@ -9,6 +9,7 @@ const orderedDirectoryMigrationUrl = new URL('../supabase/migrations/20260803110
 const externalRestoreMigrationUrl = new URL('../supabase/migrations/20260803135527_fix_email_router_external_reactivation.sql', import.meta.url);
 const directoryEventMigrationUrl = new URL('../supabase/migrations/20260803162059_allow_emailrouter_routing_directory_events.sql', import.meta.url);
 const presetValidationMigrationUrl = new URL('../supabase/migrations/20260803165805_fix_emailrouter_preset_recipient_validation.sql', import.meta.url);
+const routingIntegrityMigrationUrl = new URL('../supabase/migrations/20260803172446_harden_emailrouter_routing_integrity.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -125,9 +126,9 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(core, /kind: 'group'/);
   assert.match(core, /groupId: normalizedGroupId/);
   assert.match(configuration, /operation\.type === 'routing_directory_save'/);
-  assert.match(configuration, /save_emailrouter_external_destination/);
+  assert.match(configuration, /save_emailrouter_routing_change/);
   assert.match(recipientPicker, /export const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
-  assert.match(dialog, /destinationSelections: selections/);
+  assert.match(dialog, /splitRecipientSelections/);
   assert.match(recipientPicker, /Loading routing directory/);
   assert.match(recipientPicker, /findIndex\([^\n]+\) \+ 1/);
   assert.match(redirectPanel, /Send Redirect/);
@@ -144,7 +145,9 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(settings, /draggableId=\{key\}/);
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.match(workspace, /<EmailRedirectPanel/);
-  assert.doesNotMatch(dialog, /recipientAddress|emailAddress|manualRecipients/);
+  assert.match(dialog, /const recipients = splitRecipientSelections\(selections\)/);
+  assert.match(recipientPicker, /Manual \$\{kind\.toUpperCase\(\)\} email/);
+  assert.match(redirectPanel, /splitRecipientSelections/);
 });
 
 test('Email Router audit events allow whole-directory ordering changes', async () => {
@@ -172,7 +175,21 @@ test('Email Router presets validate only the non-null recipient identity', async
   assert.match(migrationSql, /destination_group\.redirect_enabled = true/i);
   assert.match(migrationSql, /revoke all on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
   assert.match(migrationSql, /grant execute on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*to service_role/i);
-  assert.match(configuration, /operation\.type === 'preset_save'[\s\S]*save_emailrouter_preset/i);
+  assert.match(configuration, /operation\.type === 'preset_save'[\s\S]*save_emailrouter_routing_change/i);
   assert.match(settings, /Remove or replace unavailable recipients before saving/);
   assert.match(settings, /Unavailable recipient/);
+});
+
+test('Email Router routing mutations preserve active group and preset integrity atomically', async () => {
+  const sql = await readFile(routingIntegrityMigrationUrl, 'utf8');
+  assert.match(sql, /create or replace function emailrouter\.assert_routing_integrity\(\)/i);
+  assert.match(sql, /active Email Router preset contains an unavailable destination/i);
+  assert.match(sql, /active Email Router preset contains an unavailable group/i);
+  assert.match(sql, /create or replace function public\.save_emailrouter_routing_change/i);
+  for (const operation of ['routing_directory_save', 'destination_save', 'group_save', 'preset_save']) {
+    assert.match(sql, new RegExp(`when '${operation}'`, 'i'));
+  }
+  assert.match(sql, /perform emailrouter\.assert_routing_integrity\(\)/i);
+  assert.match(sql, /revoke all on function public\.save_emailrouter_routing_change\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.save_emailrouter_routing_change\(jsonb, uuid\)[\s\S]*to service_role/i);
 });

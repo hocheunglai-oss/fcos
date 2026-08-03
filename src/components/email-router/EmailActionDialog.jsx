@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { actionLabel, formatAddresses } from '@/lib/emailRouter';
-import EmailRecipientPicker, { RECIPIENT_KINDS, directorySelection, normaliseDirectoryEntries, selectionKey, valueList } from './EmailRecipientPicker';
+import EmailRecipientPicker, { RECIPIENT_KINDS, directorySelection, normaliseDirectoryEntries, selectionKey, splitRecipientSelections, valueList } from './EmailRecipientPicker';
 
 const ACTION_COPY = {
   reply: { title: 'Reply', description: 'Reply to the original sender from the connected Email Router mailbox.' },
@@ -48,12 +48,13 @@ export default function EmailActionDialog({ open, onOpenChange, action, message,
   };
   const labelsFor = (kind) => selections
     .filter((selection) => selection.kind === kind)
-    .map((selection) => destinations.find((item) => `${item.kind}:${item.id}` === selectionKey(selection))?.label)
+    .map((selection) => selection.address || destinations.find((item) => `${item.kind}:${item.id}` === selectionKey(selection))?.label)
     .filter(Boolean);
   const submit = () => {
+    const recipients = splitRecipientSelections(selections);
     onSubmit({
       action,
-      destinationSelections: selections,
+      ...recipients,
       presetId: presetId === 'none' ? null : selectedPreset?.id || selectedPreset?.value || presetId,
       body: body.trim(),
     });

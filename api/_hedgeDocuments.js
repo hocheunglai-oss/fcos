@@ -374,12 +374,18 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
     created_by_email: profile.email,
   }).select('*').single();
   if (document.error) {
-    await client.storage.from(BUCKET).remove([storagePath]);
+    const cleanup = await client.storage.from(BUCKET).remove([storagePath]);
+    if (cleanup.error) throw hedgeDocumentError('Invoice document metadata and storage cleanup both failed. Review Hedge documents before uploading again.', 502, 'HEDGE_PDF_ROLLBACK_FAILED');
     throw hedgeDocumentError(`Invoice document metadata could not be saved: ${document.error.message}`, 502);
   }
   const reference = `supabase://${BUCKET}/${storagePath}`;
   const update = await client.from('hedge_invoices').update({ pdf_data_url: reference, updated_by_id: profile.id }).eq('id', invoice.id).eq('revision', invoice.revision).select('revision').maybeSingle();
-  if (update.error || !update.data) throw hedgeDocumentError('The invoice changed before its PDF could be linked. Refresh and try again.', 409);
+  if (update.error || !update.data) {
+    const metadataCleanup = await client.from('hedge_documents').delete().eq('id', document.data.id);
+    const storageCleanup = await client.storage.from(BUCKET).remove([storagePath]);
+    if (metadataCleanup.error || storageCleanup.error) throw hedgeDocumentError('The invoice changed and its unlinked PDF could not be cleaned up completely. Review Hedge documents before uploading again.', 502, 'HEDGE_PDF_ROLLBACK_FAILED');
+    throw hedgeDocumentError('The invoice changed before its PDF could be linked. Refresh and try again.', 409);
+  }
   return { ok: true, storagePath: reference, documentId: document.data.id, fileName: displayName };
 }
 
@@ -491,11 +497,21 @@ export async function sendHedgeInvoiceEmailIdempotent(client, profile, body = {}
   if (saved.error) throw hedgeDocumentError(`Email delivery could not be reserved: ${saved.error.message}`, 502);
   try {
     const result = await sendHedgeInvoiceEmail(client, profile, body, { mailboxSnapshot });
-    await client.from('hedge_integration_operations').update({ status: 'succeeded', response: { ...result, invoiceId: body.invoiceId ? String(body.invoiceId) : null, invoiceNumber: String(body.invoiceNumber || result.invoiceNumber || '') } }).eq('id', saved.data.id);
+    const finalized = await client.from('hedge_integration_operations').update({ status: 'succeeded', response: { ...result, invoiceId: body.invoiceId ? String(body.invoiceId) : null, invoiceNumber: String(body.invoiceNumber || result.invoiceNumber || '') }, error: null }).eq('id', saved.data.id);
+    if (finalized.error) {
+      const confirmationError = hedgeDocumentError('Microsoft Graph accepted the email, but FCOS could not finalize its delivery record. Review the delivery before retrying.', 502, 'HEDGE_EMAIL_CONFIRMATION_UNCERTAIN');
+      confirmationError.mailDeliveryUncertain = true;
+      throw confirmationError;
+    }
     return result;
   } catch (sendError) {
     const uncertain = sendError.mailDeliveryUncertain === true || sendError.code === 'MICROSOFT_GRAPH_SEND_UNCERTAIN';
-    await client.from('hedge_integration_operations').update({ status: uncertain ? 'uncertain' : 'failed', error: String(sendError.code || sendError.message || 'Email failure').slice(0, 500) }).eq('id', saved.data.id);
+    const failed = await client.from('hedge_integration_operations').update({ status: uncertain ? 'uncertain' : 'failed', error: String(sendError.code || sendError.message || 'Email failure').slice(0, 500) }).eq('id', saved.data.id);
+    if (failed.error) {
+      const trackingError = hedgeDocumentError('The email outcome and its FCOS delivery record could not be reconciled. Review Microsoft 365 before retrying.', 502, 'HEDGE_EMAIL_TRACKING_FAILED');
+      trackingError.mailDeliveryUncertain = uncertain;
+      throw trackingError;
+    }
     throw sendError;
   }
 }

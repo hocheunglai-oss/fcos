@@ -211,7 +211,8 @@ export async function runHedgeMaintenance(client, { forceIce = false, dryRun = f
   const sfsHealth = await hedgeSfsHealth(client);
   if (!dryRun) {
     await writeHealth(client, 'sfs_reports', 'SFS monthly reports', sfsHealth.status, sfsHealth.detail, { evaluatedMonths: sfs.length }, now.toISOString());
-    await client.from('hedge_integration_operations').delete().lt('expires_at', now.toISOString());
+    const cleanup = await client.from('hedge_integration_operations').delete().lt('expires_at', now.toISOString());
+    if (cleanup.error) throw new Error(`Expired Hedge operation cleanup failed: ${cleanup.error.message}`);
   }
   return { ok: ice.ok !== false && sfsHealth.status !== 'Unavailable', ice, paperHedgeExpiry, sfs, sfsHealth };
 }

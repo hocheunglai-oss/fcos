@@ -119,8 +119,12 @@ export default function EmailRouterSettings() {
     if (new Set(nicknames).size !== nicknames.length) return 'Every person requires a unique routing label.';
     const includedDestinationIds = new Set(includedDestinations.map((item) => item.id));
     if (includedGroups.some((group) => !(group.destinationIds || []).some((id) => includedDestinationIds.has(id)))) return 'Every included group requires at least one included person.';
+    const includedGroupIds = new Set(includedGroups.map((item) => item.id));
+    const invalidPreset = presets.some((preset) => preset.active && (preset.destinations || []).some((selection) =>
+      selection.destinationId ? !includedDestinationIds.has(selection.destinationId) : !includedGroupIds.has(selection.groupId)));
+    if (invalidPreset) return 'An active routing preset uses a person or group you are excluding. Update that preset first.';
     return '';
-  }, [destinations, includedDestinations, includedGroups, routingDraft]);
+  }, [destinations, includedDestinations, includedGroups, presets, routingDraft]);
 
   const editDestination = (item = null) => setEditor(item ? {
     type: 'destination',
@@ -194,6 +198,12 @@ export default function EmailRouterSettings() {
   };
 
   const removeEntry = async (row) => {
+    const usedByPreset = presets.some((preset) => preset.active && (preset.destinations || []).some((selection) =>
+      row.entityType === 'destination' ? selection.destinationId === row.id : selection.groupId === row.id));
+    if (usedByPreset) {
+      setError(`${row.item.displayName} is used by an active routing preset. Update that preset before removing this entry.`);
+      return;
+    }
     if (!window.confirm(`Remove ${row.item.displayName} from the routing directory? Historical mail actions will be retained.`)) return;
     setBusy(true);
     setError('');

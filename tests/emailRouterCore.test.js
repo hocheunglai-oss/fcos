@@ -9,6 +9,7 @@ import {
   fetchEmailRouterDetail,
   listEmailRouterDirectory,
   normalizeEmailRouterDestinationSelections,
+  normalizeEmailRouterManualRecipients,
   processEmailRouterOutbox,
   requireEmailRouterConfigurationAuthority,
   requireEmailRouterConfigurationUser,
@@ -16,10 +17,12 @@ import {
   resolveEmailRouterAlert,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
+  sortEmailRouterPresetDestinations,
   syncEmailRouterDelta,
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
 } from '../api/_emailRouterCore.js';
+import { emailRouterSettingsHandler } from '../api/_emailRouterHandlers.js';
 
 test('direct routing selections preserve numbered order within To, Cc, and Bcc', () => {
   const selections = normalizeEmailRouterDestinationSelections({
@@ -39,6 +42,36 @@ test('direct routing selections preserve numbered order within To, Cc, and Bcc',
   assert.throws(() => normalizeEmailRouterDestinationSelections({
     destinationSelections: [{ destinationId: 'destination-a', kind: 'to' }, { destinationId: 'destination-a', kind: 'cc' }],
   }), (error) => error.code === 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+});
+
+test('manual recipients are normalized, ordered, and accepted without directory records', async () => {
+  assert.deepEqual(normalizeEmailRouterManualRecipients({
+    manualRecipients: [
+      { address: ' First@Example.com ', kind: 'to' },
+      { address: 'second@example.com', kind: 'cc' },
+      { address: 'third@example.com', kind: 'to' },
+    ],
+  }), [
+    { address: 'first@example.com', kind: 'to', position: 1 },
+    { address: 'second@example.com', kind: 'cc', position: 1 },
+    { address: 'third@example.com', kind: 'to', position: 2 },
+  ]);
+  assert.deepEqual(await resolveEmailRouterActionRecipients({}, {
+    manualRecipients: [{ address: 'external@example.net', kind: 'bcc' }],
+  }), [{ address: 'external@example.net', kind: 'bcc' }]);
+  assert.throws(() => normalizeEmailRouterManualRecipients({
+    manualRecipients: [{ address: 'same@example.net', kind: 'to' }, { address: 'same@example.net', kind: 'cc' }],
+  }), (error) => error.code === 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+});
+
+test('routing preset recipients have deterministic To, Cc, and Bcc order', () => {
+  const sorted = sortEmailRouterPresetDestinations([
+    { recipient_kind: 'bcc', position: 1, destination_id: 'bcc-1' },
+    { recipient_kind: 'to', position: 2, destination_id: 'to-2' },
+    { recipient_kind: 'cc', position: 1, destination_id: 'cc-1' },
+    { recipient_kind: 'to', position: 1, destination_id: 'to-1' },
+  ]);
+  assert.deepEqual(sorted.map((item) => item.destination_id), ['to-1', 'to-2', 'cc-1', 'bcc-1']);
 });
 
 test('directory combines active FCOS users, external contacts, and groups in configured order', async () => {
@@ -319,7 +352,22 @@ test('message detail loads attachments separately from the Graph body request', 
   assert.equal(calls.length, 2);
   assert.doesNotMatch(calls[0], /\$expand=/);
   assert.match(calls[1], /\/attachments\?/);
+  assert.match(calls[1], /contentId/);
   assert.equal(result.attachments.length, 1);
+});
+
+test('Email Router settings fail closed when FCOS user synchronization fails', async () => {
+  const profile = { id: 'de305d54-75b4-431b-adb2-eb6b9e546014', active: true, user_type: 'administrator' };
+  const client = {
+    rpc: async (name) => {
+      assert.equal(name, 'sync_emailrouter_fcos_destinations');
+      return { data: null, error: { message: 'database unavailable' } };
+    },
+  };
+  await assert.rejects(
+    emailRouterSettingsHandler({}, {}, { client, profile }),
+    (error) => error.code === 'EMAIL_ROUTER_DIRECTORY_SYNC_UNAVAILABLE' && error.status === 503,
+  );
 });
 
 test('a repeated operation ID returns its existing state without another Graph request', async () => {
@@ -331,6 +379,7 @@ test('a repeated operation ID returns its existing state without another Graph r
     bodyHash: createHash('sha256').update('', 'utf8').digest('hex'),
     destinationFolderId: null,
     destinationSelections: [],
+    manualRecipientHashes: [],
     mailboxId,
     messageId: indexedMessageId,
     presetId: null,

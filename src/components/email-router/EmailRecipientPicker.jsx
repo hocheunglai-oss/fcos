@@ -1,5 +1,7 @@
-import { Eye, EyeOff, Loader2, Users } from 'lucide-react';
+import { useState } from 'react';
+import { Eye, EyeOff, Loader2, Plus, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export const RECIPIENT_KINDS = ['to', 'cc', 'bcc'];
 
@@ -8,12 +10,15 @@ export function valueList(data) {
 }
 
 export function normaliseDirectoryEntries(directory) {
-  return valueList(directory).map((item) => ({
-    id: String(item.id || item.value),
-    kind: item.kind === 'group' ? 'group' : 'destination',
-    label: item.label || item.nickname || item.name || '',
-    memberCount: Number(item.memberCount || 0),
-  })).filter((item) => item.id && item.label);
+  return valueList(directory).map((item) => {
+    const id = item.id || item.value;
+    return {
+      id: id == null ? '' : String(id),
+      kind: item.kind === 'group' ? 'group' : 'destination',
+      label: item.label || item.nickname || item.name || '',
+      memberCount: Number(item.memberCount || 0),
+    };
+  }).filter((item) => item.id && item.label);
 }
 
 export function directorySelection(item, kind) {
@@ -23,7 +28,19 @@ export function directorySelection(item, kind) {
 }
 
 export function selectionKey(selection) {
-  return selection?.groupId ? `group:${selection.groupId}` : `destination:${selection?.destinationId}`;
+  if (selection?.groupId) return `group:${selection.groupId}`;
+  if (selection?.destinationId) return `destination:${selection.destinationId}`;
+  return selection?.address ? `manual:${String(selection.address).trim().toLowerCase()}` : '';
+}
+
+export function splitRecipientSelections(selections) {
+  const values = Array.isArray(selections) ? selections : [];
+  return {
+    destinationSelections: values.filter((selection) => selection.destinationId || selection.groupId),
+    manualRecipients: values
+      .filter((selection) => selection.address)
+      .map((selection) => ({ address: String(selection.address).trim().toLowerCase(), kind: selection.kind })),
+  };
 }
 
 export function toggleRecipientSelection(selections, destination, kind) {
@@ -34,9 +51,49 @@ export function toggleRecipientSelection(selections, destination, kind) {
   return [...selections, directorySelection(destination, kind)];
 }
 
-function RecipientPanel({ kind, destinations, selections, disabled, loading, onToggle }) {
+function RecipientPanel({ kind, destinations, selections, disabled, loading, onToggle, onAddManual, onRemoveManual }) {
+  const [manualAddress, setManualAddress] = useState('');
+  const [manualError, setManualError] = useState('');
+  const manualSelections = selections.filter((selection) => selection.kind === kind && selection.address);
+  const addManual = () => {
+    const address = manualAddress.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      setManualError('Enter a valid email address.');
+      return;
+    }
+    if (selections.some((selection) => selectionKey(selection) === `manual:${address}`)) {
+      setManualError('This address is already selected.');
+      return;
+    }
+    onAddManual({ address, kind });
+    setManualAddress('');
+    setManualError('');
+  };
+
   return <fieldset className="space-y-2 border-t border-border pt-3" disabled={disabled}>
     <legend className="px-1 text-xs font-semibold uppercase text-muted-foreground">{kind}</legend>
+    <div className="flex gap-2">
+      <Input
+        type="email"
+        value={manualAddress}
+        onChange={(event) => { setManualAddress(event.target.value); setManualError(''); }}
+        onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addManual(); } }}
+        placeholder={`Manual ${kind.toUpperCase()} email`}
+        aria-label={`Manual ${kind.toUpperCase()} email address`}
+        disabled={disabled}
+      />
+      <Button type="button" variant="outline" size="icon" onClick={addManual} disabled={disabled || !manualAddress.trim()} title={`Add manual ${kind.toUpperCase()} recipient`} aria-label={`Add manual ${kind.toUpperCase()} recipient`}><Plus /></Button>
+    </div>
+    {manualError && <p className="text-xs font-medium text-destructive">{manualError}</p>}
+    {manualSelections.length > 0 && <div className="flex flex-wrap gap-2">{manualSelections.map((selection) => {
+      const key = selectionKey(selection);
+      const number = selections.filter((item) => item.kind === kind).findIndex((item) => selectionKey(item) === key) + 1;
+      return <span key={key} className="inline-flex min-w-0 items-center gap-1.5 border border-border bg-muted/40 px-2 py-1 text-xs">
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{number}</span>
+        <span className="max-w-52 truncate" title={selection.address}>{selection.address}</span>
+        <button type="button" onClick={() => onRemoveManual(selection)} className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground hover:text-foreground" aria-label={`Remove ${selection.address}`} title={`Remove ${selection.address}`}><X className="h-3.5 w-3.5" /></button>
+      </span>;
+    })}</div>}
     <div className="flex min-h-9 flex-wrap gap-2">
       {loading ? <p className="flex items-center gap-2 py-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading routing directory...</p> : destinations.length ? destinations.map((destination) => {
         const destinationKey = `${destination.kind}:${destination.id}`;
@@ -77,16 +134,18 @@ export default function EmailRecipientPicker({
 }) {
   const destinations = normaliseDirectoryEntries(directory);
   const toggle = (destination, kind) => onChange(toggleRecipientSelection(selections, destination, kind));
+  const addManual = (selection) => onChange([...selections, selection]);
+  const removeManual = (selection) => onChange(selections.filter((item) => selectionKey(item) !== selectionKey(selection)));
   const bccCount = selections.filter((selection) => selection.kind === 'bcc').length;
 
   return <div className="space-y-3">
-    <RecipientPanel kind="to" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} />
-    <RecipientPanel kind="cc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} />
+    <RecipientPanel kind="to" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
+    <RecipientPanel kind="cc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />
     {onBccVisibleChange && <div className="flex justify-end border-t border-border pt-2">
       <Button type="button" variant="ghost" size="sm" onClick={() => onBccVisibleChange(!bccVisible)} disabled={disabled}>
         {bccVisible ? <EyeOff /> : <Eye />}{bccVisible ? 'Hide Bcc' : 'Show Bcc'}{!bccVisible && bccCount ? ` (${bccCount})` : ''}
       </Button>
     </div>}
-    {bccVisible && <RecipientPanel kind="bcc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} />}
+    {bccVisible && <RecipientPanel kind="bcc" destinations={destinations} selections={selections} disabled={disabled} loading={loading} onToggle={toggle} onAddManual={addManual} onRemoveManual={removeManual} />}
   </div>;
 }

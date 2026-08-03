@@ -230,7 +230,12 @@ export async function approveAndSendHedgeSfsReport(client, actor, body = {}) {
   const claim = await client.from('hedge_report_deliveries').update({ status: 'sending', attempt_count: Number(delivery.attempt_count || 0) + 1, last_attempt_at: new Date().toISOString(), last_error: null }).eq('id', delivery.id).in('status', claimStatuses).select('*').maybeSingle();
   if (claim.error) throw error(`SFS delivery could not be reserved: ${claim.error.message}`, 502);
   if (!claim.data) throw error('This SFS report is already being sent.', 409);
-  await client.from('hedge_month_closes').update({ status: 'sending' }).eq('id', close.id);
+  const closeClaim = await client.from('hedge_month_closes').update({ status: 'sending' }).eq('id', close.id).in('status', ['ready', 'failed', 'sending']).select('id').maybeSingle();
+  if (closeClaim.error || !closeClaim.data) {
+    const release = await client.from('hedge_report_deliveries').update({ status: 'failed', last_error: 'The approved SFS report could not enter the sending state.' }).eq('id', delivery.id).eq('status', 'sending');
+    if (release.error) throw error('The SFS report and delivery reservation could not be reconciled. Refresh before retrying.', 502, 'HEDGE_SFS_TRACKING_FAILED');
+    throw error('The approved SFS report changed before sending. Refresh and review it again.', 409);
+  }
   try {
     const result = await sendGraphPurposeMail({
       client,
@@ -250,15 +255,27 @@ export async function approveAndSendHedgeSfsReport(client, actor, body = {}) {
       uncertain.mailDeliveryUncertain = true;
       throw uncertain;
     }
-    await client.from('hedge_month_closes').update({ status: 'sent', sent_at: sentAt }).eq('id', close.id);
-    await client.from('hedge_month_closes').update({ status: 'superseded' }).eq('report_month', month).lt('revision', close.revision).eq('status', 'sent');
+    const closeSaved = await client.from('hedge_month_closes').update({ status: 'sent', sent_at: sentAt }).eq('id', close.id).eq('status', 'sending').select('id').maybeSingle();
+    if (closeSaved.error || !closeSaved.data) {
+      const uncertain = error('Microsoft Graph accepted the report, but FCOS could not finalize the month close. Review before retrying.', 502, 'HEDGE_SFS_CONFIRMATION_UNCERTAIN');
+      uncertain.mailDeliveryUncertain = true;
+      throw uncertain;
+    }
+    const superseded = await client.from('hedge_month_closes').update({ status: 'superseded' }).eq('report_month', month).lt('revision', close.revision).eq('status', 'sent');
+    if (superseded.error) {
+      const uncertain = error('The report was sent, but older report revisions could not be finalized. Review the month before retrying.', 502, 'HEDGE_SFS_CONFIRMATION_UNCERTAIN');
+      uncertain.mailDeliveryUncertain = true;
+      throw uncertain;
+    }
     return { ok: true, closeId: close.id, revision: close.revision, sentAt, senderAddress: result.senderAddress };
   } catch (sendError) {
     if (sendError.mailDeliveryUncertain) {
-      await client.from('hedge_report_deliveries').update({ status: 'sending', last_error: String(sendError.message).slice(0, 1000) }).eq('id', delivery.id);
+      const tracked = await client.from('hedge_report_deliveries').update({ status: 'sending', last_error: String(sendError.message).slice(0, 1000) }).eq('id', delivery.id);
+      if (tracked.error) throw error('The uncertain SFS delivery could not be recorded. Review Microsoft 365 before retrying.', 502, 'HEDGE_SFS_TRACKING_FAILED');
     } else {
-      await client.from('hedge_report_deliveries').update({ status: 'failed', last_error: String(sendError.message).slice(0, 1000) }).eq('id', delivery.id);
-      await client.from('hedge_month_closes').update({ status: 'failed' }).eq('id', close.id);
+      const tracked = await client.from('hedge_report_deliveries').update({ status: 'failed', last_error: String(sendError.message).slice(0, 1000) }).eq('id', delivery.id);
+      const closeFailed = await client.from('hedge_month_closes').update({ status: 'failed' }).eq('id', close.id);
+      if (tracked.error || closeFailed.error) throw error('The failed SFS delivery could not be recorded completely. Refresh before retrying.', 502, 'HEDGE_SFS_TRACKING_FAILED');
     }
     throw sendError;
   }
@@ -314,7 +331,7 @@ export async function evaluateHedgeSfsCandidates(client, { months = [], dryRun =
         }
         throw error(`SFS report candidate could not be saved: ${created.error.message}`, 502);
       }
-      await client.from('hedge_events').insert({
+      const event = await client.from('hedge_events').insert({
         event_type: 'sfs_revision_prepared',
         entity_type: 'MonthClose',
         entity_id: created.data.id,
@@ -323,6 +340,11 @@ export async function evaluateHedgeSfsCandidates(client, { months = [], dryRun =
         actor_email: 'system',
         source: 'fcos',
       });
+      if (event.error) {
+        const failed = await client.from('hedge_month_closes').update({ status: 'failed' }).eq('id', created.data.id).eq('status', 'pending_approval');
+        if (failed.error) throw error('The SFS report was prepared but its audit history could not be reconciled.', 502, 'HEDGE_SFS_AUDIT_FAILED');
+        throw error(`SFS report audit history could not be saved: ${event.error.message}`, 502, 'HEDGE_SFS_AUDIT_FAILED');
+      }
       results.push({ month, status: created.data.status, revision: created.data.revision });
     } catch (nextError) {
       results.push({ month, status: 'error', error: nextError.message || String(nextError) });

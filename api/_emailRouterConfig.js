@@ -1,5 +1,5 @@
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, isAllowedDashboardAiModel } from './_dashboardAi.js';
-import { currentEmailRouterMailbox, emailRouterProfilesById } from './_emailRouterCore.js';
+import { currentEmailRouterMailbox, emailRouterProfilesById, sortEmailRouterPresetDestinations } from './_emailRouterCore.js';
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -111,7 +111,7 @@ export async function emailRouterConfiguration(client) {
       sortOrder: row.sort_order,
       revision: Number(row.revision),
       updatedAt: row.updated_at,
-      destinations: (row.routing_preset_destinations || []).map((item) => ({
+      destinations: sortEmailRouterPresetDestinations(row.routing_preset_destinations).map((item) => ({
         destinationId: item.destination_id,
         groupId: item.group_id,
         recipientKind: item.recipient_kind,
@@ -133,11 +133,14 @@ export async function emailRouterConfiguration(client) {
 
 export async function saveEmailRouterConfiguration(client, profile, operation = {}) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) throw configError('A configuration change is required.');
+  if (!['routing_directory_save', 'destination_save', 'group_save', 'preset_save', 'setting_save'].includes(operation.type)) {
+    throw configError('This Email Router configuration operation is no longer supported. Refresh Settings and try again.');
+  }
   if (operation.type === 'routing_directory_save') {
     const items = Array.isArray(operation.items) ? operation.items : [];
     if (!items.length) throw configError('At least one routing directory entry is required.');
-    const { data, error } = await client.rpc('save_emailrouter_routing_directory', {
-      p_items: items,
+    const { data, error } = await client.rpc('save_emailrouter_routing_change', {
+      p_operation: operation,
       p_actor: profile.id,
     });
     if (error) {
@@ -146,21 +149,8 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
     }
     return data;
   }
-  if (operation.type === 'routing_users_save') {
-    const items = Array.isArray(operation.items) ? operation.items : [];
-    if (!items.length) throw configError('At least one changed routing user is required.');
-    const { data, error } = await client.rpc('save_emailrouter_routing_users', {
-      p_items: items,
-      p_actor: profile.id,
-    });
-    if (error) {
-      const stale = /revision conflict/i.test(error.message || '');
-      throw configError(stale ? 'The routing directory changed after it was loaded. Refresh and try again.' : error.message || 'The routing directory could not be saved.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_CONFIGURATION_SAVE_FAILED');
-    }
-    return data;
-  }
   if (operation.type === 'destination_save') {
-    const { data, error } = await client.rpc('save_emailrouter_external_destination', {
+    const { data, error } = await client.rpc('save_emailrouter_routing_change', {
       p_operation: operation,
       p_actor: profile.id,
     });
@@ -181,7 +171,7 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
     return data;
   }
   if (operation.type === 'group_save') {
-    const { data, error } = await client.rpc('save_emailrouter_group', {
+    const { data, error } = await client.rpc('save_emailrouter_routing_change', {
       p_operation: operation,
       p_actor: profile.id,
     });
@@ -192,7 +182,7 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
     return data;
   }
   if (operation.type === 'preset_save') {
-    const { data, error } = await client.rpc('save_emailrouter_preset', {
+    const { data, error } = await client.rpc('save_emailrouter_routing_change', {
       p_operation: operation,
       p_actor: profile.id,
     });

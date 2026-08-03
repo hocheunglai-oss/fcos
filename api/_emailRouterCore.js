@@ -342,7 +342,7 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {}, dependencies);
   const message = await graphJson(response);
   if (message?.hasAttachments) {
-    const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline' });
+    const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
     const attachmentResponse = await emailRouterGraphFetch(
       mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`),
       {},
@@ -463,7 +463,16 @@ export async function listEmailRouterDirectory({ client, search = '' }) {
 export async function listEmailRouterPresets(client) {
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.presets).select('id,preset_key,display_name,description,active,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').eq('active', true).order('display_name');
   if (error) storageUnavailable(error);
-  return (data || []).map((preset) => ({ id: preset.id, key: preset.preset_key, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: (preset.routing_preset_destinations || []).map(({ destination_id, group_id, recipient_kind, position }) => ({ destinationId: destination_id, groupId: group_id, kind: recipient_kind, position })) }));
+  return (data || []).map((preset) => ({ id: preset.id, key: preset.preset_key, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: sortEmailRouterPresetDestinations(preset.routing_preset_destinations).map(({ destination_id, group_id, recipient_kind, position }) => ({ destinationId: destination_id, groupId: group_id, kind: recipient_kind, position })) }));
+}
+
+const RECIPIENT_KIND_ORDER = new Map([['to', 0], ['cc', 1], ['bcc', 2]]);
+
+export function sortEmailRouterPresetDestinations(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) =>
+    (RECIPIENT_KIND_ORDER.get(left.recipient_kind || left.recipientKind || left.kind) ?? 99)
+      - (RECIPIENT_KIND_ORDER.get(right.recipient_kind || right.recipientKind || right.kind) ?? 99)
+    || Number(left.position || 0) - Number(right.position || 0));
 }
 
 function headerBoundary(raw) {
@@ -686,8 +695,28 @@ export function normalizeEmailRouterDestinationSelections(input) {
   });
 }
 
+export function normalizeEmailRouterManualRecipients(input) {
+  const supplied = Array.isArray(input.manualRecipients)
+    ? input.manualRecipients
+    : Array.isArray(input.recipients)
+      ? input.recipients
+      : [];
+  if (supplied.length > MAX_ROUTING_RECIPIENTS) throw routerError('Too many manual recipients were entered.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
+  const seen = new Set();
+  const positions = { to: 0, cc: 0, bcc: 0 };
+  return supplied.map((recipient) => {
+    const address = safeAddress(recipient?.address || recipient?.email);
+    const kind = text(recipient?.kind || recipient?.recipientKind, 10).toLowerCase();
+    if (!RECIPIENT_KINDS.has(kind)) throw routerError('A manual recipient type is invalid.', 400, 'EMAIL_ROUTER_RECIPIENT_KIND_INVALID');
+    if (seen.has(address)) throw routerError('A manual email address can appear only once across To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+    seen.add(address);
+    positions[kind] += 1;
+    return { address, kind, position: positions[kind] };
+  });
+}
+
 function hasRecipientInput(input) {
-  return Boolean(input.presetId || normalizeEmailRouterDestinationSelections(input).length);
+  return Boolean(input.presetId || normalizeEmailRouterDestinationSelections(input).length || normalizeEmailRouterManualRecipients(input).length);
 }
 
 async function presetRecipients(client, presetId) {
@@ -783,18 +812,25 @@ export async function resolveEmailRouterActionRecipients(client, input) {
   const destinationIds = [...new Set(expanded.map((selection) => selection.destinationId))];
   const addresses = await destinationAddresses(client, destinationIds);
   const addressByDestination = new Map(destinationIds.map((destinationId, index) => [destinationId, addresses[index]]));
-  const recipients = expanded.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind }));
+  const recipients = [
+    ...expanded.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind })),
+    ...normalizeEmailRouterManualRecipients(input),
+  ];
+  if (recipients.length > MAX_ROUTING_RECIPIENTS) throw routerError('The selected destinations expand to too many recipients.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
   return normalizedRecipients(recipients);
 }
 
 function requestFingerprint({ mailboxId, messageId, actionType, input }) {
   const destinationSelections = normalizeEmailRouterDestinationSelections(input)
     .map(({ destinationId, groupId, kind, position }) => `${kind}:${position}:${destinationId ? `destination:${destinationId}` : `group:${groupId}`}`);
+  const manualRecipientHashes = normalizeEmailRouterManualRecipients(input)
+    .map(({ address, kind, position }) => createHash('sha256').update(`${kind}:${position}:${address}`, 'utf8').digest('hex'));
   return createHash('sha256').update(JSON.stringify({
     actionType,
     bodyHash: createHash('sha256').update(String(input.comment || input.body || ''), 'utf8').digest('hex'),
     destinationFolderId: input.destinationFolderId || null,
     destinationSelections,
+    manualRecipientHashes,
     mailboxId,
     messageId,
     presetId: input.presetId || null,
@@ -849,11 +885,12 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   if (!ACTIONS.has(actionType)) throw routerError('Unsupported email action.', 400, 'EMAIL_ROUTER_ACTION_INVALID');
   if (['redirect', 'reply', 'forward'].includes(actionType)) requireExternalActionGate('email_delivery', dependencies.env || process.env);
   const source = safeId(sourceMessageId, 'message identifier');
-  if (actionType === 'undo') return undoEmailRouterAction({ client, mailbox, sourceMessageId: source, profile }, dependencies);
+  if (actionType === 'undo') return undoEmailRouterAction({ client, mailbox, sourceMessageId: source, profile, actionId: input.actionId || input.undoToken }, dependencies);
   const indexed = await actionMessage(client, mailbox.id, source);
   const directSelections = normalizeEmailRouterDestinationSelections(input);
-  if (input.presetId && directSelections.length) {
-    throw routerError('Choose either one routing preset or direct destinations.', 400, 'EMAIL_ROUTER_ROUTE_AMBIGUOUS');
+  const manualRecipients = normalizeEmailRouterManualRecipients(input);
+  if (input.presetId && (directSelections.length || manualRecipients.length)) {
+    throw routerError('Choose either one routing preset or direct recipients.', 400, 'EMAIL_ROUTER_ROUTE_AMBIGUOUS');
   }
   if (['redirect', 'forward'].includes(actionType) && !hasRecipientInput(input)) {
     throw routerError('At least one To, Cc, or Bcc recipient is required.', 400, 'EMAIL_ROUTER_RECIPIENT_REQUIRED');
@@ -1093,9 +1130,10 @@ export async function retryEmailRouterUncertainAction({ client, mailbox, profile
   return actionResult({ ...action, state: 'draft_created' });
 }
 
-export async function undoEmailRouterAction({ client, mailbox, sourceMessageId, profile }, dependencies = {}) {
+export async function undoEmailRouterAction({ client, mailbox, sourceMessageId, profile, actionId }, dependencies = {}) {
   const indexed = await actionMessage(client, mailbox.id, sourceMessageId);
-  const { data: action, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions).select('id,action_type,state').eq('message_id', indexed.id).in('action_type', ['archive', 'delete', 'move']).eq('state', 'confirmed').order('confirmed_at', { ascending: false }).limit(1).maybeSingle();
+  const targetActionId = safeId(actionId, 'undo action identifier');
+  const { data: action, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions).select('id,action_type,state').eq('id', targetActionId).eq('message_id', indexed.id).in('action_type', ['archive', 'delete', 'move']).eq('state', 'confirmed').maybeSingle();
   if (error) storageUnavailable(error);
   if (!action) throw routerError('No reversible mail action is available.', 409, 'EMAIL_ROUTER_UNDO_UNAVAILABLE');
   const undo = await createAction(client, {

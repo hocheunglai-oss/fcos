@@ -118,7 +118,8 @@ export async function emailRouterSubscriptionHandler(req, body = {}, dependencie
 
 export async function emailRouterSettingsHandler(req, _body = {}, dependencies = {}) {
   const value = await requireEmailRouterConfigurationUser(req, dependencies);
-  await value.client.rpc('sync_emailrouter_fcos_destinations', { p_actor: value.profile.id });
+  const { error } = await value.client.rpc('sync_emailrouter_fcos_destinations', { p_actor: value.profile.id });
+  if (error) throw Object.assign(new Error('Email Router directory synchronization is unavailable.'), { status: 503, code: 'EMAIL_ROUTER_DIRECTORY_SYNC_UNAVAILABLE' });
   return emailRouterConfiguration(value.client);
 }
 

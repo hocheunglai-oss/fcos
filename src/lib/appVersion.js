@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.100';
+export const APP_VERSION = '2.0.101';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.101',
+    releasedAt: '2026-08-04',
+    title: 'Email Router workflow hardening',
+    changes: [
+      'Restored ordered manual To, Cc, and Bcc recipients for Redirect and Forward while keeping preset and directory recipients validated server-side.',
+      'Made routing-directory, group, and preset changes atomic so active presets cannot retain unavailable recipients, and corrected exact-action Undo and inline-image handling.',
+      'Hardened Hedge Desk settlement, Salesforce synchronization, document, and maintenance workflows so failed database outcome tracking cannot be reported as successful.',
+    ],
+  },
   {
     version: '2.0.100',
     releasedAt: '2026-08-04',

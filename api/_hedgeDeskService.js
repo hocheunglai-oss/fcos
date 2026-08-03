@@ -443,7 +443,8 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
       if (entity === 'MopsPrice') await reconcilePaperHedgeExpiry(client, { profile });
       return record;
     } catch (errorAfterInsert) {
-      await client.from(config.table).delete().eq('id', data.id);
+      const cleanup = await client.from(config.table).delete().eq('id', data.id);
+      if (cleanup.error) throw httpError(`The Hedge Desk record failed to finish saving and could not be rolled back: ${cleanup.error.message}`, 502, 'HEDGE_CREATE_ROLLBACK_FAILED');
       throw errorAfterInsert;
     }
   }

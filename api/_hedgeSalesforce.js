@@ -550,7 +550,7 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
       }).eq('paper_hedge_id', preview.paperHedge.id).eq('salesforce_stem_id', result.salesforceStemId);
       if (saved.error) throw failure(`Salesforce accepted the Hedge allocation, but FCOS could not confirm it: ${saved.error.message}`, 502, 'HEDGE_SALESFORCE_CONFIRMATION_FAILED');
     }
-    await client.from('hedge_events').insert({
+    const eventSaved = await client.from('hedge_events').insert({
       event_type: 'salesforce_allocations_synced',
       entity_type: 'SwapHedge',
       entity_id: preview.paperHedge.id,
@@ -560,6 +560,7 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
       actor_user_id: profile.id,
       actor_email: profile.email,
     });
+    if (eventSaved.error) throw failure(`Salesforce accepted the Hedge allocation, but FCOS could not save its audit event: ${eventSaved.error.message}`, 502, 'HEDGE_SALESFORCE_CONFIRMATION_FAILED');
     const response = { success: true, paperHedgeId: preview.paperHedge.id, financials: preview.financials, results: results.map((row) => ({ stemKey: row.stemKey, venue: row.venue, action: row.action, recordId: row.recordId, salesforceCost: row.salesforceCost })) };
     const operationSaved = await client.from('hedge_integration_operations').update({ status: 'succeeded', response, error: null }).eq('id', operation.id);
     if (operationSaved.error) throw failure(`Salesforce accepted the Hedge allocation, but FCOS could not finalize the operation: ${operationSaved.error.message}`, 502, 'HEDGE_SALESFORCE_CONFIRMATION_FAILED');
@@ -567,7 +568,8 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
     return response;
   } catch (error) {
     const uncertain = salesforceAccepted || /timeout|network|fetch failed/i.test(String(error?.message || ''));
-    await client.from('hedge_integration_operations').update({ status: uncertain ? 'uncertain' : 'failed', error: String(error?.code || error?.message || 'Salesforce failure').slice(0, 500) }).eq('id', operation.id);
+    const tracked = await client.from('hedge_integration_operations').update({ status: uncertain ? 'uncertain' : 'failed', error: String(error?.code || error?.message || 'Salesforce failure').slice(0, 500) }).eq('id', operation.id);
+    if (tracked.error) throw failure('The Salesforce outcome and its FCOS operation record could not be reconciled. Review Salesforce before retrying.', 502, 'HEDGE_SALESFORCE_TRACKING_FAILED');
     throw error;
   }
 }

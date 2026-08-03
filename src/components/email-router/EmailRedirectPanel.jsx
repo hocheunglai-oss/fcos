@@ -3,7 +3,7 @@ import { AlertCircle, Loader2, Send, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import EmailRecipientPicker, { directorySelection, normaliseDirectoryEntries, selectionKey, valueList } from './EmailRecipientPicker';
+import EmailRecipientPicker, { directorySelection, normaliseDirectoryEntries, selectionKey, splitRecipientSelections, valueList } from './EmailRecipientPicker';
 
 const PRESELECT_CONFIDENCE = 0.6;
 
@@ -82,9 +82,10 @@ export default function EmailRedirectPanel({
   };
   const submit = () => {
     if (!canSend) return;
+    const recipients = splitRecipientSelections(selections);
     onSubmit({
       action: 'redirect',
-      destinationSelections: selections,
+      ...recipients,
       presetId: presetId === 'none' ? null : selectedPreset?.id || selectedPreset?.value || presetId,
     });
   };

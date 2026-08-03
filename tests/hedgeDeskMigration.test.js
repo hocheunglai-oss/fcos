@@ -168,3 +168,24 @@ test('scheduled Hedge maintenance prepares SFS approval and never sends email', 
   assert.match(functions, /hedgeDeskMaintenanceCron/);
   assert.match(vercel, /hedgeDeskMaintenanceCron/);
 });
+
+test('Hedge integrations fail closed when database outcome tracking fails', async () => {
+  const [documents, sfs, salesforce, maintenance, service] = await Promise.all([
+    readFile(new URL('../api/_hedgeDocuments.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeSfsService.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeSalesforce.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeMaintenance.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_hedgeDeskService.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(documents, /finalized\.error[\s\S]*HEDGE_EMAIL_CONFIRMATION_UNCERTAIN/);
+  assert.match(documents, /failed\.error[\s\S]*HEDGE_EMAIL_TRACKING_FAILED/);
+  assert.match(documents, /metadataCleanup\.error \|\| storageCleanup\.error/);
+  assert.match(sfs, /closeClaim\.error \|\| !closeClaim\.data/);
+  assert.match(sfs, /closeSaved\.error \|\| !closeSaved\.data/);
+  assert.match(sfs, /event\.error[\s\S]*HEDGE_SFS_AUDIT_FAILED/);
+  assert.match(salesforce, /eventSaved\.error[\s\S]*HEDGE_SALESFORCE_CONFIRMATION_FAILED/);
+  assert.match(salesforce, /tracked\.error[\s\S]*HEDGE_SALESFORCE_TRACKING_FAILED/);
+  assert.match(maintenance, /cleanup\.error[\s\S]*Expired Hedge operation cleanup failed/);
+  assert.match(service, /cleanup\.error[\s\S]*HEDGE_CREATE_ROLLBACK_FAILED/);
+});
