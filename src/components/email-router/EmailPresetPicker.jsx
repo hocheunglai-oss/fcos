@@ -15,7 +15,8 @@ export default function EmailPresetPicker({ presets, selectedId = 'none', onSele
         variant={selected ? 'default' : 'outline'}
         size="sm"
         aria-pressed={selected}
-        disabled={disabled}
+        disabled={disabled || preset.available === false}
+        title={preset.available === false ? preset.configurationIssue || 'This routing preset is unavailable.' : undefined}
         onClick={() => onSelect(selected ? 'none' : value)}
         className="font-semibold"
       >

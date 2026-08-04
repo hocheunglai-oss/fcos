@@ -31,35 +31,73 @@ function canPreviewAttachment(attachment) {
   return type.startsWith('image/') || type === 'application/pdf' || type.startsWith('text/') || type === 'application/json' || type === 'application/xml';
 }
 
-function replaceInlineSources(value, sources) {
-  let result = String(value || '');
-  for (const [contentId, source] of Object.entries(sources)) {
-    const escaped = contentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(new RegExp(`cid:${escaped}`, 'gi'), source);
+function normalizeContentId(value) {
+  let result = String(value || '')
+    .replace(/&lt;|&#0*60;|&#x0*3c;/gi, '<')
+    .replace(/&gt;|&#0*62;|&#x0*3e;/gi, '>')
+    .replace(/&amp;|&#0*38;|&#x0*26;/gi, '&')
+    .trim()
+    .replace(/^cid:/i, '')
+    .replace(/^<|>$/g, '')
+    .trim();
+  try { result = decodeURIComponent(result); } catch { /* Preserve the provider value for matching. */ }
+  return result.replace(/^<|>$/g, '').trim().toLowerCase();
+}
+
+function inlineAttachmentAliases(attachment) {
+  return [...new Set([
+    ...(Array.isArray(attachment.inlineAliases) ? attachment.inlineAliases : []),
+    attachment.contentId,
+  ].map(normalizeContentId).filter(Boolean))];
+}
+
+export function replaceEmailRouterInlineSources(value, sources) {
+  const html = String(value || '');
+  if (typeof DOMParser === 'undefined') {
+    return html.replace(/<img\b[^>]*\bsrc\s*=\s*(["'])\s*cid:[\s\S]*?\1[^>]*>/gi, '<span title="Inline image unavailable">Inline image unavailable</span>');
   }
-  return result;
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  for (const image of document.querySelectorAll('img')) {
+    const source = image.getAttribute('src') || '';
+    if (!/^\s*cid:/i.test(source)) continue;
+    const resolved = sources[normalizeContentId(source)];
+    if (resolved) {
+      image.setAttribute('src', resolved);
+      continue;
+    }
+    const placeholder = document.createElement('span');
+    const alternative = String(image.getAttribute('alt') || '').trim();
+    placeholder.setAttribute('title', 'Inline image unavailable');
+    placeholder.textContent = alternative ? `Inline image unavailable: ${alternative}` : 'Inline image unavailable';
+    image.replaceWith(placeholder);
+  }
+  return document.body.innerHTML;
 }
 
 export function EmailMessageDetail({ message, loading, error, actionResult, onAction, onFetchAttachment, onDownloadAttachment }) {
   const [downloadingId, setDownloadingId] = useState(null);
   const [inlineSources, setInlineSources] = useState({});
   const [preview, setPreview] = useState(null);
-  const content = useMemo(() => sanitizeEmailHtml(replaceInlineSources(message?.bodyHtml || plainTextToHtml(message?.bodyText || message?.preview || 'No message content available.'), inlineSources)), [inlineSources, message?.bodyHtml, message?.bodyText, message?.preview]);
+  const content = useMemo(() => sanitizeEmailHtml(replaceEmailRouterInlineSources(message?.bodyHtml || plainTextToHtml(message?.bodyText || message?.preview || 'No message content available.'), inlineSources)), [inlineSources, message?.bodyHtml, message?.bodyText, message?.preview]);
   const history = message?.actionHistory || [];
 
   useEffect(() => {
     let active = true;
     const urls = [];
     setInlineSources({});
-    const inline = (message?.attachments || []).filter((attachment) => attachment.isInline && attachment.contentId && attachmentContentType(attachment).startsWith('image/'));
-    Promise.all(inline.map(async (attachment) => {
+    const inline = (message?.attachments || []).filter((attachment) => inlineAttachmentAliases(attachment).length && attachmentContentType(attachment).startsWith('image/'));
+    Promise.allSettled(inline.map(async (attachment) => {
       const downloaded = await onFetchAttachment(attachment);
       if (!downloaded || !active) return null;
       const url = URL.createObjectURL(downloaded.blob);
       urls.push(url);
-      return [String(attachment.contentId).replace(/^<|>$/g, ''), url];
+      return inlineAttachmentAliases(attachment).map((contentId) => [contentId, url]);
     })).then((entries) => {
-      if (active) setInlineSources(Object.fromEntries(entries.filter(Boolean)));
+      if (!active) return;
+      const resolved = entries
+        .filter((entry) => entry.status === 'fulfilled' && Array.isArray(entry.value))
+        .flatMap((entry) => entry.value);
+      setInlineSources(Object.fromEntries(resolved));
     });
     return () => {
       active = false;

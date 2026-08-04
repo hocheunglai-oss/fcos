@@ -32,6 +32,8 @@ test('every routing mutation uses the atomic integrity guard', async () => {
     { type: 'destination_save' },
     { type: 'group_save' },
     { type: 'preset_save' },
+    { type: 'preset_version_save' },
+    { type: 'preset_override_save' },
   ]) {
     const calls = [];
     const client = { async rpc(name, args) { calls.push({ name, args }); return { data: {}, error: null }; } };

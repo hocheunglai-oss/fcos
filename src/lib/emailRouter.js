@@ -247,6 +247,8 @@ export const emailRouter = {
   async detail(payload, options) { return invoke('emailRouterDetail', payload, options); },
   async directory(payload = {}, options) { return invoke('emailRouterDirectory', payload, options); },
   async presets(payload = {}, options) { return invoke('emailRouterPresets', payload, options); },
+  async leave(payload = {}, options) { return invoke('emailRouterLeave', payload, options); },
+  async saveLeave(payload = {}, options) { return invoke('emailRouterLeaveSave', payload, options); },
   async action(payload, options) {
     const directoryIds = payload?.destinationId ? [payload.destinationId] : [];
     const recipients = payload?.recipientAddress ? [{ kind: 'to', address: payload.recipientAddress }] : [];

@@ -12,6 +12,7 @@ const presetValidationMigrationUrl = new URL('../supabase/migrations/20260803165
 const routingIntegrityMigrationUrl = new URL('../supabase/migrations/20260803172446_harden_emailrouter_routing_integrity.sql', import.meta.url);
 const simplifiedPresetMigrationUrl = new URL('../supabase/migrations/20260803182723_simplify_emailrouter_routing_presets.sql', import.meta.url);
 const caseSensitiveLabelsMigrationUrl = new URL('../supabase/migrations/20260803185144_make_emailrouter_routing_labels_case_sensitive.sql', import.meta.url);
+const leavePresetMigrationUrl = new URL('../supabase/migrations/20260804022141_email_router_inline_images_leave_presets.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -196,10 +197,44 @@ test('Email Router presets validate only the non-null recipient identity', async
   assert.match(migrationSql, /destination_group\.redirect_enabled = true/i);
   assert.match(migrationSql, /revoke all on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*from public, anon, authenticated/i);
   assert.match(migrationSql, /grant execute on function public\.save_emailrouter_preset\(jsonb, uuid\)[\s\S]*to service_role/i);
-  assert.match(configuration, /operation\.type === 'preset_save'[\s\S]*save_emailrouter_routing_change/i);
+  assert.match(configuration, /\['preset_save', 'preset_version_save', 'preset_override_save'\]\.includes\(operation\.type\)[\s\S]*save_emailrouter_routing_change/i);
   assert.match(settings, /Remove or replace unavailable recipients before saving/);
   assert.match(settings, /<EmailRecipientPicker/);
   assert.match(settings, /allowManual=\{false\}/);
+});
+
+test('Email Router leave-aware preset versions remain service-only and preserve Standard routes', async () => {
+  const [sql, core, settings, workspace, messageSheet] = await Promise.all([
+    readFile(leavePresetMigrationUrl, 'utf8'),
+    readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+  ]);
+  for (const table of ['routing_preset_versions', 'routing_preset_version_conditions', 'routing_preset_version_destinations', 'routing_leave_periods', 'routing_preset_overrides']) {
+    assert.match(sql, new RegExp(`create table if not exists emailrouter\\.${table}`, 'i'));
+    assert.match(sql, new RegExp(`revoke all on table emailrouter\\.%I from public, anon, authenticated`, 'i'));
+  }
+  assert.match(sql, /version_label, version_kind[\s\S]*'Standard', 'baseline'/i);
+  assert.match(sql, /insert into emailrouter\.routing_preset_version_destinations[\s\S]*routing_preset_destinations/i);
+  assert.match(sql, /create or replace function public\.save_emailrouter_routing_leave/i);
+  assert.match(sql, /target_user_id <> p_actor and not emailrouter\.configuration_actor_authorized/i);
+  assert.match(sql, /tstzrange\(existing\.starts_at, existing\.ends_at, '\[\)'\)[\s\S]*&&/i);
+  assert.match(sql, /pg_advisory_xact_lock[\s\S]*routing_leave/i);
+  assert.match(sql, /pg_advisory_xact_lock[\s\S]*preset_override/i);
+  assert.match(core, /ROUTE_SNAPSHOT_TTL_MS = 60 \* 60 \* 1000/);
+  assert.match(core, /route-snapshot-v1:/);
+  assert.match(settings, /Routing presets and leave/);
+  assert.match(workspace, /My Routing Leave/);
+  assert.match(messageSheet, /Inline image unavailable/);
+  for (const signature of [
+    'public.save_emailrouter_preset_version(jsonb, uuid)',
+    'public.save_emailrouter_preset_override(jsonb, uuid)',
+    'public.save_emailrouter_routing_leave(jsonb, uuid)',
+  ]) {
+    assert.match(sql, new RegExp(`revoke all on function ${signature.replace(/[().]/g, '\\$&')} from public, anon, authenticated`, 'i'));
+    assert.match(sql, new RegExp(`grant execute on function ${signature.replace(/[().]/g, '\\$&')} to service_role`, 'i'));
+  }
 });
 
 test('routing presets are editable recipient templates identified by a unique display name', async () => {

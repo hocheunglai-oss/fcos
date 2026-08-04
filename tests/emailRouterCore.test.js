@@ -4,9 +4,11 @@ import test from 'node:test';
 import {
   buildEmailRouterRedirectMime,
   createEmailRouterAttachmentToken,
+  createEmailRouterRouteSnapshotToken,
   currentEmailRouterMailbox,
   emailRouterGraphFetch,
   fetchEmailRouterDetail,
+  extractEmailRouterInlineContentIds,
   listEmailRouterDirectory,
   normalizeEmailRouterDestinationSelections,
   normalizeEmailRouterManualRecipients,
@@ -15,12 +17,15 @@ import {
   requireEmailRouterConfigurationUser,
   resolveEmailRouterActionRecipients,
   resolveEmailRouterAlert,
+  resolveEmailRouterInlineAttachmentAliases,
+  resolveEmailRouterPresetVersion,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
   sortEmailRouterPresetDestinations,
   syncEmailRouterDelta,
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
+  verifyEmailRouterRouteSnapshotToken,
 } from '../api/_emailRouterCore.js';
 import { emailRouterSettingsHandler } from '../api/_emailRouterHandlers.js';
 
@@ -89,8 +94,10 @@ test('directory combines active FCOS users, external contacts, and groups in con
           return {
             select() { return this; },
             eq() { return this; },
+            lte() { return this; },
+            gt() { return this; },
             order() { return this; },
-            limit: async () => ({ data: table === 'destinations' ? destinationRows : groupRows, error: null }),
+            limit: async () => ({ data: table === 'destinations' ? destinationRows : table === 'destination_groups' ? groupRows : [{ user_profile_id: 'profile-1' }], error: null }),
           };
         },
       };
@@ -111,9 +118,9 @@ test('directory combines active FCOS users, external contacts, and groups in con
   };
   const directory = await listEmailRouterDirectory({ client });
   assert.deepEqual(directory, [
-    { id: 'group-1', kind: 'group', label: 'Operations', memberCount: 1 },
-    { id: 'destination-1', kind: 'destination', label: 'AU' },
-    { id: 'destination-3', kind: 'destination', label: 'ED' },
+    { id: 'group-1', kind: 'group', label: 'Operations', memberCount: 1, onLeaveLabels: ['AU'] },
+    { id: 'destination-1', kind: 'destination', label: 'AU', userProfileId: 'profile-1', onLeave: true },
+    { id: 'destination-3', kind: 'destination', label: 'ED', userProfileId: null, onLeave: false },
   ]);
 });
 
@@ -196,6 +203,29 @@ test('attachment links are short-lived, signed, and contain no file name', () =>
   assert.doesNotMatch(token, /\.pdf|invoice|name/i);
   assert.deepEqual(verifyEmailRouterAttachmentToken(token, env), { mailboxId: 'mailbox-1', messageId: 'message-1', attachmentId: 'attachment-1' });
   assert.throws(() => verifyEmailRouterAttachmentToken(`${token}x`, env), (error) => error.code === 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
+});
+
+test('routing versions use override, priority, specificity, ambiguity, and Standard fallback deterministically', () => {
+  const baseline = { id: 'baseline', version_label: 'Standard', version_kind: 'baseline', active: true, priority: 0, conditionUserIds: [] };
+  const oneUser = { id: 'one', version_label: 'SC Leave', version_kind: 'conditional', match_mode: 'any', active: true, priority: 10, conditionUserIds: ['sc'] };
+  const twoUsers = { id: 'two', version_label: 'SC and NHN Leave', version_kind: 'conditional', match_mode: 'all', active: true, priority: 10, conditionUserIds: ['sc', 'nhn'] };
+  const nicknameByUserId = new Map([['sc', 'SC'], ['nhn', 'NHN']]);
+  assert.equal(resolveEmailRouterPresetVersion({ versions: [baseline, oneUser, twoUsers], activeLeaveUserIds: [], nicknameByUserId }).version.id, 'baseline');
+  assert.equal(resolveEmailRouterPresetVersion({ versions: [baseline, oneUser, twoUsers], activeLeaveUserIds: ['sc'], nicknameByUserId }).version.id, 'one');
+  assert.equal(resolveEmailRouterPresetVersion({ versions: [baseline, oneUser, twoUsers], activeLeaveUserIds: ['sc', 'nhn'], nicknameByUserId }).version.id, 'two');
+  assert.equal(resolveEmailRouterPresetVersion({ versions: [baseline, oneUser], overrides: [{ version_id: 'one', active: true, starts_at: '2026-08-01T00:00:00Z', ends_at: '2026-08-31T00:00:00Z' }], activeLeaveUserIds: [], now: Date.parse('2026-08-04T00:00:00Z') }).version.id, 'one');
+  const ambiguous = resolveEmailRouterPresetVersion({ versions: [baseline, oneUser, { ...oneUser, id: 'other', version_label: 'Other' }], activeLeaveUserIds: ['sc'] });
+  assert.match(ambiguous.error, /equal priority and specificity/i);
+});
+
+test('reviewed routing snapshots are signed and expire after their fixed lifetime', () => {
+  const env = { FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET: 'route-snapshot-test-secret' };
+  const snapshot = { version: 1, profileId: 'profile-1', presetId: 'preset-1', presetVersionId: 'version-1', definitionHash: 'a'.repeat(64), reason: 'SC on leave', issuedAt: Date.now(), expiresAt: Date.now() + 60_000 };
+  const token = createEmailRouterRouteSnapshotToken(snapshot, env);
+  assert.deepEqual(verifyEmailRouterRouteSnapshotToken(token, env), snapshot);
+  assert.throws(() => verifyEmailRouterRouteSnapshotToken(`${token}x`, env), (error) => error.code === 'EMAIL_ROUTER_ROUTE_SNAPSHOT_INVALID');
+  const expired = createEmailRouterRouteSnapshotToken({ ...snapshot, issuedAt: Date.now() - 120_000, expiresAt: Date.now() - 60_000 }, env);
+  assert.throws(() => verifyEmailRouterRouteSnapshotToken(expired, env), (error) => error.code === 'EMAIL_ROUTER_ROUTE_SNAPSHOT_EXPIRED');
 });
 
 test('configuration access is limited to active administrator or UUID-backed General Manager', () => {
@@ -331,7 +361,7 @@ test('Graph delta cursors accept the mailbox-scoped URL shape returned by Micros
 
 test('message detail loads attachments separately from the Graph body request', async () => {
   const calls = [];
-  const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'text', content: 'Body' }, hasAttachments: true };
+  const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'html', content: '<p>Body</p><img src="cid:inline-logo">' }, hasAttachments: true };
   const fetchImpl = async (url) => {
     calls.push(String(url));
     const requestedUrl = String(url);
@@ -355,12 +385,62 @@ test('message detail loads attachments separately from the Graph body request', 
   assert.equal(calls.length, 3);
   assert.doesNotMatch(calls[0], /\$expand=/);
   assert.match(calls[1], /\/attachments\?/);
-  assert.doesNotMatch(calls[1], /contentId/);
+  assert.match(calls[1], /contentId/);
   assert.match(calls[2], /\/attachments\/attachment-1\?/);
   assert.match(calls[2], /contentId/);
   assert.equal(result.attachments.length, 1);
   assert.equal(result.attachments[0].contentId, 'inline-logo');
+  assert.deepEqual(result.attachments[0].inlineAliases, ['inline-logo']);
   assert.deepEqual(result.detailWarnings, []);
+});
+
+test('CID-only message images load even when Graph hasAttachments is false and contentId metadata is incomplete', async () => {
+  const calls = [];
+  const message = { id: 'provider-message-2', body: { contentType: 'html', content: '<img alt="Logo" src="CID:%3Cimage001.png%40mail%3E">' }, hasAttachments: false };
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    const requestedUrl = String(url);
+    const payload = requestedUrl.includes('/attachments/attachment-2?')
+      ? { id: 'attachment-2', name: 'image001.png', contentType: 'image/png', size: 100, isInline: false, contentId: null }
+      : requestedUrl.includes('/attachments?')
+        ? { value: [{ id: 'attachment-2', name: 'image001.png', contentType: 'image/png', size: 100, isInline: false }] }
+        : message;
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const client = { from: () => ({ select: () => ({ eq() { return this; }, maybeSingle: async () => ({ data: null, error: null }) }) }) };
+  const result = await fetchEmailRouterDetail({ client, mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' }, messageId: message.id }, { accessToken: 'access-token', fetchImpl });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(result.attachments[0].inlineAliases, ['image001.png@mail']);
+  assert.equal(result.attachments[0].isInline, true);
+  assert.deepEqual(result.detailWarnings, []);
+});
+
+test('inline CID matching is normalized, unambiguous, and reports unresolved aliases', () => {
+  assert.deepEqual(extractEmailRouterInlineContentIds('<img src="cid:<Logo.PNG@MAIL>"><img src="CID:%3Clogo.png%40mail%3E"><img src=cid:&lt;SECOND.PNG@MAIL&gt;>'), ['logo.png@mail', 'second.png@mail']);
+  const resolved = resolveEmailRouterInlineAttachmentAliases([
+    { id: 'one', name: 'image001.png', contentType: 'image/png', contentId: null },
+    { id: 'two', name: 'other.png', contentType: 'image/png', contentId: 'exact-logo' },
+  ], ['image001.png@mail', 'exact-logo', 'missing-logo']);
+  assert.deepEqual(resolved.attachments[0].inlineAliases, ['image001.png@mail']);
+  assert.deepEqual(resolved.attachments[1].inlineAliases, ['exact-logo']);
+  assert.deepEqual(resolved.unresolved, ['missing-logo']);
+});
+
+test('message detail follows attachment pagination before resolving inline images', async () => {
+  const message = { id: 'provider-message-3', body: { contentType: 'html', content: '<p>Message with ordinary attachments</p>' }, hasAttachments: true };
+  const secondPage = 'https://graph.microsoft.com/v1.0/users/router@example.net/messages/provider-message-3/attachments?$skiptoken=next';
+  const fetchImpl = async (url) => {
+    const requestedUrl = String(url);
+    const payload = requestedUrl === secondPage
+      ? { value: [{ id: 'attachment-2', name: 'second.pdf', contentType: 'application/pdf', size: 200, isInline: false }] }
+      : requestedUrl.includes('/attachments?')
+        ? { value: [{ id: 'attachment-1', name: 'first.pdf', contentType: 'application/pdf', size: 100, isInline: false }], '@odata.nextLink': secondPage }
+        : message;
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const client = { from: () => ({ select: () => ({ eq() { return this; }, maybeSingle: async () => ({ data: null, error: null }) }) }) };
+  const result = await fetchEmailRouterDetail({ client, mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' }, messageId: message.id }, { accessToken: 'access-token', fetchImpl });
+  assert.deepEqual(result.attachments.map((attachment) => attachment.id), ['attachment-1', 'attachment-2']);
 });
 
 test('message detail remains available when Graph rejects the attachment collection', async () => {

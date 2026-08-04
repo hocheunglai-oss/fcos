@@ -9,10 +9,12 @@ import {
   listEmailRouterDirectory,
   listEmailRouterMessages,
   listEmailRouterPresets,
+  listEmailRouterRoutingLeaves,
   processEmailRouterOutbox,
   requireEmailRouterConfigurationUser,
   requireEmailRouterUser,
   retryEmailRouterUncertainAction,
+  saveEmailRouterRoutingLeave,
   startEmailRouterAction,
   streamEmailRouterAttachment,
   syncEmailRouterDelta,
@@ -43,14 +45,31 @@ export async function emailRouterDirectoryHandler(req, body = {}, dependencies =
   const value = await context(req, dependencies);
   const [directory, presets] = await Promise.all([
     listEmailRouterDirectory({ client: value.client, search: body.search }),
-    listEmailRouterPresets(value.client),
+    listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }),
   ]);
   return { directory, presets };
 }
 
 export async function emailRouterPresetsHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies);
-  return { presets: await listEmailRouterPresets(value.client) };
+  return { presets: await listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }) };
+}
+
+export async function emailRouterLeaveHandler(req, body = {}, dependencies = {}) {
+  const includeAll = body.scope === 'all';
+  const value = includeAll
+    ? await requireEmailRouterConfigurationUser(req, dependencies)
+    : await requireEmailRouterUser(req, dependencies);
+  return listEmailRouterRoutingLeaves(value.client, { profile: value.profile, includeAll });
+}
+
+export async function emailRouterLeaveSaveHandler(req, body = {}, dependencies = {}) {
+  const includeAll = body.scope === 'all';
+  const value = includeAll
+    ? await requireEmailRouterConfigurationUser(req, dependencies)
+    : await requireEmailRouterUser(req, dependencies);
+  await saveEmailRouterRoutingLeave(value.client, value.profile, body.operation || body);
+  return listEmailRouterRoutingLeaves(value.client, { profile: value.profile, includeAll });
 }
 
 export async function emailRouterAttachmentUrlHandler(req, body = {}, dependencies = {}) {

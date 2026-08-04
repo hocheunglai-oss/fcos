@@ -123,6 +123,8 @@ import {
   emailRouterDetailHandler as nativeEmailRouterDetail,
   emailRouterDirectoryHandler as nativeEmailRouterDirectory,
   emailRouterListHandler as nativeEmailRouterList,
+  emailRouterLeaveHandler as nativeEmailRouterLeave,
+  emailRouterLeaveSaveHandler as nativeEmailRouterLeaveSave,
   emailRouterOutboxHandler as nativeEmailRouterOutbox,
   emailRouterPresetsHandler as nativeEmailRouterPresets,
   emailRouterRetryHandler as nativeEmailRouterRetry,
@@ -1036,6 +1038,8 @@ const HANDLER_MODULE_ACCESS = {
   navigationPreferencesSave: [],
   navigationPreferencesReset: [],
   emailRouterList: ['email_router'],
+  emailRouterLeave: ['email_router'],
+  emailRouterLeaveSave: ['email_router'],
   emailRouterDetail: ['email_router'],
   emailRouterDirectory: ['email_router'],
   emailRouterPresets: ['email_router'],
@@ -15984,6 +15988,14 @@ async function emailRouterList(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterList(req, body, nativeEmailRouterDependencies(accessContext));
 }
 
+async function emailRouterLeave(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterLeave(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterLeaveSave(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterLeaveSave(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
 async function emailRouterDetail(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterDetail(req, body, nativeEmailRouterDependencies(accessContext));
 }
@@ -16096,6 +16108,8 @@ const handlers = {
   navigationPreferencesSave,
   navigationPreferencesReset,
   emailRouterList,
+  emailRouterLeave,
+  emailRouterLeaveSave,
   emailRouterDetail,
   emailRouterDirectory,
   emailRouterPresets,

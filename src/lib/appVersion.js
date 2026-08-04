@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.104';
+export const APP_VERSION = '2.0.105';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.105',
+    releasedAt: '2026-08-04',
+    title: 'Email images and leave-aware routing',
+    changes: [
+      'Restored embedded email images by resolving Microsoft 365 content identifiers even when Graph excludes inline-only items from its attachment flag, with a clear placeholder when an image is unavailable.',
+      'Added self-managed routing leave, Administrator-managed company schedules, Standard and conditional preset versions, priority and specificity rules, and scheduled routing overrides.',
+      'Protected reviewed preset recipients with a signed 60-minute snapshot, invalidated stale configuration safely, and warned without blocking when selected recipients are currently on leave.',
+    ],
+  },
   {
     version: '2.0.104',
     releasedAt: '2026-08-04',

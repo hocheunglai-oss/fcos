@@ -71,7 +71,19 @@ export default function EmailRedirectPanel({
   }, [presetId, recipientsTouched, recommendedSelections, selections.length]);
 
   const selectedPreset = presetOptions.find((item) => String(item.id || item.value) === presetId);
-  const canSend = Boolean(message) && !directoryLoading && !submitting && selections.length > 0;
+  const selectedLeaveLabels = useMemo(() => {
+    if (selectedPreset) return [];
+    const entries = normaliseDirectoryEntries(directory);
+    const byKey = new Map(entries.map((item) => [`${item.kind}:${item.id}`, item]));
+    return [...new Set(selections.flatMap((selection) => {
+      const item = byKey.get(selectionKey(selection));
+      if (!item) return [];
+      if (item.kind === 'group') return item.onLeaveLabels || [];
+      return item.onLeave ? [item.label] : [];
+    }))];
+  }, [directory, selectedPreset, selections]);
+  const canSend = Boolean(message) && !directoryLoading && !submitting && selections.length > 0
+    && (presetId === 'none' || Boolean(selectedPreset?.routeSnapshotToken));
   const selectPreset = (value) => {
     setPresetId(value);
     setRecipientsTouched(true);
@@ -99,6 +111,7 @@ export default function EmailRedirectPanel({
       action: 'redirect',
       ...recipients,
       presetId: presetId === 'none' ? null : selectedPreset?.id || selectedPreset?.value || presetId,
+      routeSnapshotToken: presetId === 'none' ? null : selectedPreset?.routeSnapshotToken || null,
     });
   };
 
@@ -114,8 +127,10 @@ export default function EmailRedirectPanel({
         <div className="space-y-2">
           <Label>Routing preset</Label>
           <EmailPresetPicker presets={presetOptions} selectedId={presetId} onSelect={selectPreset} disabled={submitting} />
-          {presetId !== 'none' && <p className="text-xs text-muted-foreground">{selectedPreset?.label || 'Preset'} is applied. Changing any recipient turns the preset label off and keeps your amended selection.</p>}
+          {presetId !== 'none' && <div className="space-y-1 text-xs text-muted-foreground"><p><span className="font-semibold text-foreground">{selectedPreset?.label || 'Preset'} · {selectedPreset?.effectiveVersion?.label || 'Standard'}</span></p><p>{selectedPreset?.effectiveVersion?.reason || 'Standard routing'}. Changing any recipient turns the preset label off and keeps your amended selection.</p></div>}
+          {(selectedPreset?.warnings || []).map((warning) => <div key={warning} className="flex gap-2 border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><p>{warning}</p></div>)}
         </div>
+        {selectedLeaveLabels.length > 0 && <div className="flex gap-2 border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><p>Currently on leave: {selectedLeaveLabels.join(', ')}. You may continue after reviewing the recipients.</p></div>}
         <div className="space-y-2">
           <Label>Recipients</Label>
           <EmailRecipientPicker

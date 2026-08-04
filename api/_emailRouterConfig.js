@@ -44,14 +44,19 @@ function usageTotals(rows) {
 
 export async function emailRouterConfiguration(client) {
   const mailbox = await currentEmailRouterMailbox(client);
-  const [destinations, groups, presets, settings, subscriptions, alerts, folderCountResults, actions, usage] = await Promise.all([
+  const [destinations, groups, presets, presetVersions, presetVersionDestinations, presetVersionConditions, presetOverrides, routingLeaves, settings, subscriptions, alerts, folderCountResults, actions, usage] = await Promise.all([
     table(client, 'destinations')
       .select('id,destination_kind,user_profile_id,display_name,email_address,nickname,redirect_enabled,active,sort_order,revision,updated_at')
       .eq('active', true)
       .order('sort_order')
       .order('nickname'),
     table(client, 'destination_groups').select('id,group_key,display_name,active,redirect_enabled,sort_order,revision,updated_at,destination_group_members(destination_id)').eq('active', true).order('sort_order').order('display_name'),
-    table(client, 'routing_presets').select('id,display_name,description,active,sort_order,revision,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').order('sort_order').order('display_name'),
+    table(client, 'routing_presets').select('id,display_name,description,active,sort_order,revision,updated_at').order('sort_order').order('display_name'),
+    table(client, 'routing_preset_versions').select('id,preset_id,version_label,version_kind,match_mode,priority,active,revision,updated_at').order('priority', { ascending: false }).order('version_label'),
+    table(client, 'routing_preset_version_destinations').select('version_id,destination_id,group_id,recipient_kind,position'),
+    table(client, 'routing_preset_version_conditions').select('version_id,user_profile_id'),
+    table(client, 'routing_preset_overrides').select('id,preset_id,version_id,starts_at,ends_at,reason,active,revision,updated_at').eq('active', true).order('starts_at'),
+    table(client, 'routing_leave_periods').select('id,user_profile_id,starts_at,ends_at,note,active,revision,updated_at').eq('active', true).order('starts_at'),
     table(client, 'settings').select('key,value,revision,updated_at').order('key'),
     table(client, 'mailbox_subscriptions').select('id,resource_key,state,expires_at,lifecycle_event,lifecycle_at,updated_at').eq('mailbox_id', mailbox.id).order('resource_key'),
     table(client, 'alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(50),
@@ -62,7 +67,7 @@ export async function emailRouterConfiguration(client) {
     table(client, 'mail_actions').select('state').order('created_at', { ascending: false }).limit(1000),
     table(client, 'ai_usage_events').select('model_id,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,cost_usd,created_at').order('created_at', { ascending: false }).limit(5000),
   ]);
-  const failed = [destinations, groups, presets, settings, subscriptions, alerts, ...folderCountResults.map((entry) => entry.result), actions, usage].find((result) => result.error);
+  const failed = [destinations, groups, presets, presetVersions, presetVersionDestinations, presetVersionConditions, presetOverrides, routingLeaves, settings, subscriptions, alerts, ...folderCountResults.map((entry) => entry.result), actions, usage].find((result) => result.error);
   if (failed?.error) throw configError(`Email Router settings could not be loaded: ${failed.error.message}`, 503, 'EMAIL_ROUTER_CONFIGURATION_UNAVAILABLE');
 
   const folderCounts = Object.fromEntries(folderCountResults.map(({ folder, result }) => [folder, Number(result.count || 0)]));
@@ -102,20 +107,63 @@ export async function emailRouterConfiguration(client) {
       updatedAt: row.updated_at,
       destinationIds: (row.destination_group_members || []).map((item) => item.destination_id),
     })),
-    presets: (presets.data || []).map((row) => ({
+    presets: (presets.data || []).map((row) => {
+      const versions = (presetVersions.data || []).filter((version) => version.preset_id === row.id).map((version) => ({
+        id: version.id,
+        label: version.version_label,
+        kind: version.version_kind,
+        matchMode: version.match_mode,
+        priority: Number(version.priority || 0),
+        active: version.active,
+        revision: Number(version.revision),
+        updatedAt: version.updated_at,
+        conditionUserIds: (presetVersionConditions.data || []).filter((condition) => condition.version_id === version.id).map((condition) => condition.user_profile_id),
+        destinations: sortEmailRouterPresetDestinations((presetVersionDestinations.data || []).filter((item) => item.version_id === version.id)).map((item) => ({
+          destinationId: item.destination_id,
+          groupId: item.group_id,
+          recipientKind: item.recipient_kind,
+          position: item.position,
+        })),
+      }));
+      const standardVersion = versions.find((version) => version.kind === 'baseline') || null;
+      return {
+        id: row.id,
+        displayName: row.display_name,
+        description: row.description,
+        active: row.active,
+        sortOrder: row.sort_order,
+        revision: Number(row.revision),
+        updatedAt: row.updated_at,
+        destinations: standardVersion?.destinations || [],
+        standardVersion,
+        versions,
+        overrides: (presetOverrides.data || []).filter((entry) => entry.preset_id === row.id).map((entry) => ({
+          id: entry.id,
+          versionId: entry.version_id,
+          startsAt: entry.starts_at,
+          endsAt: entry.ends_at,
+          reason: entry.reason,
+          active: entry.active,
+          revision: Number(entry.revision),
+          updatedAt: entry.updated_at,
+        })),
+      };
+    }),
+    routingUsers: (destinations.data || []).filter((row) => row.destination_kind === 'fcos_profile' && profiles.get(row.user_profile_id)?.active).map((row) => ({
+      id: row.user_profile_id,
+      name: profiles.get(row.user_profile_id)?.full_name || 'FCOS user',
+      email: profiles.get(row.user_profile_id)?.email || null,
+      nickname: row.nickname,
+    })).sort((left, right) => left.name.localeCompare(right.name)),
+    routingLeaves: (routingLeaves.data || []).map((row) => ({
       id: row.id,
-      displayName: row.display_name,
-      description: row.description,
+      userProfileId: row.user_profile_id,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      note: row.note,
       active: row.active,
-      sortOrder: row.sort_order,
       revision: Number(row.revision),
       updatedAt: row.updated_at,
-      destinations: sortEmailRouterPresetDestinations(row.routing_preset_destinations).map((item) => ({
-        destinationId: item.destination_id,
-        groupId: item.group_id,
-        recipientKind: item.recipient_kind,
-        position: item.position,
-      })),
     })),
     settings: settings.data || [],
     subscriptions: subscriptions.data || [],
@@ -132,7 +180,7 @@ export async function emailRouterConfiguration(client) {
 
 export async function saveEmailRouterConfiguration(client, profile, operation = {}) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) throw configError('A configuration change is required.');
-  if (!['routing_directory_save', 'destination_save', 'group_save', 'preset_save', 'setting_save'].includes(operation.type)) {
+  if (!['routing_directory_save', 'destination_save', 'group_save', 'preset_save', 'preset_version_save', 'preset_override_save', 'setting_save'].includes(operation.type)) {
     throw configError('This Email Router configuration operation is no longer supported. Refresh Settings and try again.');
   }
   if (operation.type === 'routing_directory_save') {
@@ -180,7 +228,7 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
     }
     return data;
   }
-  if (operation.type === 'preset_save') {
+  if (['preset_save', 'preset_version_save', 'preset_override_save'].includes(operation.type)) {
     const { data, error } = await client.rpc('save_emailrouter_routing_change', {
       p_operation: operation,
       p_actor: profile.id,
@@ -190,10 +238,13 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
       const stale = /revision conflict/i.test(detail);
       const unavailable = /unavailable (?:destination|group)/i.test(detail);
       const duplicateName = /display_name|preset name|routing_presets_display_name/i.test(detail) && /duplicate|already|unique/i.test(detail);
+      const duplicateVersion = /routing_preset_versions_label|version_label/i.test(detail) && /duplicate|already|unique/i.test(detail);
       const message = stale
-        ? 'This routing preset changed after it was loaded. Refresh and try again.'
+        ? 'This routing preset configuration changed after it was loaded. Refresh and try again.'
         : unavailable
           ? 'A preset recipient is no longer included in the routing directory. Remove or replace it and try again.'
+          : duplicateVersion
+            ? 'This version label is already used within the routing preset.'
           : duplicateName
             ? 'This routing preset name is already in use. Choose a unique name.'
           : detail || 'The routing preset could not be saved.';

@@ -12,6 +12,7 @@ const RECIPIENT_KINDS = new Set(['to', 'cc', 'bcc']);
 const MAX_ROUTING_RECIPIENTS = 100;
 const MAX_MIME_BYTES = 25 * 1024 * 1024;
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
+const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 
 export const EMAIL_ROUTER_STORAGE = Object.freeze({
   mailboxes: 'mailbox_connections',
@@ -21,6 +22,11 @@ export const EMAIL_ROUTER_STORAGE = Object.freeze({
   outbox: 'mail_action_outbox',
   destinations: 'destinations',
   presetDestinations: 'routing_preset_destinations',
+  presetVersions: 'routing_preset_versions',
+  presetVersionConditions: 'routing_preset_version_conditions',
+  presetVersionDestinations: 'routing_preset_version_destinations',
+  routingLeaves: 'routing_leave_periods',
+  presetOverrides: 'routing_preset_overrides',
   presets: 'routing_presets',
   subscriptions: 'mailbox_subscriptions',
   deltaState: 'mailbox_delta_state',
@@ -217,6 +223,81 @@ function graphJson(response) {
   return response.status === 202 ? null : response.json().catch(() => null);
 }
 
+export function normalizeEmailRouterContentId(value) {
+  let normalized = String(value || '')
+    .replace(/&lt;|&#0*60;|&#x0*3c;/gi, '<')
+    .replace(/&gt;|&#0*62;|&#x0*3e;/gi, '>')
+    .replace(/&amp;|&#0*38;|&#x0*26;/gi, '&')
+    .trim()
+    .replace(/^cid:/i, '')
+    .replace(/^<|>$/g, '')
+    .trim();
+  try { normalized = decodeURIComponent(normalized); } catch { /* Preserve malformed provider values for an exact fallback match. */ }
+  return normalized.replace(/^<|>$/g, '').trim().toLowerCase();
+}
+
+export function extractEmailRouterInlineContentIds(body) {
+  const html = String(body || '');
+  const values = [];
+  const seen = new Set();
+  const candidates = [
+    ...[...html.matchAll(/\bsrc\s*=\s*(["'])\s*cid:([\s\S]*?)\1/gi)].map((match) => match[2]),
+    ...[...html.matchAll(/\bsrc\s*=\s*cid:([^\s>]+)/gi)].map((match) => match[1]),
+  ];
+  for (const candidate of candidates) {
+    const value = normalizeEmailRouterContentId(candidate);
+    if (value && !seen.has(value)) {
+      seen.add(value);
+      values.push(value);
+    }
+  }
+  return values;
+}
+
+function emailRouterAttachmentNameAliases(value) {
+  const name = normalizeEmailRouterContentId(value);
+  if (!name) return [];
+  const beforeAt = name.includes('@') ? name.slice(0, name.indexOf('@')) : name;
+  return [...new Set([name, beforeAt].filter(Boolean))];
+}
+
+export function resolveEmailRouterInlineAttachmentAliases(attachments, contentIds) {
+  const aliasesByIndex = new Map();
+  const unresolved = [];
+  const normalizedAttachments = (attachments || []).map((attachment, index) => ({
+    attachment,
+    index,
+    contentId: normalizeEmailRouterContentId(attachment?.contentId),
+    nameAliases: emailRouterAttachmentNameAliases(attachment?.name),
+  }));
+
+  for (const contentId of contentIds || []) {
+    const exact = normalizedAttachments.filter((item) => item.contentId && item.contentId === contentId);
+    const candidates = exact.length
+      ? exact
+      : normalizedAttachments.filter((item) => {
+          if (!String(item.attachment?.contentType || '').toLowerCase().startsWith('image/')) return false;
+          const cidAliases = emailRouterAttachmentNameAliases(contentId);
+          return item.nameAliases.some((alias) => cidAliases.includes(alias));
+        });
+    if (candidates.length !== 1) {
+      unresolved.push(contentId);
+      continue;
+    }
+    const aliases = aliasesByIndex.get(candidates[0].index) || [];
+    aliases.push(contentId);
+    aliasesByIndex.set(candidates[0].index, aliases);
+  }
+
+  return {
+    attachments: normalizedAttachments.map(({ attachment, index }) => {
+      const inlineAliases = aliasesByIndex.get(index) || [];
+      return inlineAliases.length ? { ...attachment, isInline: true, inlineAliases } : attachment;
+    }),
+    unresolved,
+  };
+}
+
 function messageMetadata(message, mailboxId, folder) {
   return {
     mailbox_id: mailboxId,
@@ -342,22 +423,40 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
   });
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {}, dependencies);
   const message = await graphJson(response);
-  if (message?.hasAttachments) {
+  const inlineContentIds = String(message?.body?.contentType || '').toLowerCase() === 'html'
+    ? extractEmailRouterInlineContentIds(message?.body?.content)
+    : [];
+  if (message?.hasAttachments || inlineContentIds.length) {
     try {
-      // contentId is subtype-specific and Graph rejects it on some attachment collections.
-      const attachmentQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline' });
-      const attachmentResponse = await emailRouterGraphFetch(
-        mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`),
-        {},
-        dependencies,
-      );
-      const attachmentPayload = await graphJson(attachmentResponse) || {};
-      const attachments = Array.isArray(attachmentPayload.value) ? attachmentPayload.value : [];
-      const inlineIndexes = attachments
-        .map((attachment, index) => attachment?.isInline === true && attachment?.id ? index : -1)
+      const listAttachments = async (includeContentId) => {
+        const selected = ['id', 'name', 'contentType', 'size', 'isInline', ...(includeContentId ? ['contentId'] : [])].join(',');
+        const attachmentQuery = new URLSearchParams({ '$select': selected, '$top': '100' });
+        let nextPath = mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`);
+        const attachments = [];
+        for (let page = 0; nextPath && page < 10; page += 1) {
+          const pageResponse = await emailRouterGraphFetch(nextPath, {}, dependencies);
+          const pagePayload = await graphJson(pageResponse) || {};
+          attachments.push(...(Array.isArray(pagePayload.value) ? pagePayload.value : []));
+          nextPath = pagePayload['@odata.nextLink'] || null;
+        }
+        return attachments;
+      };
+      let attachments;
+      try {
+        attachments = await listAttachments(true);
+      } catch (error) {
+        if (error?.status !== 400) throw error;
+        attachments = await listAttachments(false);
+      }
+      const metadataIndexes = inlineContentIds.length ? attachments
+        .map((attachment, index) => attachment?.id
+          && !attachment?.contentId
+          && String(attachment?.contentType || '').toLowerCase().startsWith('image/')
+          ? index
+          : -1)
         .filter((index) => index >= 0)
-        .slice(0, 20);
-      const inlineDetails = await Promise.all(inlineIndexes.map(async (index) => {
+        .slice(0, 50) : [];
+      const inlineDetails = await Promise.all(metadataIndexes.map(async (index) => {
         const attachment = attachments[index];
         const inlineQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
         try {
@@ -374,13 +473,18 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
       for (const [index, inlineDetail] of inlineDetails) {
         if (inlineDetail) attachments[index] = { ...attachments[index], ...inlineDetail };
       }
-      if (inlineIndexes.length < attachments.filter((attachment) => attachment?.isInline === true).length) {
+      if (inlineContentIds.length && metadataIndexes.length < attachments.filter((attachment) => attachment?.id && !attachment?.contentId && String(attachment?.contentType || '').toLowerCase().startsWith('image/')).length) {
         detailWarnings.push('Some inline images were omitted because the message contains too many embedded items.');
       }
-      message.attachments = attachments;
+      const resolved = resolveEmailRouterInlineAttachmentAliases(attachments, inlineContentIds);
+      message.attachments = resolved.attachments;
+      if (resolved.unresolved.length) {
+        detailWarnings.push(`${resolved.unresolved.length} inline ${resolved.unresolved.length === 1 ? 'image is' : 'images are'} unavailable in Microsoft 365.`);
+      }
     } catch {
       message.attachments = [];
       detailWarnings.push('Attachments could not be refreshed. The message body remains available.');
+      if (inlineContentIds.length) detailWarnings.push(`${inlineContentIds.length} inline ${inlineContentIds.length === 1 ? 'image is' : 'images are'} unavailable in Microsoft 365.`);
     }
   } else if (message) {
     message.attachments = [];
@@ -443,7 +547,8 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
 }
 
 export async function listEmailRouterDirectory({ client, search = '' }) {
-  const [destinationResult, groupResult] = await Promise.all([
+  const now = new Date().toISOString();
+  const [destinationResult, groupResult, leaveResult] = await Promise.all([
     routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
       .select('id,destination_kind,user_profile_id,display_name,email_address,nickname,sort_order')
       .eq('active', true)
@@ -458,11 +563,19 @@ export async function listEmailRouterDirectory({ client, search = '' }) {
       .order('sort_order')
       .order('display_name')
       .limit(500),
+    routerTable(client, EMAIL_ROUTER_STORAGE.routingLeaves)
+      .select('user_profile_id')
+      .eq('active', true)
+      .lte('starts_at', now)
+      .gt('ends_at', now)
+      .limit(500),
   ]);
   if (destinationResult.error) storageUnavailable(destinationResult.error);
   if (groupResult.error) storageUnavailable(groupResult.error);
+  if (leaveResult.error) storageUnavailable(leaveResult.error);
   const destinations = destinationResult.data || [];
   const profiles = await emailRouterProfilesById(client, destinations.map((destination) => destination.user_profile_id));
+  const leaveUserIds = new Set((leaveResult.data || []).map((leave) => leave.user_profile_id));
   const needle = text(search, 100).toLowerCase();
   const availableDestinationItems = destinations.map((destination) => {
     const profile = profiles.get(destination.user_profile_id);
@@ -475,6 +588,8 @@ export async function listEmailRouterDirectory({ client, search = '' }) {
       id: destination.id,
       kind: 'destination',
       label: destination.nickname,
+      userProfileId: isFcosUser ? destination.user_profile_id : null,
+      onLeave: isFcosUser && leaveUserIds.has(destination.user_profile_id),
       sortOrder: destination.sort_order,
       matchesSearch: !needle || searchable.includes(needle),
     };
@@ -482,20 +597,270 @@ export async function listEmailRouterDirectory({ client, search = '' }) {
   const availableDestinationIds = new Set(availableDestinationItems.map((item) => item.id));
   const destinationItems = availableDestinationItems.filter((item) => item.matchesSearch);
   const groupItems = (groupResult.data || []).map((group) => {
-    const memberCount = (group.destination_group_members || []).filter((member) => availableDestinationIds.has(member.destination_id)).length;
+    const availableMembers = (group.destination_group_members || []).filter((member) => availableDestinationIds.has(member.destination_id));
+    const memberCount = availableMembers.length;
+    const onLeaveLabels = availableMembers
+      .map((member) => availableDestinationItems.find((item) => item.id === member.destination_id))
+      .filter((item) => item?.onLeave)
+      .map((item) => item.label);
     const searchable = `${group.display_name || ''} group`.toLowerCase();
     if (!memberCount || (needle && !searchable.includes(needle))) return null;
-    return { id: group.id, kind: 'group', label: group.display_name, memberCount, sortOrder: group.sort_order };
+    return { id: group.id, kind: 'group', label: group.display_name, memberCount, onLeaveLabels, sortOrder: group.sort_order };
   }).filter(Boolean);
   return [...destinationItems, ...groupItems]
     .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.label.localeCompare(right.label))
     .map(({ sortOrder: _sortOrder, matchesSearch: _matchesSearch, ...item }) => item);
 }
 
-export async function listEmailRouterPresets(client) {
-  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.presets).select('id,display_name,description,active,updated_at,routing_preset_destinations(destination_id,group_id,recipient_kind,position)').eq('active', true).order('display_name');
+function routingVersionDestinations(rows, versionId) {
+  return sortEmailRouterPresetDestinations((rows || []).filter((row) => row.version_id === versionId)).map((row) => ({
+    destinationId: row.destination_id || null,
+    groupId: row.group_id || null,
+    kind: row.recipient_kind,
+    position: row.position,
+  }));
+}
+
+export function resolveEmailRouterPresetVersion({ versions, overrides = [], activeLeaveUserIds = [], nicknameByUserId = new Map(), now = Date.now() }) {
+  const activeVersions = (versions || []).filter((version) => version.active !== false);
+  const baseline = activeVersions.find((version) => version.version_kind === 'baseline');
+  if (!baseline) return { error: 'The Standard routing version is unavailable.' };
+  const currentOverrides = (overrides || []).filter((entry) => entry.active !== false
+    && new Date(entry.starts_at).getTime() <= now
+    && new Date(entry.ends_at).getTime() > now
+    && activeVersions.some((version) => version.id === entry.version_id));
+  if (currentOverrides.length > 1) return { error: 'Multiple scheduled routing overrides are active.' };
+  if (currentOverrides.length === 1) {
+    const version = activeVersions.find((item) => item.id === currentOverrides[0].version_id);
+    return { version, reason: 'Scheduled routing override', reasonType: 'override', matchedUserIds: [] };
+  }
+
+  const leaveIds = new Set(activeLeaveUserIds || []);
+  const matches = activeVersions.filter((version) => version.version_kind === 'conditional').map((version) => {
+    const conditionUserIds = Array.isArray(version.conditionUserIds) ? version.conditionUserIds : [];
+    const matchedUserIds = conditionUserIds.filter((userId) => leaveIds.has(userId));
+    const matched = version.match_mode === 'all'
+      ? conditionUserIds.length > 0 && matchedUserIds.length === conditionUserIds.length
+      : matchedUserIds.length > 0;
+    return { version, matchedUserIds, specificity: matchedUserIds.length, matched };
+  }).filter((item) => item.matched).sort((left, right) =>
+    Number(right.version.priority || 0) - Number(left.version.priority || 0)
+    || right.specificity - left.specificity);
+  if (matches.length > 1
+      && Number(matches[0].version.priority || 0) === Number(matches[1].version.priority || 0)
+      && matches[0].specificity === matches[1].specificity) {
+    return { error: `Routing versions ${matches[0].version.version_label} and ${matches[1].version.version_label} have equal priority and specificity.` };
+  }
+  if (!matches.length) return { version: baseline, reason: 'Standard routing', reasonType: 'baseline', matchedUserIds: [] };
+  const selected = matches[0];
+  const labels = selected.matchedUserIds.map((userId) => nicknameByUserId.get(userId)).filter(Boolean);
+  return {
+    version: selected.version,
+    reason: labels.length ? `${labels.join(' and ')} on leave` : 'Leave cover routing',
+    reasonType: 'leave',
+    matchedUserIds: selected.matchedUserIds,
+  };
+}
+
+async function emailRouterRoutingConfiguration(client) {
+  const [destinations, groups, members] = await Promise.all([
+    routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
+      .select('id,destination_kind,user_profile_id,email_address,nickname,active,redirect_enabled,sort_order,revision,updated_at')
+      .order('id'),
+    routerTable(client, 'destination_groups')
+      .select('id,active,redirect_enabled,sort_order,revision,updated_at')
+      .order('id'),
+    routerTable(client, 'destination_group_members')
+      .select('group_id,destination_id')
+      .order('group_id')
+      .order('destination_id'),
+  ]);
+  const failed = [destinations, groups, members].find((result) => result.error);
+  if (failed?.error) storageUnavailable(failed.error);
+  const profiles = await emailRouterProfilesById(client, (destinations.data || []).map((row) => row.user_profile_id));
+  const profileRows = [...profiles.values()].map((profile) => ({ id: profile.id, email: profile.email, active: profile.active }));
+  const fingerprint = createHash('sha256').update(JSON.stringify({
+    destinations: destinations.data || [],
+    groups: groups.data || [],
+    members: members.data || [],
+    profiles: profileRows.sort((left, right) => left.id.localeCompare(right.id)),
+  })).digest('hex');
+  return { destinations: destinations.data || [], groups: groups.data || [], members: members.data || [], profiles, fingerprint };
+}
+
+function routeDefinitionHash({ preset, version, destinations, configurationFingerprint }) {
+  return createHash('sha256').update(JSON.stringify({
+    presetId: preset.id,
+    presetRevision: Number(preset.revision),
+    versionId: version.id,
+    versionRevision: Number(version.revision),
+    destinations,
+    configurationFingerprint,
+  })).digest('hex');
+}
+
+export function createEmailRouterRouteSnapshotToken(value, env = process.env) {
+  const payload = Buffer.from(JSON.stringify(value)).toString('base64url');
+  const signature = createHmac('sha256', attachmentSecret(env)).update(`route-snapshot-v1:${payload}`).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+export function verifyEmailRouterRouteSnapshotToken(token, env = process.env) {
+  const [payload, signature] = String(token || '').split('.');
+  const expected = createHmac('sha256', attachmentSecret(env)).update(`route-snapshot-v1:${payload || ''}`).digest('base64url');
+  if (!payload || !signature || Buffer.byteLength(signature) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    throw routerError('The reviewed routing preset is invalid. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_INVALID');
+  }
+  let value;
+  try { value = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { throw routerError('The reviewed routing preset is invalid. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_INVALID'); }
+  if (!Number.isFinite(value.issuedAt) || !Number.isFinite(value.expiresAt) || value.expiresAt <= value.issuedAt) {
+    throw routerError('The reviewed routing preset is invalid. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_INVALID');
+  }
+  if (value.expiresAt < Date.now()) {
+    throw routerError('The reviewed routing preset has expired. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_EXPIRED');
+  }
+  return value;
+}
+
+export async function listEmailRouterPresets(client, { profileId = null, env = process.env, now = Date.now() } = {}) {
+  const timestamp = new Date(now).toISOString();
+  const presetResult = await routerTable(client, EMAIL_ROUTER_STORAGE.presets)
+    .select('id,display_name,description,active,revision,updated_at')
+    .eq('active', true)
+    .order('display_name');
+  if (presetResult.error) storageUnavailable(presetResult.error);
+  const presets = presetResult.data || [];
+  if (!presets.length) return [];
+  const presetIds = presets.map((preset) => preset.id);
+  const [versionResult, destinationResult, conditionResult, overrideResult, leaveResult, configuration] = await Promise.all([
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetVersions)
+      .select('id,preset_id,version_label,version_kind,match_mode,priority,active,revision,updated_at')
+      .in('preset_id', presetIds),
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetVersionDestinations)
+      .select('version_id,destination_id,group_id,recipient_kind,position'),
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetVersionConditions)
+      .select('version_id,user_profile_id'),
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetOverrides)
+      .select('id,preset_id,version_id,starts_at,ends_at,active')
+      .in('preset_id', presetIds)
+      .eq('active', true)
+      .lte('starts_at', timestamp)
+      .gt('ends_at', timestamp),
+    routerTable(client, EMAIL_ROUTER_STORAGE.routingLeaves)
+      .select('user_profile_id')
+      .eq('active', true)
+      .lte('starts_at', timestamp)
+      .gt('ends_at', timestamp),
+    emailRouterRoutingConfiguration(client),
+  ]);
+  const failed = [versionResult, destinationResult, conditionResult, overrideResult, leaveResult].find((result) => result.error);
+  if (failed?.error) storageUnavailable(failed.error);
+  const leaveUserIds = [...new Set((leaveResult.data || [])
+    .map((leave) => leave.user_profile_id)
+    .filter((userId) => configuration.profiles.get(userId)?.active === true))];
+  const nicknameByUserId = new Map(configuration.destinations.filter((item) => item.user_profile_id).map((item) => [item.user_profile_id, item.nickname]));
+  const destinationById = new Map(configuration.destinations.map((item) => [item.id, item]));
+  const membersByGroup = new Map();
+  for (const member of configuration.members) {
+    const current = membersByGroup.get(member.group_id) || [];
+    current.push(member.destination_id);
+    membersByGroup.set(member.group_id, current);
+  }
+
+  return presets.map((preset) => {
+    const versions = (versionResult.data || []).filter((version) => version.preset_id === preset.id).map((version) => ({
+      ...version,
+      conditionUserIds: (conditionResult.data || []).filter((condition) => condition.version_id === version.id).map((condition) => condition.user_profile_id),
+    }));
+    const resolved = resolveEmailRouterPresetVersion({
+      versions,
+      overrides: (overrideResult.data || []).filter((entry) => entry.preset_id === preset.id),
+      activeLeaveUserIds: leaveUserIds,
+      nicknameByUserId,
+      now,
+    });
+    if (resolved.error) {
+      return { id: preset.id, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: [], available: false, configurationIssue: resolved.error, warnings: [resolved.error] };
+    }
+    const destinations = routingVersionDestinations(destinationResult.data, resolved.version.id);
+    const selectedDestinationIds = [...new Set(destinations.flatMap((selection) => selection.destinationId
+      ? [selection.destinationId]
+      : membersByGroup.get(selection.groupId) || []))];
+    const onLeaveLabels = selectedDestinationIds.map((id) => destinationById.get(id)).filter((destination) => destination?.user_profile_id && leaveUserIds.includes(destination.user_profile_id)).map((destination) => destination.nickname).filter(Boolean);
+    const warnings = onLeaveLabels.length ? [`Currently on leave: ${[...new Set(onLeaveLabels)].join(', ')}. Review the recipients before sending.`] : [];
+    const definitionHash = routeDefinitionHash({ preset, version: resolved.version, destinations, configurationFingerprint: configuration.fingerprint });
+    const issuedAt = now;
+    const expiresAt = now + ROUTE_SNAPSHOT_TTL_MS;
+    const routeSnapshotToken = profileId ? createEmailRouterRouteSnapshotToken({
+      version: 1,
+      profileId,
+      presetId: preset.id,
+      presetVersionId: resolved.version.id,
+      definitionHash,
+      reason: resolved.reason,
+      issuedAt,
+      expiresAt,
+    }, env) : null;
+    return {
+      id: preset.id,
+      label: preset.display_name,
+      description: preset.description,
+      updatedAt: preset.updated_at,
+      destinations,
+      available: true,
+      effectiveVersion: { id: resolved.version.id, label: resolved.version.version_label, reason: resolved.reason, reasonType: resolved.reasonType },
+      warnings,
+      routeSnapshotToken,
+      routeSnapshotExpiresAt: new Date(expiresAt).toISOString(),
+    };
+  });
+}
+
+export async function listEmailRouterRoutingLeaves(client, { profile, includeAll = false } = {}) {
+  let query = routerTable(client, EMAIL_ROUTER_STORAGE.routingLeaves)
+    .select('id,user_profile_id,starts_at,ends_at,note,active,revision,created_at,updated_at')
+    .eq('active', true)
+    .order('starts_at', { ascending: false })
+    .limit(includeAll ? 1000 : 200);
+  if (!includeAll) query = query.eq('user_profile_id', profile.id);
+  const { data, error } = await query;
   if (error) storageUnavailable(error);
-  return (data || []).map((preset) => ({ id: preset.id, label: preset.display_name, description: preset.description, updatedAt: preset.updated_at, destinations: sortEmailRouterPresetDestinations(preset.routing_preset_destinations).map(({ destination_id, group_id, recipient_kind, position }) => ({ destinationId: destination_id, groupId: group_id, kind: recipient_kind, position })) }));
+  const profiles = await emailRouterProfilesById(client, (data || []).map((row) => row.user_profile_id));
+  let activeUsers = [];
+  if (includeAll) {
+    const { data: userRows, error: userError } = await client.from('user_profiles').select('id,email,full_name,active').eq('active', true).order('full_name').limit(500);
+    if (userError) storageUnavailable(userError);
+    activeUsers = userRows || [];
+    for (const user of activeUsers) profiles.set(user.id, user);
+  }
+  return {
+    scope: includeAll ? 'all' : 'self',
+    periods: (data || []).map((row) => ({
+      id: row.id,
+      userProfileId: row.user_profile_id,
+      userName: profiles.get(row.user_profile_id)?.full_name || 'FCOS user',
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      note: row.note,
+      active: row.active,
+      revision: Number(row.revision),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    users: includeAll ? activeUsers.map((row) => ({ id: row.id, name: row.full_name, email: row.email })) : [],
+  };
+}
+
+export async function saveEmailRouterRoutingLeave(client, profile, operation) {
+  const { data, error } = await client.rpc('save_emailrouter_routing_leave', {
+    p_operation: operation,
+    p_actor: profile.id,
+  });
+  if (error) {
+    const stale = /revision conflict/i.test(error.message || '');
+    throw routerError(stale ? 'This routing leave period changed after it was loaded. Refresh and try again.' : error.message || 'Routing leave could not be saved.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_LEAVE_SAVE_FAILED');
+  }
+  return data;
 }
 
 const RECIPIENT_KIND_ORDER = new Map([['to', 0], ['cc', 1], ['bcc', 2]]);
@@ -751,20 +1116,54 @@ function hasRecipientInput(input) {
   return Boolean(input.presetId || normalizeEmailRouterDestinationSelections(input).length || normalizeEmailRouterManualRecipients(input).length);
 }
 
-async function presetRecipients(client, presetId) {
-  if (!presetId) return [];
-  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.presetDestinations)
-    .select('destination_id,group_id,recipient_kind,position')
-    .eq('preset_id', safeId(presetId, 'preset identifier'))
-    .order('recipient_kind')
-    .order('position');
-  if (error) storageUnavailable(error);
-  return (data || []).map((row) => ({
-    destinationId: row.destination_id || null,
-    groupId: row.group_id || null,
-    kind: row.recipient_kind,
-    position: row.position,
-  }));
+async function resolveEmailRouterPresetSnapshot(client, profileId, input, env = process.env) {
+  const snapshot = verifyEmailRouterRouteSnapshotToken(input.routeSnapshotToken, env);
+  const presetId = safeId(input.presetId, 'preset identifier');
+  if (snapshot.profileId !== profileId || snapshot.presetId !== presetId) {
+    throw routerError('The reviewed routing preset belongs to a different user or preset. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_MISMATCH');
+  }
+  const [presetResult, versionResult, destinationResult, configuration] = await Promise.all([
+    routerTable(client, EMAIL_ROUTER_STORAGE.presets)
+      .select('id,display_name,active,revision')
+      .eq('id', presetId)
+      .eq('active', true)
+      .maybeSingle(),
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetVersions)
+      .select('id,preset_id,version_label,active,revision')
+      .eq('id', safeId(snapshot.presetVersionId, 'preset version identifier'))
+      .eq('preset_id', presetId)
+      .eq('active', true)
+      .maybeSingle(),
+    routerTable(client, EMAIL_ROUTER_STORAGE.presetVersionDestinations)
+      .select('version_id,destination_id,group_id,recipient_kind,position')
+      .eq('version_id', safeId(snapshot.presetVersionId, 'preset version identifier')),
+    emailRouterRoutingConfiguration(client),
+  ]);
+  const failed = [presetResult, versionResult, destinationResult].find((result) => result.error);
+  if (failed?.error) storageUnavailable(failed.error);
+  if (!presetResult.data || !versionResult.data) {
+    throw routerError('The reviewed routing preset is no longer available. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_STALE');
+  }
+  const destinations = routingVersionDestinations(destinationResult.data, versionResult.data.id);
+  const definitionHash = routeDefinitionHash({
+    preset: presetResult.data,
+    version: versionResult.data,
+    destinations,
+    configurationFingerprint: configuration.fingerprint,
+  });
+  if (!snapshot.definitionHash || snapshot.definitionHash !== definitionHash) {
+    throw routerError('The routing directory or preset changed after it was reviewed. Refresh the recipients.', 409, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_STALE');
+  }
+  return {
+    presetId,
+    versionId: versionResult.data.id,
+    versionLabel: versionResult.data.version_label,
+    reason: text(snapshot.reason, 500) || 'Reviewed routing preset',
+    definitionHash,
+    issuedAt: new Date(Number(snapshot.issuedAt)).toISOString(),
+    expiresAt: new Date(Number(snapshot.expiresAt)).toISOString(),
+    selections: destinations,
+  };
 }
 
 async function expandRoutingSelections(client, selections) {
@@ -808,13 +1207,17 @@ async function expandRoutingSelections(client, selections) {
   return expanded;
 }
 
-async function persistActionDestinations(client, actionId, input) {
-  const rows = input.presetId
-    ? await routerTable(client, EMAIL_ROUTER_STORAGE.presetDestinations)
-      .select('destination_id,group_id,recipient_kind,position')
-      .eq('preset_id', safeId(input.presetId, 'preset identifier'))
-      .order('recipient_kind')
-      .order('position')
+async function persistActionDestinations(client, actionId, input, routeSnapshot = null) {
+  const rows = routeSnapshot
+    ? {
+        data: routeSnapshot.selections.map((selection) => ({
+          destination_id: selection.destinationId || null,
+          group_id: selection.groupId || null,
+          recipient_kind: selection.kind,
+          position: selection.position,
+        })),
+        error: null,
+      }
     : {
         data: normalizeEmailRouterDestinationSelections(input).map((selection, index) => ({
           destination_id: selection.destinationId || null,
@@ -836,11 +1239,9 @@ async function persistActionDestinations(client, actionId, input) {
   if (error) storageUnavailable(error);
 }
 
-export async function resolveEmailRouterActionRecipients(client, input) {
-  const selected = input.presetId
-    ? await presetRecipients(client, input.presetId)
-    : normalizeEmailRouterDestinationSelections(input);
-  const expanded = await expandRoutingSelections(client, selected);
+export async function resolveEmailRouterActionRecipients(client, input, routeSnapshot = null) {
+  const selected = routeSnapshot?.selections || normalizeEmailRouterDestinationSelections(input);
+  const expanded = routeSnapshot?.expandedSelections || await expandRoutingSelections(client, selected);
   const destinationIds = [...new Set(expanded.map((selection) => selection.destinationId))];
   const addresses = await destinationAddresses(client, destinationIds);
   const addressByDestination = new Map(destinationIds.map((destinationId, index) => [destinationId, addresses[index]]));
@@ -852,7 +1253,7 @@ export async function resolveEmailRouterActionRecipients(client, input) {
   return normalizedRecipients(recipients);
 }
 
-function requestFingerprint({ mailboxId, messageId, actionType, input }) {
+function requestFingerprint({ mailboxId, messageId, actionType, input, routeSnapshot = null }) {
   const destinationSelections = normalizeEmailRouterDestinationSelections(input)
     .map(({ destinationId, groupId, kind, position }) => `${kind}:${position}:${destinationId ? `destination:${destinationId}` : `group:${groupId}`}`);
   const manualRecipientHashes = normalizeEmailRouterManualRecipients(input)
@@ -866,6 +1267,7 @@ function requestFingerprint({ mailboxId, messageId, actionType, input }) {
     mailboxId,
     messageId,
     presetId: input.presetId || null,
+    ...(routeSnapshot ? { presetVersionId: routeSnapshot.versionId, routeDefinitionHash: routeSnapshot.definitionHash } : {}),
   })).digest('hex');
 }
 
@@ -880,11 +1282,11 @@ function actionResult(action) {
   };
 }
 
-async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, input }, dependencies) {
+async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, input, routeSnapshot = null }, dependencies) {
   if (actionType === 'redirect') {
     const source = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/$value`), { headers: { accept: 'message/rfc822' } }, dependencies);
     const raw = new Uint8Array(await source.arrayBuffer());
-    const recipients = await resolveEmailRouterActionRecipients(client, input);
+    const recipients = await resolveEmailRouterActionRecipients(client, input, routeSnapshot);
     const prepared = buildEmailRouterRedirectMime({ raw, mailboxAddress: mailbox.emailAddress, recipients });
     const response = await emailRouterGraphFetch(mailboxPath(mailbox, '/messages'), { method: 'POST', headers: { 'content-type': 'text/plain' }, body: prepared.raw.toString('base64') }, dependencies);
     const draft = await graphJson(response);
@@ -906,7 +1308,7 @@ async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, 
   const draft = await graphJson(response);
   const draftId = safeId(draft?.id, 'draft identifier');
   if (actionType === 'forward' && hasRecipientInput(input)) {
-    const recipients = await resolveEmailRouterActionRecipients(client, input);
+    const recipients = await resolveEmailRouterActionRecipients(client, input, routeSnapshot);
     const graphRecipients = (kind) => recipients.filter((recipient) => recipient.kind === kind).map((recipient) => ({ emailAddress: { address: recipient.address } }));
     await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toRecipients: graphRecipients('to'), ccRecipients: graphRecipients('cc'), bccRecipients: graphRecipients('bcc') }) }, dependencies);
   }
@@ -924,9 +1326,23 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   if (input.presetId && (directSelections.length || manualRecipients.length)) {
     throw routerError('Choose either one routing preset or direct recipients.', 400, 'EMAIL_ROUTER_ROUTE_AMBIGUOUS');
   }
+  if (!input.presetId && input.routeSnapshotToken) {
+    throw routerError('A routing snapshot can be used only with its preset.', 400, 'EMAIL_ROUTER_ROUTE_SNAPSHOT_UNEXPECTED');
+  }
   if (['redirect', 'forward'].includes(actionType) && !hasRecipientInput(input)) {
     throw routerError('At least one To, Cc, or Bcc recipient is required.', 400, 'EMAIL_ROUTER_RECIPIENT_REQUIRED');
   }
+  const routeSnapshot = input.presetId
+    ? await resolveEmailRouterPresetSnapshot(client, profile.id, input, dependencies.env || process.env)
+    : null;
+  if (routeSnapshot) routeSnapshot.expandedSelections = await expandRoutingSelections(client, routeSnapshot.selections);
+  const routeRecipientSnapshot = routeSnapshot ? (() => {
+    const positions = { to: 0, cc: 0, bcc: 0 };
+    return routeSnapshot.expandedSelections.map((selection) => {
+      positions[selection.kind] += 1;
+      return { destinationId: selection.destinationId, recipientKind: selection.kind, position: positions[selection.kind] };
+    });
+  })() : null;
   const suppliedIdempotencyKey = text(input.idempotencyKey || input.operationId, 200);
   if (suppliedIdempotencyKey && suppliedIdempotencyKey.length < 16) {
     throw routerError('The mail operation identifier is invalid.', 400, 'EMAIL_ROUTER_IDEMPOTENCY_INVALID');
@@ -935,11 +1351,18 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   const action = await createAction(client, {
     message_id: indexed.id,
     preset_id: input.presetId || null,
+    preset_version_id: routeSnapshot?.versionId || null,
+    preset_version_label_snapshot: routeSnapshot?.versionLabel || null,
+    route_resolution_reason: routeSnapshot?.reason || null,
+    route_definition_hash: routeSnapshot?.definitionHash || null,
+    route_recipient_snapshot: routeRecipientSnapshot,
+    route_snapshot_issued_at: routeSnapshot?.issuedAt || null,
+    route_snapshot_expires_at: routeSnapshot?.expiresAt || null,
     action_type: actionType,
     state: 'reserved',
     requested_by: profile.id,
     idempotency_key: idempotencyKey,
-    request_fingerprint: requestFingerprint({ mailboxId: mailbox.id, messageId: indexed.id, actionType, input }),
+    request_fingerprint: requestFingerprint({ mailboxId: mailbox.id, messageId: indexed.id, actionType, input, routeSnapshot }),
   });
   if (action.duplicate) return actionResult(action);
   await recordEvent(client, { eventType: 'mail_action.reserved', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
@@ -955,7 +1378,7 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   }
   if (['redirect', 'forward'].includes(actionType)) {
     try {
-      await persistActionDestinations(client, action.id, input);
+      await persistActionDestinations(client, action.id, input, routeSnapshot);
     } catch (error) {
       const failureCode = String(error.code || 'email_router_route_invalid').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
       await updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() });
@@ -987,7 +1410,7 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     }
   }
   try {
-    const draftId = await createGraphDraft({ client, mailbox, actionType, sourceMessageId: source, input }, dependencies);
+    const draftId = await createGraphDraft({ client, mailbox, actionType, sourceMessageId: source, input, routeSnapshot }, dependencies);
     await updateAction(client, action.id, { state: 'draft_created', provider_operation_id: draftId, draft_created_at: new Date().toISOString() });
     await enqueueOutbox(client, { mail_action_id: action.id, state: 'draft_created', provider_operation_id: draftId, next_attempt_at: new Date().toISOString() });
     await recordEvent(client, { eventType: 'mail_action.draft_created', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });

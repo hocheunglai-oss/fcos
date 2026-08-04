@@ -17,6 +17,8 @@ export function normaliseDirectoryEntries(directory) {
       kind: item.kind === 'group' ? 'group' : 'destination',
       label: item.label || item.nickname || item.name || '',
       memberCount: Number(item.memberCount || 0),
+      onLeave: item.onLeave === true,
+      onLeaveLabels: Array.isArray(item.onLeaveLabels) ? item.onLeaveLabels : [],
     };
   }).filter((item) => item.id && item.label);
 }

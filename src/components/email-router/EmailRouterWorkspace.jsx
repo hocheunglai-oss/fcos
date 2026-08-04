@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, CheckCircle2, Inbox, Loader2, Mail, RefreshCw, Search, Send, ShieldCheck, XCircle } from 'lucide-react';
+import { Archive, CalendarOff, CheckCircle2, Inbox, Loader2, Mail, RefreshCw, Search, Send, ShieldCheck, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -12,6 +12,7 @@ import EmailActionDialog from './EmailActionDialog';
 import EmailMessageList from './EmailMessageList';
 import EmailMessageSheet, { EmailMessageDetail } from './EmailMessageSheet';
 import EmailRedirectPanel from './EmailRedirectPanel';
+import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
 
 const LIMIT = 30;
 const METHODOLOGY = {
@@ -20,11 +21,12 @@ const METHODOLOGY = {
   sections: [
     { title: 'Mailbox data', body: 'Inbox, Sent, and Archive are read from the connected mailbox service. The workspace preserves the server result and does not infer delivery or deletion outcomes.' },
     { title: 'Routing directory', body: 'Administrators and the General Manager maintain one ordered directory of active FCOS users, approved external contacts, and groups. The same order is used in Redirect and Forward. Short routing labels preserve their letter case and must be unique using an exact case-sensitive comparison.' },
-    { title: 'Routing presets', body: 'A routing preset is identified by its unique name and appears as a selectable label. Selecting it fills the numbered To, Cc, and Bcc recipients. The recipients remain editable; changing any recipient keeps the amended selection and switches off the preset label.' },
+    { title: 'Routing presets', body: 'Each preset has a Standard route and may have leave-aware versions. FCOS selects the current version from scheduled overrides and active routing leave, then holds that reviewed route for up to 60 minutes. Changing any recipient switches off the preset label and keeps the amended direct route.' },
+    { title: 'Routing leave', body: 'My Routing Leave records operational availability only; it is not an HR leave request. Administrators and the General Manager maintain company routing rules. FCOS warns when a reviewed recipient is currently on leave but does not prevent a deliberate send.' },
     { title: 'Recipient order', body: 'The fixed Redirect window numbers To, Cc, and Bcc independently. Bcc stays hidden until requested. FCOS preserves each sequence in the outgoing message so visible recipients see the same To and Cc order, while Bcc remains private.' },
     { title: 'Controlled actions', body: 'Redirect uses one explicit Send Redirect command from the fixed window and does not add a second confirmation. Reply, Forward, Archive, Delete, Undo, and uncertain-send review retain their confirmation safeguards. FCOS never retries a submitted message automatically.' },
     { title: 'Routing advisor', body: 'The Advisor is read-only and remains below Send Redirect. Suggestions are preselected only when confidence is above 60%; the user must still review recipient roles and order and explicitly send the message.' },
-    { title: 'Message safety', body: 'Message HTML is sanitized before display. Attachments are requested through a time-limited URL only when a user selects Download.' },
+    { title: 'Message safety', body: 'Message HTML is sanitized before display. Embedded images are matched to authorized Microsoft Graph attachments and streamed temporarily; an unmatched image is shown as unavailable. Other attachments are requested only when a user selects Download.' },
     { title: 'Availability', body: 'When the router backend is unavailable, FCOS keeps the workspace read-only and reports the service state instead of simulating mail activity.' },
   ],
 };
@@ -67,6 +69,7 @@ export default function EmailRouterWorkspace() {
   const [advisor, setAdvisor] = useState(null);
   const [advisorLoading, setAdvisorLoading] = useState(false);
   const [advisorError, setAdvisorError] = useState('');
+  const [leaveOpen, setLeaveOpen] = useState(false);
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -288,7 +291,7 @@ export default function EmailRouterWorkspace() {
       title="Email Router"
       description="Review connected mailbox traffic and submit controlled routing actions."
       meta={loading ? 'Loading mailbox...' : listError ? 'Mailbox service unavailable' : `${messages.length.toLocaleString()} messages loaded`}
-      actions={<><PageMethodology {...METHODOLOGY} /><Button variant="outline" size="icon" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
+      actions={<><Button variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />My Routing Leave</Button><PageMethodology {...METHODOLOGY} /><Button variant="outline" size="icon" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
     />
     <ResultNotice result={actionResult} />
     <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-10rem)] xl:flex-row">
@@ -301,5 +304,6 @@ export default function EmailRouterWorkspace() {
     </section>
     {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />
+    <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} />
   </div>;
 }
