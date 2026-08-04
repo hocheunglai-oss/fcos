@@ -428,6 +428,33 @@ export const SPECIAL_TERMS_METHODOLOGY = {
   ],
 };
 
+export const FCOS_IMPROVEMENTS_METHODOLOGY = {
+  title: 'FCOS Improvements',
+  description: 'How bugs and feature requests are reported, discussed, approved, and resolved.',
+  sections: [
+    {
+      title: 'Shared visibility',
+      body: 'Every active FCOS user can report a bug or propose a feature and can see every ticket, its approved history, pending proposals, comments, and private attachments. Bug reports require reproducible evidence; feature requests require a desired outcome and business value.',
+    },
+    {
+      title: 'Controlled discussion and workflow',
+      body: 'Comments, assignments, ticket edits, and status changes are proposals. They remain visibly Pending Approval until the active UUID-backed General Manager approves or rejects them. Proposals created by the General Manager are applied immediately and recorded as approved.',
+    },
+    {
+      title: 'Status progression',
+      body: 'Tickets progress through Reported, Under Review, Accepted, In Progress, Ready for Verification, and Closed. Reopened and Rejected preserve exceptional outcomes. The server validates every transition and rejects stale changes.',
+    },
+    {
+      title: 'Codex collaboration',
+      body: 'The ticket key is the stable reference for a later Codex task. Codex may inspect a ticket and propose a comment or status change through the local helper, but cannot approve its own proposal. The General Manager remains the decision authority.',
+    },
+    {
+      title: 'Files and audit',
+      body: 'Attachments are stored in a private Supabase bucket and opened through short-lived links. Operational events are added to the Universal Audit Trail using redacted metadata; ticket descriptions, comments, file names, and file contents are not copied into audit records.',
+    },
+  ],
+};
+
 export const SETTINGS_METHODOLOGIES = {
   system: {
     title: 'System Settings',

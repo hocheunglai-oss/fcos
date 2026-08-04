@@ -14,6 +14,7 @@ import {
   ChartNoAxesCombined,
   CandlestickChart,
   LayoutDashboard,
+  Lightbulb,
   ListTodo,
   LogOut,
   MailSearch,
@@ -49,6 +50,7 @@ const navGroups = [
       workspaceNavigation('my_commitments', { icon: UserRoundCheck }),
       workspaceNavigation('growth_coaching', { icon: Sprout }),
       workspaceNavigation('projects_tasks', { icon: ListTodo }),
+      workspaceNavigation('fcos_improvements', { icon: Lightbulb }),
     ],
   },
   {

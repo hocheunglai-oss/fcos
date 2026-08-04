@@ -64,6 +64,17 @@ import { workNotificationsList as workNotificationsListService, workNotification
 import { reportSystemError, resolveSystemErrorsForHandler, shouldAutoResolveSystemError, shouldNotifySystemError } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
+  improvementAttachmentComplete as improvementAttachmentCompleteService,
+  improvementAttachmentDelete as improvementAttachmentDeleteService,
+  improvementAttachmentPrepare as improvementAttachmentPrepareService,
+  improvementAttachmentUrl as improvementAttachmentUrlService,
+  improvementCreate as improvementCreateService,
+  improvementDecision as improvementDecisionService,
+  improvementDetail as improvementDetailService,
+  improvementPropose as improvementProposeService,
+  improvementsList as improvementsListService,
+} from '../_fcosImprovements.js';
+import {
   coachingActionPublish as coachingActionPublishService,
   coachingActionProposalRespond as coachingActionProposalRespondService,
   coachingActionSave as coachingActionSaveService,
@@ -784,6 +795,42 @@ async function collaborationNotificationsRead(body = {}, req = null, accessConte
   return collaborationNotificationsReadService(body, accessContext || (await requireActiveUser(req)));
 }
 
+async function improvementsList(body = {}, req = null, accessContext = null) {
+  return improvementsListService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementDetail(body = {}, req = null, accessContext = null) {
+  return improvementDetailService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementCreate(body = {}, req = null, accessContext = null) {
+  return improvementCreateService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementPropose(body = {}, req = null, accessContext = null) {
+  return improvementProposeService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementDecision(body = {}, req = null, accessContext = null) {
+  return improvementDecisionService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementAttachmentPrepare(body = {}, req = null, accessContext = null) {
+  return improvementAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementAttachmentComplete(body = {}, req = null, accessContext = null) {
+  return improvementAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementAttachmentUrl(body = {}, req = null, accessContext = null) {
+  return improvementAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function improvementAttachmentDelete(body = {}, req = null, accessContext = null) {
+  return improvementAttachmentDeleteService(body, accessContext || (await requireActiveUser(req)));
+}
+
 function requireAdministratorContext(accessContext) {
   if (!isAdministratorUserType(accessContext?.profile?.user_type)) {
     throw appError('Administrator or General Manager access required.', 403);
@@ -1063,6 +1110,15 @@ const HANDLER_MODULE_ACCESS = {
   collaborationAttachmentDelete: [],
   collaborationNotificationsList: [],
   collaborationNotificationsRead: [],
+  improvementsList: [],
+  improvementDetail: [],
+  improvementCreate: [],
+  improvementPropose: [],
+  improvementDecision: [],
+  improvementAttachmentPrepare: [],
+  improvementAttachmentComplete: [],
+  improvementAttachmentUrl: [],
+  improvementAttachmentDelete: [],
   workNotificationsList: [],
   workNotificationsRead: [],
   workNotificationsState: [],
@@ -2047,7 +2103,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows] = await Promise.all([
+  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2069,6 +2125,21 @@ async function universalAuditTrail(body, req) {
       target: row.collaboration_items?.item_key || row.item_id || '—',
       summary: compactAuditSummary([row.collaboration_items?.title, row.summary, row.metadata?.status]),
       metadata: row.metadata || {},
+    })),
+    safeAuditRows(client.from('fcos_improvement_events').select('id,ticket_id,event_type,summary,metadata,actor_email,created_at,fcos_improvement_tickets(ticket_key)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `fcos-improvement:${row.id}`,
+      source: 'FCOS Improvements',
+      module: 'FCOS Improvements',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.fcos_improvement_tickets?.ticket_key || row.ticket_id || '—',
+      summary: row.summary || 'FCOS Improvement workflow event.',
+      metadata: {
+        changeType: row.metadata?.changeType || null,
+        hasProposal: Boolean(row.metadata?.changeType),
+        hasAttachment: row.event_type === 'attachment_added' || row.event_type === 'attachment_removed',
+      },
     })),
     safeAuditRows(client.from('portal_access_events').select('id,application_id,target_user_id,actor_email,action,outcome,request_id,metadata,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `portal:${row.id}`,
@@ -2256,7 +2327,7 @@ async function universalAuditTrail(body, req) {
     })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -16135,6 +16206,15 @@ const handlers = {
   collaborationNotificationsList,
   collaborationNotificationsRead,
   collaborationDailyCron,
+  improvementsList,
+  improvementDetail,
+  improvementCreate,
+  improvementPropose,
+  improvementDecision,
+  improvementAttachmentPrepare,
+  improvementAttachmentComplete,
+  improvementAttachmentUrl,
+  improvementAttachmentDelete,
   workNotificationsList,
   workNotificationsRead,
   workNotificationsState,

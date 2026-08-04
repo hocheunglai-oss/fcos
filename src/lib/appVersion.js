@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.107';
+export const APP_VERSION = '2.0.108';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.108',
+    releasedAt: '2026-08-04',
+    title: 'Shared FCOS Improvements ticketing',
+    changes: [
+      'Added FCOS Improvements for every active user to report reproducible bugs and measurable feature requests, attach private evidence, and follow one shared queue.',
+      'Added General Manager approval for comments, assignments, ticket edits, and status changes, with pending proposals visible to everyone and stale decisions blocked server-side.',
+      'Connected improvement approvals to My Commitments, unified notifications, the redacted Audit Trail, and a Codex helper that can inspect and propose changes but cannot approve them.',
+    ],
+  },
   {
     version: '2.0.107',
     releasedAt: '2026-08-04',

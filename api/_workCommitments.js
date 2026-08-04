@@ -171,7 +171,7 @@ function sortCommitments(left, right) {
 export async function workCommitmentsList(_body = {}, accessContext) {
   const { client, profile, capabilities = {} } = accessContext;
   const today = hongKongDate();
-  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, disputesResult, hedgeClosesResult, notificationsResult] = await Promise.all([
+  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
     client
       .from("collaboration_items")
       .select(
@@ -229,6 +229,25 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           .order('updated_date', { ascending: false })
           .limit(100)
       : Promise.resolve({ data: [], error: null }),
+    client
+      .from('fcos_improvement_tickets')
+      .select('id,ticket_key,ticket_type,title,status,priority,reporter_user_id,assignee_user_id,assignee_name,updated_at')
+      .not('status', 'in', '(Closed,Rejected)')
+      .order('updated_at', { ascending: false })
+      .limit(250),
+    client
+      .from('fcos_improvement_proposals')
+      .select('id,ticket_id,change_type,created_at')
+      .eq('approval_state', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(250),
+    client
+      .from('collaboration_roles')
+      .select('user_id')
+      .eq('user_id', profile.id)
+      .eq('role', 'general_manager')
+      .eq('active', true)
+      .maybeSingle(),
     safeNotifications(accessContext),
   ]);
 
@@ -238,6 +257,10 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   const collections = ensureResult(collectionsResult);
   const disputes = ensureResult(disputesResult);
   const hedgeCloses = ensureResult(hedgeClosesResult);
+  const improvementTickets = ensureResult(improvementTicketsResult);
+  const improvementProposals = ensureResult(improvementProposalsResult);
+  const generalManagerRole = ensureResult(generalManagerRoleResult);
+  const isGeneralManager = generalManagerRole?.user_id === profile.id;
   const goalIds = goals.map((goal) => goal.id);
   const relationshipIds = relationships.map((relationship) => relationship.id);
 
@@ -537,6 +560,34 @@ export async function workCommitmentsList(_body = {}, accessContext) {
         today,
       ),
     );
+  }
+
+  const pendingImprovementByTicket = new Map();
+  for (const proposal of improvementProposals) {
+    if (!pendingImprovementByTicket.has(proposal.ticket_id)) pendingImprovementByTicket.set(proposal.ticket_id, []);
+    pendingImprovementByTicket.get(proposal.ticket_id).push(proposal);
+  }
+  for (const ticket of improvementTickets) {
+    const pending = pendingImprovementByTicket.get(ticket.id) || [];
+    const belongsToUser = ticket.reporter_user_id === profile.id || ticket.assignee_user_id === profile.id;
+    if (!belongsToUser && !(isGeneralManager && pending.length)) continue;
+    commitments.push(normalizeCommitment({
+      id: `fcos-improvement:${ticket.id}`,
+      source: 'fcos_improvements',
+      kind: ticket.ticket_type,
+      title: `${ticket.ticket_key} · ${ticket.title}`,
+      subtitle: isGeneralManager && pending.length
+        ? `${pending.length} proposed change${pending.length === 1 ? '' : 's'} awaiting your approval`
+        : ticket.assignee_user_id === profile.id
+          ? `Assigned to you · ${ticket.status}`
+          : `${ticket.status} · ${ticket.assignee_name ? `Assigned to ${ticket.assignee_name}` : 'Unassigned'}`,
+      status: ticket.status,
+      priority: ticket.priority,
+      dueAt: null,
+      urgency: isGeneralManager && pending.length ? 'needs_action' : ticket.assignee_user_id === profile.id ? 'needs_action' : 'waiting',
+      link: `/fcos-improvements?ticket=${encodeURIComponent(ticket.id)}`,
+      actionLabel: isGeneralManager && pending.length ? 'Review proposals' : 'Open ticket',
+    }, today));
   }
 
   for (const notification of notificationsResult.notifications || []) {

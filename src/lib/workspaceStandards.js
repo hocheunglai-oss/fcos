@@ -36,6 +36,15 @@ export const WORKSPACE_STANDARDS = Object.freeze({
     freshness: 'Live FCOS state',
     consequentialActionsRefresh: true,
   },
+  fcos_improvements: {
+    title: 'FCOS Improvements',
+    route: '/fcos-improvements',
+    section: 'Personal',
+    authority: 'FCOS with General Manager approval',
+    views: ['needs_action', 'all', 'closed', 'activity'],
+    freshness: 'Live FCOS state',
+    consequentialActionsRefresh: true,
+  },
   dashboard: {
     title: 'Dashboard',
     route: '/',

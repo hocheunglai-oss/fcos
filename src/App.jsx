@@ -23,6 +23,7 @@ const Login = lazy(() => import('@/pages/Login'));
 const SettingsWorkspace = lazy(() => import('@/pages/SettingsWorkspace'));
 const AccountManagers = lazy(() => import('@/pages/AccountManagers'));
 const ProjectsTasks = lazy(() => import('@/pages/ProjectsTasks'));
+const FcosImprovements = lazy(() => import('@/pages/FcosImprovements'));
 const GrowthCoaching = lazy(() => import('@/pages/GrowthCoaching'));
 const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
 const HedgeDesk = lazy(() => import('@/pages/HedgeDesk'));
@@ -91,6 +92,7 @@ const AuthenticatedApp = () => {
             <Route path="/my-commitments" element={<MyCommitments />} />
             <Route path="/growth-coaching" element={<GrowthCoaching />} />
             <Route path="/projects-tasks" element={<ProjectsTasks />} />
+            <Route path="/fcos-improvements" element={<FcosImprovements />} />
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
             <Route path="/settings" element={<ModuleGateAny moduleIds={['settings', 'admin']}><SettingsWorkspace /></ModuleGateAny>} />
