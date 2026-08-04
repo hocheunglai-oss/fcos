@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, BookOpen, Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw } from 'lucide-react';
+import { Bot, Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { useDeskData } from '@/hedge/hooks/useDeskData';
 import { useAppSettings } from '@/hedge/hooks/useAppSettings';
@@ -10,8 +10,7 @@ import { HedgesView } from '@/hedge/views/HedgesView';
 import { SettlementView } from '@/hedge/views/SettlementView';
 import { CounterpartiesView } from '@/hedge/views/CounterpartiesView';
 import { AssistantPanel } from '@/hedge/components/AssistantPanel';
-import { Button, EmptyState, InlineError, Panel, SectionHeading, StatusBadge } from '@/hedge/components/ui';
-import { PAGE_METHODOLOGIES } from '@/hedge/lib/methodology';
+import { Button, EmptyState, InlineError, StatusBadge } from '@/hedge/components/ui';
 import '@/hedge/styles.css';
 
 const TABS = [
@@ -20,31 +19,7 @@ const TABS = [
   { id: 'hedges', label: 'Paper Hedges', icon: ChartNoAxesCombined },
   { id: 'settlement', label: 'Settlement', icon: FileSpreadsheet },
   { id: 'counterparties', label: 'Counterparties', icon: Building2 },
-  { id: 'methodology', label: 'Methodology', icon: BookOpen },
 ];
-
-function MethodologyView() {
-  const entries = Object.entries(PAGE_METHODOLOGIES).filter(([name]) => !['Settings', 'Audit history'].includes(name));
-  return (
-    <div className="app-page">
-      <header className="app-page-header">
-        <div className="app-page-header__copy">
-          <div className="app-eyebrow">Controls and calculations</div>
-          <div className="app-page-header__title-row"><h1>Hedge Desk methodology</h1></div>
-          <p>The common calculation, valuation, settlement, and data-control rules used throughout the native FCOS Hedge Desk.</p>
-        </div>
-      </header>
-      <div className="app-methodology-grid">
-        {entries.map(([name, methodology]) => (
-          <Panel key={name}>
-            <SectionHeading title={name} description={methodology.summary} />
-            <ol className="app-methodology-list">{methodology.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-          </Panel>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export default function HedgeDesk() {
   const navigate = useNavigate();
@@ -61,8 +36,7 @@ export default function HedgeDesk() {
     if (tab === 'hedges') return <HedgesView data={data} settings={settings} quickCreateSignal={quickCreateSignals.hedges} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'settlement') return <SettlementView data={data} settings={settings} readOnly={!capabilities.hedge_settlement_manage} canClose={capabilities.hedge_close_approve === true} />;
     if (tab === 'counterparties') return <CounterpartiesView data={data} settings={settings} readOnly={!capabilities.hedge_book_manage} />;
-    if (tab === 'methodology') return <MethodologyView />;
-    return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => { if (path === '/markets') navigate('/markets'); else setTab(path === '/hedges' ? 'hedges' : path === '/settlement' ? 'settlement' : path === '/audit' ? 'methodology' : 'overview'); }} />;
+    return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => { if (path === '/markets') navigate('/markets'); else if (path === '/audit') navigate('/settings?section=audit'); else setTab(path === '/hedges' ? 'hedges' : path === '/settlement' ? 'settlement' : 'overview'); }} />;
   }, [capabilities, data, navigate, quickCreateSignals, readOnly, settings, tab]);
 
   if ((data.loading || settings.loading) && !data.physicals.length && !data.swaps.length) {

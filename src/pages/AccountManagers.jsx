@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  CircleHelp,
   GripVertical,
   Loader2,
   Pencil,
@@ -19,6 +18,7 @@ import {
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import { Badge } from '@/components/ui/badge';
@@ -33,7 +33,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -41,6 +40,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
+import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';
@@ -143,7 +143,6 @@ export default function AccountManagers() {
   const [noteSavingKey, setNoteSavingKey] = useState('');
   const [groupEditAccount, setGroupEditAccount] = useState(null);
   const [groupNoteEditAccount, setGroupNoteEditAccount] = useState(null);
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
   const nextDraftKey = useRef(0);
 
   const loadAccounts = useCallback(async ({ background = false } = {}) => {
@@ -409,10 +408,7 @@ export default function AccountManagers() {
         meta={`${stats.total.toLocaleString()} active Account names`}
         actions={(
           <>
-            <Button variant="outline" onClick={() => setMethodologyOpen(true)}>
-              <CircleHelp />
-              Methodology
-            </Button>
+            <PageMethodology {...ACCOUNT_MANAGERS_METHODOLOGY} />
             <Button
               variant="outline"
               size="icon"
@@ -837,53 +833,6 @@ export default function AccountManagers() {
           <StateBlock title="No Accounts found" description="No active Account names match the current filters." />
         )}
       </TableShell>
-
-      <Dialog open={methodologyOpen} onOpenChange={setMethodologyOpen}>
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Account Managers Methodology</DialogTitle>
-            <DialogDescription>How Account coverage, manager priority, GROUP propagation, and synchronization work.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5 text-sm text-foreground">
-            <section>
-              <h3 className="font-semibold">Account coverage</h3>
-              <p className="mt-1 text-muted-foreground">
-                The directory shows active Buyer, Buyer &amp; Supplier, Broker, and GROUP Account names. GROUP Accounts appear first. Same-name Salesforce Account records are managed together; inactive and supplier-only Accounts are not listed.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Manager priority</h3>
-              <p className="mt-1 text-muted-foreground">
-                Each Account can have up to three managers. Priority 1 is highest. Drag the handle to reorder managers, then use Save to apply the ordered list.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">GROUP Accounts</h3>
-              <p className="mt-1 text-muted-foreground">
-                Every GROUP manager edit asks for a scope. GROUP only updates the GROUP Account in FCOS and Salesforce, turns off child inheritance, and leaves existing child Salesforce values and direct FCOS assignments unchanged. GROUP + children writes the ordered list to the GROUP and every direct child Salesforce Account, turns on inheritance, and replaces direct child FCOS manager overrides.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Salesforce synchronization</h3>
-              <p className="mt-1 text-muted-foreground">
-                FCOS stores the ordered users and writes their display names to Salesforce Account Manager. GROUP families are written all-or-none; failed or mismatched rows remain visible as sync issues for retry.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Account notes</h3>
-              <p className="mt-1 text-muted-foreground">
-                Each Account name has an FCOS note of up to 255 characters. A GROUP note edit can update the GROUP only or copy the note to every direct child Account name. GROUP + children replaces existing child notes at that time; each child note remains independently editable afterward. Notes never write to Salesforce.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Search and filters</h3>
-              <p className="mt-1 text-muted-foreground">
-                Every Account search result shows the Account name and Salesforce CL Key. Search matches Account names, CL Keys, parent GROUP names, GROUP child names, Account type, manager name, manager email, and note text. The manager filter includes inherited assignments and Unassigned Accounts.
-              </p>
-            </section>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <AlertDialog open={Boolean(groupEditAccount)} onOpenChange={(open) => {
         if (!open) setGroupEditAccount(null);

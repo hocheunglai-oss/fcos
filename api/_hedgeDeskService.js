@@ -50,7 +50,7 @@ const ENTITY_CONFIG = {
   Counterparty: {
     table: 'hedge_counterparties',
     capability: 'hedge_book_manage',
-    fields: [...COMMON_FIELDS, 'short_name', 'full_name', 'address_line1', 'address_line2', 'address_line3', 'attention', 'emails', 'bank_name', 'bank_swift', 'intermediary_bank', 'intermediary_swift', 'account_number', 'notes'],
+    fields: [...COMMON_FIELDS, 'short_name', 'full_name', 'address_line1', 'address_line2', 'address_line3', 'attention', 'emails', 'notes'],
   },
   AppConfig: {
     table: 'hedge_settings',

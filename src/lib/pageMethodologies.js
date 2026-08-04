@@ -1,23 +1,113 @@
-export const APP_PORTAL_METHODOLOGY = {
-  title: 'Application Portal',
-  description: 'How FCOS determines application access, availability, launch behavior, and sign-out.',
+export const ACCOUNT_MANAGERS_METHODOLOGY = {
+  title: 'Account Managers',
+  description: 'How Account coverage, manager priority, GROUP propagation, notes, and synchronization work.',
   sections: [
     {
-      title: 'Application access',
-      body: 'The portal shows only applications available to the signed-in user. FCOS permissions and external-application entitlements are evaluated independently, so access to one application never implies access to another.',
+      title: 'Account coverage',
+      body: 'The directory groups active Buyer, Buyer & Supplier, Broker, and GROUP Salesforce Accounts by normalized Account name. GROUP Accounts appear first. Supplier-only and inactive Accounts are excluded, while every result keeps its Account name and CL Key visible.',
     },
     {
-      title: 'Launch and identity',
-      body: 'FCOS opens in the current tab. External applications open in a new tab through a short-lived, single-use server handoff; FCOS passwords and browser access tokens are not sent to the target application.',
+      title: 'Manager priority',
+      body: 'Each Account name may have zero to three active FCOS managers. Priority 1 is highest; drag the rows to change order. Same-name Salesforce Account records share one ordered FCOS assignment and are synchronized together.',
     },
     {
-      title: 'Availability and synchronization',
-      body: 'An external application is launchable only when its entitlement is synchronized and its health check is available. A target outage or pending access update does not prevent normal FCOS use.',
+      title: 'GROUP scope',
+      body: 'GROUP only saves the GROUP assignment, disables continuous inheritance, and leaves existing child assignments and Salesforce values unchanged. GROUP + children replaces direct-child assignments and Salesforce values and enables inheritance for current eligible children. GROUP note propagation is a one-time copy; child notes remain independently editable.',
     },
     {
-      title: 'Sign out',
-      body: 'Sign out asks registered target applications to revoke their active sessions before ending the FCOS session. An incomplete target logout is recorded for retry without keeping the FCOS session open.',
+      title: 'Synchronization and search',
+      body: 'FCOS stores ordered user IDs and writes display names to Salesforce Account Manager. GROUP-family writes are all-or-none; drift and failures stay visible for retry. Search covers Account name, CL Key, GROUP relationships, Account type, manager identity, and the 255-character FCOS note.',
     },
+  ],
+};
+
+export const CASHFLOW_FORECAST_METHODOLOGY = {
+  title: 'Cashflow Forecast',
+  description: 'How Salesforce receivables and payables become expected daily cash movement.',
+  sections: [
+    {
+      title: 'Purpose and scope',
+      body: 'The page forecasts AR receipts and AP payments for planning; it does not post accounting entries. STEMs delivered before 1 January 2026 are excluded, and currencies remain separate because this page performs no currency conversion.',
+    },
+    {
+      title: 'Buyer receipts',
+      body: 'Buyer rows use open buyer-invoice inclusion rules and the current receivable balance. FCOS starts from the buyer due date, adds the expected payment delay, and uses today when that prediction is already past before applying business-day adjustments.',
+    },
+    {
+      title: 'Payment delay model',
+      body: 'Paid history before 1 January 2026 is ignored. The model uses the exact buyer when enough samples exist, then falls back to buyer GROUP and global history. Recent payments carry more weight; model level, sample count, and confidence remain visible for review.',
+    },
+    {
+      title: 'Supplier payments',
+      body: 'Open supplier invoices are expected as full cash outflows on their contractual due date. Supplier timing is not predicted from payment history, and a blocked date moves the payment forward rather than changing its amount.',
+    },
+    {
+      title: 'Business days and controls',
+      body: 'Dates use Hong Kong time. Weekends, Singapore public holidays, US bank or public holidays, and authorized manual blocked dates move a forecast to the next available day. Only users with Cashflow settings authority may change model parameters or manual dates.',
+    },
+  ],
+};
+
+export const GROWTH_COACHING_METHODOLOGY = {
+  title: 'Growth & Coaching',
+  description: 'How FCOS separates accountable development from private, equal-participant coaching.',
+  sections: [
+    {
+      title: 'Formal development goals',
+      body: 'Employees author measurable goals with a deadline and checkpoint. The Primary Manager approves each goal independently. The active General Manager is the UUID-backed reporting root and activates self-managed goals; an Advisory Manager has read-only visibility and cannot comment, approve, or complete goals. Material changes to an approved goal create a new approval revision.',
+    },
+    {
+      title: 'Progress and completion',
+      body: 'Employees record progress and evidence while managers comment and decide formal outcomes. Missed checkpoints and deadlines remain overdue. The General Manager self-completes with final evidence or records not achieved with a note. Completed Projects & Tasks items may be linked as private evidence.',
+    },
+    {
+      title: 'Equal-participant coaching',
+      body: 'Any two active users may form a coaching relationship after mutual acceptance. Private preparation remains visible only to its author; shared notes, actions, files, and decisions remain visible only to the pair. Both participants confirm closure, later corrections are append-only, and proposed actions require acceptance by the assigned participant.',
+    },
+    {
+      title: 'Calendar, notifications, and boundaries',
+      body: 'FCOS owns the coaching schedule and requests neutral Outlook events without silently overwriting conflicts. In-app notifications remain active and email categories are configurable. Coaching has no Administrator or General Manager content override and creates no ratings, compensation decisions, or Salesforce changes.',
+    },
+  ],
+};
+
+export const PROJECTS_TASKS_METHODOLOGY = {
+  title: 'Projects & Tasks',
+  description: 'How shared work, authority, progress, notifications, dependencies, and private files operate.',
+  sections: [
+    {
+      title: 'Visibility and ownership',
+      body: 'Every active FCOS user can see active projects, tasks, subtasks, comments, files, progress, and activity. The creator is the immutable owner. Only that owner or the active General Manager may assign, move, archive, restore, or manage dependencies.',
+    },
+    {
+      title: 'Hierarchy and progress',
+      body: 'Projects contain tasks; tasks may contain one level of subtasks, while standalone tasks are allowed. A leaf item derives progress from status. Parent progress is calculated from non-cancelled active children, and a parent cannot become Done while any non-cancelled child is incomplete.',
+    },
+    {
+      title: 'Collaboration controls',
+      body: 'Owners, assignees, and the General Manager may update work details. Every active user may comment, mention colleagues, follow work, and upload files. Blocked work requires a reason, circular dependencies are rejected, and revision checks return current server state instead of overwriting concurrent edits.',
+    },
+    {
+      title: 'Repeat work and notifications',
+      body: 'Project health, milestones, templates, and controlled bulk changes support recurring work while preserving each item revision. FCOS notifies assignments, mentions, relevant changes, due-today work, and overdue work once per event, excluding the actor.',
+    },
+    {
+      title: 'Files',
+      body: 'Files use private storage and short-lived access links. Approved business formats are limited to 20 MB, duplicate display names receive an incremental suffix, and archived work remains historical rather than being physically deleted.',
+    },
+  ],
+};
+
+export const EMAIL_ROUTER_METHODOLOGY = {
+  title: 'Email Router',
+  description: 'How FCOS retrieves messages and submits controlled Microsoft Graph mailbox actions.',
+  sections: [
+    { title: 'Mailbox data', body: 'Inbox, Sent, and Archive are read from the assigned Microsoft 365 mailbox. Message bodies and attachment bytes remain in Microsoft 365 and are fetched temporarily only when opened.' },
+    { title: 'Routing directory and presets', body: 'Administrators and the General Manager maintain ordered active-user labels, approved external contacts, groups, and case-sensitive labels. A preset family has a Standard route plus optional leave-aware versions; scheduled overrides win before priority and specificity. Manual recipient amendments clear the selected preset.' },
+    { title: 'Routing leave and snapshots', body: 'My Routing Leave records operational availability, not HR approval. A reviewed preset route is held by a server-signed snapshot for up to 60 minutes unless directory or preset configuration changes. FCOS warns, but does not block, when a chosen recipient is currently on leave.' },
+    { title: 'Recipients and actions', body: 'Redirect numbers To, Cc, and Bcc independently and preserves visible To/Cc order; Bcc stays private and hidden until used. Redirect has one explicit Send command. Reply, Forward, Archive, Delete, Undo, and uncertain-send review keep their applicable safeguards.' },
+    { title: 'Submission safety', body: 'Graph submission is durable: Reserved, Draft Created, Submitted, Confirmed, Failed, or Uncertain. A 202 response is not treated as delivery, sent-mail reconciliation confirms submission, source mail is archived only after confirmation, and FCOS never automatically retries after submission begins.' },
+    { title: 'Advisor and display safety', body: 'The Advisor is read-only and preselects recipients only above 60% confidence; a user must still review and send. HTML is sanitized, embedded images are streamed through authorized temporary endpoints, and unavailable inline images receive a visible placeholder.' },
   ],
 };
 
@@ -338,29 +428,6 @@ export const SPECIAL_TERMS_METHODOLOGY = {
   ],
 };
 
-export const MARKETS_METHODOLOGY = {
-  title: 'Markets',
-  description: 'How FCOS maintains MOPS market records and forward adjustments.',
-  sections: [
-    {
-      title: 'Market records',
-      body: 'Actual and estimated Singapore MOPS observations are kept separately. Daily publication rows provide the calculation inputs and do not require individual source verification.',
-    },
-    {
-      title: 'Automatic hedge expiry',
-      body: 'FCOS expires a paper hedge automatically only after every contract month reaches its final Platts trading day, every scheduled MOPS row contains complete actual values, and a user saves the manual verification text for the final monthly average. FCOS stores but does not parse or compare that text. Spread hedges wait for both contract months. A daily-value change makes the monthly verification stale.',
-    },
-    {
-      title: 'Forward adjustments',
-      body: 'Forward adjustments supplement current market indications for open exposure views. They do not replace final published MOPS and are saved with revision protection.',
-    },
-    {
-      title: 'Access',
-      body: 'Every active FCOS user can view Markets. Only users with Manage Hedge Book permission may create, edit, or remove price records and change forward adjustments.',
-    },
-  ],
-};
-
 export const SETTINGS_METHODOLOGIES = {
   system: {
     title: 'System Settings',
@@ -393,8 +460,8 @@ export const SETTINGS_METHODOLOGIES = {
         body: 'Only active FCOS profiles may use authenticated APIs. Module permissions, including Email Router visibility, are managed by user type or individual override and are applied before personal navigation preferences. Hiding a navigation item does not grant or remove module access.',
       },
       {
-        title: 'Application entitlements',
-        body: 'External application access is versioned and synchronized to the target. Automatic Administrator policies and explicit grants remain distinguishable so downgrades and revocations behave predictably.',
+        title: 'Access precedence',
+        body: 'User-type defaults establish the normal module set and an individual override may narrow or extend it. Protected General Manager and Administrator capabilities are enforced server-side. The retired application switcher and native Email Router do not use external application entitlements.',
       },
       {
         title: 'Reporting lines and authority',

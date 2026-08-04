@@ -49,3 +49,12 @@ test('Hedge styles cannot leak into the FCOS application shell', () => {
   assert.match(styles, /--app-bg: hsl\(var\(--background\)\)/);
   assert.match(styles, /--app-teal: hsl\(var\(--primary\)\)/);
 });
+
+test('counterparty management excludes obsolete banking instructions', () => {
+  const view = read('src/hedge/views/CounterpartiesView.jsx');
+  const service = read('api/_hedgeDeskService.js');
+  const methodology = read('src/hedge/lib/methodology.js');
+  assert.doesNotMatch(view, /bank_name|bank_swift|account_number|Bank instructions|<th>Banking<\/th>/);
+  assert.doesNotMatch(service.match(/Counterparty: \{[\s\S]*?\n  \},/)?.[0] || '', /bank_name|bank_swift|account_number|intermediary/);
+  assert.match(methodology, /Counterparty banking instructions are not maintained or printed/);
+});

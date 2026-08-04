@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CircleHelp } from 'lucide-react';
+import { BookOpen, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,7 +14,7 @@ export default function PageMethodology({
   title,
   description,
   sections = [],
-  size,
+  sources = [],
   className,
 }) {
   const [open, setOpen] = useState(false);
@@ -24,11 +24,13 @@ export default function PageMethodology({
       <Button
         type="button"
         variant="outline"
-        size={size}
-        className={cn('gap-2', className)}
+        className={cn(
+          'h-[38px] gap-[7px] rounded-[7px] px-3.5 text-xs font-[750] text-muted-foreground shadow-sm hover:text-foreground',
+          className,
+        )}
         onClick={() => setOpen(true)}
       >
-        <CircleHelp className="h-4 w-4" />
+        <BookOpen className="h-4 w-4" />
         Methodology
       </Button>
 
@@ -55,6 +57,25 @@ export default function PageMethodology({
                 </section>
               );
             })}
+            {!!sources.length && (
+              <section>
+                <h3 className="font-semibold">Sources</h3>
+                <div className="mt-2 flex flex-col items-start gap-2">
+                  {sources.map((source) => (
+                    <a
+                      key={source.url}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 text-primary hover:underline"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      {source.label}
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
         </DialogContent>
       </Dialog>

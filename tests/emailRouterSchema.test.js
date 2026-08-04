@@ -165,10 +165,10 @@ test('Email Router audit events allow whole-directory ordering changes', async (
 });
 
 test('Email Router routing labels preserve case and are unique by exact case', async () => {
-  const [sql, settings, workspace] = await Promise.all([
+  const [sql, settings, methodologies] = await Promise.all([
     readFile(caseSensitiveLabelsMigrationUrl, 'utf8'),
     readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/pageMethodologies.js', import.meta.url), 'utf8'),
   ]);
 
   assert.match(sql, /nickname ~ '\^\[A-Za-z0-9\]\{1,12\}\$'/);
@@ -180,7 +180,7 @@ test('Email Router routing labels preserve case and are unique by exact case', a
   assert.match(settings, /replace\(\/\[\^A-Za-z0-9\]\/g, ''\)/);
   assert.doesNotMatch(settings, /toUpperCase\(\)\.replace\(\/\[\^A-Z0-9\]/);
   assert.match(settings, /case-sensitive unique routing label/i);
-  assert.match(workspace, /exact case-sensitive comparison/i);
+  assert.match(methodologies, /case-sensitive labels/i);
 });
 
 test('Email Router presets validate only the non-null recipient identity', async () => {

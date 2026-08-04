@@ -15,19 +15,14 @@ test('every authenticated FCOS workspace exposes a Methodology control', () => {
     'src/pages/UnofficialCompensation.jsx',
     'src/pages/BrokerWorkspace.jsx',
     'src/pages/SettingsWorkspace.jsx',
-  ];
-  for (const page of sharedControlPages) {
-    assert.match(read(page), /PageMethodology/, `${page} should use the shared Methodology control`);
-  }
-
-  const specializedPages = [
     'src/pages/AccountManagers.jsx',
     'src/pages/CashflowForecast.jsx',
     'src/pages/GrowthCoaching.jsx',
     'src/pages/ProjectsTasks.jsx',
+    'src/components/email-router/EmailRouterWorkspace.jsx',
   ];
-  for (const page of specializedPages) {
-    assert.match(read(page), /Methodology/, `${page} should retain its specialized Methodology guide`);
+  for (const page of sharedControlPages) {
+    assert.match(read(page), /PageMethodology/, `${page} should use the shared Methodology control`);
   }
 });
 
@@ -49,5 +44,18 @@ test('the shared Methodology dialog remains readable on constrained viewports', 
   assert.match(component, /max-h-\[85vh\]/);
   assert.match(component, /overflow-y-auto/);
   assert.match(component, /max-w-2xl/);
-  assert.match(component, /CircleHelp/);
+  assert.match(component, /BookOpen/);
+  assert.match(component, /h-\[38px\]/);
+  assert.match(component, /font-\[750\]/);
+});
+
+test('Markets and Hedge Desk expose one shared page-level Methodology control', () => {
+  const marketsPage = read('src/pages/Markets.jsx');
+  const marketsView = read('src/hedge/views/MarketsView.jsx');
+  const hedgeUi = read('src/hedge/components/ui.jsx');
+  const hedgeDesk = read('src/pages/HedgeDesk.jsx');
+  assert.doesNotMatch(marketsPage, /methodologyAction|PageMethodology/);
+  assert.doesNotMatch(marketsView, /methodologyAction/);
+  assert.match(hedgeUi, /<PageMethodology/);
+  assert.doesNotMatch(hedgeDesk, /id: 'methodology'|MethodologyView/);
 });

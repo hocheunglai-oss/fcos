@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.106';
+export const APP_VERSION = '2.0.107';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.107',
+    releasedAt: '2026-08-04',
+    title: 'Consistent page methodology and Hedge controls',
+    changes: [
+      'Standardized every page-level Methodology control on the labelled Book icon, typography, color, and size used by Markets and removed the duplicate Markets control.',
+      'Centralized and refreshed the Account Managers, Cashflow, Growth & Coaching, Projects & Tasks, Email Router, Settings, trading, collection, dispute, and operational methodology guides against current workflow and permission rules.',
+      'Removed obsolete Hedge Desk methodology navigation and counterparty banking inputs while preserving historical database values; settlement documents continue to rely on a counterparty-issued invoice when FCOS must pay.',
+    ],
+  },
   {
     version: '2.0.106',
     releasedAt: '2026-08-04',

@@ -7,7 +7,6 @@ import {
   Check,
   CheckSquare2,
   ChevronsUpDown,
-  CircleHelp,
   Download,
   Eye,
   FileText,
@@ -33,6 +32,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { appClient } from "@/api/appClient";
 import PageHeader from "@/components/common/PageHeader";
+import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
 import TableShell from "@/components/common/TableShell";
 import {
@@ -103,6 +103,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+import { PROJECTS_TASKS_METHODOLOGY } from "@/lib/pageMethodologies";
 import { cn } from "@/lib/utils";
 
 const STATUS_FALLBACK = [
@@ -438,7 +439,6 @@ export default function ProjectsTasks() {
   const [commentSaving, setCommentSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
@@ -1361,19 +1361,7 @@ export default function ProjectsTasks() {
           }
           actions={
             <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setMethodologyOpen(true)}
-                    aria-label="Open methodology"
-                  >
-                    <CircleHelp />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Methodology</TooltipContent>
-              </Tooltip>
+              <PageMethodology {...PROJECTS_TASKS_METHODOLOGY} />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -3443,73 +3431,6 @@ export default function ProjectsTasks() {
           </AlertDialogContent>
         </AlertDialog>
 
-        <Dialog open={methodologyOpen} onOpenChange={setMethodologyOpen}>
-          <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Projects & Tasks Methodology</DialogTitle>
-              <DialogDescription>
-                How shared work, authority, notifications, and private files
-                operate in FCOS.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-5 text-sm">
-              <section>
-                <h3 className="font-semibold">Visibility and ownership</h3>
-                <p className="mt-1 text-muted-foreground">
-                  Every active FCOS user sees every active project, task,
-                  subtask, comment, file, progress value, and activity record.
-                  The creator remains the owner. Only the owner or the appointed
-                  General Manager can assign, move, archive, or restore work.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold">Progress and completion</h3>
-                <p className="mt-1 text-muted-foreground">
-                  Leaf task progress follows its status. Parent progress is
-                  calculated from active child work. A project or task cannot be
-                  marked Done while any non-cancelled child remains incomplete.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold">Collaboration</h3>
-                <p className="mt-1 text-muted-foreground">
-                  Owners, assignees, and the General Manager can update work
-                  details. Every active user can comment, mention colleagues,
-                  upload related files, and follow work for updates. Owners and
-                  the General Manager can link blockers; circular dependencies
-                  are rejected. Blocked work must explain what is needed next.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold">Projects and repeat work</h3>
-                <p className="mt-1 text-muted-foreground">
-                  Project health and milestones give departments a concise
-                  delivery view. A project task checklist can be saved as a
-                  reusable template. List selection supports controlled bulk
-                  changes; each record keeps its own revision protection and
-                  reports conflicts separately.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold">Notifications</h3>
-                <p className="mt-1 text-muted-foreground">
-                  FCOS creates in-app notifications for assignments, mentions,
-                  relevant updates, due-today work, and overdue work. The person
-                  making the change is never notified about their own action.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold">Private files</h3>
-                <p className="mt-1 text-muted-foreground">
-                  Files are stored in a private FCOS bucket and are opened
-                  through short-lived links. Uploads are limited to approved
-                  business document formats and 20 MB per file. Duplicate
-                  display names receive a numeric suffix automatically.
-                </p>
-              </section>
-            </div>
-          </DialogContent>
-        </Dialog>
       </div>
     </TooltipProvider>
   );

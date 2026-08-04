@@ -17,6 +17,7 @@ const notesMigrationUrl = new URL('../supabase/migrations/20260722073320_account
 const groupScopesMigrationUrl = new URL('../supabase/migrations/20260722075428_account_manager_group_scopes.sql', import.meta.url);
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const pageUrl = new URL('../src/pages/AccountManagers.jsx', import.meta.url);
+const methodologiesUrl = new URL('../src/lib/pageMethodologies.js', import.meta.url);
 
 const buyer = (overrides = {}) => ({
   Id: '0012x00000AAAAAABC',
@@ -304,6 +305,7 @@ test('server revalidates eligibility and updates every grouped Salesforce Accoun
 
 test('page edits rows inline with explicit save and cancel controls', async () => {
   const source = await readFile(pageUrl, 'utf8');
+  const methodologies = await readFile(methodologiesUrl, 'utf8');
   assert.match(source, /invoke\('accountManagersList'/);
   assert.match(source, /invoke\('accountManagersSave'/);
   assert.match(source, /invoke\('accountManagersSaveNote'/);
@@ -319,11 +321,12 @@ test('page edits rows inline with explicit save and cancel controls', async () =
   assert.match(source, /Edit GROUP Account note\?/);
   assert.match(source, /GROUP \+ children/);
   assert.match(source, /GROUP only stops inheritance/);
-  assert.match(source, /GROUP \+ children replaces existing child notes/);
-  assert.match(source, /Account Managers Methodology/);
+  assert.match(source, /PageMethodology \{\.\.\.ACCOUNT_MANAGERS_METHODOLOGY\}/);
+  assert.match(methodologies, /export const ACCOUNT_MANAGERS_METHODOLOGY/);
+  assert.match(methodologies, /GROUP \+ children replaces direct-child assignments/);
   assert.match(source, /Search Accounts, groups or managers/);
   assert.match(source, /accountClKeyLabel\(account\.clKeys\)/);
-  assert.match(source, /Search matches Account names, CL Keys/);
+  assert.match(methodologies, /Search covers Account name, CL Key/);
   assert.match(source, /Unassigned/);
   assert.doesNotMatch(source, />Manage</);
 });

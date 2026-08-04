@@ -58,12 +58,12 @@ export const PAGE_METHODOLOGIES = {
     ],
   },
   Counterparties: {
-    summary: "Counterparty records are the controlled source for legal identity, invoice delivery, address, attention, and payment instructions.",
+    summary: "Counterparty records are the controlled source for legal identity, invoice delivery, address, and attention details.",
     steps: [
       "Short names link counterparties to physical trades, hedges, settlement groups, and invoices.",
       "Legal name, address, and attention fields populate settlement documents.",
       "Recipient fields are used as defaults during invoice composition and remain editable before delivery.",
-      "Banking text is retained as controlled settlement-document content and is not used to initiate payments.",
+      "Counterparty banking instructions are not maintained or printed: when FCOS must pay, the counterparty supplies its own invoice and payment instructions.",
     ],
   },
   Settings: {

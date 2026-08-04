@@ -5,8 +5,6 @@ import { MarketsView } from '@/hedge/views/MarketsView';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
 import { loadMarketSnapshot, MarketPrice, saveForwardSpreads, verifyMopsMonth } from '@/hedge/api/marketData';
-import PageMethodology from '@/components/common/PageMethodology';
-import { MARKETS_METHODOLOGY } from '@/lib/pageMethodologies';
 import '@/hedge/styles.css';
 
 const EMPTY = { mops: [], mopsMonthVerifications: [], settings: {}, capabilities: {} };
@@ -67,7 +65,6 @@ export default function Markets() {
             await reload({ silent: true });
             return result;
           }}
-          methodologyAction={<PageMethodology {...MARKETS_METHODOLOGY} />}
         />
       </div>
     </ActionsProvider>

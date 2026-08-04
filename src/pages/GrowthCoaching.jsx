@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertCircle, ArrowDown, ArrowUpRight, ArrowUp, BadgeCheck, BookOpen, CalendarClock, CalendarDays, Check, CheckCircle2, ClipboardCheck, FileText, Goal, Handshake, History, Loader2, Lock, MessageSquareText, Pencil, Plus, RefreshCw, RotateCcw, Save, Send, ShieldCheck, Target, Upload, UserPlus, Users, X } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowUpRight, ArrowUp, BadgeCheck, CalendarClock, CalendarDays, Check, CheckCircle2, ClipboardCheck, FileText, Goal, Handshake, History, Loader2, Lock, MessageSquareText, Pencil, Plus, RefreshCw, RotateCcw, Save, Send, ShieldCheck, Target, Upload, UserPlus, Users, X } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { cn } from '@/lib/utils';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
+import { GROWTH_COACHING_METHODOLOGY } from '@/lib/pageMethodologies';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -300,7 +302,6 @@ export default function GrowthCoaching() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = ['growth', 'reports', 'coaching', 'settings'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'growth';
   const [tab, setTab] = useState(initialTab);
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
   const [goalActionOpen, setGoalActionOpen] = useState(null);
@@ -975,10 +976,7 @@ export default function GrowthCoaching() {
           description="Personal development goals and private, equal-participant coaching."
           actions={
             <>
-              <Button type="button" variant="outline" onClick={() => setMethodologyOpen(true)} className="gap-2">
-                <BookOpen className="h-4 w-4" />
-                Methodology
-              </Button>
+              <PageMethodology {...GROWTH_COACHING_METHODOLOGY} />
               <Button type="button" variant="outline" onClick={() => load({ background: true })} disabled={refreshing} className="gap-2">
                 {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Refresh
@@ -1338,7 +1336,6 @@ export default function GrowthCoaching() {
         <GoalActionDialog state={goalActionOpen} setState={setGoalActionOpen} onDecision={decideGoal} onProgress={saveProgress} onCompletion={completeGoal} evidenceOptions={goalEvidenceOptions} onToggleEvidence={toggleGoalEvidence} busy={busy} />
         <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} users={users.filter((candidate) => candidate.id !== currentUserId && candidate.active !== false)} inviteeId={inviteeId} setInviteeId={setInviteeId} cadence={inviteCadence} setCadence={setInviteCadence} customCadenceDays={inviteCustomCadenceDays} setCustomCadenceDays={setInviteCustomCadenceDays} onInvite={invite} busy={busy === 'coach-invite'} />
         <SessionDialog open={sessionOpen} onOpenChange={setSessionOpen} draft={sessionDraft} setDraft={setSessionDraft} relationships={relationships.filter((relationship) => relationship.status === 'Active' || relationship.status === 'Accepted')} sessions={sessions} onSave={saveSession} busy={busy === 'session-save'} />
-        <MethodologyDialog open={methodologyOpen} onOpenChange={setMethodologyOpen} />
       </div>
     </TooltipProvider>
   );
@@ -2904,41 +2901,6 @@ function SessionDialog({ open, onOpenChange, draft, setDraft, relationships, ses
             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save session
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function MethodologyDialog({ open, onOpenChange }) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Growth & Coaching Methodology</DialogTitle>
-          <DialogDescription>How FCOS separates accountable development from private peer coaching.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-5 text-sm">
-          <section>
-            <h3 className="font-semibold">Formal development goals</h3>
-            <p className="mt-1 text-muted-foreground">Employees author their own goals. Every goal is measurable, has a deadline and checkpoint, and is approved independently by the primary manager. The active General Manager selected in Users & Access is the UUID-backed reporting hierarchy root, needs no manager assignment, and activates their own goals without a self-notification. An Advisory Manager may read goals but cannot comment, approve, or complete them. Changes to an approved measurement, deadline, or checkpoint create a new approval revision.</p>
-          </section>
-          <section>
-            <h3 className="font-semibold">Progress and completion</h3>
-            <p className="mt-1 text-muted-foreground">Employees submit evidence and on-track signals. Managers comment and decide approval or completion. The General Manager records self-managed completion with final evidence or marks a goal not achieved with a note. Missed checkpoints and deadlines remain visible as overdue, while plans can contain several concurrent goals. Completed Projects & Tasks records may be linked as private goal evidence. Ended plans are explicitly closed or carried forward.</p>
-          </section>
-          <section>
-            <h3 className="font-semibold">Equal-participant coaching</h3>
-            <p className="mt-1 text-muted-foreground">Any two active users may coach one another after mutual acceptance. Neither person has seniority. Preparation notes are private; shared notes, decisions, actions, and attachments are visible only to the pair. Both must confirm a completed session before shared notes lock. Corrections are append-only. The session workspace separates preparation, live discussion, and follow-up; unfinished agenda topics may be carried forward. Assigning a coaching action to the other participant creates a proposal they must accept, and a published action is thereafter controlled by Projects & Tasks.</p>
-          </section>
-          <section>
-            <h3 className="font-semibold">Calendar and notifications</h3>
-            <p className="mt-1 text-muted-foreground">FCOS owns the schedule and requests a neutral Outlook event. Calendar conflicts never overwrite silently. In-app notifications remain active; email categories can be disabled in Settings. External messages and calendar changes are never triggered automatically by opening this page.</p>
-          </section>
-          <section>
-            <h3 className="font-semibold">Visibility and boundaries</h3>
-            <p className="mt-1 text-muted-foreground">Development goals follow the reporting hierarchy. Coaching contents are visible only to the two participants, including no Administrator or General Manager override. This module does not create performance ratings, rankings, compensation decisions, or Salesforce changes.</p>
-          </section>
-        </div>
       </DialogContent>
     </Dialog>
   );

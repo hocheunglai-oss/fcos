@@ -1,15 +1,14 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
-  BookOpen,
   ChevronDown,
-  ExternalLink,
   Inbox,
   Search,
   X,
 } from "lucide-react";
 import { PRODUCT_COLORS, formatMoney } from "../lib/domain";
 import { PAGE_METHODOLOGIES } from "../lib/methodology";
+import PageMethodology from "@/components/common/PageMethodology";
 
 export function Button({ children, icon: Icon, variant = "secondary", size = "md", className = "", ...props }) {
   return (
@@ -65,52 +64,35 @@ export function SearchInput({ value, onChange, placeholder = "Search", className
 }
 
 export function PageHeader({ eyebrow, title, description, actions, status }) {
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
   const methodology = PAGE_METHODOLOGIES[title];
+  const methodologySections = methodology ? [
+    { title: "Purpose", body: methodology.summary },
+    { title: "Calculation and control rules", points: methodology.steps },
+  ] : [];
   return (
-    <>
-      <header className="app-page-header">
-        <div className="app-page-header__copy">
-          {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
-          <div className="app-page-header__title-row">
-            <h1>{title}</h1>
-            {status}
-          </div>
-          {description && <p>{description}</p>}
+    <header className="app-page-header">
+      <div className="app-page-header__copy">
+        {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
+        <div className="app-page-header__title-row">
+          <h1>{title}</h1>
+          {status}
         </div>
-        {(methodology || actions) && (
-          <div className="app-page-header__actions">
-            {methodology && <Button icon={BookOpen} onClick={() => setMethodologyOpen(true)}>Methodology</Button>}
-            {actions}
-          </div>
-        )}
-      </header>
-      {methodology && (
-        <Modal
-          open={methodologyOpen}
-          onClose={() => setMethodologyOpen(false)}
-          title={`${title} methodology`}
-          description="Calculation basis, workflow assumptions, and control sources used by this page."
-          size="lg"
-        >
-          <div className="app-methodology">
-            <p>{methodology.summary}</p>
-            <ol>{methodology.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-            {methodology.sources?.length ? (
-              <div className="app-methodology__sources">
-                <h3>Sources</h3>
-                {methodology.sources.map((source) => (
-                  <a key={source.url} href={source.url} target="_blank" rel="noreferrer">
-                    <ExternalLink size={14} aria-hidden="true" />
-                    <span>{source.label}</span>
-                  </a>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </Modal>
+        {description && <p>{description}</p>}
+      </div>
+      {(methodology || actions) && (
+        <div className="app-page-header__actions">
+          {methodology && (
+            <PageMethodology
+              title={title}
+              description="Calculation basis, workflow assumptions, and control sources used by this page."
+              sections={methodologySections}
+              sources={methodology.sources || []}
+            />
+          )}
+          {actions}
+        </div>
       )}
-    </>
+    </header>
   );
 }
 

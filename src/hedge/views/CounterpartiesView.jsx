@@ -24,11 +24,6 @@ const BLANK_COUNTERPARTY = {
   address_line2: "",
   address_line3: "",
   emails: "",
-  bank_name: "",
-  bank_swift: "",
-  intermediary_bank: "",
-  intermediary_swift: "",
-  account_number: "",
   notes: "",
 };
 
@@ -65,7 +60,16 @@ export function CounterpartiesView({ data, settings, readOnly = false }) {
     setSaving(true);
     setError(null);
     try {
-      const payload = { ...form, short_name: form.short_name.trim().toUpperCase() };
+      const payload = {
+        short_name: form.short_name.trim().toUpperCase(),
+        full_name: form.full_name || "",
+        attention: form.attention || "",
+        address_line1: form.address_line1 || "",
+        address_line2: form.address_line2 || "",
+        address_line3: form.address_line3 || "",
+        emails: form.emails || "",
+        notes: form.notes || "",
+      };
       if (drawer?.mode === "edit") {
         await actions.update({ entity: Counterparty, entityName: "Counterparty", id: drawer.record.id, payload, before: drawer.record, label: payload.short_name });
       } else {
@@ -95,16 +99,15 @@ export function CounterpartiesView({ data, settings, readOnly = false }) {
 
   return (
     <div className="app-page">
-      <PageHeader eyebrow="Directory" title="Counterparties" description="Maintain legal names, invoice recipients, addresses, and payment instructions used in settlement documents." actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button> : null} />
+      <PageHeader eyebrow="Directory" title="Counterparties" description="Maintain legal identities, invoice recipients, and addresses used in settlement documents." actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button> : null} />
       <div className="app-toolbar"><SearchInput value={search} onChange={setSearch} placeholder="Search name, email, address..." /><span className="app-toolbar__summary">{rows.length} counterparties</span></div>
       <TableFrame>
-        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th>Banking</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => (
+        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => (
           <tr key={record.id}>
             <td><div className="app-party-name"><span>{String(record.short_name || "?").slice(0, 2)}</span><strong>{record.short_name}</strong></div></td>
             <td><strong>{record.full_name || "Not provided"}</strong><small>{record.attention ? `Attn: ${record.attention}` : "No attention line"}</small></td>
             <td>{record.emails ? <><span className="app-inline-icon"><Mail size={14} />{record.emails}</span><StatusBadge tone="positive">Ready</StatusBadge></> : <StatusBadge tone="warning">Missing email</StatusBadge>}</td>
             <td><span className="app-inline-icon"><MapPin size={14} />{[record.address_line1, record.address_line2, record.address_line3].filter(Boolean).join(", ") || "Not provided"}</span></td>
-            <td>{record.bank_name || record.account_number ? <><strong>{record.bank_name || "Bank details"}</strong><small>{record.account_number || record.bank_swift || ""}</small></> : <StatusBadge tone="neutral">Not configured</StatusBadge>}</td>
             <td><div className="app-row-actions">{!readOnly && <><IconButton label="Edit counterparty" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete counterparty" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}</div></td>
           </tr>
         ))}</tbody></table> : <EmptyState icon={Building2} title="No counterparties match" description="Adjust the search or create a new counterparty record." action={<Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button>} />}
@@ -114,7 +117,6 @@ export function CounterpartiesView({ data, settings, readOnly = false }) {
         {error && <InlineError error={error} />}
         <section className="app-form-section"><div className="app-form-section__title">Identity</div><div className="app-form-grid app-form-grid--2"><Field label="Short name" required><input className="app-input" value={form.short_name || ""} onChange={(event) => setField("short_name", event.target.value)} /></Field><Field label="Attention"><input className="app-input" value={form.attention || ""} onChange={(event) => setField("attention", event.target.value)} /></Field><Field label="Full legal name" className="app-field--span-2"><input className="app-input" value={form.full_name || ""} onChange={(event) => setField("full_name", event.target.value)} /></Field></div></section>
         <section className="app-form-section"><div className="app-form-section__title">Invoice delivery</div><div className="app-form-grid app-form-grid--2"><Field label="Invoice email addresses" hint="Comma-separated" className="app-field--span-2"><input className="app-input" value={form.emails || ""} onChange={(event) => setField("emails", event.target.value)} /></Field><Field label="Address line 1" className="app-field--span-2"><input className="app-input" value={form.address_line1 || ""} onChange={(event) => setField("address_line1", event.target.value)} /></Field><Field label="Address line 2"><input className="app-input" value={form.address_line2 || ""} onChange={(event) => setField("address_line2", event.target.value)} /></Field><Field label="Address line 3"><input className="app-input" value={form.address_line3 || ""} onChange={(event) => setField("address_line3", event.target.value)} /></Field></div></section>
-        <section className="app-form-section"><div className="app-form-section__title">Bank instructions</div><div className="app-form-grid app-form-grid--2"><Field label="Bank name"><input className="app-input" value={form.bank_name || ""} onChange={(event) => setField("bank_name", event.target.value)} /></Field><Field label="SWIFT"><input className="app-input" value={form.bank_swift || ""} onChange={(event) => setField("bank_swift", event.target.value)} /></Field><Field label="Account number" className="app-field--span-2"><input className="app-input" value={form.account_number || ""} onChange={(event) => setField("account_number", event.target.value)} /></Field><Field label="Intermediary bank"><input className="app-input" value={form.intermediary_bank || ""} onChange={(event) => setField("intermediary_bank", event.target.value)} /></Field><Field label="Intermediary SWIFT"><input className="app-input" value={form.intermediary_swift || ""} onChange={(event) => setField("intermediary_swift", event.target.value)} /></Field></div></section>
         <section className="app-form-section"><div className="app-form-section__title">Notes</div><Field label="Internal notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field></section>
       </Drawer>
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete counterparty?" description={deleteTarget?.short_name || ""} />

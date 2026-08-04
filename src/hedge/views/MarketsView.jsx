@@ -117,7 +117,7 @@ function MopsTooltip({ active, payload, label }) {
   );
 }
 
-export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, verifyMonth = null, methodologyAction = null }) {
+export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, verifyMonth = null }) {
   const actions = useActions();
   const [range, setRange] = useState("3m");
   const [drawer, setDrawer] = useState(null);
@@ -374,7 +374,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
         eyebrow="Market data"
         title="MOPS market"
         description="Track published Singapore prices, maintain forward adjustments, and control estimated versus actual entries."
-        actions={<>{methodologyAction}{!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add price</Button> : null}</>}
+        actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add price</Button> : null}
       />
 
       <div className="app-metric-grid app-metric-grid--4">
