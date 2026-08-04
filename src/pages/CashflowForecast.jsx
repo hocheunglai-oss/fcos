@@ -26,6 +26,7 @@ import {
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -168,6 +169,7 @@ export default function CashflowForecast() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
   const [sort, setSort] = useState({ key: 'forecastDate', direction: 'asc' });
   const [selectedStemId, setSelectedStemId] = useState(null);
 
@@ -187,6 +189,7 @@ export default function CashflowForecast() {
       force,
       cacheKey: `cashflowForecast:${dateFrom}:${dateTo}:${bucket}`,
     });
+    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     setLoading(false);
     if (response.data?.error) {
       setError(response.data.error);
@@ -327,7 +330,12 @@ export default function CashflowForecast() {
         eyebrow="AR and AP forecast"
         title="Cashflow Forecast"
         description="Predict buyer receipts from historical payment delay and supplier outflows on due date, adjusted for weekends, Singapore holidays, and US holidays."
-        meta={`Hong Kong timezone. Range: ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}.`}
+        meta={(
+          <span className="flex flex-wrap items-center gap-2">
+            <span>Hong Kong timezone. Range: {fmtDate(dateFrom)} to {fmtDate(dateTo)}.</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Forecast data" /> : null}
+          </span>
+        )}
         actions={(
           <>
             <PageMethodology {...CASHFLOW_FORECAST_METHODOLOGY} />

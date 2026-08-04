@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, BookOpen, CheckCircle2, CircleDollarSign, ExternalLink, Eye, FileCheck2, Link2, Loader2, Plus, RefreshCw, Search, Send, ShieldCheck, Upload, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import StemDetailLink from '@/components/common/StemDetailLink';
@@ -1905,6 +1906,7 @@ export default function DisputeWorkflow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedStages, setSelectedStages] = useState(['Draft', 'Pending Approval', 'Revision Requested', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close']);
   const [managedStem, setManagedStem] = useState(null);
@@ -1912,11 +1914,13 @@ export default function DisputeWorkflow() {
   const [capabilities, setCapabilities] = useState({ role: 'user', canPrepare: true, canApprove: false, canAccount: false, canClose: false, canViewAllRules: true });
   const [rulesOpen, setRulesOpen] = useState(false);
   const [fieldWarning, setFieldWarning] = useState('');
+  const deepLinkedStemOpened = useRef(false);
 
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
     const res = await appClient.functions.invoke('disputeWorkflowList', { limit: 10000 }, { cache: true, force: options.force });
+    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
@@ -1940,6 +1944,16 @@ export default function DisputeWorkflow() {
   };
 
   useEffect(() => { loadRows(); }, []);
+
+  useEffect(() => {
+    if (deepLinkedStemOpened.current || !rows.length) return;
+    const stemId = new URLSearchParams(window.location.search).get('stem');
+    if (!stemId) return;
+    const matched = rows.find((row) => row.Id === stemId);
+    if (!matched) return;
+    deepLinkedStemOpened.current = true;
+    setManagedStem(matched);
+  }, [rows]);
 
   const selectedStageSet = useMemo(() => new Set(selectedStages), [selectedStages]);
   const filteredRows = useMemo(() => {
@@ -1999,7 +2013,12 @@ export default function DisputeWorkflow() {
         title="Dispute Workflow"
         description="Trader instructions, approval, accounting settlement, Salesforce documents, and closure."
         className="shrink-0"
-        meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}
+        meta={(
+          <span className="flex flex-wrap items-center gap-2">
+            <span>{lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Workflow data" /> : null}
+          </span>
+        )}
         actions={(
           <div className="flex gap-2">
             <PageMethodology {...DISPUTE_WORKFLOW_METHODOLOGY} />

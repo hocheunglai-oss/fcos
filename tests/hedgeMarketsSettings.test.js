@@ -27,12 +27,14 @@ test('settlement communication uses rich text and draggable template variables',
 
 test('Markets is a default-access Trading page with a market-only server boundary', () => {
   const layout = read('src/components/Layout.jsx');
+  const workspaces = read('src/lib/workspaceStandards.js');
   const app = read('src/App.jsx');
   const handler = read('api/functions/[name].js');
   const service = read('api/_hedgeDeskService.js');
   const migration = read('supabase/migrations/20260802090000_markets_default_access.sql');
 
-  assert.match(layout, /Account Managers[\s\S]*Markets[\s\S]*Hedge Desk/);
+  assert.match(layout, /workspaceNavigation\('buyers_administrator'[\s\S]*workspaceNavigation\('markets'[\s\S]*workspaceNavigation\('hedge_desk'/);
+  assert.match(workspaces, /buyers_administrator:[\s\S]*title: 'Account Managers'[\s\S]*markets:[\s\S]*title: 'Markets'[\s\S]*hedge_desk:/);
   assert.match(app, /path="\/markets"[\s\S]*moduleId="markets"/);
   assert.match(handler, /hedgeMarkets: \['markets'\]/);
   assert.equal((handler.match(/markets: true/g) || []).length, 5);

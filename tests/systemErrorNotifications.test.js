@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
   reportSystemError,
+  shouldAutoResolveSystemError,
   shouldNotifySystemError,
   systemErrorDedupeKey,
   systemErrorPublicDescriptor,
@@ -11,6 +12,7 @@ import {
 const migrationUrl = new URL('../supabase/migrations/20260804113709_system_error_notifications.sql', import.meta.url);
 const handlerUrl = new URL('../api/functions/[name].js', import.meta.url);
 const notificationsUrl = new URL('../api/_workNotifications.js', import.meta.url);
+const notificationUiUrl = new URL('../src/components/WorkNotifications.jsx', import.meta.url);
 
 function functionSource(source, name) {
   const start = source.indexOf(`async function ${name}(`);
@@ -30,6 +32,8 @@ test('only unexpected server failures create global error notifications', () => 
   assert.equal(shouldNotifySystemError(409), false);
   assert.equal(shouldNotifySystemError(500), true);
   assert.equal(shouldNotifySystemError(503), true);
+  assert.equal(shouldAutoResolveSystemError('disputeWorkflowList'), true);
+  assert.equal(shouldAutoResolveSystemError('unknownMutation'), false);
 });
 
 test('system errors are redacted, friendly, and deduplicated within a time window', async () => {
@@ -70,9 +74,10 @@ test('unknown handlers receive a safe generic notification', () => {
 });
 
 test('system error storage is service-only and integrated into unified notifications', async () => {
-  const [migration, notifications] = await Promise.all([
+  const [migration, notifications, notificationUi] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(notificationsUrl, 'utf8'),
+    readFile(notificationUiUrl, 'utf8'),
   ]);
   for (const table of ['system_error_events', 'system_error_notification_states']) {
     assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`, 'i'));
@@ -83,6 +88,17 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(migration, /on conflict \(dedupe_key\) do update/i);
   assert.match(notifications, /system_error_notification_states/);
   assert.match(notifications, /source: 'system_error'/);
+  assert.match(notifications, /diagnosticRef: row\.last_request_id/);
+  assert.match(notifications, /outcome: 'Completion not confirmed'/);
+  assert.match(notifications, /retryAvailable: Boolean\(row\.link\)/);
+  assert.match(notifications, /Review affected workspace before retrying/);
+  assert.match(notificationUi, /Diagnostic reference:/);
+  assert.match(notificationUi, /Save outcome:/);
+  assert.match(notificationUi, /Open Error Centre/);
+  assert.match(notificationUi, /notification\.actionLabel/);
+  const handler = await readFile(handlerUrl, 'utf8');
+  assert.match(handler, /resolveSystemErrorsForHandler/);
+  assert.match(handler, /shouldAutoResolveSystemError\(name\)/);
 });
 
 test('all Graph report and reminder handlers pass an explicit database client', async () => {

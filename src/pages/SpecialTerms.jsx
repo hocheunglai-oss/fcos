@@ -6,6 +6,9 @@ import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
+import DataStatus from '@/components/common/DataStatus';
+import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
+import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,9 +18,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
 
 const EMPTY_TERM = { id: null, name: '', termsText: '', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
@@ -59,6 +62,7 @@ function LookupField({ label, kind, value, onChange, placeholder }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
 
   useEffect(() => {
     if (value) setQuery('');
@@ -131,11 +135,13 @@ export default function SpecialTerms() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [saveAttempted, setSaveAttempted] = useState(false);
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('specialTermsWorkspace', { force }, { cache: false });
+    const response = await appClient.functions.invoke('specialTermsWorkspace', { force }, { force });
+    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     if (response.data?.error) {
       setError(response.data.error);
       setWorkspace(null);
@@ -168,8 +174,16 @@ export default function SpecialTerms() {
     return (workspace?.rules || []).filter((rule) => [rule.name, rule.specialTermName, rule.audience, ...conditionSummary(rule)].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [search, workspace?.rules]);
 
-  const openTerm = (term = null) => setTermForm(term ? { ...EMPTY_TERM, ...term, expectedLastModifiedAt: term.lastModifiedAt } : { ...EMPTY_TERM });
-  const openRule = (rule = null) => setRuleForm(rule ? {
+  const termValidationIssues = useMemo(() => termForm ? specialTermIssues(termForm) : [], [termForm]);
+  const ruleValidationIssues = useMemo(() => ruleForm ? specialTermRuleIssues(ruleForm) : [], [ruleForm]);
+
+  const openTerm = (term = null) => {
+    setSaveAttempted(false);
+    setTermForm(term ? { ...EMPTY_TERM, ...term, expectedLastModifiedAt: term.lastModifiedAt } : { ...EMPTY_TERM });
+  };
+  const openRule = (rule = null) => {
+    setSaveAttempted(false);
+    setRuleForm(rule ? {
     ...EMPTY_RULE,
     ...rule,
     country: rule.country || '__any__',
@@ -177,9 +191,12 @@ export default function SpecialTerms() {
     port: rule.portId ? { id: rule.portId, label: rule.portName, secondary: rule.portCountry || '' } : null,
     product: rule.productId ? { id: rule.productId, label: rule.productName, secondary: '' } : null,
     expectedLastModifiedAt: rule.lastModifiedAt,
-  } : { ...EMPTY_RULE, specialTermId: workspace?.terms?.[0]?.id || '' });
+    } : { ...EMPTY_RULE, specialTermId: workspace?.terms?.[0]?.id || '' });
+  };
 
   const saveTerm = async () => {
+    setSaveAttempted(true);
+    if (termValidationIssues.length) return;
     setBusy(true);
     setError('');
     const response = await appClient.functions.invoke('specialTermsSave', { ...termForm, operationId: operationId() }, { cache: false });
@@ -193,6 +210,8 @@ export default function SpecialTerms() {
   };
 
   const saveRule = async () => {
+    setSaveAttempted(true);
+    if (ruleValidationIssues.length) return;
     setBusy(true);
     setError('');
     const response = await appClient.functions.invoke('specialTermRuleSave', {
@@ -249,10 +268,16 @@ export default function SpecialTerms() {
       {message && <Alert><ShieldCheck className="h-4 w-4" /><AlertDescription>{message}</AlertDescription></Alert>}
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3 sm:flex-row sm:items-center sm:justify-between">
-        <Tabs value={activeTab} onValueChange={setActiveTab}><TabsList><TabsTrigger value="terms">Terms ({workspace?.terms?.length || 0})</TabsTrigger><TabsTrigger value="rules">Rules ({workspace?.rules?.length || 0})</TabsTrigger></TabsList></Tabs>
-        <div className="relative w-full sm:max-w-sm"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div>
-      </div>
+      <WorkspaceViewBar
+        views={[
+          { id: 'terms', label: 'Terms', count: workspace?.terms?.length || 0 },
+          { id: 'rules', label: 'Rules', count: workspace?.rules?.length || 0 },
+        ]}
+        value={activeTab}
+        onValueChange={setActiveTab}
+        status={loading ? <DataStatus meta={responseMeta} state="refreshing" label="Salesforce" /> : <DataStatus meta={responseMeta} label="Salesforce" />}
+        trailing={<div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div>}
+      />
 
       {loading && !workspace ? <StateBlock title="Loading Special Terms" description="Reading authoritative Salesforce definitions and rules." icon={Loader2} /> : null}
 
@@ -282,16 +307,16 @@ export default function SpecialTerms() {
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => !open && !busy && setTermForm(null)}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
           <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Rich-text remarks are used in confirmation and nomination documents.</DialogDescription></DialogHeader>
-          {termForm && <div className="space-y-5"><div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div><div className="space-y-1.5"><Label>Terms Text</Label><Textarea rows={6} value={termForm.termsText} onChange={(event) => setTermForm((current) => ({ ...current, termsText: event.target.value }))} /></div><div className="grid gap-4 md:grid-cols-2"><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label><div className="space-y-1.5"><Label>Confirmation special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.confirmationRemark} onChange={(confirmationRemark) => setTermForm((current) => ({ ...current, confirmationRemark }))} /></div></div></section><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach PDF to Nomination</label><div className="space-y-1.5"><Label>Nomination special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.nominationRemark} onChange={(nominationRemark) => setTermForm((current) => ({ ...current, nominationRemark }))} /></div></div></section></div></div>}
-          <DialogFooter><Button variant="outline" onClick={() => setTermForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy || !termForm?.name.trim()}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
+          {termForm && <div className="space-y-5"><div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div><div className="space-y-1.5"><Label>Terms Text</Label><Textarea rows={6} value={termForm.termsText} onChange={(event) => setTermForm((current) => ({ ...current, termsText: event.target.value }))} /></div><div className="grid gap-4 md:grid-cols-2"><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label><div className="space-y-1.5"><Label>Confirmation special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.confirmationRemark} onChange={(confirmationRemark) => setTermForm((current) => ({ ...current, confirmationRemark }))} /></div></div></section><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach PDF to Nomination</label><div className="space-y-1.5"><Label>Nomination special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.nominationRemark} onChange={(nominationRemark) => setTermForm((current) => ({ ...current, nominationRemark }))} /></div></div></section></div><WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} /></div>}
+          <DialogFooter><Button variant="outline" onClick={() => setTermForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={Boolean(ruleForm)} onOpenChange={(open) => !open && !busy && setRuleForm(null)}>
         <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto">
           <DialogHeader><DialogTitle>{ruleForm?.id ? 'Edit Special Term Rule' : 'Add Special Term Rule'}</DialogTitle><DialogDescription>Set the dimensions Salesforce will evaluate. Salesforce calculates priority after saving.</DialogDescription></DialogHeader>
-          {ruleForm && <div className="grid gap-4 md:grid-cols-2"><div className="space-y-1.5"><Label>Special Term</Label><Select value={ruleForm.specialTermId} onValueChange={(specialTermId) => setRuleForm((current) => ({ ...current, specialTermId }))}><SelectTrigger><SelectValue placeholder="Select a term" /></SelectTrigger><SelectContent>{(workspace?.terms || []).map((term) => <SelectItem key={term.id} value={term.id}>{term.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Audience</Label><Select value={ruleForm.audience} onValueChange={(audience) => setRuleForm((current) => ({ ...current, audience }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(workspace?.audienceOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><LookupField label="Account" kind="account" value={ruleForm.account} onChange={(account) => setRuleForm((current) => ({ ...current, account }))} placeholder="Search Account name or CL Key" /><LookupField label="Port" kind="port" value={ruleForm.port} onChange={(port) => setRuleForm((current) => ({ ...current, port }))} placeholder="Search port name" /><LookupField label="Product" kind="product" value={ruleForm.product} onChange={(product) => setRuleForm((current) => ({ ...current, product }))} placeholder="Search active product" /><div className="space-y-1.5"><Label>Country</Label><Select value={ruleForm.country} onValueChange={(country) => setRuleForm((current) => ({ ...current, country }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{(workspace?.countryOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><p className="md:col-span-2 text-xs text-muted-foreground">Leave dimensions empty when they should not restrict this rule. At least one Account, Port, Product, or Country is required.</p></div>}
-          <DialogFooter><Button variant="outline" onClick={() => setRuleForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveRule} disabled={busy || !ruleForm?.specialTermId || !(ruleForm?.account || ruleForm?.port || ruleForm?.product || ruleForm?.country !== '__any__')}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
+          {ruleForm && <div className="grid gap-4 md:grid-cols-2"><div className="space-y-1.5"><Label>Special Term</Label><Select value={ruleForm.specialTermId} onValueChange={(specialTermId) => setRuleForm((current) => ({ ...current, specialTermId }))}><SelectTrigger><SelectValue placeholder="Select a term" /></SelectTrigger><SelectContent>{(workspace?.terms || []).map((term) => <SelectItem key={term.id} value={term.id}>{term.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Audience</Label><Select value={ruleForm.audience} onValueChange={(audience) => setRuleForm((current) => ({ ...current, audience }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(workspace?.audienceOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><LookupField label="Account" kind="account" value={ruleForm.account} onChange={(account) => setRuleForm((current) => ({ ...current, account }))} placeholder="Search Account name or CL Key" /><LookupField label="Port" kind="port" value={ruleForm.port} onChange={(port) => setRuleForm((current) => ({ ...current, port }))} placeholder="Search port name" /><LookupField label="Product" kind="product" value={ruleForm.product} onChange={(product) => setRuleForm((current) => ({ ...current, product }))} placeholder="Search active product" /><div className="space-y-1.5"><Label>Country</Label><Select value={ruleForm.country} onValueChange={(country) => setRuleForm((current) => ({ ...current, country }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{(workspace?.countryOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><p className="md:col-span-2 text-xs text-muted-foreground">Leave dimensions empty when they should not restrict this rule. At least one Account, Port, Product, or Country is required.</p><div className="md:col-span-2"><WorkflowValidationSummary issues={saveAttempted ? ruleValidationIssues : []} /></div></div>}
+          <DialogFooter><Button variant="outline" onClick={() => setRuleForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveRule} disabled={busy}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

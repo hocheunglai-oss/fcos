@@ -17,8 +17,10 @@ import {
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -32,6 +34,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { UNOFFICIAL_COMPENSATION_METHODOLOGY } from '@/lib/pageMethodologies';
+import { unofficialCompensationClaimIssues, unofficialCompensationRecoveryIssues } from '@/lib/workflowValidation';
 
 const EMPTY_CLAIM = { accountId: '', contactId: '__none__', amount: '', deadlineDate: '', pic: '', description: '' };
 const EMPTY_RECOVERY = { claimId: '', stemKeyword: '', stemId: '', lineItemId: '', fixed: false, unitPrice: '', lumpSumPrice: '' };
@@ -108,6 +111,7 @@ export default function UnofficialCompensation() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
   const [view, setView] = useState('outstanding');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState(new Set());
@@ -125,11 +129,14 @@ export default function UnofficialCompensation() {
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+  const [claimSaveAttempted, setClaimSaveAttempted] = useState(false);
+  const [recoverySaveAttempted, setRecoverySaveAttempted] = useState(false);
 
   const load = useCallback(async (force = false) => {
     force ? setRefreshing(true) : setLoading(true);
     setError('');
     const response = await appClient.functions.invoke('unofficialCompensationList', { force }, { force });
+    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     if (response.data?.error) setError(response.data.error);
     else setWorkspace(response.data || { accounts: [], summary: { currencyTotals: [] } });
     setLoading(false);
@@ -176,6 +183,7 @@ export default function UnofficialCompensation() {
       const loaded = await ensureOptions();
       const nextAccountId = accountId && loaded.accounts.some((row) => row.accountId === accountId) ? accountId : '';
       setClaimDraft({ ...EMPTY_CLAIM, accountId: nextAccountId });
+      setClaimSaveAttempted(false);
       if (nextAccountId) await loadContacts(nextAccountId);
       setClaimDialog(true);
     } catch (loadError) {
@@ -184,6 +192,9 @@ export default function UnofficialCompensation() {
   };
 
   const saveClaim = async () => {
+    setClaimSaveAttempted(true);
+    const issues = unofficialCompensationClaimIssues(claimDraft);
+    if (issues.length) return;
     setSaving(true);
     const response = await appClient.functions.invoke('unofficialCompensationClaimCreate', {
       ...claimDraft,
@@ -218,6 +229,7 @@ export default function UnofficialCompensation() {
     setRecoveryDraft({ ...EMPTY_RECOVERY, claimId: firstClaim?.id || '' });
     setStemOptions([]);
     setStemContext(null);
+    setRecoverySaveAttempted(false);
   };
 
   const selectedRecoveryLine = stemContext?.lineItems?.find((line) => line.lineItemId === recoveryDraft.lineItemId);
@@ -229,8 +241,16 @@ export default function UnofficialCompensation() {
   const selectedClaim = recoveryDialog?.group.claims.find((claim) => claim.id === recoveryDraft.claimId);
   const selectedStemAccount = stemContext?.eligibleAccounts?.find((account) => account.accountId === recoveryDialog?.account.accountId);
   const selectedStemClaimIsEligible = selectedStemAccount?.claims?.some((claim) => claim.claimId === recoveryDraft.claimId);
+  const claimValidationIssues = useMemo(() => unofficialCompensationClaimIssues(claimDraft), [claimDraft]);
+  const recoveryValidationIssues = useMemo(() => unofficialCompensationRecoveryIssues({
+    form: recoveryDraft,
+    eligible: selectedStemClaimIsEligible,
+    preview: recoveryPreview,
+  }), [recoveryDraft, recoveryPreview, selectedStemClaimIsEligible]);
 
   const saveRecovery = async () => {
+    setRecoverySaveAttempted(true);
+    if (recoveryValidationIssues.length) return;
     setSaving(true);
     const response = await appClient.functions.invoke('unofficialCompensationRecoveryCreate', {
       operationId: operationId(),
@@ -314,7 +334,12 @@ export default function UnofficialCompensation() {
       <PageHeader
         icon={CircleDollarSign}
         title="Unofficial Compensation"
-        meta={workspace.fetchedAt ? `Salesforce data retrieved ${formatDateTime(workspace.fetchedAt)}` : undefined}
+        meta={workspace.fetchedAt ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <span>Salesforce data retrieved {formatDateTime(workspace.fetchedAt)}</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Salesforce" /> : null}
+          </span>
+        ) : undefined}
         actions={<><PageMethodology {...UNOFFICIAL_COMPENSATION_METHODOLOGY} /><Button type="button" variant="outline" className="gap-2" onClick={() => load(true)} disabled={refreshing}><RefreshCw className={refreshing ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />Refresh</Button><Button type="button" className="gap-2" onClick={() => openClaim()}><Plus className="h-4 w-4" />Open Claim</Button></>}
       />
 
@@ -394,7 +419,8 @@ export default function UnofficialCompensation() {
             <div><Label>Agreed amount</Label><Input type="number" min="0.01" step="0.01" value={claimDraft.amount} onChange={(event) => setClaimDraft((current) => ({ ...current, amount: event.target.value }))} /></div>
             <div><Label>Deadline</Label><Input type="date" value={claimDraft.deadlineDate} onChange={(event) => setClaimDraft((current) => ({ ...current, deadlineDate: event.target.value }))} /></div>
             <div className="sm:col-span-2"><Label>Description (optional)</Label><Textarea value={claimDraft.description} onChange={(event) => setClaimDraft((current) => ({ ...current, description: event.target.value }))} maxLength={32768} /></div>
-          </div><DialogFooter><Button type="button" variant="outline" onClick={() => setClaimDialog(false)}>Cancel</Button><Button type="button" onClick={saveClaim} disabled={saving || !claimDraft.accountId || !(Number(claimDraft.amount) > 0) || !claimDraft.deadlineDate || !claimDraft.pic}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Open Claim</Button></DialogFooter>
+            <div className="sm:col-span-2"><WorkflowValidationSummary issues={claimSaveAttempted ? claimValidationIssues : []} /></div>
+          </div><DialogFooter><Button type="button" variant="outline" onClick={() => setClaimDialog(false)}>Cancel</Button><Button type="button" onClick={saveClaim} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Open Claim</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -412,8 +438,9 @@ export default function UnofficialCompensation() {
               {recoveryDraft.fixed ? <div><Label>Lump-sum price</Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.lumpSumPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, lumpSumPrice: event.target.value }))} /></div> : <div><Label>Unit price</Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.unitPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, unitPrice: event.target.value }))} /></div>}
               {selectedRecoveryLine && selectedClaim && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3"><div className="text-xs font-medium text-emerald-800">Calculated recovery</div><div className="mt-1 text-lg font-semibold tabular-nums text-emerald-900">{formatMoney(recoveryPreview, selectedClaim.currencyIsoCode)}</div><div className="text-xs text-emerald-800">{recoveryDraft.fixed ? 'Lump-sum price' : `${Math.abs(Number(selectedRecoveryLine.deliveredQuantity || 0)) >= 0.005 ? 'Delivered quantity' : 'Line quantity'} × unit price`} · saved as a negative UOC amount</div></div>}
             </>}
+            <WorkflowValidationSummary issues={recoverySaveAttempted ? recoveryValidationIssues : []} />
           </div>}
-          <DialogFooter><Button type="button" variant="outline" onClick={() => setRecoveryDialog(null)}>Cancel</Button><Button type="button" onClick={saveRecovery} disabled={saving || !recoveryDraft.claimId || !recoveryDraft.stemId || !recoveryDraft.lineItemId || !selectedStemClaimIsEligible || !(recoveryPreview > 0)}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Record Recovery</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" onClick={() => setRecoveryDialog(null)}>Cancel</Button><Button type="button" onClick={saveRecovery} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Record Recovery</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

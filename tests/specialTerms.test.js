@@ -6,11 +6,13 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), '
 
 test('Special Terms is a default-visible Trading page with controlled management', () => {
   const layout = read('src/components/Layout.jsx');
+  const workspaces = read('src/lib/workspaceStandards.js');
   const app = read('src/App.jsx');
   const auth = read('src/lib/authModules.js');
   const functions = read('api/functions/[name].js');
 
-  assert.match(layout, /Account Managers[\s\S]*Markets[\s\S]*Special Terms[\s\S]*Hedge Desk/);
+  assert.match(layout, /workspaceNavigation\('buyers_administrator'[\s\S]*workspaceNavigation\('markets'[\s\S]*workspaceNavigation\('special_terms'[\s\S]*workspaceNavigation\('hedge_desk'/);
+  assert.match(workspaces, /buyers_administrator:[\s\S]*title: 'Account Managers'[\s\S]*markets:[\s\S]*title: 'Markets'[\s\S]*special_terms:[\s\S]*title: 'Special Terms'[\s\S]*hedge_desk:/);
   assert.match(app, /path="\/special-terms"[\s\S]*moduleId="special_terms"/);
   assert.match(auth, /id: 'special_terms_manage'/);
   assert.match(functions, /specialTermsSave:[\s\S]*\['special_terms'\]/);

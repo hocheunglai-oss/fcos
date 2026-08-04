@@ -39,52 +39,53 @@ import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import WorkNotifications from '@/components/WorkNotifications';
+import { workspaceNavigation } from '@/lib/workspaceStandards';
 
 const navGroups = [
   {
     id: 'personal',
     label: 'Personal',
     items: [
-      { id: 'my_commitments', to: '/my-commitments', label: 'My Commitments', icon: UserRoundCheck },
-      { id: 'growth_coaching', to: '/growth-coaching', label: 'Growth & Coaching', icon: Sprout },
-      { id: 'projects_tasks', to: '/projects-tasks', label: 'Projects & Tasks', icon: ListTodo },
+      workspaceNavigation('my_commitments', { icon: UserRoundCheck }),
+      workspaceNavigation('growth_coaching', { icon: Sprout }),
+      workspaceNavigation('projects_tasks', { icon: ListTodo }),
     ],
   },
   {
     id: 'trading',
     label: 'Trading',
     items: [
-      { id: 'dashboard', to: '/', label: 'Dashboard', moduleId: 'dashboard', icon: LayoutDashboard },
-      { id: 'buyers_administrator', to: '/account-managers', label: 'Account Managers', moduleId: 'buyers_administrator', icon: UsersRound },
-      { id: 'markets', to: '/markets', label: 'Markets', moduleId: 'markets', icon: CandlestickChart },
-      { id: 'special_terms', to: '/special-terms', label: 'Special Terms', moduleId: 'special_terms', icon: ScrollText },
-      { id: 'hedge_desk', to: '/hedge-desk', label: 'Hedge Desk', moduleId: 'hedge_desk', icon: ChartNoAxesCombined },
+      workspaceNavigation('dashboard', { moduleId: 'dashboard', icon: LayoutDashboard }),
+      workspaceNavigation('buyers_administrator', { moduleId: 'buyers_administrator', icon: UsersRound }),
+      workspaceNavigation('markets', { moduleId: 'markets', icon: CandlestickChart }),
+      workspaceNavigation('special_terms', { moduleId: 'special_terms', icon: ScrollText }),
+      workspaceNavigation('hedge_desk', { moduleId: 'hedge_desk', icon: ChartNoAxesCombined }),
     ],
   },
   {
     id: 'cross_functions',
     label: 'Cross Functions',
     items: [
-      { id: 'payment_collections', to: '/payment-collections', label: 'Payment Collections', moduleIds: ['buyer_invoices', 'incoming_payments'], icon: ReceiptText },
-      { id: 'disputes', to: '/disputes', label: 'Dispute Workflow', moduleId: 'disputes', icon: FileCheck2 },
-      { id: 'unofficial_compensation', to: '/unofficial-compensation', label: 'Unofficial Compensation', moduleId: 'unofficial_compensation', icon: HandCoins },
-      { id: 'brokers', to: '/brokers', label: 'Broker Commissions', moduleId: 'brokers', icon: DollarSign },
+      workspaceNavigation('payment_collections', { moduleIds: ['buyer_invoices', 'incoming_payments'], icon: ReceiptText }),
+      workspaceNavigation('disputes', { moduleId: 'disputes', icon: FileCheck2 }),
+      workspaceNavigation('unofficial_compensation', { moduleId: 'unofficial_compensation', icon: HandCoins }),
+      workspaceNavigation('brokers', { moduleId: 'brokers', icon: DollarSign }),
     ],
   },
   {
     id: 'finance',
     label: 'Finance',
     items: [
-      { id: 'cashflow_forecast', to: '/cashflow-forecast', label: 'Cashflow', moduleId: 'cashflow_forecast', icon: WalletCards },
+      workspaceNavigation('cashflow_forecast', { moduleId: 'cashflow_forecast', icon: WalletCards }),
     ],
   },
   {
     id: 'tools',
     label: 'Tools',
     items: [
-      { id: 'email_router', to: '/email-router', label: 'Email Router', moduleId: 'email_router', icon: MailSearch },
-      { id: 'review', to: '/review', label: 'Exception Review', moduleId: 'review', icon: ClipboardCheck },
-      { id: 'pnl', to: '/pnl', label: 'Qlik Validator', moduleId: 'pnl', icon: TrendingUp },
+      workspaceNavigation('email_router', { moduleId: 'email_router', icon: MailSearch }),
+      workspaceNavigation('review', { moduleId: 'review', icon: ClipboardCheck }),
+      workspaceNavigation('pnl', { moduleId: 'pnl', icon: TrendingUp }),
       { id: 'report_archive', to: '/brokers?tab=archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
     ],
   },

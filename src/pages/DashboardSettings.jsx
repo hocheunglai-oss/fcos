@@ -10,6 +10,7 @@ import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import TableShell from '@/components/common/TableShell';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff, Sparkles, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
@@ -57,6 +58,7 @@ export default function DashboardSettings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [tableSearch, setTableSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [filteredTableWide, setFilteredTableWide] = useState(false);
@@ -164,6 +166,7 @@ export default function DashboardSettings() {
       companyFilterMode: mode,
       companyKeyword: normalizedCompany || null,
     }, { cache: true, force: options.force });
+    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -197,6 +200,7 @@ export default function DashboardSettings() {
         selectedYears,
         selectedMonths,
       }, { cache: true, force: options.force });
+      setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
       if (response.data?.error) {
         setAiError(response.data.error);
         setAiQuery(null);
@@ -460,7 +464,12 @@ export default function DashboardSettings() {
         icon={SlidersHorizontal}
         eyebrow="Dashboard"
         title="Dashboard"
-        meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}
+        meta={(
+          <span className="flex flex-wrap items-center gap-2">
+            <span>{lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')} · Auto-saved` : 'Auto-saved filters'}</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Salesforce" /> : null}
+          </span>
+        )}
         actions={(
           <>
             <PageMethodology {...DASHBOARD_METHODOLOGY} />

@@ -247,9 +247,10 @@ test("Outlook synchronization is scoped to neutral events and never blocks FCOS 
 });
 
 test("Growth & Coaching is universal, sits above Projects & Tasks, and exposes reporting-line administration", async () => {
-  const [app, layout, page, admin, handler, methodologies] = await Promise.all([
+  const [app, layout, workspaces, page, admin, handler, methodologies] = await Promise.all([
     readFile(appUrl, "utf8"),
     readFile(layoutUrl, "utf8"),
+    readFile(new URL('../src/lib/workspaceStandards.js', import.meta.url), 'utf8'),
     readFile(pageUrl, "utf8"),
     readFile(adminUrl, "utf8"),
     readFile(handlerUrl, "utf8"),
@@ -257,7 +258,8 @@ test("Growth & Coaching is universal, sits above Projects & Tasks, and exposes r
   ]);
   assert.match(app, /path="\/growth-coaching" element=\{<GrowthCoaching \/>\}/);
   assert.doesNotMatch(app, /path="\/growth-coaching" element=\{<ModuleGate/);
-  assert.ok(layout.indexOf("/growth-coaching") < layout.indexOf("/projects-tasks"));
+  assert.ok(layout.indexOf("workspaceNavigation('growth_coaching'") < layout.indexOf("workspaceNavigation('projects_tasks'"));
+  assert.ok(workspaces.indexOf("route: '/growth-coaching'") < workspaces.indexOf("route: '/projects-tasks'"));
   assert.match(layout, /<WorkNotifications \/>/);
   assert.match(page, /PageMethodology \{\.\.\.GROWTH_COACHING_METHODOLOGY\}/);
   assert.match(methodologies, /shared notes, actions, files, and decisions remain visible only to the pair/);

@@ -24,10 +24,12 @@ import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import DataStatus from '@/components/common/DataStatus';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import TableShell from '@/components/common/TableShell';
+import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -49,6 +51,7 @@ import { cn } from '@/lib/utils';
 import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
 import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } from '@/lib/paymentCollectionDisputes';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+import { collectionWorkflowIssues } from '@/lib/workflowValidation';
 
 const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
@@ -855,6 +858,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
   const [restoredAt, setRestoredAt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [saveAttempted, setSaveAttempted] = useState(false);
   const ownerSelectRef = useRef(null);
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
   const ownerChoices = useMemo(() => uniqueNames([
@@ -889,9 +893,15 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
     setRestoredAt(draft?.data && !sameDraftValue(draft.data, nextBase) ? draft.updatedAt : null);
     setAdviceFile(null);
     setError(null);
+    setSaveAttempted(false);
   }, [draftKey, ownerChoices, ownerOptions, row, rowTraderOptions]);
 
   const formDirty = Boolean(baseForm && !sameDraftValue(form, baseForm));
+  const validationIssues = useMemo(() => collectionWorkflowIssues({
+    form,
+    adviceFile,
+    existingAdviceDocumentIds: row?.collection?.adviceDocumentIds || [],
+  }), [adviceFile, form, row?.collection?.adviceDocumentIds]);
   useDraftAutosave(draftKey, form, {
     enabled: open && Boolean(row),
     dirty: formDirty,
@@ -921,6 +931,11 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
     setRestoredAt(null);
   };
   const save = async () => {
+    setSaveAttempted(true);
+    if (validationIssues.length) {
+      setError(validationIssues[0].message);
+      return;
+    }
     setSaving(true);
     setError(null);
     let functionName = 'buyerInvoiceCollectionSave';
@@ -931,16 +946,6 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
       expectedUpdatedAt: row.collection?.updatedAt || null,
     };
     if (form.status === 'Payment Advice Received') {
-      if (!form.adviceReceivedDate || !(Number(form.adviceAmount) > 0) || !form.adviceVerificationDate) {
-        setError('Payment advice date, positive amount, and verification date are required.');
-        setSaving(false);
-        return;
-      }
-      if (!form.adviceReference.trim() && !adviceFile && !(row.collection?.adviceDocumentIds || []).length) {
-        setError('Enter the buyer reference or upload the payment advice document.');
-        setSaving(false);
-        return;
-      }
       let base64 = null;
       try {
         base64 = adviceFile ? await fileToBase64(adviceFile) : null;
@@ -1113,6 +1118,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
               <Label className="text-xs text-muted-foreground">Latest Note</Label>
               <Textarea value={form.latestNote} onChange={(event) => update('latestNote', event.target.value)} className="min-h-32" placeholder="Add the latest follow-up note..." />
             </div>
+            <WorkflowValidationSummary issues={saveAttempted ? validationIssues : []} />
             {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -2417,6 +2423,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
@@ -2615,6 +2622,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     setLoading(true);
     setError(null);
     const res = await appClient.functions.invoke('salesforceBuyerInvoicesDue', { daysAhead: nextDays }, { cache: true, force: options.force });
+    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (res.data?.error) {
       setError(res.data.error);
       setRows([]);
@@ -2864,7 +2872,12 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
         eyebrow="Accounts receivable follow-up"
         title="Payment Collections"
         description="Prioritize buyer follow-up, promises, payment advice, and settlement using the live Salesforce receivable balance."
-        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${collectionRows.length.toLocaleString()} invoices` : undefined}
+        meta={meta ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <span>Window: {fmtDate(meta.today)} to {fmtDate(meta.dueThrough)} · {filteredRows.length.toLocaleString()} of {collectionRows.length.toLocaleString()} invoices</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Salesforce" /> : null}
+          </span>
+        ) : undefined}
         actions={(
           <>
             <Button variant="outline" onClick={() => setShowReminderRules(true)} className="gap-2 w-fit">

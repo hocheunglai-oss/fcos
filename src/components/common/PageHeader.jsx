@@ -5,7 +5,7 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
   const copy = getPageCopy({ title, eyebrow, description });
 
   return (
-    <div className={cn('glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-2xl px-5 py-4 lg:flex-row lg:items-end lg:justify-between', className)}>
+    <div className={cn('glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-lg px-5 py-4 lg:flex-row lg:items-end lg:justify-between', className)}>
       <div className="min-w-0">
         {(eyebrow || Icon) && (
           <div className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">

@@ -8,6 +8,7 @@ import PageHeader from '@/components/common/PageHeader';
 import ReorderableDataTable from '@/components/common/ReorderableDataTable';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
+import DataStatus from '@/components/common/DataStatus';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
@@ -397,6 +398,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const { dateFrom, dateTo, search, data, thresholdDraft } = pageState;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [selectedStemId, setSelectedStemId] = useState(readUrlStemId);
@@ -449,6 +451,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
       dateTo,
       limit: 5000,
     }, { cache: true, force: options.force });
+    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -1020,6 +1023,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         meta={lastMeta ? `Payment created date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
         actions={(
           <>
+            <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
             <Button variant="outline" onClick={() => setSettingsOpen(true)}>
               <Settings2 className="mr-2 h-4 w-4" />
               Global Settings

@@ -8,6 +8,7 @@
     "dev:full": "vercel dev",
     "dev:ui": "vite",
     "test": "node --test tests/*.test.js",
+    "test:e2e": "playwright test",
     "build": "node scripts/write-app-version.mjs && vite build",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
@@ -16,6 +17,9 @@
     "reconcile:email-router": "node scripts/reconcile-email-router.mjs",
     "migrate:account-managers": "node --env-file=.env.local scripts/migrate-account-managers.mjs",
     "typecheck": "tsc -p ./jsconfig.json",
+    "verify:migrations": "node scripts/verify-migrations.mjs",
+    "verify:graph-only": "node scripts/verify-production-source.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -96,6 +100,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
+    "@playwright/test": "^1.54.2",
     "@types/node": "^22.13.5",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",

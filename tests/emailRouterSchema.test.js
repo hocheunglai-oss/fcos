@@ -78,7 +78,7 @@ test('Email Router visibility is controlled by module access without removing cu
   assert.match(sql, /select id, 'email_router', true\s+from public\.user_types/);
   assert.match(sql, /select id, 'email_router', true\s+from public\.user_profiles\s+where use_type_defaults = false/);
   assert.match(app, /path="\/email-router" element=\{<ModuleGate moduleId="email_router">/);
-  assert.match(layout, /id: 'email_router'[\s\S]*moduleId: 'email_router'/);
+  assert.match(layout, /workspaceNavigation\('email_router', \{ moduleId: 'email_router'/);
   assert.match(authModules, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /emailRouterList: \['email_router'\]/);

@@ -20,7 +20,9 @@ import { Textarea } from '@/components/ui/textarea';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StemDetailLink from '@/components/common/StemDetailLink';
+import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 
@@ -82,6 +84,7 @@ export default function PaymentCollections() {
   const [reconciliation, setReconciliation] = useState(null);
   const [reconciling, setReconciling] = useState(false);
   const [reconciliationError, setReconciliationError] = useState('');
+  const [reconciliationMeta, setReconciliationMeta] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [overrideEntry, setOverrideEntry] = useState(null);
   const [overrideReason, setOverrideReason] = useState('');
@@ -99,6 +102,7 @@ export default function PaymentCollections() {
     setReconciling(true);
     setReconciliationError('');
     const response = await appClient.functions.invoke('paymentCollectionsReconcile', { force }, { force });
+    setReconciliationMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     if (response.data?.error) {
       setReconciliationError(response.data.error);
     } else {
@@ -160,28 +164,32 @@ export default function PaymentCollections() {
   return (
     <div className="min-h-full bg-slate-50">
       <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-            {availableTabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <Button key={tab.id} type="button" variant={activeTab === tab.id ? 'default' : 'ghost'} size="sm" className="shrink-0 gap-2" onClick={() => changeTab(tab.id)}>
-                  <Icon className="h-4 w-4" />
-                  {tab.label}
-                  {tab.id === 'reconciliation' && reconciliation?.summary?.exceptions > 0 && (
-                    <Badge variant="secondary" className="ml-1 bg-amber-100 text-amber-800">{reconciliation.summary.exceptions}</Badge>
-                  )}
-                </Button>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-3">
+        <WorkspaceViewBar
+          className="border-0 bg-transparent p-0"
+          views={availableTabs.map((tab) => ({
+            ...tab,
+            count: tab.id === 'reconciliation' && reconciliation?.summary?.exceptions > 0
+              ? reconciliation.summary.exceptions
+              : undefined,
+          }))}
+          value={activeTab}
+          onValueChange={changeTab}
+          status={(
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               {reconciling ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking Salesforce balances</> : reconciliation?.summary ? <><CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> {reconciliation.summary.checked} cases checked</> : null}
             </div>
+          )}
+          trailing={(
+            <>
+            {reconciling
+              ? <DataStatus meta={reconciliationMeta} state="refreshing" label="Reconciliation" />
+              : reconciliationMeta
+                ? <DataStatus meta={reconciliationMeta} label="Reconciliation" />
+                : null}
             <PageMethodology {...activeMethodology} size="sm" />
-          </div>
-        </div>
+            </>
+          )}
+        />
         {reconciliationError && (
           <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />

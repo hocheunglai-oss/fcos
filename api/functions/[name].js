@@ -61,7 +61,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
-import { reportSystemError, shouldNotifySystemError } from '../_systemErrorNotifications.js';
+import { reportSystemError, resolveSystemErrorsForHandler, shouldAutoResolveSystemError, shouldNotifySystemError } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   coachingActionPublish as coachingActionPublishService,
@@ -804,7 +804,39 @@ async function workNotificationsState(body = {}, req = null, accessContext = nul
 }
 
 async function workCommitmentsList(body = {}, req = null, accessContext = null) {
-  return workCommitmentsListService(body, accessContext || (await requireActiveUser(req)));
+  const context = accessContext || (await requireActiveUser(req));
+  const [
+    paymentCollections,
+    disputes,
+    disputeApprove,
+    disputeAccount,
+    hedgeDesk,
+    hedgeCloseApprove,
+    hedgeSettlementManage,
+    emailRouter,
+  ] = await Promise.all([
+    userHasAnyModuleAccess(context.client, context.profile, ['buyer_invoices', 'incoming_payments']),
+    userHasAnyModuleAccess(context.client, context.profile, ['disputes']),
+    userHasCapability(context.client, context.profile, 'disputes_approve'),
+    userHasCapability(context.client, context.profile, 'disputes_account'),
+    userHasAnyModuleAccess(context.client, context.profile, ['hedge_desk']),
+    userHasCapability(context.client, context.profile, 'hedge_close_approve'),
+    userHasCapability(context.client, context.profile, 'hedge_settlement_manage'),
+    userHasAnyModuleAccess(context.client, context.profile, ['email_router']),
+  ]);
+  return workCommitmentsListService(body, {
+    ...context,
+    capabilities: {
+      paymentCollections,
+      disputes,
+      disputeApprove,
+      disputeAccount,
+      hedgeDesk,
+      hedgeCloseApprove,
+      hedgeSettlementManage,
+      emailRouter,
+    },
+  });
 }
 
 async function growthReportingLinesList(body = {}, req = null, accessContext = null) {
@@ -16314,6 +16346,16 @@ export default async function handler(req, res) {
         const accessContext = await requireHandlerAccess(name, req);
         const body = await readBody(req);
         const data = await fn(body, req, accessContext);
+        if (shouldAutoResolveSystemError(name)) {
+          try {
+            await resolveSystemErrorsForHandler(safeSupabaseAdminClient(), name);
+          } catch (resolutionError) {
+            console.warn('[system-error-notification] resolution failed', {
+              handler: name,
+              message: resolutionError.message,
+            });
+          }
+        }
         return sendJson(res, data);
       } catch (error) {
         const status = error.status || error.statusCode || 500;

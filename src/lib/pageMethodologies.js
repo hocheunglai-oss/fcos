@@ -117,7 +117,7 @@ export const MY_COMMITMENTS_METHODOLOGY = {
   sections: [
     {
       title: 'Included work',
-      body: 'The page combines actionable Projects & Tasks items and Growth & Coaching commitments for which you are an owner, assignee, employee, manager, coaching participant, or action owner. It is a personal work view, not a privacy boundary.',
+      body: 'The page combines Projects & Tasks, Growth & Coaching, assigned Payment Collections, dispute approvals and accounting work, Hedge settlement decisions, Email Router warnings, and operational system errors. FCOS evaluates each source using your current server-side permissions; this is a personal action view, not a privacy boundary.',
     },
     {
       title: 'Urgency order',
@@ -129,7 +129,7 @@ export const MY_COMMITMENTS_METHODOLOGY = {
     },
     {
       title: 'Opening and refresh',
-      body: 'Selecting an item opens its source record. Refresh retrieves current workflow state; My Commitments does not copy or independently edit the underlying record.',
+      body: 'Each row states the next action and opens the exact source record where possible. Refresh retrieves current workflow and notification state; My Commitments does not copy, settle, approve, or independently edit the underlying record.',
     },
   ],
 };

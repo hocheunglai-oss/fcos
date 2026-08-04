@@ -1,23 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowRight,
   CalendarClock,
+  ChartNoAxesCombined,
   CheckCircle2,
   CircleDot,
   Clock3,
+  FileCheck2,
+  MailSearch,
+  ReceiptText,
   RefreshCw,
+  TriangleAlert,
   UserRoundCheck,
 } from "lucide-react";
 import { appClient } from "@/api/appClient";
 import PageHeader from "@/components/common/PageHeader";
 import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
-import TableShell from "@/components/common/TableShell";
+import WorkspaceViewBar from "@/components/common/WorkspaceViewBar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { MY_COMMITMENTS_METHODOLOGY } from "@/lib/pageMethodologies";
 
@@ -29,6 +33,17 @@ const SECTIONS = [
   { key: "waiting", label: "Waiting for others", icon: UserRoundCheck },
   { key: "later", label: "Later", icon: CheckCircle2 },
   { key: "no_due_date", label: "No due date", icon: CheckCircle2 },
+];
+
+const SOURCES = [
+  { key: "all", label: "All", icon: UserRoundCheck },
+  { key: "collaboration", label: "Projects & Tasks", icon: CircleDot },
+  { key: "growth_coaching", label: "Growth & Coaching", icon: UserRoundCheck },
+  { key: "payment_collections", label: "Payment Collections", icon: ReceiptText },
+  { key: "disputes", label: "Disputes", icon: FileCheck2 },
+  { key: "hedge_desk", label: "Hedge Desk", icon: ChartNoAxesCombined },
+  { key: "email_router", label: "Email Router", icon: MailSearch },
+  { key: "system_error", label: "System Errors", icon: TriangleAlert },
 ];
 
 function formatDue(value) {
@@ -49,7 +64,17 @@ function formatDue(value) {
 }
 
 function sourceLabel(source) {
-  return source === "collaboration" ? "Projects & Tasks" : "Growth & Coaching";
+  return SOURCES.find((item) => item.key === source)?.label || source || "Work";
+}
+
+function sourceBadgeClass(source) {
+  if (source === "system_error") return "border-red-200 bg-red-50 text-red-800";
+  if (source === "email_router") return "border-amber-200 bg-amber-50 text-amber-900";
+  if (source === "payment_collections") return "border-cyan-200 bg-cyan-50 text-cyan-900";
+  if (source === "disputes") return "border-orange-200 bg-orange-50 text-orange-900";
+  if (source === "hedge_desk") return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  if (source === "growth_coaching") return "border-violet-200 bg-violet-50 text-violet-800";
+  return "border-blue-200 bg-blue-50 text-blue-800";
 }
 
 function sectionTone(key) {
@@ -63,8 +88,10 @@ function sectionTone(key) {
 
 export default function MyCommitments() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState({ commitments: [], counts: {} });
-  const [scope, setScope] = useState("all");
+  const requestedSource = searchParams.get('source');
+  const scope = SOURCES.some((item) => item.key === requestedSource) ? requestedSource : 'all';
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -100,6 +127,26 @@ export default function MyCommitments() {
       ),
     [data.commitments, scope],
   );
+  const visibleSources = useMemo(() => {
+    const available = new Set(data.sources || (data.commitments || []).map((item) => item.source));
+    return SOURCES
+      .filter((item) => item.key === "all" || available.has(item.key))
+      .map((item) => ({
+        id: item.key,
+        label: item.label,
+        icon: item.icon,
+        count: item.key === 'all'
+          ? (data.commitments || []).length
+          : (data.commitments || []).filter((commitment) => commitment.source === item.key).length,
+      }));
+  }, [data.commitments, data.sources]);
+
+  const changeScope = (nextScope) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextScope === 'all') next.delete('source');
+    else next.set('source', nextScope);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <div className="space-y-5">
@@ -143,24 +190,14 @@ export default function MyCommitments() {
         ))}
       </div>
 
-      <TableShell bodyClassName="p-4">
-        <Tabs value={scope} onValueChange={setScope}>
-          <TabsList className="h-auto w-full sm:w-auto">
-            <TabsTrigger value="all" className="flex-1 sm:flex-none">
-              All
-            </TabsTrigger>
-            <TabsTrigger value="collaboration" className="flex-1 sm:flex-none">
-              Projects & Tasks
-            </TabsTrigger>
-            <TabsTrigger
-              value="growth_coaching"
-              className="flex-1 sm:flex-none"
-            >
-              Growth & Coaching
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </TableShell>
+      <WorkspaceViewBar views={visibleSources} value={scope} onValueChange={changeScope} />
+
+      {data.unavailableSources?.length ? (
+        <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{data.unavailableSources.join(", ")} could not be checked. Other commitments remain current.</span>
+        </div>
+      ) : null}
 
       {loading ? (
         <StateBlock
@@ -204,7 +241,7 @@ export default function MyCommitments() {
                           <span className="font-medium text-foreground">
                             {item.title}
                           </span>
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className={cn("text-[10px]", sourceBadgeClass(item.source))}>
                             {sourceLabel(item.source)}
                           </Badge>
                           {item.priority && (
@@ -218,7 +255,10 @@ export default function MyCommitments() {
                         </span>
                       </span>
                       <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
-                        <span>{formatDue(item.dueAt)}</span>
+                        <span className="text-right">
+                          <span className="block font-medium text-foreground">{item.actionLabel || "Open"}</span>
+                          <span className="block">{formatDue(item.dueAt)}</span>
+                        </span>
                         <ArrowRight className="h-4 w-4" />
                       </span>
                     </button>

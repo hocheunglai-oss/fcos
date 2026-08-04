@@ -28,12 +28,26 @@ const HANDLER_CONTEXT = {
     message: 'A Hedge Desk record operation could not be completed. The error has been recorded for follow-up.',
     link: '/hedge-desk',
   },
+  disputeWorkflowList: {
+    title: 'Dispute Workflow refresh failed',
+    message: 'The Dispute Workflow queue could not be refreshed. Review Salesforce connectivity before retrying.',
+    link: '/disputes',
+  },
   workNotificationsList: {
     title: 'FCOS notifications are temporarily unavailable',
     message: 'The notification centre could not be refreshed. The error has been recorded for follow-up.',
     link: '/',
   },
 };
+
+const AUTO_RESOLVE_HANDLERS = new Set([
+  ...Object.keys(HANDLER_CONTEXT),
+  'accountManagersList',
+  'specialTermsWorkspace',
+  'unofficialCompensationList',
+  'salesforceDashboardFiltered',
+  'stemPnl',
+]);
 
 function cleanHandler(value) {
   return String(value || 'unknown')
@@ -63,6 +77,10 @@ function redactedErrorSignature(error) {
 export function shouldNotifySystemError(status) {
   const value = Number(status);
   return Number.isInteger(value) && value >= 500 && value <= 599;
+}
+
+export function shouldAutoResolveSystemError(handler) {
+  return AUTO_RESOLVE_HANDLERS.has(cleanHandler(handler));
 }
 
 export function systemErrorPublicDescriptor(handler) {
@@ -101,5 +119,42 @@ export async function reportSystemError(client, { handler, error, status = 500, 
     p_occurred_at: occurredAt instanceof Date ? occurredAt.toISOString() : new Date(occurredAt).toISOString(),
   });
   if (notificationError) throw notificationError;
+  if (data && typeof client.from === 'function') {
+    const { error: reopenError } = await client
+      .from('system_error_notification_states')
+      .update({ read_at: null, handled_at: null, snoozed_until: null, updated_at: new Date().toISOString() })
+      .eq('event_id', data);
+    if (reopenError && reopenError.code !== '42P01') throw reopenError;
+  }
   return { recorded: true, eventId: data || null };
+}
+
+export async function resolveSystemErrorsForHandler(client, handler, resolvedAt = new Date()) {
+  if (!client || !shouldAutoResolveSystemError(handler)) return { resolved: 0, skipped: true };
+  const since = new Date(resolvedAt.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
+    client.from('system_error_events').select('id').eq('handler', cleanHandler(handler)).gte('last_seen_at', since).limit(20),
+    client.from('user_profiles').select('id').eq('active', true),
+  ]);
+  if (eventError) {
+    if (eventError.code === '42P01') return { resolved: 0, skipped: true };
+    throw eventError;
+  }
+  if (profileError) throw profileError;
+  if (!events?.length || !profiles?.length) return { resolved: 0 };
+
+  const timestamp = resolvedAt.toISOString();
+  const rows = events.flatMap((event) => profiles.map((profile) => ({
+    event_id: event.id,
+    user_id: profile.id,
+    read_at: timestamp,
+    handled_at: timestamp,
+    snoozed_until: null,
+    updated_at: timestamp,
+  })));
+  const { error: stateError } = await client
+    .from('system_error_notification_states')
+    .upsert(rows, { onConflict: 'event_id,user_id' });
+  if (stateError) throw stateError;
+  return { resolved: rows.length };
 }

@@ -19,6 +19,7 @@ import {
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import { Badge } from '@/components/ui/badge';
@@ -129,6 +130,7 @@ export default function AccountManagers() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedManagerKeys, setSelectedManagerKeys] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -150,6 +152,7 @@ export default function AccountManagers() {
     else setLoading(true);
     setError('');
     const response = await appClient.functions.invoke('accountManagersList', {}, { force: true });
+    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     if (response.data?.error) {
       setError(response.data.error);
     } else {
@@ -409,6 +412,7 @@ export default function AccountManagers() {
         actions={(
           <>
             <PageMethodology {...ACCOUNT_MANAGERS_METHODOLOGY} />
+            <DataStatus meta={responseMeta} state={loading || refreshing ? 'refreshing' : undefined} label="Accounts" />
             <Button
               variant="outline"
               size="icon"

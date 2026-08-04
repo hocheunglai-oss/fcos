@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
@@ -240,6 +240,17 @@ export default function WorkNotifications() {
                       </span>
                       <span className="block break-words text-sm font-medium text-foreground">{notification.title}</span>
                       {notification.message && <span className="mt-0.5 line-clamp-2 block break-words text-xs text-muted-foreground">{notification.message}</span>}
+                      {notification.diagnosticRef && (
+                        <span className="mt-1 block break-all text-[10px] font-medium text-red-700">
+                          Diagnostic reference: {notification.diagnosticRef}
+                        </span>
+                      )}
+                      {notification.outcome && (
+                        <span className="mt-1 block text-[11px] text-muted-foreground">Save outcome: {notification.outcome}</span>
+                      )}
+                      {notification.actionLabel && (
+                        <span className="mt-1 block text-[11px] font-semibold text-blue-700">{notification.actionLabel}</span>
+                      )}
                     </span>
                   </button>
                   <span className="flex shrink-0 items-center gap-0.5 pt-1">
@@ -269,6 +280,21 @@ export default function WorkNotifications() {
             <div className="px-4 py-12 text-center text-sm text-muted-foreground">No work notifications.</div>
           )}
         </ScrollArea>
+        <div className="border-t border-border p-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between"
+            onClick={() => {
+              setOpen(false);
+              navigate('/my-commitments?source=system_error');
+            }}
+          >
+            Open Error Centre
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

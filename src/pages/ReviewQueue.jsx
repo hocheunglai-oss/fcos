@@ -13,6 +13,7 @@ import PageMethodology from '@/components/common/PageMethodology';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
+import DataStatus from '@/components/common/DataStatus';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
@@ -120,6 +121,7 @@ export default function ReviewQueue() {
   const [search, setSearch] = useState('');
   const [data, setData] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
@@ -167,6 +169,7 @@ export default function ReviewQueue() {
       }, { cache: true, force: options.force }),
       appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: true, force: options.force }),
     ]);
+    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (handoffsRes.data?.error) {
       setBackboneHandoffError(handoffsRes.data.error);
       setBackboneHandoffs([]);
@@ -319,6 +322,7 @@ export default function ReviewQueue() {
         actions={(
           <>
             <PageMethodology {...EXCEPTION_REVIEW_METHODOLOGY} />
+            <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
             <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className="gap-2">
               <Download className="w-3.5 h-3.5" /> Export CSV
             </Button>

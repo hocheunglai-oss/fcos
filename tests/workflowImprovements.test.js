@@ -27,6 +27,44 @@ test("unified commitments use Hong Kong due-date urgency and deterministic order
   assert.deepEqual(rows.map((row) => row.title), ["Overdue", "Decision", "Later"]);
 });
 
+test("operational commitments prioritize reconciliation and exact role actions", () => {
+  assert.equal(workCommitmentInternals.collectionUrgency({
+    status: "Awaiting Buyer",
+    reconciliation_state: "payment_posting_mismatch",
+  }), "needs_action");
+  assert.equal(workCommitmentInternals.collectionUrgency({
+    status: "Awaiting Buyer",
+    reconciliation_state: "open",
+  }), "waiting");
+  assert.equal(workCommitmentInternals.collectionDueAt({
+    status: "Payment Advice Received",
+    advice_verification_date: "2026-08-05",
+    next_follow_up_date: "2026-08-10",
+  }), "2026-08-05");
+
+  const profile = { id: "user-1" };
+  assert.deepEqual(
+    workCommitmentInternals.disputeCommitment(
+      { workflow_status: "Pending Approval", submitted_by: "user-2" },
+      profile,
+      { disputeApprove: true, disputeAccount: false },
+    ),
+    {
+      subtitle: "Commercial approval required",
+      urgency: "needs_action",
+      actionLabel: "Review dispute",
+    },
+  );
+  assert.equal(
+    workCommitmentInternals.disputeCommitment(
+      { workflow_status: "Approved - Pending Accounting", submitted_by: "user-2" },
+      profile,
+      { disputeApprove: false, disputeAccount: false },
+    ),
+    null,
+  );
+});
+
 test("workflow improvement migration is service-only, revision-aware, and identity based", async () => {
   const sql = await readFile(migrationUrl, "utf8");
   for (const table of [
@@ -92,4 +130,9 @@ test("notifications and commitments are actionable from one universal workspace"
   assert.match(commitments, /My Commitments/);
   assert.match(commitments, /Needs action/);
   assert.match(commitments, /Waiting for others/);
+  assert.match(commitments, /Payment Collections/);
+  assert.match(commitments, /Disputes/);
+  assert.match(commitments, /Hedge Desk/);
+  assert.match(commitments, /System Errors/);
+  assert.match(commitments, /item\.actionLabel/);
 });

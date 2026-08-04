@@ -1,3 +1,5 @@
+import { workNotificationsList } from './_workNotifications.js';
+
 const ACTIVE_WORK_STATUSES = new Set([
   "Backlog",
   "To Do",
@@ -11,6 +13,32 @@ const ACTIVE_COACHING_ACTION_STATUSES = new Set([
   "In Progress",
   "Blocked",
 ]);
+
+const PAYMENT_COLLECTION_RECONCILIATION_ISSUES = new Set([
+  'payment_posting_pending',
+  'payment_partially_posted',
+  'payment_posting_mismatch',
+  'payment_posting_overdue',
+  'advice_overdue',
+  'reopened',
+  'balance_unavailable',
+  'manual_closure_mismatch',
+]);
+
+const DISPUTE_ACCOUNTING_STAGES = new Set([
+  'Approved - Pending Accounting',
+  'Accounting In Progress',
+  'Settled - Ready to Close',
+]);
+
+function money(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
 
 function hongKongDate(value = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -50,6 +78,69 @@ function ensureResult(result) {
   return result?.data || [];
 }
 
+async function safeNotifications(accessContext) {
+  try {
+    return await workNotificationsList({ limit: 100, state: 'active' }, accessContext);
+  } catch {
+    return { notifications: [], unavailableSources: ['Notifications'] };
+  }
+}
+
+function collectionDueAt(item) {
+  if (item.status === 'Payment Advice Received') return item.advice_verification_date || item.next_follow_up_date;
+  if (item.status === 'Promise to Pay') return item.promised_payment_date || item.next_follow_up_date;
+  if (item.status === 'On Hold') return item.on_hold_review_date || item.next_follow_up_date;
+  return item.next_follow_up_date;
+}
+
+function collectionUrgency(item) {
+  if (PAYMENT_COLLECTION_RECONCILIATION_ISSUES.has(item.reconciliation_state)) return 'needs_action';
+  if (item.status === 'To Contact' && !collectionDueAt(item)) return 'needs_action';
+  if (item.status === 'Awaiting Buyer' && !collectionDueAt(item)) return 'waiting';
+  return null;
+}
+
+function collectionTitle(item) {
+  const snapshotName = item.payment_reconciliation_snapshot?.stemName
+    || item.latest_payment_snapshot?.stemName
+    || item.latest_payment_snapshot?.stem_name;
+  return snapshotName ? `Collect ${snapshotName}` : 'Payment collection follow-up';
+}
+
+function disputeCommitment(caseRow, profile, capabilities) {
+  const stage = caseRow.workflow_status || 'Draft';
+  const submittedByUser = caseRow.submitted_by === profile.id;
+  if (stage === 'Pending Approval' && capabilities.disputeApprove) {
+    return {
+      subtitle: 'Commercial approval required',
+      urgency: 'needs_action',
+      actionLabel: 'Review dispute',
+    };
+  }
+  if (DISPUTE_ACCOUNTING_STAGES.has(stage) && capabilities.disputeAccount) {
+    return {
+      subtitle: stage === 'Settled - Ready to Close' ? 'Final closure required' : 'Accounting action required',
+      urgency: 'needs_action',
+      actionLabel: stage === 'Settled - Ready to Close' ? 'Close dispute' : 'Open accounting work',
+    };
+  }
+  if (submittedByUser && ['Draft', 'Revision Requested', 'Rejected'].includes(stage)) {
+    return {
+      subtitle: stage === 'Draft' ? 'Continue trader preparation' : `${stage} · Trader action required`,
+      urgency: 'needs_action',
+      actionLabel: 'Continue dispute',
+    };
+  }
+  if (submittedByUser && ['Pending Approval', ...DISPUTE_ACCOUNTING_STAGES].includes(stage)) {
+    return {
+      subtitle: `${stage} · Waiting for the next department`,
+      urgency: 'waiting',
+      actionLabel: 'View dispute',
+    };
+  }
+  return null;
+}
+
 function normalizeCommitment(commitment, today) {
   return {
     ...commitment,
@@ -78,9 +169,9 @@ function sortCommitments(left, right) {
 }
 
 export async function workCommitmentsList(_body = {}, accessContext) {
-  const { client, profile } = accessContext;
+  const { client, profile, capabilities = {} } = accessContext;
   const today = hongKongDate();
-  const [itemsResult, goalsResult, relationshipsResult] = await Promise.all([
+  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, disputesResult, hedgeClosesResult, notificationsResult] = await Promise.all([
     client
       .from("collaboration_items")
       .select(
@@ -113,11 +204,40 @@ export async function workCommitmentsList(_body = {}, accessContext) {
       )
       .in("status", ["Pending", "Active"])
       .limit(100),
+    capabilities.paymentCollections
+      ? client
+          .from('buyer_invoice_collection_items')
+          .select('stem_id,status,owner_user_id,owner_name,latest_note,next_follow_up_date,promised_payment_date,promised_amount,on_hold_review_date,advice_verification_date,reconciliation_state,verified_receivable_balance,latest_payment_snapshot,payment_reconciliation_snapshot,last_reconciled_at,updated_at')
+          .eq('owner_user_id', profile.id)
+          .neq('status', 'Paid / Closed')
+          .order('updated_at', { ascending: false })
+          .limit(250)
+      : Promise.resolve({ data: [], error: null }),
+    capabilities.disputes
+      ? client
+          .from('dispute_beta_cases')
+          .select('id,stem_id,stem_name,buyer_name,supplier_names,workflow_status,approval_status,submitted_by,submitted_by_email,updated_at')
+          .neq('workflow_status', 'Closed')
+          .order('updated_at', { ascending: false })
+          .limit(250)
+      : Promise.resolve({ data: [], error: null }),
+    capabilities.hedgeDesk && (capabilities.hedgeCloseApprove || capabilities.hedgeSettlementManage)
+      ? client
+          .from('hedge_month_closes')
+          .select('id,report_month,revision,status,finalized_by_id,approved_by_id,updated_date')
+          .in('status', ['pending_approval', 'ready', 'failed', 'sending'])
+          .order('updated_date', { ascending: false })
+          .limit(100)
+      : Promise.resolve({ data: [], error: null }),
+    safeNotifications(accessContext),
   ]);
 
   const items = ensureResult(itemsResult);
   const goals = ensureResult(goalsResult);
   const relationships = ensureResult(relationshipsResult);
+  const collections = ensureResult(collectionsResult);
+  const disputes = ensureResult(disputesResult);
+  const hedgeCloses = ensureResult(hedgeClosesResult);
   const goalIds = goals.map((goal) => goal.id);
   const relationshipIds = relationships.map((relationship) => relationship.id);
 
@@ -338,6 +458,109 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     );
   }
 
+  for (const item of collections) {
+    const balance = money(item.verified_receivable_balance);
+    const detail = [item.status || 'To Contact'];
+    if (PAYMENT_COLLECTION_RECONCILIATION_ISSUES.has(item.reconciliation_state)) {
+      detail.push(String(item.reconciliation_state || '').replaceAll('_', ' '));
+    }
+    if (balance != null) detail.push(`Receivable ${balance}`);
+    commitments.push(
+      normalizeCommitment(
+        {
+          id: `payment-collection:${item.stem_id}`,
+          source: 'payment_collections',
+          kind: 'payment_collection',
+          title: collectionTitle(item),
+          subtitle: detail.join(' · '),
+          status: item.status,
+          dueAt: collectionDueAt(item),
+          urgency: collectionUrgency(item),
+          link: `/payment-collections?tab=collections&collectionStemId=${encodeURIComponent(item.stem_id)}`,
+          actionLabel: 'Open collection',
+        },
+        today,
+      ),
+    );
+  }
+
+  for (const caseRow of disputes) {
+    const next = disputeCommitment(caseRow, profile, capabilities);
+    if (!next) continue;
+    commitments.push(
+      normalizeCommitment(
+        {
+          id: `dispute:${caseRow.id}`,
+          source: 'disputes',
+          kind: 'dispute',
+          title: caseRow.stem_name ? `Dispute ${caseRow.stem_name}` : 'Dispute workflow',
+          subtitle: next.subtitle,
+          status: caseRow.workflow_status,
+          dueAt: null,
+          urgency: next.urgency,
+          link: `/disputes?stem=${encodeURIComponent(caseRow.stem_id)}`,
+          actionLabel: next.actionLabel,
+        },
+        today,
+      ),
+    );
+  }
+
+  for (const close of hedgeCloses) {
+    const status = String(close.status || '');
+    const canAct = status === 'pending_approval'
+      ? capabilities.hedgeCloseApprove
+      : ['ready', 'failed'].includes(status)
+        ? capabilities.hedgeCloseApprove || capabilities.hedgeSettlementManage
+        : false;
+    if (!canAct && status !== 'sending') continue;
+    commitments.push(
+      normalizeCommitment(
+        {
+          id: `hedge-close:${close.id}`,
+          source: 'hedge_desk',
+          kind: 'hedge_month_close',
+          title: `Hedge settlement ${close.report_month}`,
+          subtitle: status === 'pending_approval'
+            ? `Revision ${close.revision} · Approval required`
+            : status === 'failed'
+              ? `Revision ${close.revision} · Delivery failed`
+              : status === 'ready'
+                ? `Revision ${close.revision} · Ready to send`
+                : `Revision ${close.revision} · Sending confirmation pending`,
+          status,
+          dueAt: null,
+          urgency: status === 'sending' ? 'waiting' : 'needs_action',
+          link: '/hedge-desk?view=settlement',
+          actionLabel: status === 'pending_approval' ? 'Review settlement' : 'Open settlement',
+        },
+        today,
+      ),
+    );
+  }
+
+  for (const notification of notificationsResult.notifications || []) {
+    if (!['email_router', 'system_error'].includes(notification.source)) continue;
+    if (notification.source === 'email_router' && !capabilities.emailRouter) continue;
+    commitments.push(
+      normalizeCommitment(
+        {
+          id: `notification:${notification.id}`,
+          source: notification.source,
+          kind: notification.type || 'operational_notification',
+          title: notification.title,
+          subtitle: notification.message || 'Review the recorded operational issue.',
+          status: notification.source === 'system_error' ? 'Needs review' : 'Warning',
+          dueAt: notification.createdAt,
+          urgency: 'needs_action',
+          link: notification.link || '/',
+          actionLabel: 'Review issue',
+        },
+        today,
+      ),
+    );
+  }
+
   commitments.sort(sortCommitments);
   const counts = commitments.reduce((result, item) => {
     result[item.urgency] = (result[item.urgency] || 0) + 1;
@@ -347,13 +570,18 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   return {
     commitments,
     counts,
+    sources: [...new Set(commitments.map((item) => item.source))],
+    unavailableSources: notificationsResult.unavailableSources || [],
     today,
     generatedAt: new Date().toISOString(),
   };
 }
 
 export const workCommitmentInternals = {
+  collectionDueAt,
+  collectionUrgency,
   dateOnly,
+  disputeCommitment,
   hongKongDate,
   sortCommitments,
   urgencyFor,

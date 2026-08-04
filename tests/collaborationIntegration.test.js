@@ -139,9 +139,10 @@ test("attachment APIs use signed direct upload and short-lived private preview U
 });
 
 test("Projects & Tasks is a universal FCOS route with daily notification maintenance", async () => {
-  const [appSource, layoutSource, vercelSource] = await Promise.all([
+  const [appSource, layoutSource, workspaceSource, vercelSource] = await Promise.all([
     readFile(appUrl, "utf8"),
     readFile(layoutUrl, "utf8"),
+    readFile(new URL('../src/lib/workspaceStandards.js', import.meta.url), 'utf8'),
     readFile(vercelUrl, "utf8"),
   ]);
   assert.match(
@@ -153,9 +154,10 @@ test("Projects & Tasks is a universal FCOS route with daily notification mainten
     /path="\/projects-tasks" element=\{<ModuleGate/,
   );
   assert.match(
-    layoutSource,
-    /to: '\/projects-tasks', label: 'Projects & Tasks'/,
+    workspaceSource,
+    /projects_tasks:[\s\S]*title: 'Projects & Tasks'[\s\S]*route: '\/projects-tasks'/,
   );
+  assert.match(layoutSource, /workspaceNavigation\('projects_tasks'/);
   assert.match(layoutSource, /<WorkNotifications \/>/);
   assert.match(
     vercelSource,
