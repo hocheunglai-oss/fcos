@@ -17,28 +17,33 @@ const ENTITY_CONFIG = {
   PhysicalTrade: {
     table: 'hedge_physical_trades',
     capability: 'hedge_book_manage',
+    dateFields: ['trade_date', 'delivery_date_from', 'delivery_date_to', 'sell_bal_date', 'buy_bal_date'],
     fields: [...COMMON_FIELDS, 'trade_date', 'product', 'counterparty', 'qty_min', 'qty_max', 'unit', 'vessel_name', 'delivery_date_from', 'delivery_date_to', 'sell_price_type', 'sell_price', 'sell_premium', 'sell_pricing_month', 'sell_pricing_basis', 'sell_bal_date', 'buy_price_type', 'buy_price', 'buy_premium', 'buy_pricing_month', 'buy_pricing_basis', 'buy_bal_date', 'notes', 'stem_number', 'sf_record_id', 'is_closed'],
   },
   SwapHedge: {
     table: 'hedge_swap_hedges',
     capability: 'hedge_book_manage',
+    dateFields: ['trade_date', 'bal_start_date', 'leg1_bal_date', 'leg2_bal_date'],
     relationshipFields: ['physical_trade_ids'],
     fields: [...COMMON_FIELDS, 'physical_trade_ids', 'trade_date', 'product', 'direction', 'swap_month', 'quantity', 'unit', 'price', 'venue', 'broker', 'counterparty', 'notes', 'is_expired', 'round_trip', 'initial_margin', 'current_margin', 'pricing_basis', 'bal_start_date', 'trade_type', 'leg1_month', 'leg1_price', 'leg1_basis', 'leg1_bal_date', 'leg2_month', 'leg2_price', 'leg2_basis', 'leg2_bal_date', 'sf_record_id'],
   },
   MopsPrice: {
     table: 'hedge_market_prices',
     capability: 'hedge_book_manage',
+    dateFields: ['price_date'],
     fields: [...COMMON_FIELDS, 'price_date', 's380', 's05', 'sgo', 'source', 'raw_input', 'is_estimate'],
   },
   ClearingAccount: {
     table: 'hedge_clearing_entries',
     capability: 'hedge_settlement_manage',
+    dateFields: ['date'],
     aliases: { date: 'entry_date' },
     fields: [...COMMON_FIELDS, 'date', 'type', 'amount', 'notes', 'status'],
   },
   Invoice: {
     table: 'hedge_invoices',
     capability: 'hedge_settlement_manage',
+    dateFields: ['issue_date'],
     relationshipFields: ['line_items', 'swap_ids', 'physical_trade_ids'],
     fields: [...COMMON_FIELDS, 'invoice_number', 'invoice_type', 'issue_date', 'settlement_month', 'counterparty', 'section', 'line_items', 'subtotal', 'status', 'notes', 'swap_ids', 'physical_trade_ids', 'email_sent_at', 'email_sent_to', 'email_sent_cc', 'sender_mailbox_snapshot', 'pdf_payload', 'pdf_data_url'],
   },
@@ -99,6 +104,26 @@ function mapDatabaseRow(config, row) {
   return result;
 }
 
+function validIsoDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+export function normalizeHedgeDateValue(value, field = 'date') {
+  if (value == null || (typeof value === 'string' && !value.trim())) return null;
+  const normalized = String(value).trim();
+  if (!validIsoDate(normalized)) {
+    const label = String(field || 'date').replaceAll('_', ' ');
+    throw httpError(`Choose a valid ${label}.`, 400, 'INVALID_HEDGE_DATE');
+  }
+  return normalized;
+}
+
 function cleanPayload(config, payload, profile, { creating = false } = {}) {
   const relationships = {};
   const clean = {};
@@ -106,7 +131,7 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
     if (['id', 'created_date', 'updated_date', 'created_by', 'created_by_id', 'updated_by_id', 'revision', 'legacy_source_id'].includes(field)) continue;
     assertedField(config, field);
     if (config.relationshipFields?.includes(field)) relationships[field] = value;
-    else clean[config.aliases?.[field] || field] = value;
+    else clean[config.aliases?.[field] || field] = config.dateFields?.includes(field) ? normalizeHedgeDateValue(value, field) : value;
   }
   clean.updated_by_id = profile.id;
   if (creating) {

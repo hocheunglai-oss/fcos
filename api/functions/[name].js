@@ -61,6 +61,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
+import { reportSystemError, shouldNotifySystemError } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   coachingActionPublish as coachingActionPublishService,
@@ -11397,7 +11398,7 @@ function buildIncomingPaymentEmail(report, settings) {
 }
 
 async function incomingPaymentEmailReport(body = {}, req = null, accessContext = null) {
-  if (!accessContext) await requireActiveUser(req);
+  const activeAccess = accessContext || (await requireActiveUser(req));
   const settings = incomingPaymentEmailSettings(body.settings || body);
   const source = await incomingPaymentsList(
     {
@@ -11406,7 +11407,7 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
       limit: body.limit || 5000,
     },
     null,
-    accessContext,
+    activeAccess,
   );
   const search = String(body.search || '').trim();
   const rows = (source.rows || []).filter((row) => incomingPaymentSearchMatches(row, search, ['partyName', 'stemName', 'keyStem', 'buyerName', 'buyerGroupName', 'supplierName', 'supplierInvoiceName']));
@@ -11449,7 +11450,7 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
     subject: email.subject,
     html: email.html,
     text: email.text,
-  }, { client, purposeKey: 'incoming_payment_reports' });
+  }, { client: activeAccess.client, purposeKey: 'incoming_payment_reports' });
   return {
     sent: true,
     id: result.id,
@@ -12232,7 +12233,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
         subject: email.subject,
         html: email.html,
         text: email.text,
-      }, { client, purposeKey: 'payment_reminders' });
+      }, { client: activeAccess.client, purposeKey: 'payment_reminders' });
     } catch (error) {
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         message: error.message,
@@ -12349,7 +12350,9 @@ function requireCronAuthorization(req) {
 }
 
 async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
-  if (!body.scheduled) await requireActiveUser(req);
+  const activeAccess = accessContext || (body.scheduled ? null : await requireActiveUser(req));
+  const deliveryClient = activeAccess?.client || safeSupabaseAdminClient();
+  if (!deliveryClient) throw appError('FCOS database access is unavailable for the internal report.', 503);
   const hasExplicitSettings = Boolean(body.settings) || ['to', 'cc', 'daysAhead', 'subject', 'intro', 'includeSummary', 'includeTable', 'buyerTraders', 'weekdays', 'sendTimes', 'appUrl'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
   const stored = hasExplicitSettings ? null : await loadStoredBuyerInvoiceEmailSettings();
   if (stored && stored.meta.storageAvailable !== true) {
@@ -12378,7 +12381,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
   const reportPayload = { daysAhead: settings.daysAhead };
   if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
   if (!body.preview && !body.dryRun) reportPayload.force = true;
-  const report = await salesforceBuyerInvoicesDue(reportPayload, null, accessContext);
+  const report = await salesforceBuyerInvoicesDue(reportPayload, null, activeAccess);
   const email = buildBuyerInvoiceReportEmail(report, settings);
   if (body.preview || body.dryRun) {
     await updateBuyerInvoiceEmailSettingsMeta({
@@ -12415,7 +12418,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
       subject: email.subject,
       html: email.html,
       text: email.text,
-    }, { client, purposeKey: 'outstanding_invoice_reports' });
+    }, { client: deliveryClient, purposeKey: 'outstanding_invoice_reports' });
   } catch (error) {
     await updateBuyerInvoiceEmailSettingsMeta({ last_error: error.message });
     throw error;
@@ -16294,10 +16297,11 @@ const handlers = {
 export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
+  const requestId = requestIdFrom(req);
   return runWithRequestTelemetry(
     {
       handler: name,
-      requestId: requestIdFrom(req),
+      requestId,
     },
     async () => {
       try {
@@ -16314,6 +16318,21 @@ export default async function handler(req, res) {
       } catch (error) {
         const status = error.status || error.statusCode || 500;
         recordRequestFailure(error, status);
+        if (shouldNotifySystemError(status)) {
+          try {
+            await reportSystemError(safeSupabaseAdminClient(), {
+              handler: name,
+              error,
+              status,
+              requestId,
+            });
+          } catch (notificationError) {
+            console.error('[system-error-notification] recording failed', {
+              handler: name,
+              message: notificationError.message,
+            });
+          }
+        }
         return sendJson(
           res,
           {

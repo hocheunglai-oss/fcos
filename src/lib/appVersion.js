@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.105';
+export const APP_VERSION = '2.0.106';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.106',
+    releasedAt: '2026-08-04',
+    title: 'Report delivery and system error notifications',
+    changes: [
+      'Corrected the Microsoft Graph database context used by the Outstanding Buyer Invoices report, Incoming Payment report, and payment reminders so live delivery no longer fails with an undefined client.',
+      'Added redacted and deduplicated system-error notifications for every active user while excluding normal validation and permission responses.',
+      'Normalized blank optional Hedge Desk dates to no date and rejected invalid calendar dates before saving to PostgreSQL.',
+    ],
+  },
   {
     version: '2.0.105',
     releasedAt: '2026-08-04',

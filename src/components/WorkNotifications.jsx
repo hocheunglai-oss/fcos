@@ -19,6 +19,8 @@ const SOURCE_LABELS = {
   growth: "Growth & Coaching",
   coaching: "Growth & Coaching",
   email_router: "Email Router",
+  system_error: "System",
+  system: "System",
 };
 
 function formatNotificationTime(value) {
@@ -41,6 +43,7 @@ function sourceLabel(source) {
 }
 
 function sourceBadgeClass(source) {
+  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10";
   if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10";
   return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10" : "bg-blue-50 text-blue-800 ring-blue-700/10";
 }
@@ -206,6 +209,7 @@ export default function WorkNotifications() {
               <SelectItem value="collaboration">Projects & Tasks</SelectItem>
               <SelectItem value="growth_coaching">Growth & Coaching</SelectItem>
               <SelectItem value="email_router">Email Router</SelectItem>
+              <SelectItem value="system_error">System errors</SelectItem>
             </SelectContent>
           </Select>
         </div>

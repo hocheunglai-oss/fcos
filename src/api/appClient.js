@@ -159,6 +159,9 @@ async function invoke(name, payload = {}, options = {}) {
   }
 
   if (!res.ok) {
+    if (res.status >= 500) {
+      window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
+    }
     return {
       data: { error: data.error || `Request failed: ${res.status}` },
       meta: {
