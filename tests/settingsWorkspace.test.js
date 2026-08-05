@@ -42,6 +42,22 @@ test('sidebar preference controls are launched only from My Settings', async () 
   assert.match(settings, /Customize sidebar order and visibility/);
 });
 
+test('application sidebar is compact and session actions belong to Settings', async () => {
+  const [layout, workspace] = await Promise.all([
+    read('../src/components/Layout.jsx'),
+    read('../src/pages/SettingsWorkspace.jsx'),
+  ]);
+
+  assert.match(layout, /w-\[192px\]/);
+  assert.match(layout, /title=\{label\}/);
+  assert.doesNotMatch(layout, />\s*Sign out\s*</);
+  assert.match(layout, /fcos:version-audit-open/);
+  assert.match(layout, /fcos:sign-out-requested/);
+  assert.match(workspace, /Version \{APP_VERSION\}/);
+  assert.match(workspace, />Sign out</);
+  assert.match(workspace, /lg:mt-auto/);
+});
+
 test('module-owned configuration is linked from its owning workflow', async () => {
   const [workspace, emailRouter, hedgeDesk, brokerWorkspace, brokerRegister] = await Promise.all([
     read('../src/pages/SettingsWorkspace.jsx'),

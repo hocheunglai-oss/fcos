@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.115';
+export const APP_VERSION = '2.0.116';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.116',
+    releasedAt: '2026-08-05',
+    title: 'Compact application sidebar',
+    changes: [
+      'Reduced the fixed and auto-hide application sidebar width by approximately 30% while preserving labelled navigation and hover access to truncated page names.',
+      'Moved Version Audit Trail and Sign out from the application sidebar into the Settings navigator on desktop and mobile.',
+    ],
+  },
   {
     version: '2.0.115',
     releasedAt: '2026-08-05',

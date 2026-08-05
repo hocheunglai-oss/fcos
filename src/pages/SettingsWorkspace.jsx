@@ -4,6 +4,7 @@ import {
   Bot,
   HeartPulse,
   History,
+  LogOut,
   Mail,
   Megaphone,
   Settings2,
@@ -20,6 +21,7 @@ import PageMethodology from '@/components/common/PageMethodology';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologies';
+import { APP_VERSION } from '@/lib/appVersion';
 
 const SECTION_GROUPS = [
   {
@@ -125,9 +127,12 @@ export default function SettingsWorkspace() {
     setSearchParams(next, { replace: true });
   };
 
+  const openVersionAudit = () => window.dispatchEvent(new CustomEvent('fcos:version-audit-open'));
+  const requestSignOut = () => window.dispatchEvent(new CustomEvent('fcos:sign-out-requested'));
+
   return (
     <div className="min-h-full bg-slate-50 lg:grid lg:grid-cols-[212px_minmax(0,1fr)]">
-      <aside className="border-b border-slate-200 bg-white p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
+      <aside className="flex flex-col border-b border-slate-200 bg-white p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
         <div className="mb-4 hidden items-center gap-2 px-2 lg:flex">
           <Activity className="h-4 w-4 text-blue-700" />
           <span className="text-sm font-semibold">Settings</span>
@@ -144,7 +149,7 @@ export default function SettingsWorkspace() {
           </Select>
         </div>
 
-        <nav className="hidden space-y-5 lg:block" aria-label="Settings sections">
+        <nav className="hidden space-y-5 lg:block lg:min-h-0 lg:flex-1 lg:overflow-y-auto" aria-label="Settings sections">
           {availableGroups.map((group) => (
             <div key={group.id}>
               <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group.label}</div>
@@ -170,6 +175,17 @@ export default function SettingsWorkspace() {
             {hasModuleAccess('brokers') && hasCapability('broker_settings_manage') && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/brokers?tab=configuration">Broker configuration</Link>}
             {hasModuleAccess('hedge_desk') && hasCapability('hedge_admin') && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/hedge-desk?tab=administration">Hedge Desk administration</Link>}
           </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3 lg:mt-auto lg:block lg:space-y-1">
+          <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-3 text-xs font-medium" onClick={openVersionAudit} title="Open Version Audit Trail">
+            <History className="h-4 w-4 shrink-0" />
+            <span className="truncate">Version {APP_VERSION}</span>
+          </Button>
+          <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-3 text-xs font-medium text-red-700 hover:bg-red-50 hover:text-red-800" onClick={requestSignOut}>
+            <LogOut className="h-4 w-4 shrink-0" />
+            <span>Sign out</span>
+          </Button>
         </div>
       </aside>
 

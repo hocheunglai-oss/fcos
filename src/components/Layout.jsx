@@ -14,7 +14,6 @@ import {
   LayoutDashboard,
   Lightbulb,
   ListTodo,
-  LogOut,
   MailSearch,
   RotateCcw,
   Save,
@@ -381,6 +380,19 @@ export default function Layout() {
     if (!unsaved) return;
     if (!confirmLeaveWithUnsavedChanges()) event.preventDefault();
   };
+  useEffect(() => {
+    const openVersionAudit = () => setVersionOpen(true);
+    const requestSignOut = () => {
+      if (unsaved && !window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`)) return;
+      logout();
+    };
+    window.addEventListener('fcos:version-audit-open', openVersionAudit);
+    window.addEventListener('fcos:sign-out-requested', requestSignOut);
+    return () => {
+      window.removeEventListener('fcos:version-audit-open', openVersionAudit);
+      window.removeEventListener('fcos:sign-out-requested', requestSignOut);
+    };
+  }, [logout, unsaved]);
   const updateToLatestVersion = async () => {
     if (!confirmLeaveWithUnsavedChanges()) return;
     try {
@@ -407,7 +419,7 @@ export default function Layout() {
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-out',
+          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex w-[192px] shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-out',
           effectiveSidebarFixed
             ? 'translate-x-0 shadow-xl shadow-slate-900/10 md:relative md:shadow-none'
             : sidebarHovered
@@ -415,7 +427,7 @@ export default function Layout() {
               : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-slate-200 focus-within:shadow-xl focus-within:shadow-slate-900/10',
         )}
       >
-        <div className="border-b border-slate-200 px-5 py-4">
+        <div className="border-b border-slate-200 px-3 py-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-950">FCOS</div>
@@ -474,6 +486,7 @@ export default function Layout() {
                                     to={to}
                                     end={to === '/'}
                                     onClick={handleNavigation}
+                                    title={label}
                                     className={({ isActive }) => cn(
                                       'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                                       isActive
@@ -518,23 +531,6 @@ export default function Layout() {
               {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Local admin mode</div>}
             </div>
           )}
-          <div>
-            <Button variant="outline" size="sm" className="w-full" onClick={() => setVersionOpen(true)}>
-              {APP_VERSION}
-            </Button>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => {
-              if (!confirmLeaveWithUnsavedChanges()) return;
-              logout();
-            }}
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Sign out
-          </Button>
         </div>
       </aside>
 
