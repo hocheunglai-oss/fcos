@@ -65,3 +65,13 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);
 });
+
+test('Special Terms owns the Salesforce response metadata used by its status bar', () => {
+  const page = read('src/pages/SpecialTerms.jsx');
+  const component = page.split('export default function SpecialTerms()')[1] || '';
+  const stateDeclaration = component.indexOf('const [responseMeta, setResponseMeta] = useState(null);');
+  const loadCallback = component.indexOf('const load = useCallback');
+
+  assert.ok(stateDeclaration >= 0, 'Special Terms must declare response metadata in the page component');
+  assert.ok(stateDeclaration < loadCallback, 'response metadata state must be in scope for the load callback');
+});

@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.111';
+export const APP_VERSION = '2.0.112';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.112',
+    releasedAt: '2026-08-05',
+    title: 'Special Terms page restored',
+    changes: [
+      'Restored the Special Terms workspace by keeping Salesforce response-status data in the page component that loads and displays it.',
+      'Added a regression check that prevents the response-status state from being moved outside the Special Terms page scope again.',
+    ],
+  },
   {
     version: '2.0.111',
     releasedAt: '2026-08-05',

@@ -62,7 +62,6 @@ function LookupField({ label, kind, value, onChange, placeholder }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [responseMeta, setResponseMeta] = useState(null);
 
   useEffect(() => {
     if (value) setQuery('');
@@ -136,6 +135,7 @@ export default function SpecialTerms() {
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [saveAttempted, setSaveAttempted] = useState(false);
+  const [responseMeta, setResponseMeta] = useState(null);
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
