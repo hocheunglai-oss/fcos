@@ -106,6 +106,7 @@ export function reconcileBuyerPaymentPosting({
   currentBalance,
   payments = [],
   fullyPaidThreshold = 0,
+  fullyPaidThresholdInclusive = true,
   tolerance = MONEY_TOLERANCE,
   now = new Date(),
 } = {}) {
@@ -123,7 +124,9 @@ export function reconcileBuyerPaymentPosting({
     };
   }
 
-  if (balance <= Number(fullyPaidThreshold || 0)) {
+  const threshold = Number(fullyPaidThreshold || 0);
+  const fullyPaid = fullyPaidThresholdInclusive ? balance <= threshold : balance < threshold;
+  if (fullyPaid) {
     return {
       state: 'settled',
       snapshot: cleanSnapshot({ payments: currentPayments, balance, state: 'settled', nowIso }),

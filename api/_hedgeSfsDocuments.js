@@ -153,7 +153,7 @@ export function generateSfsReportPdfBuffer(report, {
   doc.setFontSize(9)
   doc.setTextColor(...muted)
   doc.text(`${monthLabel(report.month)} | Revision ${revision} | ${String(status).replaceAll('_', ' ').toUpperCase()}`, margin, 28)
-  doc.text(`Recipient: ${report.recipient || 'accounts@cosulich.com.hk'}`, right, 21, { align: 'right' })
+  doc.text(`Recipient: ${report.recipient || 'Not configured'}`, right, 21, { align: 'right' })
   doc.text(`Finalized: ${finalizedAt ? new Date(finalizedAt).toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong' }) + ' HKT' : 'Provisional preview'}`, right, 28, { align: 'right' })
 
   y = 38

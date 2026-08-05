@@ -1456,11 +1456,12 @@ export async function collaborationBulkUpdate(body = {}, accessContext) {
         revision: detail.item.revision,
       });
     } catch (error) {
+      const status = Number(error.status || 500);
       results.push({
         itemId: change.itemId,
         ok: false,
-        status: Number(error.status || 500),
-        message: error.message || "Unable to update this work item.",
+        status,
+        message: status < 500 && error.message ? error.message : "Unable to update this work item.",
         latest: error.status === 409 ? error.details?.item || null : null,
       });
     }

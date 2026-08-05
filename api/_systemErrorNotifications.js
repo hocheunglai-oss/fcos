@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
 
-const DEDUPE_WINDOW_MS = 10 * 60 * 1000;
-
 const HANDLER_CONTEXT = {
   outstandingBuyerInvoicesEmailReport: {
     title: 'Outstanding buyer invoices report failed',
@@ -40,15 +38,6 @@ const HANDLER_CONTEXT = {
   },
 };
 
-const AUTO_RESOLVE_HANDLERS = new Set([
-  ...Object.keys(HANDLER_CONTEXT),
-  'accountManagersList',
-  'specialTermsWorkspace',
-  'unofficialCompensationList',
-  'salesforceDashboardFiltered',
-  'stemPnl',
-]);
-
 function cleanHandler(value) {
   return String(value || 'unknown')
     .trim()
@@ -79,10 +68,6 @@ export function shouldNotifySystemError(status) {
   return Number.isInteger(value) && value >= 500 && value <= 599;
 }
 
-export function shouldAutoResolveSystemError(handler) {
-  return AUTO_RESOLVE_HANDLERS.has(cleanHandler(handler));
-}
-
 export function systemErrorPublicDescriptor(handler) {
   const key = cleanHandler(handler);
   if (HANDLER_CONTEXT[key]) return { handler: key, ...HANDLER_CONTEXT[key] };
@@ -95,11 +80,9 @@ export function systemErrorPublicDescriptor(handler) {
   };
 }
 
-export function systemErrorDedupeKey({ handler, error, status, occurredAt = new Date() }) {
-  const timestamp = occurredAt instanceof Date ? occurredAt.getTime() : new Date(occurredAt).getTime();
-  const bucket = Math.floor((Number.isFinite(timestamp) ? timestamp : Date.now()) / DEDUPE_WINDOW_MS);
+export function systemErrorDedupeKey({ handler, error, status }) {
   return createHash('sha256')
-    .update(`${cleanHandler(handler)}|${Number(status) || 500}|${redactedErrorSignature(error)}|${bucket}`)
+    .update(`${cleanHandler(handler)}|${Number(status) || 500}|${redactedErrorSignature(error)}`)
     .digest('hex');
 }
 
@@ -129,11 +112,11 @@ export async function reportSystemError(client, { handler, error, status = 500, 
   return { recorded: true, eventId: data || null };
 }
 
-export async function resolveSystemErrorsForHandler(client, handler, resolvedAt = new Date()) {
-  if (!client || !shouldAutoResolveSystemError(handler)) return { resolved: 0, skipped: true };
-  const since = new Date(resolvedAt.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+export async function resolveSystemErrorIncident(client, signature, resolvedAt = new Date()) {
+  const dedupeKey = String(signature || '').trim().toLowerCase();
+  if (!client || !/^[a-f0-9]{64}$/.test(dedupeKey)) return { resolved: 0, skipped: true };
   const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
-    client.from('system_error_events').select('id').eq('handler', cleanHandler(handler)).gte('last_seen_at', since).limit(20),
+    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
     client.from('user_profiles').select('id').eq('active', true),
   ]);
   if (eventError) {

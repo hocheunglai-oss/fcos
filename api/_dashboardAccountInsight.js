@@ -1,6 +1,7 @@
 import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
+import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 
 const DAY_MS = 86_400_000;
 const ZERO_TOLERANCE = 0.005;
@@ -95,14 +96,6 @@ function firstNumber(...values) {
     if (result != null) return result;
   }
   return null;
-}
-
-function financialQuantity(item, stemHasDelivery, maxField = 'Quantity_Max__c') {
-  if (stemHasDelivery) return firstNumber(item.Quantity_Delivered_Per_BDN__c, item.Quantity__c, item.Quantity_in_MT__c) || 0;
-  const minimum = firstNumber(item.Quantity__c, item.Quantity_in_MT__c, item.Quantity_Delivered_Per_BDN__c);
-  const maximum = firstNumber(item[maxField]);
-  if (item.Is_Quantity_Range__c && minimum != null && maximum != null) return (minimum + maximum) / 2;
-  return minimum || 0;
 }
 
 function lineSellAmount(item, stemHasDelivery) {
@@ -1015,6 +1008,15 @@ export function buildDashboardAccountInsight(dataset, {
   const activeChildren = childSummaries.filter((row) => !row.inactive);
   const tradingChildren = childSummaries.filter((row) => row.stemCount > 0);
   const topTurnoverChild = [...childSummaries].sort((left, right) => valueOrZero(right.turnover) - valueOrZero(left.turnover))[0] || null;
+  const missingFinancialUomCount = [...(dataset.lineItems || []), ...(dataset.extraCosts || [])].filter((item) => {
+    if (item.Cancelled__c === true) return false;
+    return Boolean(nativeFinancialQuantity(item, {
+      stemHasDelivery: Boolean((dataset.stems || []).find((stem) => stem.Id === item.STEM__c)?.Delivery_Date__c),
+      maxField: Object.prototype.hasOwnProperty.call(item, 'Quantity_Range_Max__c') ? 'Quantity_Range_Max__c' : 'Quantity_Max__c',
+      lineItemUomField: dataset.schema?.lineItemUomField,
+      productUomField: dataset.schema?.productUomField,
+    }).warning);
+  }).length;
   const warnings = unique([
     ...(dataset.warnings || []),
     ...(!dataset.identity.clKey ? ['CL Key is not set for this Salesforce Account.'] : []),
@@ -1022,6 +1024,7 @@ export function buildDashboardAccountInsight(dataset, {
     ...(role !== 'supplier' && rows.some((row) => row.receivableBalance == null) ? ['One or more Salesforce receivable balances are unavailable and are not treated as zero.'] : []),
     ...(rows.some((row) => row.invoiceValueSource === 'unavailable') ? ['One or more STEM values are unavailable because neither an invoiced nor estimated amount could be derived.'] : []),
     ...(dataset.truncated ? ['Salesforce returned more records than the Account Insight safety limit. Refine the period for complete totals.'] : []),
+    ...(missingFinancialUomCount ? [`${missingFinancialUomCount} financial line${missingFinancialUomCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`] : []),
     ...(!rows.length ? ['No STEM activity matched this Account, role, and period.'] : []),
   ]);
   return {

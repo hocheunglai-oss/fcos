@@ -15,7 +15,7 @@ import DataStatus from '@/components/common/DataStatus';
 import TableShell from '@/components/common/TableShell';
 import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizontal, Loader2, Search, X, Percent, Maximize2, Minimize2, Eye, EyeOff, Sparkles, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
-import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { MONTHS, THIS_MONTH, THIS_YEAR, buildDashboardDateWindows, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologies';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
@@ -37,7 +37,6 @@ const COUNTERPARTY_MODES = [
   { value: 'buyer', label: 'Buyer', plural: 'Buyers' },
   { value: 'supplier', label: 'Supplier', plural: 'Suppliers' },
 ];
-const escapeSoqlLiteral = (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const formatQuantity = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const AI_TABLE_PAGE_SIZE = 100;
 
@@ -100,14 +99,10 @@ export default function DashboardSettings() {
     const loadPortCountries = async () => {
       const applyPortCountries = (res) => {
         if (cancelled || res.data?.error) return;
-        const options = [...new Set((res.data?.records || []).flatMap((row) => [
-          row.Country__c,
-          row.Name,
-        ]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-        setPortCountryOptions(options);
+        setPortCountryOptions(res.data?.options || []);
       };
-      const res = await appClient.functions.invoke('salesforceQuery', {
-        soql: 'SELECT Name, Country__c FROM Port__c WHERE Country__c != null OR Name != null ORDER BY Country__c, Name LIMIT 2000'
+      const res = await appClient.functions.invoke('dashboardFilterOptions', {
+        optionType: 'ports',
       }, navigationCacheOptions('reference', applyPortCountries));
       applyPortCountries(res);
     };
@@ -119,40 +114,19 @@ export default function DashboardSettings() {
     let cancelled = false;
     const loadCompanies = async () => {
       setCompanyOptions([]);
-      const isSupplier = counterpartyMode === 'supplier';
-      const field = isSupplier ? 'Supplier_Name__c' : 'Buyer_Name__c';
-      const soql = isSupplier
-        ? `SELECT ${field}, COUNT(Id) total FROM STEM_Line_Item__c WHERE ${field} != null GROUP BY ${field} ORDER BY ${field} LIMIT 2000`
-        : `SELECT Buyer_Name__c, Account__r.Group_Name__c, Account__r.Parent.Name FROM stem__c WHERE Buyer_Name__c != null ORDER BY Delivery_Date__c DESC NULLS LAST LIMIT 2000`;
       const applyCompanies = (res) => {
         if (cancelled || res.data?.error) return;
-        const names = isSupplier
-          ? [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
-          : [...new Set((res.data?.records || []).flatMap((row) => [
-              row.Buyer_Name__c,
-              row.Account__r?.Group_Name__c,
-              row.Account__r?.Parent?.Name,
-            ]).filter(Boolean))];
-        setCompanyOptions(names.sort((a, b) => String(a).localeCompare(String(b))));
+        setCompanyOptions(res.data?.options || []);
       };
-      const res = await appClient.functions.invoke('salesforceQuery', {
-        soql
+      const res = await appClient.functions.invoke('dashboardFilterOptions', {
+        optionType: 'companies',
+        counterpartyMode,
       }, navigationCacheOptions('reference', applyCompanies));
       applyCompanies(res);
     };
     loadCompanies();
     return () => { cancelled = true; };
   }, [counterpartyMode]);
-
-  const buildWhereClause = (yrs = selectedYears, mos = selectedMonths, country = portCountry) => {
-    const normalizedCountry = String(country || '').trim();
-    const portLike = normalizedCountry ? `%${escapeSoqlLiteral(normalizedCountry)}%` : '';
-    const filters = [
-      buildDeliveryWhere(yrs, mos),
-      normalizedCountry ? `(Port__r.Country__c LIKE '${portLike}' OR Port__r.Name LIKE '${portLike}')` : '',
-    ].filter(Boolean);
-    return filters.map((condition) => `(${condition})`).join(' AND ');
-  };
 
   const load = async (
     yrs = selectedYears,
@@ -167,7 +141,7 @@ export default function DashboardSettings() {
     setError(null);
     const normalizedCountry = String(country || '').trim();
     const normalizedCompany = String(company || '').trim();
-    const where = buildWhereClause(yrs, mos, normalizedCountry);
+    const dateWindows = buildDashboardDateWindows(yrs, mos);
     const applyDashboard = (res) => {
       setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
       if (res.data?.error) setError(res.data.error);
@@ -181,7 +155,7 @@ export default function DashboardSettings() {
       name: 'salesforceDashboardFiltered',
       payload: {
         mode: 'dashboard',
-        where,
+        dateWindows,
         trendYear: THIS_YEAR,
         disputeOnly: onlyDisputes,
         portCountry: normalizedCountry || null,

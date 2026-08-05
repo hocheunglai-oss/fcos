@@ -27,7 +27,7 @@ import {
   verifyEmailRouterAttachmentToken,
   verifyEmailRouterRouteSnapshotToken,
 } from '../api/_emailRouterCore.js';
-import { emailRouterSettingsHandler } from '../api/_emailRouterHandlers.js';
+import { emailRouterDirectoryRefreshHandler } from '../api/_emailRouterHandlers.js';
 
 test('direct routing selections preserve numbered order within To, Cc, and Bcc', () => {
   const selections = normalizeEmailRouterDestinationSelections({
@@ -471,7 +471,7 @@ test('message detail remains available when Graph rejects the attachment collect
   assert.deepEqual(result.detailWarnings, ['Attachments could not be refreshed. The message body remains available.']);
 });
 
-test('Email Router settings fail closed when FCOS user synchronization fails', async () => {
+test('explicit Email Router directory refresh fails closed when FCOS user synchronization fails', async () => {
   const profile = { id: 'de305d54-75b4-431b-adb2-eb6b9e546014', active: true, user_type: 'administrator' };
   const client = {
     rpc: async (name) => {
@@ -480,7 +480,7 @@ test('Email Router settings fail closed when FCOS user synchronization fails', a
     },
   };
   await assert.rejects(
-    emailRouterSettingsHandler({}, {}, { client, profile }),
+    emailRouterDirectoryRefreshHandler({}, {}, { client, profile }),
     (error) => error.code === 'EMAIL_ROUTER_DIRECTORY_SYNC_UNAVAILABLE' && error.status === 503,
   );
 });

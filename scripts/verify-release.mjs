@@ -12,7 +12,12 @@ const checks = [
 
 for (const [label, args] of checks) {
   process.stdout.write(`\n[release gate] ${label}\n`);
-  const result = spawnSync('npm', args, { stdio: 'inherit', env: process.env });
+  const env = {
+    ...process.env,
+    ...(label === 'Migration integrity' ? { FCOS_REQUIRE_LIVE_MIGRATION_CHECK: '1' } : {}),
+    ...(label === 'Read-only browser smoke tests' ? { FCOS_REQUIRE_AUTH_E2E: '1' } : {}),
+  };
+  const result = spawnSync('npm', args, { stdio: 'inherit', env });
   if (result.status !== 0) process.exit(result.status || 1);
 }
 

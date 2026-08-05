@@ -17,10 +17,10 @@ const fmtCny = (value) => {
   const number = numericValue(value);
   return `CNY ${Number(number || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
-const fmtUnit = (value) => {
+const fmtUnit = (value, unit = 'UOM not set') => {
   if (typeof value === 'string') return value;
   const number = numericValue(value);
-  return number != null ? `${fmtMoney(number)} / MT` : textValue(value);
+  return number != null ? `${fmtMoney(number)} / ${unit}` : textValue(value);
 };
 const fmtDelay = (value) => {
   const number = numericValue(value);
@@ -42,7 +42,7 @@ const productQuantityLabel = (item) => {
   const product = textValue(item.productFamily || item.productName, '—');
   const qty = numericValue(item.quantity);
   return qty != null
-    ? `${product} - ${qty.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${item.quantityUnit || 'MT'}`
+    ? `${product} - ${qty.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${item.quantityUnit || 'UOM not set'}`
     : product;
 };
 
@@ -69,13 +69,13 @@ function CommissionUnitCell({ row }) {
     ? row.commissionUnitPriceLines
     : row.commissionUnitPriceLabel
       ? row.commissionUnitPriceLabel.split('; ').map((label) => ({ label }))
-      : [{ label: fmtUnit(row.commissionUnitPrice) }];
+      : [{ label: fmtUnit(row.commissionUnitPrice, row.quantityUnit) }];
 
   return (
     <div className="space-y-1 text-right">
       {items.map((item, index) => (
         <div key={`${item.productName || item.label}-${index}`} className="text-foreground">
-          {item.label || fmtUnit(item.value)}
+          {item.label || fmtUnit(item.value, item.unit || row.quantityUnit)}
         </div>
       ))}
     </div>

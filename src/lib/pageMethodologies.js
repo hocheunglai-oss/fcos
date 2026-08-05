@@ -292,7 +292,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'CIA payment timing',
-        body: 'A buyer receipt made on or before either the earliest available Salesforce ETA date or the actual delivery date is CIA. Open balances display Partial CIA; a live Salesforce balance within the fully-paid threshold displays Full CIA. Later receipts display Partial Payment or Full Payment. Each row shows the comparison dates, and multiple receipts are split into CIA and other-payment totals.',
+        body: 'A buyer receipt made on or before either the earliest available Salesforce ETA date or the actual delivery date is CIA. Open balances display Partial CIA; a live Salesforce balance satisfying its ISO-currency fully-paid rule displays Full CIA. Later receipts display Partial Payment or Full Payment. Each row shows the comparison dates, and multiple receipts are split into CIA and other-payment totals.',
       },
       {
         title: 'Reminder safety',
@@ -300,7 +300,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Settlement',
-        body: 'Salesforce Receivable Balance is authoritative. A balance within the configured fully-paid threshold automatically closes an existing case; partial payments preserve the active collection stage and remaining balance.',
+        body: 'Salesforce Receivable Balance is authoritative. Automatic closure uses the configured threshold for the STEM currency. An unconfigured currency closes only when the absolute live balance is below 0.005; overpayments also qualify. Partial payments preserve the active collection stage and remaining balance.',
       },
     ],
   },
@@ -336,7 +336,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Automatic closure and reopening',
-        body: 'FCOS automatically closes an existing case when the verified balance satisfies the fully-paid threshold and records the previous active status. A system-closed case reopens if the balance later rises; a manually closed mismatch remains an exception for review.',
+        body: 'FCOS automatically closes an existing case when the verified balance satisfies its ISO-currency threshold and records the previous active status. An unconfigured currency uses the strict absolute-balance rule below 0.005. A system-closed case reopens if the balance later rises; a manually closed mismatch remains an exception for review.',
       },
       {
         title: 'Exception types',
@@ -365,7 +365,7 @@ export const BROKER_METHODOLOGIES = {
       },
       {
         title: 'Commission values',
-        body: 'Buyer-side and supplier-side commission values remain attributable to their exact broker and STEM. Missing or incomplete source values stay visible for review rather than being silently estimated.',
+        body: 'Buyer-side and supplier-side commission values remain attributable to their exact broker and STEM. Per-unit commission calculations use the Salesforce native quantity and native UOM. A missing UOM remains visible for review; FCOS does not infer a financial quantity from MT or approximate density conversions.',
       },
       {
         title: 'CNY conversion',

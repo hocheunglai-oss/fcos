@@ -762,7 +762,7 @@ export async function revokePortalSessions({
         requestId,
       });
     } catch (error) {
-      failures.push({ applicationId: application.id, message: error.message });
+      failures.push({ applicationId: application.id, message: 'Application session logout could not be confirmed.' });
       if (entitlement) {
         await queuePortalOperation(
           client,
@@ -1075,7 +1075,7 @@ export async function checkPortalApplicationsHealth({
       );
       results.push({ id: application.id, status: response.status === 'online' ? 'online' : 'warning', message: response.message || null });
     } catch (error) {
-      results.push({ id: application.id, status: 'unavailable', message: error.message });
+      results.push({ id: application.id, status: 'unavailable', message: 'The target application health check is unavailable.' });
     }
   }
   return results;

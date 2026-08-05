@@ -38,6 +38,7 @@ export const APP_CAPABILITIES = [
   { id: 'disputes_approve', label: 'Approve disputes', description: 'Approve or reject dispute instructions.' },
   { id: 'disputes_account', label: 'Settle disputes', description: 'Record accounting settlement and close disputes.' },
   { id: 'buyer_invoices_manage', label: 'Manage invoice email settings', description: 'Change buyer invoice templates and schedules.' },
+  { id: 'financial_report_settings_manage', label: 'Manage financial report settings', description: 'Change approved recipients and templates for internal financial reports.' },
   { id: 'cashflow_forecast_manage', label: 'Manage cashflow settings', description: 'Change forecast settings and manual overrides.' },
   { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain trades, hedges, markets, and counterparties.' },
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage settlement, invoices, and clearing entries.' },

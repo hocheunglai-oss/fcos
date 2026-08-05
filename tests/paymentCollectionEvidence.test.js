@@ -98,7 +98,7 @@ test('Payment Collections derives classifications and totals from live Salesforc
   assert.match(server, /'ETA_End_Date__c'/);
   assert.match(server, /'Delivery_Date__c'/);
   assert.match(server, /summarizeBuyerPaymentEvidence/);
-  assert.match(server, /decision\.balance != null && decision\.balance <= threshold/);
+  assert.match(server, /paymentCollectionBalanceIsSettled\(decision\.balance, thresholdPolicy\)/);
   assert.match(server, /paymentEvidenceSummary,/);
   assert.match(page, /PAYMENT_EVIDENCE_FILTERS/);
   assert.match(page, /Earliest ETA/);

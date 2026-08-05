@@ -54,7 +54,6 @@ import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } 
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { collectionWorkflowIssues } from '@/lib/workflowValidation';
 
-const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
@@ -71,11 +70,12 @@ const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
 const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
 const DEFAULT_EMAIL_SETTINGS = {
   enabled: true,
-  to: 'bt@cosulich.com.hk',
-  cc: 'louisa@cosulich.com.hk, laureen@cosulich.com.hk',
+  to: '',
+  cc: '',
+  bcc: '',
   daysAhead: 7,
-  subject: 'Outstanding Buyer Invoices Report',
-  intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
+  subject: '',
+  intro: '',
   includeSummary: true,
   includeTable: true,
   weekdays: WEEKDAYS,
@@ -494,6 +494,7 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
     ...merged,
     to: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.to)),
     cc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.cc)),
+    bcc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.bcc)),
     sendTimes: arrayToInput(merged.sendTimes),
     weekdays: Array.isArray(merged.weekdays) ? merged.weekdays : WEEKDAYS,
     intro: richTemplateValue(merged.intro, DEFAULT_EMAIL_SETTINGS.intro),
@@ -501,15 +502,6 @@ function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
     paymentReminderBcc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.paymentReminderBcc)),
     paymentReminderBody: richTemplateValue(paymentReminderBody),
   };
-}
-
-function readLegacyEmailSettings() {
-  try {
-    const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
-    return emailSettingsToForm(raw ? JSON.parse(raw) : DEFAULT_EMAIL_SETTINGS);
-  } catch {
-    return emailSettingsToForm(DEFAULT_EMAIL_SETTINGS);
-  }
 }
 
 function sameSettings(a, b) {
@@ -1873,10 +1865,12 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
         paymentReminderBcc: form.templateBcc || '',
         paymentReminderBody: form.body,
       },
+      expectedRevision: data?.settingsRevision,
     });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
+      setData((prev) => prev ? { ...prev, settingsRevision: Number(res.data?.meta?.revision || prev.settingsRevision + 1) } : prev);
       setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
       clearDraft(draftKey);
       setTemplateMessage('Payment reminder template saved.');
@@ -2432,9 +2426,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [showReminderRules, setShowReminderRules] = useState(false);
   const [copySelection, setCopySelection] = useState(null);
   const [showEmailSchedule, setShowEmailSchedule] = useState(false);
-  const [savedEmailSettings, setSavedEmailSettings] = useState(readLegacyEmailSettings);
+  const [savedEmailSettings, setSavedEmailSettings] = useState(() => emailSettingsToForm(DEFAULT_EMAIL_SETTINGS));
   const [emailSettings, setEmailSettings] = useState(savedEmailSettings);
   const [emailMeta, setEmailMeta] = useState(null);
+  const [emailSettingsRevision, setEmailSettingsRevision] = useState(0);
   const [canManageEmailSettings, setCanManageEmailSettings] = useState(false);
   const [emailLoading, setEmailLoading] = useState(true);
   const [emailBusy, setEmailBusy] = useState(false);
@@ -2443,7 +2438,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [internalEmailEditing, setInternalEmailEditing] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
-  const [emailDraftRestoredAt, setEmailDraftRestoredAt] = useState(null);
   const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
   const [selectedCollectionStatuses, setSelectedCollectionStatuses] = useState(COLLECTION_STATUSES);
   const [invoiceKeyword, setInvoiceKeyword] = useState('');
@@ -2459,12 +2453,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const deepLinkedCollectionOpened = useRef(false);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
-  useDraftAutosave('buyer-invoices:email-settings', emailSettings, {
-    enabled: canManageEmailSettings && !emailLoading,
-    dirty: emailDirty,
-    message: 'Autosaved internal email reminder/template draft. Save or discard it before leaving.',
-  });
-
   const reconciliationByStem = useMemo(() => new Map(
     reconciliationItems
       .filter((entry) => entry?.item?.stemId)
@@ -2647,14 +2635,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
-      const draft = readDraft('buyer-invoices:email-settings');
-      const nextSettings = draft?.data && !sameSettings(draft.data, formSettings)
-        ? emailSettingsToForm(draft.data)
-        : formSettings;
       setSavedEmailSettings(formSettings);
-      setEmailSettings(nextSettings);
-      setEmailDraftRestoredAt(draft?.data && !sameSettings(nextSettings, formSettings) ? draft.updatedAt : null);
+      setEmailSettings(formSettings);
       setEmailMeta(res.data.meta || null);
+      setEmailSettingsRevision(Number(res.data.meta?.revision || 0));
       setCanManageEmailSettings(res.data.capabilities?.canManageSettings === true);
       setEmailError(null);
     }
@@ -2710,7 +2694,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
       buyerTraders: hasBuyerTraderFilter ? selectedBuyerTraders : [],
       hasBuyerTraderFilter,
-      appUrl: window.location.origin,
     };
   };
 
@@ -2782,16 +2765,18 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const saveEmailSettings = async () => {
     setEmailBusy(true);
     setEmailError(null);
-    const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', { settings: settingsForServer() });
+    const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', {
+      settings: settingsForServer(),
+      expectedRevision: emailSettingsRevision,
+    }, { invalidateCache: true });
     if (res.data?.error) {
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
-      clearDraft('buyer-invoices:email-settings');
       setSavedEmailSettings(formSettings);
       setEmailSettings(formSettings);
-      setEmailDraftRestoredAt(null);
       setEmailMeta(res.data.meta || null);
+      setEmailSettingsRevision(Number(res.data.meta?.revision || emailSettingsRevision + 1));
       setEmailMessage('Email report schedule saved.');
       setInternalEmailEditing(false);
     }
@@ -2799,9 +2784,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   };
 
   const cancelEmailSettings = () => {
-    clearDraft('buyer-invoices:email-settings');
     setEmailSettings(savedEmailSettings);
-    setEmailDraftRestoredAt(null);
     setEmailMessage(null);
     setEmailError(null);
     setInternalEmailEditing(false);
@@ -2832,7 +2815,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     setEmailAction(preview ? 'preview' : 'send');
     setEmailError(null);
     setEmailMessage(null);
-    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings: settingsForServer(), preview, force: !preview });
+    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { preview, force: !preview });
     if (res.data?.error) {
       setEmailError(res.data.error);
     } else if (preview) {
@@ -3085,7 +3068,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
 
             <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[430px_minmax(0,1fr)]">
               <div className="min-h-0 space-y-3 overflow-auto pr-1">
-                <DraftNotice restoredAt={emailDraftRestoredAt} label="Email reminder settings draft restored" onDiscard={cancelEmailSettings} />
 
                 <div className="grid gap-2 md:grid-cols-2">
                   <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
@@ -3119,6 +3101,10 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                   <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">CC</Label>
                     <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} disabled={!internalEmailEditing} />
+                  </div>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label className="text-xs text-muted-foreground">BCC</Label>
+                    <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} disabled={!internalEmailEditing} />
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">Subject</Label>

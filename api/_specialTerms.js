@@ -25,6 +25,10 @@ function text(value, max = 10000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+function isSalesforceRecordId(value) {
+  return SALESFORCE_ID.test(text(value, 18));
+}
+
 function soql(value) {
   return text(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -157,22 +161,45 @@ function mapRule(row) {
   };
 }
 
-export async function listSpecialTerms({ force = false } = {}) {
+export async function listSpecialTerms({ force = false, scope = null } = {}) {
   const schema = await resolveSpecialTermsSchema({ force });
+  const scopedAccountIds = [...new Set((scope?.accountIds || []).map((value) => text(value)).filter(isSalesforceRecordId))].sort();
+  const scopedPortIds = [...new Set((scope?.portIds || []).map((value) => text(value)).filter(isSalesforceRecordId))].sort();
+  const scopedProductIds = [...new Set((scope?.productIds || []).map((value) => text(value)).filter(isSalesforceRecordId))].sort();
+  const scopedCountries = [...new Set((scope?.countries || []).map((value) => text(value, 100)).filter(Boolean))].sort();
+  const scopedAudience = ['Buyer', 'Supplier'].includes(scope?.audience) ? scope.audience : null;
+  const isScoped = Boolean(scope);
+  const scopePayload = isScoped ? {
+    accountIds: scopedAccountIds,
+    portIds: scopedPortIds,
+    productIds: scopedProductIds,
+    countries: scopedCountries,
+    audience: scopedAudience,
+  } : null;
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-special-terms',
     version: '1',
     accessScope: 'global',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { view: 'workspace' },
+    payload: { view: isScoped ? 'applicable-scope' : 'workspace', scope: scopePayload },
     ttlSeconds: 60,
     tags: ['salesforce:special-terms'],
     force,
     loader: async () => {
-      const [termResult, ruleResult] = await sfCompositeQueries([
-        { soql: 'SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,LastModifiedDate FROM Special_Term__c ORDER BY Name LIMIT 5000', clean: true, limit: 5000 },
-        { soql: 'SELECT Id,Name,Special_Term__c,Special_Term__r.Name,Account__c,Account__r.Name,Account__r.Company_Code__c,Port__c,Port__r.Name,Port__r.Country__c,Product__c,Product__r.Name,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c ORDER BY Priority__c,Name LIMIT 10000', clean: true, limit: 10000 },
-      ]);
+      const ruleConditions = [];
+      if (isScoped) {
+        ruleConditions.push(scopedAudience ? `Supplier_Buyer__c = '${soql(scopedAudience)}'` : null);
+        ruleConditions.push(scopedAccountIds.length ? `(Account__c = null OR Account__c IN (${scopedAccountIds.map((id) => `'${soql(id)}'`).join(',')}))` : 'Account__c = null');
+        ruleConditions.push(scopedPortIds.length ? `(Port__c = null OR Port__c IN (${scopedPortIds.map((id) => `'${soql(id)}'`).join(',')}))` : 'Port__c = null');
+        ruleConditions.push(scopedProductIds.length ? `(Product__c = null OR Product__c IN (${scopedProductIds.map((id) => `'${soql(id)}'`).join(',')}))` : 'Product__c = null');
+        ruleConditions.push(scopedCountries.length ? `(Country__c = null OR Country__c IN (${scopedCountries.map((country) => `'${soql(country)}'`).join(',')}))` : 'Country__c = null');
+      }
+      const ruleResult = await sfQuery(`SELECT Id,Name,Special_Term__c,Special_Term__r.Name,Account__c,Account__r.Name,Account__r.Company_Code__c,Port__c,Port__r.Name,Port__r.Country__c,Product__c,Product__r.Name,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c${ruleConditions.filter(Boolean).length ? ` WHERE ${ruleConditions.filter(Boolean).join(' AND ')}` : ''} ORDER BY Priority__c,Name LIMIT 10000`, { clean: true, limit: 10000 });
+      const termIds = [...new Set(ruleResult.records.map((rule) => rule.Special_Term__c).filter(isSalesforceRecordId))];
+      const termWhere = isScoped
+        ? (termIds.length ? ` WHERE Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
+        : '';
+      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
       if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
       return { terms: termResult.records.map(mapTerm), rules: ruleResult.records.map(mapRule), fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
     },

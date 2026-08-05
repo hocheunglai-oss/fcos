@@ -7,6 +7,8 @@ import { listUnofficialCompensation } from './_unofficialCompensationService.js'
 import { listSpecialTerms } from './_specialTerms.js';
 import { resolveBuyerReminderRule } from './_buyerInvoiceReminderRules.js';
 import { buildDashboardAccountInsight } from './_dashboardAccountInsight.js';
+import { classifyExceptionReviewStem } from '../src/lib/exceptionReviewClassifier.js';
+import { normalizeExceptionSchedule } from '../src/lib/exceptionReviewSchedule.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -25,6 +27,7 @@ function serviceError(message, status = 400, code = null) {
   const error = new Error(message);
   error.status = status;
   error.code = code;
+  error.expose = status < 500 || /SCHEMA|ACCESS/.test(String(code || ''));
   return error;
 }
 
@@ -188,6 +191,9 @@ function serializeAccount(account, { root = false } = {}) {
 }
 
 async function loadAccountScope(accountId, role, accountFields, interoffice) {
+  if (interoffice && !accountFields.has('Group_Name__c') && !accountFields.has('ParentId')) {
+    throw serviceError('Interoffice Account Insight validation requires Account Group or Parent metadata. No Salesforce records were returned.', 503, 'ACCOUNT_INSIGHT_INTEROFFICE_SCHEMA');
+  }
   const fields = accountSelectFields(accountFields);
   const result = await sfQuery(`SELECT ${fields.join(',')} FROM Account WHERE Id = '${soql(accountId)}' LIMIT 1`, { clean: true, limit: 1 });
   const root = result.records[0];
@@ -222,11 +228,14 @@ function interofficeStemCondition(accountFields) {
   const conditions = [];
   if (accountFields.has('Group_Name__c')) conditions.push(`(Account__r.Group_Name__c = null OR Account__r.Group_Name__c != '${soql(INTEROFFICE_EXCLUDED_GROUP)}')`);
   if (accountFields.has('ParentId')) conditions.push(`(Account__r.Parent.Name = null OR Account__r.Parent.Name != '${soql(INTEROFFICE_EXCLUDED_GROUP)}')`);
+  if (!conditions.length) {
+    throw serviceError('Interoffice Account Insight validation requires Account Group or Parent metadata. No Salesforce records were returned.', 503, 'ACCOUNT_INSIGHT_INTEROFFICE_SCHEMA');
+  }
   return combineConditions(conditions);
 }
 
 function stemSelectFields(stemFields, accountFields) {
-  const values = ['Id', 'Name', 'CreatedDate', ...selected(stemFields, ['LastModifiedDate', 'KeyStem__c', 'Account__c', 'Port__c', 'Vessel__c', 'Buyer_Name__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_Start_Date__c', 'ETA_End_Date__c', 'Original_Invoice_Sent_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'Dispute_Type__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c', 'QLIK_Total_Profit__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Payment_Date__c', 'CurrencyIsoCode'])];
+  const values = ['Id', 'Name', 'CreatedDate', ...selected(stemFields, ['LastModifiedDate', 'KeyStem__c', 'Account__c', 'Port__c', 'Vessel__c', 'Buyer_Name__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_ETB__c', 'ETA_Start_Date__c', 'ETA_End_Date__c', 'ETB_Start_Date__c', 'ETB_End_Date__c', 'Original_Invoice_Sent_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'Dispute_Type__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c', 'QLIK_Total_Profit__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Payment_Date__c', 'CurrencyIsoCode'])];
   if (stemFields.has('Account__c')) {
     values.push('Account__r.Name');
     if (accountFields.has('Company_Code__c')) values.push('Account__r.Company_Code__c');
@@ -629,13 +638,25 @@ async function selectSupabaseRowsByStem(client, table, columns, stemIds, { order
 
 async function loadAccountManagerState(client, scopeAccounts) {
   try {
-    const [groupsResult, assignmentsResult, notesResult, profilesResult] = await Promise.all([
-      client.from('account_manager_groups').select('account_name_key,account_name,salesforce_account_ids'),
-      client.from('account_manager_assignments').select('account_name_key,manager_user_id,assignment_order').order('assignment_order'),
-      client.from('account_manager_notes').select('account_name_key,account_note,source_group_account_name_key,source_group_account_name'),
-      client.from('user_profiles').select('id,full_name,email,active'),
+    const accountIds = unique(scopeAccounts.flatMap((account) => [account.accountId, idKey(account.accountId)]));
+    if (!accountIds.length) return { accountState: new Map(), managers: [], note: null };
+    const groupsResult = await client
+      .from('account_manager_groups')
+      .select('account_name_key,account_name,salesforce_account_ids')
+      .overlaps('salesforce_account_ids', accountIds);
+    if (groupsResult.error) throw groupsResult.error;
+    const accountKeys = unique((groupsResult.data || []).map((group) => group.account_name_key));
+    if (!accountKeys.length) return { accountState: new Map(), managers: [], note: null };
+    const [assignmentsResult, notesResult] = await Promise.all([
+      client.from('account_manager_assignments').select('account_name_key,manager_user_id,assignment_order').in('account_name_key', accountKeys).order('assignment_order'),
+      client.from('account_manager_notes').select('account_name_key,account_note,source_group_account_name_key,source_group_account_name').in('account_name_key', accountKeys),
     ]);
-    if (groupsResult.error || assignmentsResult.error || notesResult.error || profilesResult.error) throw groupsResult.error || assignmentsResult.error || notesResult.error || profilesResult.error;
+    if (assignmentsResult.error || notesResult.error) throw assignmentsResult.error || notesResult.error;
+    const managerIds = unique((assignmentsResult.data || []).map((assignment) => assignment.manager_user_id));
+    const profilesResult = managerIds.length
+      ? await client.from('user_profiles').select('id,full_name,email,active').in('id', managerIds)
+      : { data: [], error: null };
+    if (profilesResult.error) throw profilesResult.error;
     const profileMap = new Map((profilesResult.data || []).map((profile) => [profile.id, profile]));
     const assignmentsByKey = new Map();
     for (const assignment of assignmentsResult.data || []) {
@@ -652,16 +673,19 @@ async function loadAccountManagerState(client, scopeAccounts) {
     const rootState = accountState.get(idKey(scopeAccounts.find((account) => account.root)?.accountId)) || { managers: [], note: null };
     return { accountState, managers: rootState.managers, note: rootState.note };
   } catch (error) {
-    return { accountState: new Map(), managers: [], note: null, warning: `Account Manager information is unavailable: ${error.message}` };
+    console.warn('[account-insight] scoped Account Manager load failed', { code: error?.code || null });
+    return { accountState: new Map(), managers: [], note: null, warning: 'Account Manager information is temporarily unavailable.' };
   }
 }
 
 async function loadReminderPolicy(client, identity, role) {
   if (role === 'supplier') return { policy: null, source: null, note: null };
   try {
+    const accountIds = unique([identity.accountId, idKey(identity.accountId), identity.parentId, idKey(identity.parentId)]);
     const { data, error } = await client
       .from('buyer_invoice_reminder_rules')
-      .select('salesforce_account_id,account_name,parent_salesforce_account_id,policy,note,inherit_to_children,revision,updated_at');
+      .select('salesforce_account_id,account_name,parent_salesforce_account_id,policy,note,inherit_to_children,revision,updated_at')
+      .in('salesforce_account_id', accountIds);
     if (error) throw error;
     const rule = resolveBuyerReminderRule({
       buyerAccountId: identity.accountId,
@@ -671,7 +695,8 @@ async function loadReminderPolicy(client, identity, role) {
     }, data || []);
     return { policy: rule.policy, source: rule.source, sourceAccountName: rule.sourceAccountName || null, note: rule.note || null };
   } catch (error) {
-    return { policy: null, source: 'unavailable', note: null, warning: `Payment reminder policy is unavailable: ${error.message}` };
+    console.warn('[account-insight] scoped reminder-rule load failed', { code: error?.code || null });
+    return { policy: null, source: 'unavailable', note: null, warning: 'Payment reminder policy is temporarily unavailable.' };
   }
 }
 
@@ -693,7 +718,11 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
       selectSupabaseRowsByStem(client, 'exception_review_items', 'stem_id,status,department,priority,due_date', stemIds),
       selectSupabaseRowsByStem(client, 'hedge_salesforce_allocations', 'salesforce_stem_id,paper_hedge_id,venue,allocation_percentage,net_pnl,sync_state', stemIds, { field: 'salesforce_stem_id' }),
     ]);
-    for (const result of [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations]) if (result.error) warnings.push(result.error.message);
+    const unavailableWorkflowSources = [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations]
+      .filter((result) => result.error).length;
+    if (unavailableWorkflowSources) {
+      warnings.push(`${unavailableWorkflowSources} internal workflow source${unavailableWorkflowSources === 1 ? ' is' : 's are'} temporarily unavailable.`);
+    }
     for (const item of collectionItems.data || []) collectionByStem[item.stem_id] = { item: serializeCollectionItem(item), events: [] };
     for (const event of collectionEvents.data || []) {
       if (!collectionByStem[event.stem_id]) collectionByStem[event.stem_id] = { item: null, events: [] };
@@ -708,13 +737,20 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
       values.push({ venue: allocation.venue, allocationPercentage: number(allocation.allocation_percentage), netPnl: number(allocation.net_pnl), syncState: allocation.sync_state });
       hedgeByStem[allocation.salesforce_stem_id] = values;
     }
+    const uncancelledLineStemIds = new Set(salesforceData.lineItems
+      .filter((item) => item.Cancelled__c !== true && Boolean(item.Product__c))
+      .map((item) => item.STEM__c));
+    const classifiedExceptions = salesforceData.stems.map((stem) => classifyExceptionReviewStem({
+      ...stem,
+      _Exception_Schedule: normalizeExceptionSchedule(stem),
+      _Has_Uncancelled_Line_Product_Item: uncancelledLineStemIds.has(stem.Id),
+    })).filter((stem) => stem.reviewReasons.length > 0);
     const reasonCounts = new Map();
-    for (const item of exceptionItems.data || []) {
-      const reason = text(item.reason || item.exception_reason || item.status) || 'Reason not set';
-      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+    for (const stem of classifiedExceptions) {
+      for (const reason of stem.reviewReasons) reasonCounts.set(reason.label, (reasonCounts.get(reason.label) || 0) + 1);
     }
     const today = hongKongToday();
-    exceptions = { count: (exceptionItems.data || []).length, overdue: (exceptionItems.data || []).filter((item) => item.due_date && item.due_date < today && !/resolved|dismissed/i.test(text(item.status))).length, reasons: [...reasonCounts.entries()].map(([label, value]) => ({ label, value })) };
+    exceptions = { count: classifiedExceptions.length, overdue: (exceptionItems.data || []).filter((item) => item.due_date && item.due_date < today && !/resolved|dismissed/i.test(text(item.status))).length, reasons: [...reasonCounts.entries()].map(([label, value]) => ({ label, value })) };
   }
   const [managers, reminderPolicy] = await Promise.all([
     loadAccountManagerState(client, salesforceData.scopeAccounts),
@@ -725,18 +761,28 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
   const scopeAccounts = salesforceData.scopeAccounts.map((account) => ({ ...account, managerCount: managers.accountState.get(idKey(account.accountId))?.managers?.length || 0 }));
   let compensation = { accounts: [] };
   try {
-    compensation = await listUnofficialCompensation({ force, interoffice });
+    compensation = await listUnofficialCompensation({ force, interoffice, accountIds: scopeAccounts.map((account) => account.accountId) });
   } catch (error) {
-    warnings.push(`Unofficial Compensation is unavailable: ${error.message}`);
+    console.warn('[account-insight] scoped compensation load failed', { code: error?.code || null });
+    warnings.push('Unofficial Compensation is temporarily unavailable.');
   }
   let specialTerms = { count: 0, terms: [] };
   try {
-    const workspace = await listSpecialTerms({ force });
     const accountIds = new Set(scopeAccounts.map((account) => idKey(account.accountId)));
     const portIds = new Set(salesforceData.stems.map((stem) => idKey(stem.Port__c)).filter(Boolean));
     const countries = new Set(salesforceData.stems.map((stem) => text(stem.Port__r?.Country__c).toLowerCase()).filter(Boolean));
     const productIds = new Set(salesforceData.lineItems.map((item) => idKey(item.Product__c)).filter(Boolean));
     const audience = salesforceData.role === 'supplier' ? 'Supplier' : 'Buyer';
+    const workspace = await listSpecialTerms({
+      force,
+      scope: {
+        accountIds: [...accountIds],
+        portIds: [...portIds],
+        productIds: [...productIds],
+        countries: [...countries],
+        audience,
+      },
+    });
     const matchedRules = (workspace.rules || []).filter((rule) => rule.audience === audience
       && (!rule.accountId || accountIds.has(idKey(rule.accountId)))
       && (!rule.portId || portIds.has(idKey(rule.portId)))
@@ -745,7 +791,8 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
     const termMap = new Map((workspace.terms || []).map((term) => [idKey(term.id), term]));
     specialTerms = { count: matchedRules.length, terms: matchedRules.map((rule) => ({ ruleId: rule.id, ruleName: rule.name, termName: termMap.get(idKey(rule.specialTermId))?.name || rule.specialTermName, audience: rule.audience, priority: rule.priority })) };
   } catch (error) {
-    warnings.push(`Special Terms are unavailable: ${error.message}`);
+    console.warn('[account-insight] scoped Special Terms load failed', { code: error?.code || null });
+    warnings.push('Special Terms are temporarily unavailable.');
   }
   return { collectionByStem, workflows, hedgeByStem, exceptions, managers, reminderPolicy, scopeAccounts, compensation, specialTerms, warnings };
 }

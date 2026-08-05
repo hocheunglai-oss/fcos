@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
   SFS_REPORT_AUTOMATION_START_MONTH,
-  SFS_REPORT_RECIPIENT,
   buildSfsMonthlyReport,
   sfsReportInputPayload,
 } from '../src/hedge/lib/sfsReport.js';
@@ -9,6 +8,7 @@ import { DEFAULT_GENERAL, DEFAULT_RATES } from '../src/hedge/lib/domain.js';
 import { generateSfsReportCsv, generateSfsReportPdfBuffer, sfsReportFilename } from './_hedgeSfsDocuments.js';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
 import { mopsMonthDateBounds } from './_hedgeMops.js';
+import { loadFinancialReportSettings } from './_financialReportSettings.js';
 
 function error(message, statusCode = 500, code = null) {
   const next = new Error(message);
@@ -72,6 +72,14 @@ async function currentReport(client, month, requireComplete = false) {
   });
 }
 
+async function sfsRecipients(client, { required = false } = {}) {
+  const stored = await loadFinancialReportSettings(client, 'hedge_sfs_reports', { required });
+  const recipients = Array.isArray(stored.settings?.to)
+    ? stored.settings.to.map((value) => String(value || '').trim()).filter(Boolean)
+    : String(stored.settings?.to || '').split(/[;,\n]/).map((value) => value.trim()).filter(Boolean);
+  return { recipients, label: recipients.join(', '), revision: stored.revision };
+}
+
 async function history(client, month) {
   const closes = await client.from('hedge_month_closes').select('*').eq('report_month', month).order('revision', { ascending: false });
   if (closes.error) throw error(`SFS report history could not be loaded: ${closes.error.message}`, 502);
@@ -85,7 +93,11 @@ async function history(client, month) {
 
 export async function getHedgeSfsMonthReport(client, monthValue) {
   const month = assertMonth(monthValue);
-  const preview = await currentReport(client, month);
+  const [basePreview, recipientSettings] = await Promise.all([
+    currentReport(client, month),
+    sfsRecipients(client),
+  ]);
+  const preview = { ...basePreview, recipient: recipientSettings.label || null };
   const rows = await history(client, month);
   const currentFingerprint = preview.final ? fingerprint(preview) : null;
   const currentRevision = currentFingerprint ? rows.find((row) => row.input_fingerprint === currentFingerprint) || null : null;
@@ -103,7 +115,8 @@ export async function getHedgeSfsMonthReport(client, monthValue) {
     previewRevision: currentRevision?.revision || Number(rows[0]?.revision || 0) + 1,
     historical: month < SFS_REPORT_AUTOMATION_START_MONTH,
     automationStartMonth: SFS_REPORT_AUTOMATION_START_MONTH,
-    recipient: SFS_REPORT_RECIPIENT,
+    recipient: recipientSettings.label || null,
+    recipientSettingsRevision: recipientSettings.revision,
   };
 }
 
@@ -172,12 +185,12 @@ async function createOrLoadClose(client, month, report, actor) {
   return { ...created.data, delivery: null };
 }
 
-async function deliveryFor(client, close) {
+async function deliveryFor(client, close, recipientLabel) {
   if (close.delivery) return close.delivery;
   const existing = await client.from('hedge_report_deliveries').select('*').eq('close_id', close.id).maybeSingle();
   if (existing.error) throw error(`SFS delivery could not be loaded: ${existing.error.message}`, 502);
   if (existing.data) return existing.data;
-  const created = await client.from('hedge_report_deliveries').insert({ close_id: close.id, recipient: SFS_REPORT_RECIPIENT, status: 'pending' }).select('*').single();
+  const created = await client.from('hedge_report_deliveries').insert({ close_id: close.id, recipient: recipientLabel, status: 'pending' }).select('*').single();
   if (created.error) throw error(`SFS delivery could not be prepared: ${created.error.message}`, 502);
   return created.data;
 }
@@ -192,7 +205,11 @@ function attachments(close) {
 
 export async function approveAndSendHedgeSfsReport(client, actor, body = {}) {
   const month = assertMonth(body.month);
-  const report = await currentReport(client, month, true);
+  const [baseReport, recipientSettings] = await Promise.all([
+    currentReport(client, month, true),
+    sfsRecipients(client, { required: true }),
+  ]);
+  const report = { ...baseReport, recipient: recipientSettings.label };
   let close = await createOrLoadClose(client, month, report, actor);
   if (body.closeId && close.id !== body.closeId) throw error('Report inputs changed after this revision was prepared. Review the latest report.', 409);
   if (['sent', 'superseded'].includes(close.status) || close.delivery?.status === 'sent') throw error('This report revision has already been sent.', 409);
@@ -208,7 +225,7 @@ export async function approveAndSendHedgeSfsReport(client, actor, body = {}) {
     if (!approved.data) throw error('This SFS report changed before approval. Refresh and review it again.', 409);
     close = { ...approved.data, delivery: close.delivery };
   }
-  const delivery = await deliveryFor(client, close);
+  const delivery = await deliveryFor(client, close, recipientSettings.label);
   const uncertainRetry = delivery.status === 'sending' && Boolean(delivery.last_error);
   if (delivery.status === 'sending' && (!uncertainRetry || body.confirmUncertainResend !== true)) {
     throw error('This report delivery outcome is unresolved. Confirm the uncertain resend only after checking Microsoft 365.', 409);
@@ -242,7 +259,7 @@ export async function approveAndSendHedgeSfsReport(client, actor, body = {}) {
       purposeKey: 'hedge_sfs_reports',
       mailboxSnapshot,
       message: {
-        to: SFS_REPORT_RECIPIENT,
+        to: String(delivery.recipient || '').split(/[;,\n]/).map((value) => value.trim()).filter(Boolean),
         subject: `${close.revision > 1 ? `REVISED R${close.revision} - ` : ''}SFS Realised Swap P&L - ${monthLabel(month)}`,
         text: `Please find attached the SFS realised swap P&L report for ${monthLabel(month)}.`,
         attachments: attachments(close),

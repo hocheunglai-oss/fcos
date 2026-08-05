@@ -78,10 +78,6 @@ function trimFunctionCache() {
   }
 }
 
-function isMutationHandler(name) {
-  return /(?:Save|Create|Update|Delete|Submit|Approve|Reject|Return|Close|Send|Retry|Archive|Restore|Complete|Finalize|Decision|Link|Upload|Reconcile|Sync|Assign|Cancel|Move|Record|Propose|Request|Reset|SignOut|Action|Undo|Delta)(?:[A-Z]|$)/.test(String(name || ''));
-}
-
 function invalidateFunctionCache({ names = [], tags = [] } = {}) {
   functionCacheGeneration += 1;
   inFlightFunctionRequests.clear();
@@ -181,6 +177,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const requestId = responseHeader('x-fcos-request-id');
   const salesforceCallsHeader = responseHeader('x-fcos-salesforce-calls');
   const salesforceCalls = salesforceCallsHeader == null ? null : Number(salesforceCallsHeader);
+  const mutationHeader = responseHeader('x-fcos-handler-mutation');
 
   if (!responseIsJson) {
     return {
@@ -201,7 +198,10 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
     }
     return {
-      data: { error: data.error || `Request failed: ${res.status}` },
+      data: {
+        ...data,
+        error: data.error || data.message || `Request failed: ${res.status}`,
+      },
       meta: {
         cached: false,
         cacheLayer: 'server',
@@ -234,7 +234,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     trimFunctionCache();
   }
 
-  if (options.invalidateCache === true || (!cacheKey && isMutationHandler(name))) invalidateFunctionCache();
+  if (options.invalidateCache === true || mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')) invalidateFunctionCache();
   else if (options.invalidateNames?.length || options.invalidateTags?.length) {
     invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
   }

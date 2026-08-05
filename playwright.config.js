@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.FCOS_E2E_BASE_URL || 'http://127.0.0.1:5173';
+const usesExternalServer = Boolean(process.env.FCOS_E2E_BASE_URL);
 
 export default defineConfig({
   testDir: './e2e',
@@ -15,7 +16,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
+  webServer: usesExternalServer ? undefined : {
     command: 'npm run dev:full',
     url: `${baseURL}/login`,
     reuseExistingServer: true,

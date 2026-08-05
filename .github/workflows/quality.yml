@@ -1,0 +1,63 @@
+name: FCOS quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  code-and-database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run verify:graph-only
+      - run: npm run build
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+      - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+
+  authenticated-browser:
+    runs-on: ubuntu-latest
+    env:
+      FCOS_E2E_BASE_URL: ${{ secrets.FCOS_E2E_BASE_URL }}
+      FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
+      FCOS_REQUIRE_AUTH_E2E: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - name: Prepare authenticated browser state
+        env:
+          FCOS_E2E_STORAGE_STATE_BASE64: ${{ secrets.FCOS_E2E_STORAGE_STATE_BASE64 }}
+        run: |
+          test -n "$FCOS_E2E_BASE_URL"
+          test -n "$FCOS_E2E_STORAGE_STATE_BASE64"
+          printf '%s' "$FCOS_E2E_STORAGE_STATE_BASE64" | base64 --decode > "$FCOS_E2E_STORAGE_STATE"
+      - run: npm run test:e2e
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # FCOS is a Vite SPA and does not enable React Router Server Components/actions.
+          allow-ghsas: GHSA-qwww-vcr4-c8h2

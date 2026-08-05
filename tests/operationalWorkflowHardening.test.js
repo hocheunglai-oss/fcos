@@ -25,7 +25,7 @@ test('sensitive workflow actions use managed capabilities', async () => {
   const source = await readFile(functionUrl, 'utf8');
   assert.match(source, /requireCapability\(client, profile, 'disputes_approve'/);
   assert.match(source, /requireCapability\(client, profile, 'disputes_account'/);
-  assert.match(source, /requireCapability\(client, profile, 'buyer_invoices_manage'/);
+  assert.match(source, /requireCapability\(client, profile, 'financial_report_settings_manage'/);
   assert.match(source, /requireCapability\(client, profile, 'cashflow_forecast_manage'/);
   assert.doesNotMatch(source, /DISPUTE_BETA_APPROVER_EMAILS/);
 });

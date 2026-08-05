@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +13,7 @@ import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
-import { buildDeliveryWhere } from '@/lib/dashboardFilters';
+import { buildDashboardDateWindows } from '@/lib/dashboardFilters';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { QLIK_VALIDATOR_METHODOLOGY } from '@/lib/pageMethodologies';
 
@@ -91,15 +91,11 @@ export default function StemPnlReport() {
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [responseMeta, setResponseMeta] = useState(null);
 
-  const buildWhere = useCallback(() => {
-    return buildDeliveryWhere([year], month === 'all' ? [] : [month]);
-  }, [year, month]);
-
   const run = async (force = true) => {
     setLoading(true);
     setError(null);
-    const where = buildWhere();
-    const reportRes = await appClient.functions.invoke('stemPnl', { where, limit: 1000 }, { cache: true, force });
+    const dateWindows = buildDashboardDateWindows([year], month === 'all' ? [] : [month]);
+    const reportRes = await appClient.functions.invoke('stemPnl', { dateWindows, limit: 1000 }, { cache: true, force });
     setResponseMeta(reportRes.data?.error ? { ...reportRes.meta, cacheStatus: 'UNAVAILABLE' } : reportRes.meta);
     if (reportRes.data?.error) {
       setError(reportRes.data.error);

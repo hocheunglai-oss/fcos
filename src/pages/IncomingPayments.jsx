@@ -13,6 +13,7 @@ import DataStatus from '@/components/common/DataStatus';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import PaymentCollectionThresholdsDialog from '@/components/payments/PaymentCollectionThresholdsDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,8 +32,6 @@ import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { cn } from '@/lib/utils';
 
 const PAGE_STATE_KEY = 'incoming-payments';
-const EMAIL_SETTINGS_KEY = 'fcos:incoming_payment_email_settings';
-const INTEREST_EMAIL_SETTINGS_KEY = 'fcos:incoming_payment_interest_email_settings';
 const RECEIVABLE_PAYMENTS_TABLE_TOKEN = '{{receivablePaymentsTable}}';
 const BUYER_CIA_TABLE_TOKEN = '{{buyerCiaInvoicesTable}}';
 const INTEREST_CALCULATION_TABLE_TOKEN = '{{interestCalculationTable}}';
@@ -50,21 +49,21 @@ const QUILL_MODULES = {
   ],
 };
 const DEFAULT_EMAIL_SETTINGS = {
-  to: 'bt@cosulich.com.hk',
+  to: '',
   cc: '',
   bcc: '',
-  subject: 'Incoming Payment Report - {{dateFrom}} to {{dateTo}}',
-  intro: `<h2>Incoming Payment Report</h2><p>Please find below the receivable payments and Buyer CIA invoices for the selected filters.</p><p>Payment created date range: {{dateFrom}} to {{dateTo}}.<br>Incoming total: {{incomingTotal}}.</p><p>${RECEIVABLE_PAYMENTS_TABLE_TOKEN}</p><p>${BUYER_CIA_TABLE_TOKEN}</p>`,
+  subject: '',
+  intro: '',
   includeReceivablePayments: true,
   includeBuyerCiaInvoices: true,
 };
 
 const DEFAULT_INTEREST_EMAIL_SETTINGS = {
-  to: 'louisa@cosulich.com.hk',
-  cc: '{{requesterEmail}}',
+  to: '',
+  cc: '',
   bcc: '',
-  subject: 'Late Payment Interest Invoice Request - {{stemName}}',
-  body: `<h2>Late Payment Interest Invoice Request</h2><p>{{requestedBy}} is requesting Louisa to issue a late payment interest invoice for the following delayed buyer payment.</p><p>Buyer: {{buyerName}}<br>Group: {{buyerGroupName}}<br>STEM: {{stemName}}</p><p>${STEM_LINK_TOKEN}</p><p>Payment: {{paymentName}}<br>Received date: {{receivedDate}}<br>Payment terms delay: {{delayDays}}<br>Payment amount: {{paymentAmount}}<br>Receivable balance: {{receivableBalance}}<br>Calculated interest total: {{interestTotal}}</p><p>${INTEREST_CALCULATION_TABLE_TOKEN}</p>`,
+  subject: '',
+  body: '',
 };
 
 const EMAIL_TABLE_TOKENS = [
@@ -167,7 +166,7 @@ function defaultPageState() {
     dateTo: todayHongKong(),
     search: '',
     data: null,
-    thresholdDraft: '50',
+    thresholdDrafts: [],
   };
 }
 
@@ -193,46 +192,6 @@ function initialPageState() {
   const filterPatch = readUrlFilterPatch();
   if (!Object.keys(filterPatch).length) return cached;
   return { ...cached, ...filterPatch, data: null };
-}
-
-function readEmailSettings() {
-  try {
-    const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
-    const settings = raw ? { ...DEFAULT_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_EMAIL_SETTINGS;
-    delete settings.from;
-    return {
-      ...settings,
-      intro: richTemplateValue(
-        String(settings.intro || DEFAULT_EMAIL_SETTINGS.intro).replace('Received date range:', 'Payment created date range:'),
-        DEFAULT_EMAIL_SETTINGS.intro,
-      ),
-    };
-  } catch {
-    return DEFAULT_EMAIL_SETTINGS;
-  }
-}
-
-function saveEmailSettings(settings) {
-  const normalized = { ...DEFAULT_EMAIL_SETTINGS, ...settings };
-  delete normalized.from;
-  localStorage.setItem(EMAIL_SETTINGS_KEY, JSON.stringify(normalized));
-}
-
-function readInterestEmailSettings() {
-  try {
-    const raw = localStorage.getItem(INTEREST_EMAIL_SETTINGS_KEY);
-    const settings = raw ? { ...DEFAULT_INTEREST_EMAIL_SETTINGS, ...JSON.parse(raw) } : DEFAULT_INTEREST_EMAIL_SETTINGS;
-    return {
-      ...settings,
-      body: richTemplateValue(settings.body, DEFAULT_INTEREST_EMAIL_SETTINGS.body),
-    };
-  } catch {
-    return DEFAULT_INTEREST_EMAIL_SETTINGS;
-  }
-}
-
-function saveInterestEmailSettings(settings) {
-  localStorage.setItem(INTEREST_EMAIL_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_INTEREST_EMAIL_SETTINGS, ...settings }));
 }
 
 function escapeInterestHtml(value) {
@@ -395,9 +354,10 @@ function CompactTableEmptyState({ icon: Icon, title, description }) {
 export default function IncomingPayments({ reconciliationItems = [] }) {
   const { request: requestPayments } = useNavigationAwareRequest('collaboration');
   const { toast } = useToast();
-  const { isAdministrator } = useAuth();
+  const { isAdministrator, hasCapability } = useAuth();
+  const canManageFinancialReportSettings = hasCapability('financial_report_settings_manage');
   const [pageState, setPageState] = useState(initialPageState);
-  const { dateFrom, dateTo, search, data, thresholdDraft } = pageState;
+  const { dateFrom, dateTo, search, data, thresholdDrafts = [] } = pageState;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [responseMeta, setResponseMeta] = useState(null);
@@ -406,8 +366,9 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const [selectedStemId, setSelectedStemId] = useState(readUrlStemId);
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailStep, setEmailStep] = useState(0);
-  const [savedEmailSettings, setSavedEmailSettings] = useState(readEmailSettings);
+  const [savedEmailSettings, setSavedEmailSettings] = useState(DEFAULT_EMAIL_SETTINGS);
   const [emailSettings, setEmailSettings] = useState(() => savedEmailSettings);
+  const [emailSettingsRevision, setEmailSettingsRevision] = useState(0);
   const [emailTemplateEditing, setEmailTemplateEditing] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailAction, setEmailAction] = useState('');
@@ -415,8 +376,9 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const [emailError, setEmailError] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
   const [interestTemplateOpen, setInterestTemplateOpen] = useState(false);
-  const [savedInterestEmailSettings, setSavedInterestEmailSettings] = useState(readInterestEmailSettings);
+  const [savedInterestEmailSettings, setSavedInterestEmailSettings] = useState(DEFAULT_INTEREST_EMAIL_SETTINGS);
   const [interestEmailSettings, setInterestEmailSettings] = useState(() => savedInterestEmailSettings);
+  const [interestSettingsRevision, setInterestSettingsRevision] = useState(0);
   const [interestTemplateEditing, setInterestTemplateEditing] = useState(false);
   const [interestPreview, setInterestPreview] = useState(null);
   const [interestTemplateMessage, setInterestTemplateMessage] = useState('');
@@ -439,7 +401,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const setDateFrom = (value) => updatePageState({ dateFrom: value });
   const setDateTo = (value) => updatePageState({ dateTo: value });
   const setSearch = (value) => updatePageState({ search: value });
-  const setThresholdDraft = (value) => updatePageState({ thresholdDraft: value });
+  const setThresholdDrafts = (value) => updatePageState({ thresholdDrafts: value });
 
   useEffect(() => {
     writePageState(PAGE_STATE_KEY, pageState);
@@ -459,7 +421,11 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
           setError('');
           updatePageState({
             data: res.data,
-            thresholdDraft: String(res.data?.settings?.fullyPaidThreshold ?? 50),
+            thresholdDrafts: (res.data?.settings?.thresholds || []).map((item) => ({
+              currencyIsoCode: item.currencyIsoCode,
+              threshold: String(item.threshold),
+              revision: Number(item.revision || 0),
+            })),
           });
         }
       },
@@ -514,7 +480,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   }, [buyerCiaRows, search]);
 
   const summary = data?.summary || {};
-  const threshold = data?.settings?.fullyPaidThreshold ?? 50;
+  const thresholdCount = data?.settings?.thresholds?.length || 0;
   const lastMeta = data?.dateFrom && data?.dateTo ? `${fmtDate(data.dateFrom)} to ${fmtDate(data.dateTo)}` : null;
 
   const markInterestInvoiceRequested = (paymentId, notification) => {
@@ -560,8 +526,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         invoiceAmount: row.invoiceAmount,
         currency: row.currency,
         receivableBalance: row.receivableBalance,
-        template: readInterestEmailSettings(),
-        appUrl: window.location.origin,
         force: forceResend,
       });
       if (res.data?.error) {
@@ -571,7 +535,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
       markInterestInvoiceRequested(paymentId, res.data?.notification || null);
       toast({
         title: res.data?.resent ? 'Interest invoice request sent again' : 'Interest invoice request sent',
-        description: res.data?.trackingWarning || 'Louisa and your email have been notified through the assigned Microsoft Graph mailbox.',
+        description: res.data?.trackingWarning || 'The approved recipients have been notified through the assigned Microsoft Graph mailbox.',
       });
     } catch (error) {
       toast({
@@ -779,20 +743,40 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   ], []);
 
   const saveSettings = async () => {
-    if (!isAdministrator) {
-      toast({ title: 'Administrator access required', description: 'Only administrators can change the global payment threshold.' });
+    if (!canManageFinancialReportSettings) {
+      toast({ title: 'Access required', description: 'Finance, Administrators, and the General Manager can change payment thresholds.' });
+      return;
+    }
+    const normalized = thresholdDrafts.map((item) => ({
+      currencyIsoCode: String(item.currencyIsoCode || '').trim().toUpperCase(),
+      threshold: Number(item.threshold),
+      expectedRevision: Number(item.revision || 0),
+    }));
+    if (normalized.some((item) => !/^[A-Z]{3}$/.test(item.currencyIsoCode) || !Number.isFinite(item.threshold) || item.threshold < 0)) {
+      toast({ title: 'Thresholds are incomplete', description: 'Each row needs a three-letter currency code and a non-negative threshold.', variant: 'destructive' });
+      return;
+    }
+    if (new Set(normalized.map((item) => item.currencyIsoCode)).size !== normalized.length) {
+      toast({ title: 'Duplicate currency', description: 'Each currency can appear only once.', variant: 'destructive' });
       return;
     }
     setSavingSettings(true);
-    const res = await appClient.functions.invoke('incomingPaymentSettingsSave', {
-      fullyPaidThreshold: Number(thresholdDraft),
+    const changed = normalized.filter((item) => {
+      const current = data?.settings?.byCurrency?.[item.currencyIsoCode];
+      return !current || Number(current.threshold) !== item.threshold;
     });
+    if (!changed.length) {
+      setSavingSettings(false);
+      setSettingsOpen(false);
+      return;
+    }
+    const res = await appClient.functions.invoke('incomingPaymentSettingsSave', { thresholds: changed }, { invalidateCache: true });
     setSavingSettings(false);
     if (res.data?.error) {
       toast({ title: 'Save failed', description: res.data.error, variant: 'destructive' });
       return;
     }
-    toast({ title: 'Incoming Payment settings saved', description: `Fully paid threshold is ${fmtMoney(res.data.settings.fullyPaidThreshold)}.` });
+    toast({ title: 'Payment thresholds saved', description: 'Collection reconciliation will use the configured threshold for each currency.' });
     setSettingsOpen(false);
     appClient.functions.clearCache();
     load({ force: true });
@@ -809,9 +793,22 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     setEmailError('');
   };
 
-  const saveEmailTemplate = () => {
-    saveEmailSettings(emailSettings);
-    setSavedEmailSettings(emailSettings);
+  const saveEmailTemplate = async () => {
+    setEmailBusy(true);
+    const res = await appClient.functions.invoke('incomingPaymentEmailSettingsSave', {
+      settings: emailSettings,
+      expectedRevision: emailSettingsRevision,
+    }, { invalidateCache: true });
+    setEmailBusy(false);
+    if (res.data?.error) {
+      setEmailError(res.data.error);
+      toast({ title: 'Template save failed', description: res.data.error, variant: 'destructive' });
+      return;
+    }
+    const saved = { ...DEFAULT_EMAIL_SETTINGS, ...(res.data?.settings || emailSettings) };
+    setEmailSettings(saved);
+    setSavedEmailSettings(saved);
+    setEmailSettingsRevision(Number(res.data?.revision || emailSettingsRevision + 1));
     setEmailTemplateEditing(false);
     toast({ title: 'Incoming Payment email template saved' });
   };
@@ -834,15 +831,23 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     insertTokenIntoQuill(editor, token, uniqueTokens);
   };
 
-  const openEmailReport = () => {
-    const saved = readEmailSettings();
-    setSavedEmailSettings(saved);
-    setEmailSettings(saved);
+  const openEmailReport = async () => {
     setEmailTemplateEditing(false);
     setEmailStep(0);
     setEmailOpen(true);
     setEmailPreview(null);
     setEmailError('');
+    setEmailMessage('Loading approved recipients and template...');
+    const res = await appClient.functions.invoke('incomingPaymentEmailSettingsGet', {}, { force: true });
+    if (res.data?.error) {
+      setEmailError(res.data.error);
+      setEmailMessage('');
+      return;
+    }
+    const saved = { ...DEFAULT_EMAIL_SETTINGS, ...(res.data?.settings || {}) };
+    setSavedEmailSettings(saved);
+    setEmailSettings(saved);
+    setEmailSettingsRevision(Number(res.data?.revision || 0));
     setEmailMessage('');
   };
 
@@ -850,14 +855,26 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     setInterestEmailSettings((prev) => ({ ...prev, [field]: value }));
   };
 
-  const openInterestTemplate = () => {
-    const saved = readInterestEmailSettings();
+  const openInterestTemplate = async () => {
+    setInterestTemplateEditing(false);
+    setInterestPreview(null);
+    setInterestTemplateMessage('Loading approved recipients and template...');
+    setInterestTemplateOpen(true);
+    const res = await appClient.functions.invoke('incomingPaymentInterestSettingsGet', {}, { force: true });
+    if (res.data?.error) {
+      setInterestTemplateMessage(res.data.error);
+      return;
+    }
+    const saved = {
+      ...DEFAULT_INTEREST_EMAIL_SETTINGS,
+      ...(res.data?.settings || {}),
+      body: richTemplateValue(res.data?.settings?.body || ''),
+    };
     setSavedInterestEmailSettings(saved);
     setInterestEmailSettings(saved);
-    setInterestTemplateEditing(false);
+    setInterestSettingsRevision(Number(res.data?.revision || 0));
     setInterestPreview(buildInterestPreview(saved));
     setInterestTemplateMessage('');
-    setInterestTemplateOpen(true);
   };
 
   const closeInterestTemplate = () => {
@@ -876,9 +893,19 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     setInterestTemplateMessage('');
   };
 
-  const saveInterestTemplate = () => {
-    saveInterestEmailSettings(interestEmailSettings);
-    setSavedInterestEmailSettings(interestEmailSettings);
+  const saveInterestTemplate = async () => {
+    const res = await appClient.functions.invoke('incomingPaymentInterestSettingsSave', {
+      settings: interestEmailSettings,
+      expectedRevision: interestSettingsRevision,
+    }, { invalidateCache: true });
+    if (res.data?.error) {
+      setInterestTemplateMessage(res.data.error);
+      toast({ title: 'Template save failed', description: res.data.error, variant: 'destructive' });
+      return;
+    }
+    const saved = { ...interestEmailSettings };
+    setSavedInterestEmailSettings(saved);
+    setInterestSettingsRevision(Number(res.data?.revision || interestSettingsRevision + 1));
     setInterestTemplateEditing(false);
     setInterestTemplateMessage('Late payment interest request template saved.');
     toast({ title: 'Late payment interest template saved' });
@@ -967,7 +994,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         dateFrom,
         dateTo,
         search,
-        settings: { ...emailSettings, appUrl: window.location.origin },
         preview,
       });
       if (res.data?.error) {
@@ -1023,8 +1049,8 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         icon={Banknote}
         eyebrow="Salesforce payments"
         title="Incoming Payment"
-        description="Manage receivable buyer payments, supplier refunds, fully paid thresholds, and buyer-group overpayment balances from Salesforce payment records."
-        meta={lastMeta ? `Payment created date range: ${lastMeta}. Fully paid threshold: ${fmtMoney(threshold)}.` : null}
+        description="Manage receivable buyer payments, supplier refunds, currency-specific settlement thresholds, and buyer-group overpayment balances from Salesforce payment records."
+        meta={lastMeta ? `Payment created date range: ${lastMeta}. ${thresholdCount} configured currency threshold${thresholdCount === 1 ? '' : 's'}; all others use <0.005.` : null}
         actions={(
           <>
             <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
@@ -1177,40 +1203,15 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         </>
       )}
 
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Incoming Payment Settings</DialogTitle>
-            <DialogDescription>These settings are global and affect all users.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Fully paid threshold</Label>
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={thresholdDraft}
-                onChange={(event) => setThresholdDraft(event.target.value)}
-                disabled={!isAdministrator}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">Buyer invoices are considered fully paid when receivable balance is within this amount.</p>
-            </div>
-            {!isAdministrator && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                Only administrators can change this setting.
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSettingsOpen(false)}>Cancel</Button>
-            <Button onClick={saveSettings} disabled={!isAdministrator || savingSettings}>
-              {savingSettings && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PaymentCollectionThresholdsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        drafts={thresholdDrafts}
+        onDraftsChange={setThresholdDrafts}
+        canManage={canManageFinancialReportSettings}
+        saving={savingSettings}
+        onSave={saveSettings}
+      />
 
       <Dialog open={emailOpen} onOpenChange={(open) => (open ? setEmailOpen(true) : closeEmailReport())}>
         <DialogContent className="max-h-[94vh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden p-0 text-slate-950">
@@ -1315,8 +1316,8 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                       <div className="mt-1 truncate text-sm font-semibold text-slate-950">{search || '-'}</div>
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Fully paid threshold</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-950">{fmtMoney(threshold)}</div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Settlement policy</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-950">{thresholdCount.toLocaleString()} configured · fallback &lt;0.005</div>
                     </div>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -1477,10 +1478,12 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
               <div className="flex flex-wrap justify-end gap-2">
                 {emailStep === INCOMING_EMAIL_STEPS.length - 1 && (
                   !emailTemplateEditing ? (
+                    canManageFinancialReportSettings && (
                     <Button type="button" variant="outline" onClick={startEmailTemplateEdit} disabled={emailBusy}>
                       <Pencil className="mr-2 h-4 w-4" />
                       Edit Template
                     </Button>
+                    )
                   ) : (
                     <>
                       <Button type="button" variant="outline" onClick={cancelEmailTemplateChanges} disabled={emailBusy}>
@@ -1536,7 +1539,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                     onDrop={(event) => dropInterestToken('to', event)}
                     onChange={(event) => updateInterestEmailSetting('to', event.target.value)}
                     disabled={!interestTemplateEditing}
-                    placeholder="louisa@cosulich.com.hk"
+                    placeholder="Approved Finance recipient"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -1666,10 +1669,12 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
           <DialogFooter>
             <Button variant="outline" onClick={closeInterestTemplate}>Close</Button>
             {!interestTemplateEditing ? (
-              <Button variant="outline" onClick={startInterestTemplateEdit}>
-                <Pencil className="mr-2 h-4 w-4" />
-                Edit Template
-              </Button>
+              canManageFinancialReportSettings && (
+                <Button variant="outline" onClick={startInterestTemplateEdit}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Edit Template
+                </Button>
+              )
             ) : (
               <>
                 <Button variant="outline" onClick={cancelInterestTemplateChanges}>

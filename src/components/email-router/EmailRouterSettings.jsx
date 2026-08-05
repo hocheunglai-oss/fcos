@@ -371,6 +371,16 @@ export default function EmailRouterSettings() {
     load();
   };
 
+  const refreshFcosUsers = async () => {
+    if (directoryChanged && !window.confirm('Discard the unsaved routing directory changes?')) return;
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('emailRouterDirectoryRefresh', {});
+    if (response.data?.error) setError(response.data.error);
+    else setConfiguration(response.data);
+    setBusy(false);
+  };
+
   return <section className="rounded-lg border border-border bg-card p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="flex items-center gap-2 text-sm font-semibold"><MailSearch className="h-4 w-4" />Email Router</h2><p className="mt-1 max-w-3xl text-xs text-muted-foreground">Manage the native routing directory, groups, presets, mailbox synchronization, and operational warnings.</p></div>
@@ -386,7 +396,7 @@ export default function EmailRouterSettings() {
       <section>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h3 className="text-sm font-semibold">Routing directory</h3><p className="mt-1 text-xs text-muted-foreground">Drag people and groups into the order shown during Redirect and Forward. External contacts are marked separately from FCOS users.</p></div>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => editDestination()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add an external contact'}><Contact />Add external contact</Button><Button size="sm" variant="outline" onClick={() => editGroup()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add a routing group'}><Users />Add group</Button>{directoryChanged && <Button size="sm" onClick={saveDirectory} disabled={busy || Boolean(routingValidationError)}>{busy ? <Loader2 className="animate-spin" /> : <Save />}Save directory</Button>}</div>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={refreshFcosUsers} disabled={busy} title="Refresh active FCOS users in the routing directory"><RefreshCw />Refresh FCOS users</Button><Button size="sm" variant="outline" onClick={() => editDestination()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add an external contact'}><Contact />Add external contact</Button><Button size="sm" variant="outline" onClick={() => editGroup()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add a routing group'}><Users />Add group</Button>{directoryChanged && <Button size="sm" onClick={saveDirectory} disabled={busy || Boolean(routingValidationError)}>{busy ? <Loader2 className="animate-spin" /> : <Save />}Save directory</Button>}</div>
         </div>
         {routingValidationError && <p className="mt-3 text-xs font-medium text-red-600">{routingValidationError}</p>}
         <div className="mt-3 overflow-hidden border-y border-border">

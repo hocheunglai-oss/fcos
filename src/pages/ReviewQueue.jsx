@@ -18,20 +18,16 @@ import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
 import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
+import { classifyExceptionReviewStem } from '@/lib/exceptionReviewClassifier';
 import {
   EXCEPTION_REVIEW_DATE_BASIS,
   buildExceptionReviewDateWindows,
-  exceptionScheduleDaysSinceEnd,
-  isExceptionPotentialDelay,
-  normalizeExceptionSchedule,
 } from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
-import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { MONTHS, THIS_MONTH, THIS_YEAR, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologies';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
-const BUYER_FIELD = 'Total_Invoice_Amount__c';
-const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
 const STORAGE_KEY = 'review_queue_filters';
 const YEARS = getRecentYears();
 const WORKFLOW_STATUSES = ['Open', 'Acknowledged', 'In Progress', 'Resolved', 'Dismissed'];
@@ -55,46 +51,6 @@ const fmtDate = (value) => {
   if (!value) return '-';
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return value; }
 };
-
-function classifyStem(row) {
-  const buyer = row[BUYER_FIELD];
-  const supplier = row[SUPPLIER_FIELD];
-  const buyerBroker = row.__buyerCommCalc || 0;
-  const supplierBroker = row.__suppCommPerUnitCalc || 0;
-  const brokerTotal = buyerBroker + supplierBroker;
-  const grossProfit = row.__netPnlCalc != null
-    ? row.__netPnlCalc
-      : buyer != null && supplier != null
-      ? buyer - supplier - brokerTotal
-      : null;
-  const reasons = [];
-  const exceptionSchedule = row._Exception_Schedule || normalizeExceptionSchedule(row);
-  const scheduleDelayDays = exceptionScheduleDaysSinceEnd(exceptionSchedule);
-
-  if (isExceptionPotentialDelay({ ...row, _Exception_Schedule: exceptionSchedule })) {
-    reasons.push({ key: 'potential-delay', label: 'Potential Delay', severity: 'high' });
-  }
-  if (buyer == null || Number(buyer) === 0) {
-    reasons.push({ key: 'missing-buyer', label: 'Missing buyer invoice', severity: 'high' });
-  }
-  if (supplier == null || Number(supplier) === 0) {
-    reasons.push({ key: 'missing-supplier', label: 'Missing supplier invoice', severity: 'high' });
-  }
-  if (grossProfit != null && grossProfit < 0) {
-    reasons.push({ key: 'negative-gross', label: 'Negative gross profit', severity: 'high' });
-  }
-  const severity = reasons.some(r => r.severity === 'high') ? 'high' : reasons.length ? 'medium' : 'clear';
-  return {
-    ...row,
-    reviewReasons: reasons,
-    reviewSeverity: severity,
-    grossProfit,
-    _Exception_Schedule: exceptionSchedule,
-    scheduleDelayDays,
-    effectiveDate: row.Delivery_Date__c || exceptionSchedule.endDate,
-    usesScheduleDate: !row.Delivery_Date__c,
-  };
-}
 
 function ReasonBadge({ reason }) {
   return (
@@ -161,7 +117,6 @@ export default function ReviewQueue() {
     setLoading(true);
     setError(null);
     setBackboneHandoffError('');
-    const where = buildDeliveryWhere(yrs, mos);
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
     const applyExceptionData = (res) => {
       setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
@@ -188,7 +143,6 @@ export default function ReviewQueue() {
         name: 'salesforceDashboardFiltered',
         payload: {
         mode: 'exception_review',
-        where,
         trendYear: THIS_YEAR,
         dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
         dateWindows,
@@ -221,7 +175,7 @@ export default function ReviewQueue() {
   const selectedMonthLabel = formatSelectedMonths(selectedMonths);
 
   const reviewRows = useMemo(() => {
-    const rows = (data?.recentStems || []).map(classifyStem).filter(row => row.reviewReasons.length > 0).map((row) => ({
+    const rows = (data?.recentStems || []).map((row) => classifyExceptionReviewStem(row)).filter(row => row.reviewReasons.length > 0).map((row) => ({
       ...row,
       exceptionWorkflow: workflowByStemId[row.Id] || null,
     }));
@@ -237,7 +191,7 @@ export default function ReviewQueue() {
     return filteredByType.filter(row => matchesExceptionReviewSearch(row, search));
   }, [data?.recentStems, activeReviewType, search, workflowByStemId, workflowScope]);
 
-  const classifiedRows = useMemo(() => (data?.recentStems || []).map(classifyStem), [data?.recentStems]);
+  const classifiedRows = useMemo(() => (data?.recentStems || []).map((row) => classifyExceptionReviewStem(row)), [data?.recentStems]);
   const highPriorityCount = classifiedRows.filter(row => row.reviewSeverity === 'high').length;
   const potentialDelayCount = classifiedRows.filter(row => row.reviewReasons.some(reason => reason.key === 'potential-delay')).length;
   const clearCount = classifiedRows.filter(row => row.reviewReasons.length === 0).length;

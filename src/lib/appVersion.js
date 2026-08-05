@@ -1,6 +1,19 @@
-export const APP_VERSION = '2.0.124';
+export const APP_VERSION = '2.0.125';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.125',
+    releasedAt: '2026-08-06',
+    title: 'Security and financial workflow hardening',
+    changes: [
+      'Replaced browser-supplied Salesforce queries with server-owned Dashboard filters and made Interoffice data restrictions fail closed when Salesforce metadata cannot be validated.',
+      'Moved financial-report recipients and templates into approved server settings so browser or fallback values cannot restore an obsolete address or alter an internal report.',
+      'Added currency-specific Payment Collection closure thresholds and kept the strict below-0.005 rule for currencies without an approved threshold.',
+      'Standardized financial calculations on Salesforce native quantity and UOM while retaining approximate density conversion only for volume statistics.',
+      'Kept externally closed Salesforce disputes in FCOS until accounting is complete or an authorized external-closure acceptance is recorded with a reason.',
+      'Improved Account Insight exception classification, Email Router availability, safe error messages, targeted incident verification, and release security checks.',
+    ],
+  },
   {
     version: '2.0.124',
     releasedAt: '2026-08-06',

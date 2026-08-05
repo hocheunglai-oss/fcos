@@ -236,24 +236,34 @@ function recoverySelectFields(schema) {
     .concat(accountSelectFields(schema, 'Account__r.'), ['Contact__r.Name', 'STEM__r.Name', 'Product__r.Name']);
 }
 
-export async function listUnofficialCompensation({ force = false, interoffice = false } = {}) {
+export async function listUnofficialCompensation({ force = false, interoffice = false, accountIds = [] } = {}) {
   const schema = await resolveUnofficialCompensationSchema({ force });
   const accessScope = interoffice ? 'interoffice' : 'standard';
+  const scopedAccountIds = [...new Set((accountIds || []).map((value) => text(value)).filter(isSalesforceRecordId))].sort();
+  const accountScope = scopedAccountIds.length
+    ? `Id IN (${scopedAccountIds.map((id) => `'${soql(id)}'`).join(',')})`
+    : null;
+  const relatedAccountScope = scopedAccountIds.length
+    ? `Account__c IN (${scopedAccountIds.map((id) => `'${soql(id)}'`).join(',')})`
+    : null;
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-unofficial-compensation',
     version: '1',
     accessScope,
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { view: 'workspace' },
+    payload: { view: scopedAccountIds.length ? 'account-scope' : 'workspace', accountIds: scopedAccountIds },
     ttlSeconds: 60,
     tags: ['salesforce:compensation', 'salesforce:account', 'salesforce:stem'],
     force,
     loader: async () => {
       const accountWhere = [
-        '(Agreed_Compansation_Size__c > 0 OR Unofficial_Compensation_Size__c > 0)',
+        accountScope || '(Agreed_Compansation_Size__c > 0 OR Unofficial_Compensation_Size__c > 0)',
         ...(interoffice ? interofficeAccountConditions(schema) : []),
       ].join(' AND ');
-      const relatedAccountWhere = interoffice ? interofficeAccountConditions(schema, 'Account__r') : [];
+      const relatedAccountWhere = [
+        relatedAccountScope,
+        ...(interoffice ? interofficeAccountConditions(schema, 'Account__r') : []),
+      ].filter(Boolean);
       const [accountResult, claimResult, recoveryResult] = await sfCompositeQueries([
         { soql: `SELECT ${accountSelectFields(schema).join(',')} FROM Account WHERE ${accountWhere} ORDER BY Name LIMIT 5000`, clean: true, limit: 5000 },
         { soql: `SELECT ${claimSelectFields(schema).join(',')} FROM Agreed_Compensation__c${relatedAccountWhere.length ? ` WHERE ${relatedAccountWhere.join(' AND ')}` : ''} ORDER BY Account__c, Contact__c, CreatedDate`, clean: true, limit: 20000 },

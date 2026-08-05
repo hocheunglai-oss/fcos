@@ -47,11 +47,15 @@ test('payment reminder template save sends only payment reminder fields', async 
   assert.doesNotMatch(saveSource, /^\s*cc:/m);
 });
 
-test('server merges settings patches and fails closed when storage is unavailable', async () => {
-  const source = await readFile(new URL('api/functions/[name].js', root), 'utf8');
+test('server stores approved financial report settings and fails closed when storage is unavailable', async () => {
+  const [source, settingsService] = await Promise.all([
+    readFile(new URL('api/functions/[name].js', root), 'utf8'),
+    readFile(new URL('api/_financialReportSettings.js', root), 'utf8'),
+  ]);
 
-  assert.match(source, /\.rpc\('merge_buyer_invoice_email_settings'/);
-  assert.match(source, /stored\.meta\.storageAvailable !== true/);
+  assert.match(source, /loadFinancialReportSettings\(client, 'outstanding_invoice_reports'/);
+  assert.match(settingsService, /from\('financial_report_settings'\)/);
+  assert.match(settingsService, /Sending is disabled until storage is restored/);
   assert.doesNotMatch(source, /cc:\s*\['lousia@cosulich\.com\.hk'/);
 });
 

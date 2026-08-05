@@ -9,7 +9,6 @@ import {
   tradingDaysInMonth,
 } from "./domain.js";
 
-export const SFS_REPORT_RECIPIENT = "accounts@cosulich.com.hk";
 export const SFS_REPORT_AUTOMATION_START_MONTH = "2026-07";
 
 const PRICE_FIELDS = ["s380", "s05", "sgo"];
@@ -253,7 +252,7 @@ export function buildSfsMonthlyReport({
     month,
     final: completeness.complete && calendarSupported && validationErrors.length === 0,
     generatedAt,
-    recipient: SFS_REPORT_RECIPIENT,
+    recipient: null,
     completeness: {
       complete: completeness.complete,
       total: completeness.total,

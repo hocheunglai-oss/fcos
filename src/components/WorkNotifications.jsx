@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
@@ -157,6 +157,19 @@ export default function WorkNotifications() {
     [applyResponse, sourceFilter, stateFilter],
   );
 
+  const verifySystemIncident = useCallback(async (notification) => {
+    if (!notification?.incidentSignature) return;
+    setUpdating(true);
+    try {
+      const response = await appClient.functions.invoke("systemErrorVerify", {
+        incidentSignature: notification.incidentSignature,
+      }, { force: true });
+      if (!response.data?.error) await loadNotifications({ quiet: true });
+    } finally {
+      setUpdating(false);
+    }
+  }, [loadNotifications]);
+
   const unavailableLabel = unavailableSources.map(sourceLabel).join(", ");
   const hasUnavailableSources = unavailableSources.length > 0;
 
@@ -257,6 +270,11 @@ export default function WorkNotifications() {
                     </span>
                   </button>
                   <span className="flex shrink-0 items-center gap-0.5 pt-1">
+                    {notification.source === "system_error" && notification.verificationAvailable && stateFilter !== "handled" && (
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-blue-700" title="Verify this exact incident is fixed" disabled={updating} onClick={() => verifySystemIncident(notification)}>
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                     {stateFilter === "handled" ? (
                       <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
                         <RotateCcw className="h-3.5 w-3.5" />

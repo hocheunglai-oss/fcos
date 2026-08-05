@@ -3,7 +3,6 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
   reportSystemError,
-  shouldAutoResolveSystemError,
   shouldNotifySystemError,
   systemErrorDedupeKey,
   systemErrorPublicDescriptor,
@@ -32,18 +31,16 @@ test('only unexpected server failures create global error notifications', () => 
   assert.equal(shouldNotifySystemError(409), false);
   assert.equal(shouldNotifySystemError(500), true);
   assert.equal(shouldNotifySystemError(503), true);
-  assert.equal(shouldAutoResolveSystemError('disputeWorkflowList'), true);
-  assert.equal(shouldAutoResolveSystemError('unknownMutation'), false);
 });
 
-test('system errors are redacted, friendly, and deduplicated within a time window', async () => {
+test('system errors are redacted, friendly, and keyed by a stable incident signature', async () => {
   const error = new ReferenceError('client is not defined for vincent@example.com on 0012x00000LGhzUAAT with sk_secret-value');
   const occurredAt = new Date('2026-08-04T03:30:00.000Z');
   const first = systemErrorDedupeKey({ handler: 'outstandingBuyerInvoicesEmailReport', error, status: 500, occurredAt });
   const repeated = systemErrorDedupeKey({ handler: 'outstandingBuyerInvoicesEmailReport', error, status: 500, occurredAt: new Date('2026-08-04T03:35:00.000Z') });
   const later = systemErrorDedupeKey({ handler: 'outstandingBuyerInvoicesEmailReport', error, status: 500, occurredAt: new Date('2026-08-04T03:41:00.000Z') });
   assert.equal(first, repeated);
-  assert.notEqual(first, later);
+  assert.equal(first, later);
 
   const calls = [];
   const client = {
@@ -87,6 +84,8 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(migration, /security invoker/i);
   assert.match(migration, /on conflict \(dedupe_key\) do update/i);
   assert.match(notifications, /system_error_notification_states/);
+  assert.match(notifications, /incidentSignature: row\.dedupe_key/);
+  assert.match(notifications, /verificationAvailable/);
   assert.match(notifications, /source: 'system_error'/);
   assert.match(notifications, /diagnosticRef: row\.last_request_id/);
   assert.match(notifications, /outcome: 'Completion not confirmed'/);
@@ -96,9 +95,15 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(notificationUi, /Save outcome:/);
   assert.match(notificationUi, /Open Error Centre/);
   assert.match(notificationUi, /notification\.actionLabel/);
+  assert.match(notificationUi, /systemErrorVerify/);
   const handler = await readFile(handlerUrl, 'utf8');
-  assert.match(handler, /resolveSystemErrorsForHandler/);
-  assert.match(handler, /shouldAutoResolveSystemError\(name\)/);
+  const systemErrors = await readFile(new URL('../api/_systemErrorNotifications.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(handler, /resolveSystemErrorsForHandler/);
+  assert.match(systemErrors, /resolveSystemErrorIncident/);
+  assert.match(systemErrors, /\.eq\('dedupe_key', dedupeKey\)/);
+  assert.match(handler, /async function systemErrorVerify/);
+  assert.match(handler, /resolveSystemErrorIncident\(context\.client, incidentSignature\)/);
+  assert.doesNotMatch(handler, /resolveSystemErrorsForHandler/);
 });
 
 test('all Graph report and reminder handlers pass an explicit database client', async () => {

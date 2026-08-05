@@ -69,6 +69,14 @@ function emailRouterNotification(row, state = {}) {
 
 function systemErrorNotification(row, state = {}) {
   const occurrenceCount = Math.max(1, Number(row.occurrence_count || 1));
+  const verificationHandlers = new Set([
+    'outstandingBuyerInvoicesEmailReport',
+    'outstandingBuyerInvoicesEmailCron',
+    'incomingPaymentEmailReport',
+    'buyerInvoicePaymentReminderSend',
+    'disputeWorkflowList',
+    'workNotificationsList',
+  ]);
   return {
     id: `system_error:${row.id}`,
     source: 'system_error',
@@ -80,6 +88,8 @@ function systemErrorNotification(row, state = {}) {
     link: row.link || '/',
     occurrenceCount,
     diagnosticRef: row.last_request_id || null,
+    incidentSignature: row.dedupe_key || null,
+    verificationAvailable: verificationHandlers.has(row.handler) && /^[a-f0-9]{64}$/i.test(String(row.dedupe_key || '')),
     outcome: 'Completion not confirmed',
     retryAvailable: Boolean(row.link),
     actionLabel: row.link ? 'Review affected workspace before retrying' : 'Review error details',
@@ -122,7 +132,7 @@ export async function workNotificationsList(body = {}, accessContext) {
     client.from('fcos_improvement_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
     router.from('alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(queryLimit),
     router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
-    client.from('system_error_events').select('id,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
+    client.from('system_error_events').select('id,dedupe_key,handler,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
     client.from('system_error_notification_states').select('event_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
   ]);
 

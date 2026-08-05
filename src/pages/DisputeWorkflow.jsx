@@ -1299,6 +1299,7 @@ function WorkflowDecisionModal({ mode, open, onClose, onConfirm, busy }) {
     revision: ['Request Revision', 'Revision reason', 'Return to Trader'],
     reject: ['Reject Instructions', 'Rejection reason', 'Reject'],
     close: ['Close Dispute', 'Final closure note', 'Close Dispute'],
+    'accept-external': ['Accept Salesforce Closure', 'Mandatory acceptance reason', 'Accept and Close FCOS'],
   }[mode] || ['Workflow Decision', 'Note', 'Confirm'];
   useEffect(() => { if (open) setNote(''); }, [open, mode]);
   const requiresNote = mode !== 'approve';
@@ -1401,7 +1402,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const candidateSchemaValid = partyRegistry?.candidateSchemaValid === true;
   const selectionValid = legacyReadOnly || selectedAccountIds.length > 0;
   const partiesValid = legacyReadOnly || (candidateSchemaValid && selectionValid);
-  const canEdit = !legacyReadOnly && editableWorkflow(caseRow) && candidateSchemaValid;
+  const canEdit = !legacyReadOnly && !externalClosure && editableWorkflow(caseRow) && candidateSchemaValid;
   const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
   const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
   const supplierAmountRequired = actions.filter((action) => action.partyType === 'supplier' && action.supplierDisputeAmountRequired);
@@ -1409,7 +1410,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const uocActions = actions.filter((action) => String(action.closeReason || '').trim().toLowerCase() === 'uoc opened');
   const missingUocClaimLinks = uocActions.filter((action) => !action.linkedAgreedCompensationId);
   const canSubmit = canEdit && selectionValid && actions.length > 0 && missingRequiredDocuments.length === 0 && supplierAmountRequired.length === 0 && supplierConversionRequired.length === 0 && !reconciliationError;
-  const canReview = !legacyReadOnly && capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
+  const canReview = !legacyReadOnly && !externalClosure && capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
   const canApprove = partiesValid
     && canReview
     && missingRequiredDocuments.length === 0
@@ -1418,7 +1419,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     && !reconciliationError;
   const canAccount = capabilities?.canAccount && caseRow?.approvalStatus === 'Approved' && caseRow?.workflowStatus !== 'Closed';
   const canAcknowledgeUrgentHold = capabilities?.canAccount && caseRow?.workflowStatus !== 'Closed';
-  const canClose = partiesValid && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError && missingUocClaimLinks.length === 0;
+  const canClose = partiesValid && !externalClosure && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError && missingUocClaimLinks.length === 0;
+  const canAcceptExternalClosure = partiesValid && externalClosure && capabilities?.canAcceptExternalClosure && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError && missingUocClaimLinks.length === 0;
   const canManageDocuments = !legacyReadOnly
     && caseRow?.workflowStatus !== 'Closed'
     && (canEdit || canAccount || capabilities?.canApprove);
@@ -1590,6 +1592,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     if (decisionMode === 'revision') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: true });
     if (decisionMode === 'reject') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: false });
     if (decisionMode === 'close') result = await invokeWorkflow('disputeWorkflowClose', { caseId: caseRow.id, note: decisionNote });
+    if (decisionMode === 'accept-external') result = await invokeWorkflow('disputeWorkflowAcceptExternalClosure', { caseId: caseRow.id, reason: decisionNote });
     if (result) setDecisionMode(null);
   };
   const documentUploaded = async (document) => {
@@ -1642,10 +1645,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <div className="font-semibold">Closed directly in Salesforce.</div>
+                <div className="font-semibold">Salesforce was closed outside FCOS.</div>
                 <div>
-                  FCOS is showing this case as read-only Closed. Its preserved internal stage is {caseRow.internalWorkflowStatus || 'Draft'}.
-                  Reopen the dispute in Salesforce to continue that workflow.
+                  FCOS has preserved the internal stage {caseRow.internalWorkflowStatus || caseRow.workflowStatus || 'Draft'}.
+                  {caseRow.approvalStatus === 'Approved'
+                    ? ' Finance can complete every accounting action and instruction here. An Administrator or the General Manager must then accept the external closure with a reason.'
+                    : ' Reopen the dispute in Salesforce before continuing commercial preparation or approval.'}
                 </div>
               </div>
             </div>
@@ -1877,7 +1882,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('revision')} disabled={busy}>Request Revision</Button>}
             {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('reject')} disabled={busy}>Reject</Button>}
             {canApprove && <Button type="button" onClick={() => setDecisionMode('approve')} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" /> Approve</Button>}
-            {capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy || !canClose} title={!canClose ? reconciliationError ? 'Resolve supplier payment reconciliation before closure' : missingUocClaimLinks.length ? 'Link every required Agreed Compensation claim before closure' : 'Complete the closure requirements' : undefined} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
+            {!externalClosure && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy || !canClose} title={!canClose ? reconciliationError ? 'Resolve supplier payment reconciliation before closure' : missingUocClaimLinks.length ? 'Link every required Agreed Compensation claim before closure' : 'Complete the closure requirements' : undefined} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
+            {externalClosure && capabilities?.canAcceptExternalClosure && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('accept-external')} disabled={busy || !canAcceptExternalClosure} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Accept Salesforce Closure</Button>}
           </div>
         </div>
       </DialogContent>
@@ -1943,6 +1949,7 @@ export default function DisputeWorkflow() {
           canApprove: Boolean(res.data?.isDisputeAdmin),
           canAccount: Boolean(res.data?.isDisputeAccounting),
           canClose: Boolean(res.data?.isDisputeAccounting),
+          canAcceptExternalClosure: false,
           canViewAllRules: true,
         });
         setFieldWarning(res.data?.fieldWarning || '');

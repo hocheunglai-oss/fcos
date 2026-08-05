@@ -13,25 +13,27 @@ export const THIS_MONTH = now.getMonth() + 1;
 export const getRecentYears = (baseYear = THIS_YEAR, count = 3) =>
   Array.from({ length: count }, (_, index) => baseYear - index);
 
-export function buildEffectiveDateRange(startDate, endDate) {
-  return `((Delivery_Date__c >= ${startDate} AND Delivery_Date__c <= ${endDate}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${startDate} AND Expected_Delivery_Date__c <= ${endDate}))`;
-}
+export function buildDashboardDateWindows(years, months) {
+  const normalizedYears = [...new Set((years || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const normalizedMonths = [...new Set((months || []).map(Number).filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const useFullYear = normalizedMonths.length === 0 || normalizedMonths.length === 12;
+  const windows = [];
 
-export function buildDeliveryWhere(years, months) {
-  if (!years.length) return '';
-  const conditions = [];
-  for (const yr of years) {
-    if (!months.length || months.length === 12) {
-      conditions.push(buildEffectiveDateRange(`${yr}-01-01`, `${yr}-12-31`));
-    } else {
-      for (const mo of months) {
-        const mm = String(mo).padStart(2, '0');
-        const lastDay = new Date(Number(yr), Number(mo), 0).getDate();
-        conditions.push(buildEffectiveDateRange(`${yr}-${mm}-01`, `${yr}-${mm}-${lastDay}`));
-      }
+  for (const year of normalizedYears) {
+    if (useFullYear) {
+      windows.push({ startDate: `${year}-01-01`, endDate: `${year}-12-31` });
+      continue;
+    }
+    for (const month of normalizedMonths) {
+      const monthToken = String(month).padStart(2, '0');
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      windows.push({
+        startDate: `${year}-${monthToken}-01`,
+        endDate: `${year}-${monthToken}-${String(lastDay).padStart(2, '0')}`,
+      });
     }
   }
-  return conditions.join(' OR ');
+  return windows;
 }
 
 export function formatSelectedMonths(selectedMonths) {
