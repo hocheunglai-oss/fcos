@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.114';
+export const APP_VERSION = '2.0.115';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.115',
+    releasedAt: '2026-08-05',
+    title: 'Simplified Dashboard STEM table',
+    changes: [
+      'Removed raw Port references, Exception Schedule, uncancelled-product flags, and Extra Costs from the Dashboard Filtered STEMs table while retaining them for calculations and search.',
+      'Simplified Buyer and Buyer GROUP labels to the Account name while preserving exact Account identity for Account Insight.',
+    ],
+  },
   {
     version: '2.0.114',
     releasedAt: '2026-08-05',

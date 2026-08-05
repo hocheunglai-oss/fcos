@@ -59,6 +59,11 @@ const BASE_HIDDEN_COLS = new Set([
   '_Supplier_Accounts',
   '_Product_Quantity_List',
   '_Extra_Cost_Name_List',
+  '_Extra_Cost_Names',
+  'Port__c',
+  'Port__r',
+  '_Exception_Schedule',
+  '_Has_Uncancelled_Line_Product_Item',
 ]);
 
 // Columns that are right-aligned (money)
@@ -138,13 +143,16 @@ const COL_ORDER = [
   '__pnl__',
 ];
 
-const accountDisplayLabel = (account, fallback = 'Account') => {
+const accountDisplayLabel = (account, fallback = 'Account', showClKey = true) => {
   if (!account) return fallback;
-  return [account.name || fallback, account.clKey].filter(Boolean).join(' · ');
+  const name = account.name || fallback;
+  const clKey = String(account.clKey || '').trim();
+  const hasDistinctClKey = clKey && clKey.localeCompare(String(name).trim(), undefined, { sensitivity: 'accent' }) !== 0;
+  return showClKey && hasDistinctClKey ? `${name} · ${clKey}` : name;
 };
 
-function AccountInsightButton({ account, role, fallback, onOpen, className = '' }) {
-  const label = accountDisplayLabel(account, fallback);
+function AccountInsightButton({ account, role, fallback, onOpen, className = '', showClKey = true }) {
+  const label = accountDisplayLabel(account, fallback, showClKey);
   if (!account?.accountId || !onOpen) return <span className={className}>{label || '—'}</span>;
   return (
     <button
@@ -297,6 +305,7 @@ export default function PnlTable({ records = [], onStemClick, onAccountClick, co
                           role="buyer"
                           fallback={fmtVal(col, row[col])}
                           onOpen={onAccountClick}
+                          showClKey={false}
                         />
                       </td>
                     );
@@ -309,6 +318,7 @@ export default function PnlTable({ records = [], onStemClick, onAccountClick, co
                           role="group"
                           fallback={fmtVal(col, row[col])}
                           onOpen={onAccountClick}
+                          showClKey={false}
                         />
                       </td>
                     );
