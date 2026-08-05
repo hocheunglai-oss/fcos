@@ -319,7 +319,7 @@ function buyerBrokerQueryConfiguration(brokerFields, accountFields) {
       fields: [],
       commissionField: null,
       relationshipName: null,
-      warning: 'Secondary buyer-broker details are unavailable because STEM_Buyer_Broker__c.STEM__c was not found.',
+      warning: null,
     };
   }
   const values = ['Id', 'STEM__c'];
@@ -343,9 +343,7 @@ function buyerBrokerQueryConfiguration(brokerFields, accountFields) {
     fields: [...new Set(values)],
     commissionField,
     relationshipName: brokerLookup?.relationshipName || null,
-    warning: commissionField
-      ? null
-      : 'Secondary buyer-broker commission amounts are unavailable in Salesforce. Account Insight uses validated STEM line-item commissions only.',
+    warning: null,
   };
 }
 
@@ -459,7 +457,7 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         stemId: invoice.STEM__c,
         supplierAccountId: accountField ? invoice[accountField] : accountId,
         supplierName: relationship ? invoice[relationship]?.Name : invoice.Supplier_Name__c || null,
-        currency: invoice.CurrencyIsoCode || 'Unspecified',
+        currency: invoice.CurrencyIsoCode || 'Currency not set',
         invoiceAmount,
         payableBalance,
         dueDate: schema.supplierSettlement.invoiceDueDateFields.map((field) => invoice[field]).find(Boolean) || null,
@@ -712,7 +710,7 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
     }
     const reasonCounts = new Map();
     for (const item of exceptionItems.data || []) {
-      const reason = text(item.reason || item.exception_reason || item.status) || 'Unspecified';
+      const reason = text(item.reason || item.exception_reason || item.status) || 'Reason not set';
       reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
     }
     const today = hongKongToday();

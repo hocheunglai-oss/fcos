@@ -141,7 +141,7 @@ test('buyer-broker enrichment uses described fields and never assumes Commission
     'Buyer_Broker__r.Company_Code__c',
   ]);
   assert.equal(config.commissionField, null);
-  assert.match(config.warning, /uses validated STEM line-item commissions only/);
+  assert.equal(config.warning, null);
 });
 
 test('buyer-broker enrichment selects a commission amount only when describe confirms it', () => {

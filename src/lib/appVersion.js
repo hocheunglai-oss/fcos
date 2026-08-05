@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.123';
+export const APP_VERSION = '2.0.124';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.124',
+    releasedAt: '2026-08-06',
+    title: 'Account Insight data labels',
+    changes: [
+      'Replaced every generic Unspecified label in Account Insight with the exact missing field, such as Currency not set, Product not set, Port not set, UOM not set, Date not set, or Reason not set.',
+      'Removed secondary buyer-broker commission messages from Account Insight data warnings while retaining validated line-item commission calculations.',
+    ],
+  },
   {
     version: '2.0.123',
     releasedAt: '2026-08-06',

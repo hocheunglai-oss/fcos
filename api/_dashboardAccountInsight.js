@@ -4,6 +4,7 @@ import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/payme
 
 const DAY_MS = 86_400_000;
 const ZERO_TOLERANCE = 0.005;
+const CURRENCY_NOT_SET = 'Currency not set';
 
 function hongKongToday() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -85,7 +86,7 @@ function salesforceIdKey(value) {
 }
 
 function currencyOf(record) {
-  return text(record?.CurrencyIsoCode || record?.Currency__c) || 'Unspecified';
+  return text(record?.CurrencyIsoCode || record?.Currency__c) || CURRENCY_NOT_SET;
 }
 
 function firstNumber(...values) {
@@ -149,11 +150,11 @@ function dashboardFamily(item) {
 }
 
 function productName(item) {
-  return text(item.Product__r?.Name || item.Product2Id__r?.Name || item.Name || item.Description__c) || 'Unspecified';
+  return text(item.Product__r?.Name || item.Product2Id__r?.Name || item.Name || item.Description__c) || 'Product not set';
 }
 
-function addMapAmount(target, key, amount) {
-  const label = text(key) || 'Unspecified';
+function addMapAmount(target, key, amount, missingLabel = 'Value not set') {
+  const label = text(key) || missingLabel;
   target.set(label, valueOrZero(target.get(label)) + valueOrZero(amount));
 }
 
@@ -283,7 +284,7 @@ function topDistribution(entries, total, limit = 10) {
 function groupedMoney(rows, selectors) {
   const grouped = {};
   for (const row of rows) {
-    const currency = row.currency || 'Unspecified';
+    const currency = row.currency || CURRENCY_NOT_SET;
     if (!grouped[currency]) grouped[currency] = Object.fromEntries(selectors.flatMap((selector) => [[selector.key, 0], [`${selector.key}__count`, 0]]));
     for (const selector of selectors) {
       const value = number(selector.value(row));
@@ -362,18 +363,18 @@ function summarizeDisputes(workflows = {}, stemRows = [], accountId, role, today
   const disputeAges = openCases.map((row) => daysBetween(today, row.submitted_at || row.created_at)).filter((value) => value != null);
   const outcomes = new Map();
   for (const action of actions) {
-    const label = text(action.close_reason || action.action_label || action.action_type) || 'Unspecified';
+    const label = text(action.close_reason || action.action_label || action.action_type) || 'Closure reason not set';
     outcomes.set(label, (outcomes.get(label) || 0) + 1);
   }
   const instructionAmounts = groupedMoney(instructions.map((row) => ({
     ...row,
-    currency: text(row.currency_iso_code) || 'Unspecified',
+    currency: text(row.currency_iso_code) || CURRENCY_NOT_SET,
   })), [
     { key: 'holdAmount', value: (row) => row.instruction_type === 'withhold_unpaid' ? row.planned_amount : 0 },
     { key: 'getBackAmount', value: (row) => row.instruction_type === 'get_back_paid' ? row.planned_amount : 0 },
   ]);
-  const stemCurrencies = new Map(stemRows.map((row) => [row.stemId, row.currency || 'Unspecified']));
-  const actionAmounts = groupedMoney(actions.map((row) => ({ ...row, currency: stemCurrencies.get(row.stem_id) || 'Unspecified' })), [
+  const stemCurrencies = new Map(stemRows.map((row) => [row.stemId, row.currency || CURRENCY_NOT_SET]));
+  const actionAmounts = groupedMoney(actions.map((row) => ({ ...row, currency: stemCurrencies.get(row.stem_id) || CURRENCY_NOT_SET })), [
     { key: 'commercialAmount', value: (row) => row.amount },
     { key: 'settlementAmount', value: (row) => row.settlement_amount },
   ]);
@@ -397,7 +398,7 @@ function summarizeCompensation(compensation = {}, accountIds = [], today) {
   const keys = new Set(accountIds.map(salesforceIdKey).filter(Boolean));
   const accounts = (compensation.accounts || compensation.rows || []).filter((row) => keys.has(salesforceIdKey(row.accountId || row.account_id || row.id)));
   const currencyRows = accounts.flatMap((account) => (account.currencyTotals || []).map((row) => ({
-    currency: row.currencyIsoCode || 'Unspecified',
+    currency: row.currencyIsoCode || CURRENCY_NOT_SET,
     agreedAmount: row.agreedAmount,
     recoveredAmount: row.recoveredAmount,
     outstandingAmount: row.outstandingAmount,
@@ -441,7 +442,7 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
       bucket.spend += valueOrZero(row.spend);
       bucket.grossProfit += valueOrZero(row.grossProfit);
       trend.set(key, bucket);
-      const currency = row.currency || 'Unspecified';
+      const currency = row.currency || CURRENCY_NOT_SET;
       const byPeriod = currencyTrends.get(currency) || new Map();
       const currencyBucket = byPeriod.get(key) || { period: key, stems: 0, volumeMt: 0, turnover: 0, spend: 0, grossProfit: 0 };
       currencyBucket.stems += 1;
@@ -456,13 +457,13 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
     for (const item of row.products || []) addMapAmount(families, item.family, item.volumeMt);
     for (const item of row.products || []) {
       if (item.nativeQuantity <= 0 || (item.sellPrice == null && item.buyPrice == null)) continue;
-      const period = row.effectiveDate?.slice(0, 7) || 'Unspecified';
-      const groupKey = [item.name, item.originalUom || 'Unspecified', row.currency, row.portName || 'Unspecified', period].join('\u0000');
+      const period = row.effectiveDate?.slice(0, 7) || 'Date not set';
+      const groupKey = [item.name, item.originalUom || 'UOM not set', row.currency, row.portName || 'Port not set', period].join('\u0000');
       const priceGroup = priceGroups.get(groupKey) || {
         product: item.name,
-        unitOfMeasure: item.originalUom || 'Unspecified',
+        unitOfMeasure: item.originalUom || 'UOM not set',
         currency: row.currency,
-        port: row.portName || 'Unspecified',
+        port: row.portName || 'Port not set',
         period,
         quantity: 0,
         sellValue: 0,
@@ -715,7 +716,7 @@ function buyerPaymentMetrics(stemRows, buyerPaymentsByStem = {}, today) {
 function supplierPaymentMetrics(invoices = [], today) {
   const rows = invoices.map((invoice) => ({
     ...invoice,
-    currency: invoice.currency || 'Unspecified',
+    currency: invoice.currency || CURRENCY_NOT_SET,
     paymentState: paymentState(invoice),
   }));
   const states = { unpaid: 0, partlyPaid: 0, paid: 0 };
@@ -837,7 +838,7 @@ function buildStemFinancialRow(stem, context) {
       family,
       volumeMt: valueOrZero(volume.quantity),
       unitOfMeasure: volume.unitOfMeasure,
-      originalUom: resolveDashboardItemUom(item, { lineItemUomField: context.lineItemUomField, productUomField: context.productUomField }) || 'Unspecified',
+      originalUom: resolveDashboardItemUom(item, { lineItemUomField: context.lineItemUomField, productUomField: context.productUomField }) || 'UOM not set',
       nativeQuantity: financialQuantity(item, stemHasDelivery),
       sellPrice: firstNumber(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item.Offer_Line_Item__r?.UnitPrice),
       buyPrice: firstNumber(item.Cost_Per_Unit__c, item.Unit_Buy_At__c, item.Unit_Cost__c, item.Offer_Line_Item__r?.Supplier_Unit_Price__c),
