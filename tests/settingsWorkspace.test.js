@@ -29,6 +29,19 @@ test('Settings is universal while administrative sections remain role-aware', as
   assert.match(settings, /Save My Settings/);
 });
 
+test('sidebar preference controls are launched only from My Settings', async () => {
+  const [layout, settings] = await Promise.all([
+    read('../src/components/Layout.jsx'),
+    read('../src/pages/Settings.jsx'),
+  ]);
+
+  assert.doesNotMatch(layout, /toggle-fixed-sidebar|Use auto-hide sidebar|Keep sidebar open/);
+  assert.doesNotMatch(layout, /title="Customize navigation"|aria-label="Customize navigation"/);
+  assert.match(layout, /fcos:navigation-customize/);
+  assert.match(settings, /Auto-hide at the left edge/);
+  assert.match(settings, /Customize sidebar order and visibility/);
+});
+
 test('module-owned configuration is linked from its owning workflow', async () => {
   const [workspace, emailRouter, hedgeDesk, brokerWorkspace, brokerRegister] = await Promise.all([
     read('../src/pages/SettingsWorkspace.jsx'),

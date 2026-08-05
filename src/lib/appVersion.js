@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.109';
+export const APP_VERSION = '2.0.110';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.110',
+    releasedAt: '2026-08-05',
+    title: 'Single-source sidebar preferences',
+    changes: [
+      'Removed the duplicate sidebar mode arrow and navigation-order pencil from the sidebar; both preferences remain managed through My Settings.',
+      'Preserved left-edge hover for auto-hide mode and the existing drag, visibility, reset, cancel, and save workflow when navigation editing is opened from Settings.',
+    ],
+  },
   {
     version: '2.0.109',
     releasedAt: '2026-08-05',

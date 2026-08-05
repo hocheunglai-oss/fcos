@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  ChevronLeft,
-  ChevronRight,
   ClipboardCheck,
   DollarSign,
   Eye,
@@ -18,7 +16,6 @@ import {
   ListTodo,
   LogOut,
   MailSearch,
-  Pencil,
   RotateCcw,
   Save,
   Sprout,
@@ -253,30 +250,6 @@ export default function Layout() {
     };
   }, [navigationPreferences]);
 
-  const toggleSidebarMode = async () => {
-    const previous = sidebarFixed;
-    const nextFixed = !previous;
-    setSidebarFixed(nextFixed);
-    if (!workspacePreferences) return;
-    const documents = readDocumentSettings();
-    const response = await appClient.functions.invoke('workspacePreferencesSave', {
-      sidebarMode: nextFixed ? 'fixed' : 'auto_hide',
-      tableDensity: density,
-      documentShowOnlyRelevant: documents.showOnlyRelevant,
-      documentSourceGroups: documents.relevantSourceGroups,
-      expectedRevision: workspacePreferences.revision,
-    });
-    if (response.data?.error) {
-      setSidebarFixed(previous);
-      setNavigationError(response.data.error);
-      return;
-    }
-    const preferences = response.data.preferences;
-    setWorkspacePreferences(preferences);
-    setNavigationPreferences((current) => ({ ...current, revision: Number(preferences.revision) }));
-    window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: preferences }));
-  };
-
   const startNavigationEditing = () => {
     setNavigationDraft(normalizedNavigationPreferences(navigationPreferences));
     setNavigationError('');
@@ -422,25 +395,6 @@ export default function Layout() {
 
   return (
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        data-testid="toggle-fixed-sidebar"
-        className={cn(
-          'top-3 z-[45] h-8 w-7 rounded-md bg-white p-0 shadow-sm transition-[left] duration-200 ease-out',
-          effectiveSidebarFixed
-            ? 'absolute left-[240px]'
-            : 'fixed left-0 rounded-l-none border-l-0',
-        )}
-        onClick={toggleSidebarMode}
-        disabled={navigationEditing}
-        aria-label={effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
-        title={navigationEditing ? 'Finish editing navigation first' : effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
-      >
-        {effectiveSidebarFixed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-      </Button>
-
       {!effectiveSidebarFixed && (
         <div
           className="fixed inset-y-0 left-0 z-[39] w-1 bg-transparent"
@@ -461,10 +415,7 @@ export default function Layout() {
               : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-slate-200 focus-within:shadow-xl focus-within:shadow-slate-900/10',
         )}
       >
-        <div className={cn(
-          'border-b border-slate-200 py-4',
-          effectiveSidebarFixed ? 'pl-5 pr-12' : 'pl-10 pr-5',
-        )}>
+        <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-950">FCOS</div>
@@ -477,11 +428,7 @@ export default function Layout() {
         <nav className="min-h-0 flex-1 space-y-5 overflow-auto px-3 py-4">
           <div className="flex items-center justify-between px-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
-            {!navigationEditing ? (
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={startNavigationEditing} title="Customize navigation" aria-label="Customize navigation">
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-            ) : (
+            {navigationEditing && (
               <div className="flex items-center gap-1">
                 <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={resetNavigationPreferences} disabled={navigationSaving} title="Reset navigation" aria-label="Reset navigation">
                   <RotateCcw className="h-3.5 w-3.5" />
