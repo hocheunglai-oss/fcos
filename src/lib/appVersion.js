@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.113';
+export const APP_VERSION = '2.0.114';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.114',
+    releasedAt: '2026-08-05',
+    title: 'Account Insight Salesforce schema fix',
+    changes: [
+      'Fixed Account Insight so secondary buyer-broker fields are selected only after Salesforce describe confirms they exist.',
+      'Kept Account Insight available when Salesforce has no secondary buyer-broker commission field by using validated line-item commissions and showing a clear data warning.',
+    ],
+  },
   {
     version: '2.0.113',
     releasedAt: '2026-08-05',

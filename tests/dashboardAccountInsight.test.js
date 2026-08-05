@@ -119,6 +119,43 @@ test('allocates supplier contribution by exact Account ID and reconciles to the 
   assert.equal(rows.reduce((sum, row) => sum + row.grossProfit, 0), 100);
 });
 
+test('buyer-broker enrichment uses described fields and never assumes Commission_Lumpsum__c exists', () => {
+  const fields = new Map([
+    ['Id', { name: 'Id', type: 'id' }],
+    ['STEM__c', { name: 'STEM__c', type: 'reference', referenceTo: ['STEM__c'] }],
+    ['Buyer_Broker__c', {
+      name: 'Buyer_Broker__c',
+      type: 'reference',
+      referenceTo: ['Account'],
+      relationshipName: 'Buyer_Broker__r',
+    }],
+  ]);
+  const accountFields = new Map([['Company_Code__c', { name: 'Company_Code__c' }]]);
+  const config = dashboardAccountInsightServiceInternals.buyerBrokerQueryConfiguration(fields, accountFields);
+
+  assert.deepEqual(config.fields, [
+    'Id',
+    'STEM__c',
+    'Buyer_Broker__c',
+    'Buyer_Broker__r.Name',
+    'Buyer_Broker__r.Company_Code__c',
+  ]);
+  assert.equal(config.commissionField, null);
+  assert.match(config.warning, /uses validated STEM line-item commissions only/);
+});
+
+test('buyer-broker enrichment selects a commission amount only when describe confirms it', () => {
+  const fields = new Map([
+    ['STEM__c', { name: 'STEM__c', type: 'reference', referenceTo: ['STEM__c'] }],
+    ['Commission_Amount__c', { name: 'Commission_Amount__c', type: 'currency' }],
+  ]);
+  const config = dashboardAccountInsightServiceInternals.buyerBrokerQueryConfiguration(fields, new Map());
+
+  assert.equal(config.commissionField, 'Commission_Amount__c');
+  assert.ok(config.fields.includes('Commission_Amount__c'));
+  assert.equal(config.warning, null);
+});
+
 test('combines repeated occurrences of one supplier ID and gives the final supplier any rounding residual', () => {
   const rows = allocateSupplierContribution({
     stem: stem(STEM_A),

@@ -786,7 +786,7 @@ function buildStemFinancialRow(stem, context) {
   const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
   const brokerCommissions = activeLines.reduce((sum, item) => {
     return sum + buyerBrokerCommission(item, stemHasDelivery) + supplierBrokerCommission(item, stemHasDelivery);
-  }, 0) + buyerBrokers.reduce((sum, item) => sum + valueOrZero(item.Commission_Lumpsum__c), 0);
+  }, 0) + buyerBrokers.reduce((sum, item) => sum + valueOrZero(item._Commission_Amount), 0);
   const stemGrossProfit = buyer == null ? null : buyer - valueOrZero(supplier) - brokerCommissions;
   const allocations = allocateSupplierContribution({
     stem,

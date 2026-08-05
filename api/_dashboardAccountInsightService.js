@@ -313,6 +313,42 @@ function extraCostSelectFields(extraFields, accountFields, productFields, lookup
   return [...new Set(values)];
 }
 
+function buyerBrokerQueryConfiguration(brokerFields, accountFields) {
+  if (!brokerFields.has('STEM__c')) {
+    return {
+      fields: [],
+      commissionField: null,
+      relationshipName: null,
+      warning: 'Secondary buyer-broker details are unavailable because STEM_Buyer_Broker__c.STEM__c was not found.',
+    };
+  }
+  const values = ['Id', 'STEM__c'];
+  const brokerLookup = brokerFields.get('Buyer_Broker__c');
+  if (brokerLookup?.type === 'reference' && brokerLookup.referenceTo?.includes('Account')) {
+    values.push('Buyer_Broker__c');
+    if (brokerLookup.relationshipName) {
+      values.push(`${brokerLookup.relationshipName}.Name`);
+      if (accountFields.has('Company_Code__c')) values.push(`${brokerLookup.relationshipName}.Company_Code__c`);
+    }
+  }
+  const commissionField = firstAvailable(brokerFields, [
+    'Commission_Lumpsum__c',
+    'Buyers_Brokers_Commission_Lumpsum__c',
+    'Buyer_Broker_Commission_Lumpsum__c',
+    'Lumpsum_Commission__c',
+    'Commission_Amount__c',
+  ]);
+  if (commissionField) values.push(commissionField);
+  return {
+    fields: [...new Set(values)],
+    commissionField,
+    relationshipName: brokerLookup?.relationshipName || null,
+    warning: commissionField
+      ? null
+      : 'Secondary buyer-broker commission amounts are unavailable in Salesforce. Account Insight uses validated STEM line-item commissions only.',
+  };
+}
+
 async function queryChildren(stemIds, fields, objectName, limit = 50_000) {
   if (!stemIds.length) return [];
   const results = await sfCompositeQueries(chunkIds(stemIds).map((chunk) => ({
@@ -438,12 +474,13 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
 }
 
 async function loadSalesforceDataset({ accountId, role, period, interoffice, force }) {
-  const [accountDescribe, stemDescribe, lineDescribe, productDescribe, extraDescribe, invoiceDescribe, paymentDescribe] = await Promise.all([
+  const [accountDescribe, stemDescribe, lineDescribe, productDescribe, extraDescribe, buyerBrokerDescribe, invoiceDescribe, paymentDescribe] = await Promise.all([
     describeObject('Account', force),
     describeObject('STEM__c', force),
     describeObject('STEM_Line_Item__c', force),
     describeObject('Product2', force),
     describeObject('STEM_Extra_Cost__c', force),
+    describeObject('STEM_Buyer_Broker__c', force).catch(() => ({ fields: [] })),
     describeObject('Supplier_Invoice__c', force).catch(() => ({ fields: [] })),
     describeObject('Payment__c', force).catch(() => ({ fields: [] })),
   ]);
@@ -452,6 +489,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   const lineFields = fieldMap(lineDescribe);
   const productFields = fieldMap(productDescribe);
   const extraFields = fieldMap(extraDescribe);
+  const buyerBrokerFields = fieldMap(buyerBrokerDescribe);
   const invoiceFields = fieldMap(invoiceDescribe);
   const paymentFields = fieldMap(paymentDescribe);
   const buyerLookup = stemFields.get('Account__c');
@@ -478,11 +516,20 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   if (lineItemUomField) lineFieldsToQuery.push(lineItemUomField);
   if (productUomField) lineFieldsToQuery.push(`Product__r.${productUomField}`);
   const extraFieldsToQuery = extraCostSelectFields(extraFields, accountFields, productFields, extraCostSupplierLookup);
-  const [lineItems, extraCosts, buyerBrokers] = await Promise.all([
+  const buyerBrokerConfig = buyerBrokerQueryConfiguration(buyerBrokerFields, accountFields);
+  const [lineItems, extraCosts, buyerBrokerRows] = await Promise.all([
     queryChildren(allStemIds, [...new Set(lineFieldsToQuery)], 'STEM_Line_Item__c'),
     queryChildren(allStemIds, extraFieldsToQuery, 'STEM_Extra_Cost__c'),
-    queryChildren(allStemIds, ['Id', 'STEM__c', 'Commission_Lumpsum__c'], 'STEM_Buyer_Broker__c'),
+    buyerBrokerConfig.fields.length
+      ? queryChildren(allStemIds, buyerBrokerConfig.fields, 'STEM_Buyer_Broker__c')
+      : Promise.resolve([]),
   ]);
+  const buyerBrokers = buyerBrokerRows.map((row) => ({
+    ...row,
+    _Commission_Amount: buyerBrokerConfig.commissionField ? row[buyerBrokerConfig.commissionField] : null,
+    _Buyer_Broker_Name: buyerBrokerConfig.relationshipName ? row[buyerBrokerConfig.relationshipName]?.Name || null : null,
+    _Buyer_Broker_CL_Key: buyerBrokerConfig.relationshipName ? row[buyerBrokerConfig.relationshipName]?.Company_Code__c || null : null,
+  }));
   const currentIds = new Set(current.records.map((stem) => stem.Id));
   const previousIds = new Set(previous.records.map((stem) => stem.Id));
   const buyerPayments = role === 'supplier' ? { byStem: {}, warning: null } : await queryBuyerPayments([...currentIds], paymentFields);
@@ -507,6 +554,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     extraCostSupplierLookup.issue?.message,
     buyerPayments.warning,
     supplierInvoices.warning,
+    buyerBrokerConfig.warning,
   ]);
   return {
     identity: {
@@ -750,4 +798,5 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
 export const dashboardAccountInsightServiceInternals = {
   insightPeriod,
   effectiveDateCondition,
+  buyerBrokerQueryConfiguration,
 };
