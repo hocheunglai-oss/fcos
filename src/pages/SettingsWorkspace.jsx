@@ -70,7 +70,7 @@ function FcosUpdatesSection({ methodologyAction }) {
         description="Prepare and control internal release communications independently from user access settings."
         actions={methodologyAction}
       />
-      <div className="mt-5 overflow-hidden rounded-lg border border-border bg-card">
+      <div className="mt-5">
         <FcosUpdatesPanel />
       </div>
     </div>
@@ -126,7 +126,7 @@ export default function SettingsWorkspace() {
   };
 
   return (
-    <div className="min-h-full bg-slate-50 lg:grid lg:grid-cols-[244px_minmax(0,1fr)]">
+    <div className="min-h-full bg-slate-50 lg:grid lg:grid-cols-[212px_minmax(0,1fr)]">
       <aside className="border-b border-slate-200 bg-white p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
         <div className="mb-4 hidden items-center gap-2 px-2 lg:flex">
           <Activity className="h-4 w-4 text-blue-700" />
@@ -152,12 +152,9 @@ export default function SettingsWorkspace() {
                 {group.sections.map((section) => {
                   const Icon = section.icon;
                   return (
-                    <Button key={section.id} type="button" variant={active === section.id ? 'secondary' : 'ghost'} className="h-auto w-full justify-start gap-3 px-3 py-2 text-left" onClick={() => changeSection(section.id)}>
+                    <Button key={section.id} type="button" variant={active === section.id ? 'secondary' : 'ghost'} className="h-9 w-full justify-start gap-2.5 px-3 text-left" onClick={() => changeSection(section.id)} title={section.description}>
                       <Icon className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium">{section.label}</span>
-                        <span className="block truncate text-[11px] font-normal text-muted-foreground">{section.description}</span>
-                      </span>
+                      <span className="truncate text-sm font-medium">{section.label}</span>
                     </Button>
                   );
                 })}

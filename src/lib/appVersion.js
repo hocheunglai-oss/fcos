@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.110';
+export const APP_VERSION = '2.0.111';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.111',
+    releasedAt: '2026-08-05',
+    title: 'Unified and compact Settings workspace',
+    changes: [
+      'Unified Dashboard Search, Hedge Trading Assistant, and Email Router Advisor model selection and usage into one consistent, purpose-based format.',
+      'Redesigned Email Delivery for dense mailbox and purpose tables with one audited, all-or-none save for multiple sender assignment changes.',
+      'Condensed People & Access into searchable user and user-type tables and removed its duplicate audit list in favor of the Universal Audit Trail.',
+      'Standardized Settings navigation, panel width, typography, spacing, controls, and section-specific methodology across desktop and mobile layouts.',
+    ],
+  },
   {
     version: '2.0.110',
     releasedAt: '2026-08-05',

@@ -12,6 +12,8 @@ import {
   Loader2,
   Mail,
   Minus,
+  Pencil,
+  Plus,
   RefreshCw,
   Server,
   Settings,
@@ -35,6 +37,7 @@ import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/d
 import { useAuth } from '@/lib/AuthContext';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
+import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
@@ -70,8 +73,8 @@ function sameWorkspaceSettings(a, b) {
 
 function SettingsPanel({ title, description, icon: Icon, meta, children }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-5">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           {Icon && (
             <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
@@ -160,39 +163,6 @@ function formatHealthDate(value) {
     hour12: false,
     timeZone: 'Asia/Hong_Kong',
   }).format(date);
-}
-
-function formatAiUsd(value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount) || amount <= 0) return '$0.00';
-  if (amount < 0.01) {
-    return `$${amount.toLocaleString('en-US', {
-      minimumFractionDigits: 6,
-      maximumFractionDigits: 6,
-    })}`;
-  }
-  return amount.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
-  });
-}
-
-function formatAiRate(value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return '—';
-  return amount.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 3,
-  });
-}
-
-function formatAiCalls(value) {
-  const calls = Number(value);
-  return `${Number.isFinite(calls) ? calls.toLocaleString('en-US') : '0'} interpretation${calls === 1 ? '' : 's'}`;
 }
 
 function StatusBadge({ status }) {
@@ -510,7 +480,7 @@ function SystemHealthPanel() {
             )}
           </div>
 
-          <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-hidden rounded-lg border border-border">
             <div className="max-h-[62vh] overflow-auto">
               <table className="w-full min-w-[1080px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-muted text-xs uppercase tracking-wide text-muted-foreground">
@@ -597,6 +567,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   const [mailboxEditorOpen, setMailboxEditorOpen] = useState(false);
   const [mailboxForm, setMailboxForm] = useState({ mailboxId: null, emailAddress: '', label: '', active: true, expectedRevision: null, reason: '' });
   const [routeDrafts, setRouteDrafts] = useState({});
+  const [routeAuditReason, setRouteAuditReason] = useState('');
 
   useEffect(() => {
     const base = settingsSnapshot();
@@ -708,9 +679,9 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       setEmailSenders(response.data || null);
       setRouteDrafts(Object.fromEntries((response.data?.purposes || []).map((purpose) => [purpose.key, {
         mailboxId: purpose.mailbox?.id || '',
-        reason: '',
         expectedRevision: purpose.revision,
       }])));
+      setRouteAuditReason('');
     }
     setEmailSendersLoading(false);
   }, []);
@@ -745,15 +716,21 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     setEmailSenderBusy(false);
   };
 
-  const saveSenderRoute = async (purpose) => {
-    const draft = routeDrafts[purpose.key];
+  const dirtySenderRoutes = useMemo(() => (emailSenders?.purposes || []).filter((purpose) => (
+    String(routeDrafts[purpose.key]?.mailboxId || '') !== String(purpose.mailbox?.id || '')
+  )), [emailSenders, routeDrafts]);
+
+  const saveSenderRoutes = async () => {
+    if (!dirtySenderRoutes.length) return;
     setEmailSenderBusy(true);
     setEmailSendersError('');
     const response = await appClient.functions.invoke('emailSenderRouteSave', {
-      purposeKey: purpose.key,
-      mailboxId: draft?.mailboxId || null,
-      reason: draft?.reason || '',
-      expectedRevision: draft?.expectedRevision,
+      changes: dirtySenderRoutes.map((purpose) => ({
+        purposeKey: purpose.key,
+        mailboxId: routeDrafts[purpose.key]?.mailboxId || null,
+        expectedRevision: routeDrafts[purpose.key]?.expectedRevision,
+      })),
+      reason: routeAuditReason,
     });
     if (response.data?.error) setEmailSendersError(response.data.error);
     else await loadEmailSenders();
@@ -855,6 +832,18 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     ai: 'ai',
     health: 'health',
   }[section] || 'documents';
+  const dashboardUsageByModel = useMemo(() => Object.fromEntries(aiModels.map((model) => {
+    const usage = aiUsage?.models?.find((item) => item.modelId === model.id) || {};
+    return [model.id, {
+      requests: usage.allTimeCalls,
+      inputTokens: usage.allTimeInputTokens,
+      cachedInputTokens: usage.allTimeCachedInputTokens,
+      outputTokens: usage.allTimeOutputTokens,
+      estimatedCostUsd: usage.allTimeCostUsd,
+      periodCostUsd: usage.monthCostUsd,
+      lastUsedAt: usage.lastUsedAt,
+    }];
+  })), [aiModels, aiUsage]);
   const pageMeta = {
     my: {
       eyebrow: 'Personal',
@@ -879,7 +868,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   }[section];
 
   return (
-    <div className="mx-auto max-w-6xl p-6 lg:p-8">
+    <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={Settings}
         eyebrow={pageMeta.eyebrow}
@@ -899,13 +888,6 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       />
 
       {section === 'my' && <DraftNotice restoredAt={draftRestoredAt} label="My Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />}
-
-      {section === 'ai' && aiSettingsError && (
-        <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{aiSettingsError}</span>
-        </div>
-      )}
 
       {workspaceError && section === 'my' && (
         <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
@@ -943,7 +925,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
               />
             ) : (
               <div className="space-y-6">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-2.5">
                   <div className="text-xs text-muted-foreground">
                     <span className="font-semibold text-foreground">Microsoft Graph · Vercel OIDC</span>
                     {' · '}{emailSenders?.deliveryGateEnabled ? 'Delivery enabled' : 'Delivery disabled'}
@@ -951,7 +933,11 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                   </div>
                   {isAdministrator && (
                     <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="icon" onClick={loadEmailSenders} disabled={emailSenderBusy || emailSendersLoading} title="Refresh Email Delivery" aria-label="Refresh Email Delivery">
+                        <RefreshCw className={`h-4 w-4 ${emailSendersLoading ? 'animate-spin' : ''}`} />
+                      </Button>
                       <Button type="button" size="sm" onClick={() => openMailboxEditor()} disabled={emailSenderBusy}>
+                        <Plus className="h-4 w-4" />
                         Add mailbox
                       </Button>
                     </div>
@@ -979,7 +965,11 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                             <td className="px-3 py-3"><MailboxVerificationBadge mailbox={mailbox} /></td>
                             <td className="px-3 py-3 text-muted-foreground">{formatHealthDate(mailbox.lastSuccessAt)}</td>
                             <td className="px-3 py-3 text-right">
-                              {isAdministrator && <Button type="button" variant="ghost" size="sm" onClick={() => openMailboxEditor(mailbox)}>Edit</Button>}
+                              {isAdministrator && (
+                                <Button type="button" variant="ghost" size="icon" onClick={() => openMailboxEditor(mailbox)} title={`Edit ${mailbox.label}`} aria-label={`Edit ${mailbox.label}`}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -992,22 +982,37 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Purpose assignments</h3>
-                  <div className="mt-2 divide-y divide-border border-y border-border">
+                  <div className="flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">Purpose assignments</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">Change any number of routes, then save the complete set once.</p>
+                    </div>
+                    {dirtySenderRoutes.length > 0 && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">{dirtySenderRoutes.length} unsaved</Badge>}
+                  </div>
+                  <div className="mt-2 overflow-x-auto border-y border-border">
+                    <table className="w-full min-w-[820px] text-left text-xs">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Email purpose</th>
+                          <th className="w-[330px] px-3 py-2 font-semibold">Assigned Microsoft 365 mailbox</th>
+                          <th className="px-3 py-2 font-semibold">State</th>
+                          <th className="px-3 py-2 font-semibold">Last changed</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
                     {(emailSenders?.purposes || []).map((purpose) => {
                       const draft = routeDrafts[purpose.key] || {};
                       const dirty = String(draft.mailboxId || '') !== String(purpose.mailbox?.id || '');
                       return (
-                        <div key={purpose.key} className="grid gap-3 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(240px,0.8fr)_minmax(240px,0.8fr)_auto] lg:items-end">
-                          <div>
+                        <tr key={purpose.key} className={dirty ? 'bg-amber-50/50' : 'bg-background'}>
+                          <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-foreground">{purpose.label}</span>
-                              <MailboxVerificationBadge mailbox={purpose.mailbox} />
+                              {dirty && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">Changed</Badge>}
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">{purpose.description}</p>
-                          </div>
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Assigned mailbox</Label>
+                            <p className="mt-0.5 max-w-xl text-[11px] leading-4 text-muted-foreground">{purpose.description}</p>
+                          </td>
+                          <td className="px-3 py-2.5">
                             <Select
                               value={draft.mailboxId || '__none__'}
                               onValueChange={(mailboxId) => setRouteDrafts((current) => ({ ...current, [purpose.key]: { ...draft, mailboxId: mailboxId === '__none__' ? '' : mailboxId } }))}
@@ -1021,28 +1026,34 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                                 ))}
                               </SelectContent>
                             </Select>
-                          </div>
-                          {isAdministrator && (
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Audit reason</Label>
-                              <Input
-                                value={draft.reason || ''}
-                                onChange={(event) => setRouteDrafts((current) => ({ ...current, [purpose.key]: { ...draft, reason: event.target.value } }))}
-                                placeholder="Why is this sender changing?"
-                                maxLength={255}
-                                disabled={!dirty || emailSenderBusy}
-                              />
-                            </div>
-                          )}
-                          {isAdministrator && (
-                            <Button type="button" size="sm" onClick={() => saveSenderRoute(purpose)} disabled={!dirty || (draft.reason || '').trim().length < 8 || emailSenderBusy}>
-                              Save route
-                            </Button>
-                          )}
-                        </div>
+                          </td>
+                          <td className="px-3 py-2.5"><MailboxVerificationBadge mailbox={draft.mailboxId ? (emailSenders?.mailboxes || []).find((mailbox) => mailbox.id === draft.mailboxId) : null} /></td>
+                          <td className="px-3 py-2.5 text-muted-foreground">{formatHealthDate(purpose.updatedAt)}</td>
+                        </tr>
                       );
                     })}
+                      </tbody>
+                    </table>
                   </div>
+                  {isAdministrator && dirtySenderRoutes.length > 0 && (
+                    <div className="mt-3 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 lg:flex-row lg:items-end">
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <Label htmlFor="sender-route-audit-reason" className="text-xs">Audit reason for all {dirtySenderRoutes.length} change{dirtySenderRoutes.length === 1 ? '' : 's'}</Label>
+                        <Input
+                          id="sender-route-audit-reason"
+                          value={routeAuditReason}
+                          onChange={(event) => setRouteAuditReason(event.target.value)}
+                          placeholder="Why are these sender assignments changing?"
+                          maxLength={255}
+                          disabled={emailSenderBusy}
+                        />
+                      </div>
+                      <Button type="button" onClick={saveSenderRoutes} disabled={routeAuditReason.trim().length < 8 || emailSenderBusy} className="gap-2">
+                        {emailSenderBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                        Save {dirtySenderRoutes.length} assignment{dirtySenderRoutes.length === 1 ? '' : 's'}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1172,171 +1183,31 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
 
         <TabsContent value="ai" className="mt-0">
           <div className="space-y-5">
-          {isAdministrator && <SettingsPanel
-            icon={Sparkles}
-            title="Dashboard AI Search"
-            description="Choose the model that interprets natural-language Dashboard searches. Salesforce records are never sent to the model."
-            meta={aiSettings?.updatedAt ? `Updated ${formatHealthDate(aiSettings.updatedAt)}` : null}
-          >
-            {isAdministrator && aiSettings?.modelId !== baseAiModelId && (
-              <div className="mb-4 flex justify-end border-b border-border pb-4">
-                <Button type="button" onClick={saveDashboardAiSettings} disabled={saving} className="gap-2">
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-                  {saved ? 'Saved' : 'Save Dashboard AI Model'}
-                </Button>
-              </div>
-            )}
-            {aiSettingsLoading ? (
-              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading AI settings…
-              </div>
-            ) : aiSettings ? (
-              <div className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interpretation Model</Label>
-                    <Select
-                      value={aiSettings.modelId}
-                      onValueChange={(modelId) => setAiSettings((current) => ({ ...current, modelId }))}
-                      disabled={!isAdministrator || !aiSettings.storageAvailable}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {aiModels.map((model) => (
-                          <SelectItem key={model.id} value={model.id}>
-                            {model.label}{model.recommended ? ' · Recommended' : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      {aiModels.find((model) => model.id === aiSettings.modelId)?.description || aiSettings.model?.description}
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-border bg-background/50 p-3">
-                      <p className="text-[11px] font-semibold uppercase text-muted-foreground">OpenAI API</p>
-                      <div className="mt-2">
-                        <StatusBadge status={aiSettings.apiConfigured ? 'configured' : 'not_configured'} />
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background/50 p-3">
-                      <p className="text-[11px] font-semibold uppercase text-muted-foreground">Global Setting</p>
-                      <div className="mt-2">
-                        <StatusBadge status={aiSettings.storageAvailable ? 'configured' : 'unavailable'} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-border pt-4">
-                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <h3 className="text-sm font-semibold text-foreground">Model pricing and API usage</h3>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Estimated USD cost from OpenAI-reported tokens for uncached interpretation requests completed by OpenAI.
-                      </p>
-                    </div>
-                    <a
-                      href={aiModels.find((model) => model.pricing?.sourceUrl)?.pricing?.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                    >
-                      OpenAI pricing
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-
-                  {aiUsage && !aiUsage.available && (
-                    <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      Usage tracking is unavailable. Model rates remain visible, but spend totals cannot be confirmed.
-                    </div>
-                  )}
-
-                  <div className="overflow-x-auto rounded-md border border-border">
-                    <table className="w-full min-w-[860px] text-left text-xs">
-                      <thead className="bg-muted/50 text-muted-foreground">
-                        <tr>
-                          <th className="px-3 py-2.5 font-semibold">Interpretation model</th>
-                          <th className="px-3 py-2.5 font-semibold">Standard USD per 1M tokens</th>
-                          <th className="px-3 py-2.5 font-semibold">{aiUsage?.monthLabel || 'Current month'}</th>
-                          <th className="px-3 py-2.5 font-semibold">All tracked usage</th>
-                          <th className="px-3 py-2.5 font-semibold">Last used</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {aiModels.map((model) => {
-                          const usage = aiUsage?.models?.find((item) => item.modelId === model.id);
-                          const selected = model.id === aiSettings.modelId;
-                          return (
-                            <tr key={model.id} className={selected ? 'bg-primary/5' : 'bg-background'}>
-                              <td className="px-3 py-3 align-top">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-foreground">{model.label}</span>
-                                  {selected && <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">Selected</Badge>}
-                                </div>
-                                <p className="mt-1 text-[11px] text-muted-foreground">{model.costTier} cost</p>
-                              </td>
-                              <td className="px-3 py-3 align-top text-muted-foreground">
-                                <div><span className="font-medium text-foreground">Input</span> {formatAiRate(model.pricing?.inputPerMillion)}</div>
-                                <div><span className="font-medium text-foreground">Cached</span> {formatAiRate(model.pricing?.cachedInputPerMillion)}</div>
-                                {model.pricing?.cacheWritePerMillion !== null && model.pricing?.cacheWritePerMillion !== undefined && (
-                                  <div><span className="font-medium text-foreground">Cache write</span> {formatAiRate(model.pricing.cacheWritePerMillion)}</div>
-                                )}
-                                <div><span className="font-medium text-foreground">Output</span> {formatAiRate(model.pricing?.outputPerMillion)}</div>
-                              </td>
-                              <td className="px-3 py-3 align-top">
-                                <div className="font-semibold tabular-nums text-foreground">{formatAiUsd(usage?.monthCostUsd)}</div>
-                                <div className="mt-1 text-[11px] text-muted-foreground">{formatAiCalls(usage?.monthCalls)}</div>
-                              </td>
-                              <td className="px-3 py-3 align-top">
-                                <div className="font-semibold tabular-nums text-foreground">{formatAiUsd(usage?.allTimeCostUsd)}</div>
-                                <div className="mt-1 text-[11px] text-muted-foreground">{formatAiCalls(usage?.allTimeCalls)}</div>
-                              </td>
-                              <td className="px-3 py-3 align-top text-muted-foreground">
-                                {usage?.lastUsedAt ? formatHealthDate(usage.lastUsedAt) : 'Not used'}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
-                    Estimates use standard short-context pricing as of {aiModels.find((model) => model.pricing?.asOf)?.pricing?.asOf || 'the displayed pricing date'}.
-                    Tracking starts with this release and is not retroactive. FCOS interpretation cache hits make no OpenAI API call and add $0. OpenAI billing remains authoritative.
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-                  <p><span className="font-semibold text-foreground">Privacy:</span> only the user’s search sentence is sent for interpretation.</p>
-                  <p className="mt-1"><span className="font-semibold text-foreground">Enforcement:</span> FCOS validates the structured interpretation and builds Salesforce filters server-side.</p>
-                  {aiSettings.updatedByEmail && (
-                    <p className="mt-1"><span className="font-semibold text-foreground">Last changed by:</span> {aiSettings.updatedByEmail}</p>
-                  )}
-                </div>
-
-                {!isAdministrator && (
-                  <p className="text-xs text-muted-foreground">Only Administrators can change this global setting.</p>
-                )}
-                {!aiSettings.storageAvailable && (
-                  <p className="text-xs text-destructive">Apply the Dashboard AI settings database migration before changing the model.</p>
-                )}
-              </div>
-            ) : (
-              <StateBlock
-                icon={AlertTriangle}
-                title="AI settings unavailable"
-                description="The global Dashboard AI setting could not be loaded."
-                action={<Button variant="outline" size="sm" onClick={loadAiSettings}>Retry</Button>}
-              />
-            )}
-          </SettingsPanel>}
+          {isAdministrator && (
+            <AiModelSettingsCard
+              title="Dashboard AI Search"
+              description="Select the model that converts natural-language Dashboard requests into a validated FCOS search plan. Salesforce records are never sent to the model."
+              icon={Sparkles}
+              modelLabel="Interpretation model"
+              models={aiModels}
+              selectedModelId={aiSettings?.modelId || ''}
+              savedModelId={baseAiModelId || ''}
+              usageByModel={dashboardUsageByModel}
+              periodLabel={aiUsage?.monthLabel || 'Current month'}
+              loading={aiSettingsLoading}
+              saving={saving}
+              error={aiSettingsError || (aiUsage && !aiUsage.available ? 'Usage tracking is unavailable. Model selection remains available.' : '')}
+              message={saved ? 'Dashboard AI model saved.' : ''}
+              canManage={isAdministrator}
+              apiConfigured={aiSettings?.apiConfigured === true}
+              storageAvailable={aiSettings?.storageAvailable !== false}
+              onModelChange={(modelId) => setAiSettings((current) => ({ ...current, modelId }))}
+              onSave={saveDashboardAiSettings}
+              onRefresh={loadAiSettings}
+              updatedAt={aiSettings?.updatedAt}
+              privacyNote="Only the user’s search sentence is sent. FCOS validates the structured result and builds Salesforce filters server-side."
+            />
+          )}
           {hasCapability('hedge_admin') && <HedgeAssistantAiSettings />}
           {isAdministrator && <EmailRouterAdvisorAiSettings />}
           </div>

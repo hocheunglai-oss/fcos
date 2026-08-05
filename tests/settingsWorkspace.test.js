@@ -90,3 +90,30 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.doesNotMatch(admin, />Application Access</);
   assert.match(modules, /id: 'broker_settings_manage'/);
 });
+
+test('Settings uses unified AI cards, compact access tables, and atomic email route saving', async () => {
+  const [settings, people, workspace, dashboardAi, hedgeAi, routerAi, migration, server] = await Promise.all([
+    read('../src/pages/Settings.jsx'),
+    read('../src/pages/AdminControl.jsx'),
+    read('../src/pages/SettingsWorkspace.jsx'),
+    read('../src/components/settings/AiModelSettingsCard.jsx'),
+    read('../src/hedge/components/HedgeAssistantAiSettings.jsx'),
+    read('../src/components/email-router/EmailRouterAdvisorAiSettings.jsx'),
+    read('../supabase/migrations/20260805113522_email_sender_route_batch.sql'),
+    read('../api/functions/[name].js'),
+  ]);
+
+  assert.match(settings, /emailSenderRouteSave/);
+  assert.match(settings, /Save \{dirtySenderRoutes\.length\} assignment/);
+  assert.doesNotMatch(settings, /Save route/);
+  assert.match(people, /Search name, email, or type/);
+  assert.doesNotMatch(people, /adminAuditLogs|Audit Log/);
+  assert.match(workspace, /grid-cols-\[212px_minmax\(0,1fr\)\]/);
+  assert.match(dashboardAi, /Cached input/);
+  assert.match(hedgeAi, /<AiModelSettingsCard/);
+  assert.match(routerAi, /<AiModelSettingsCard/);
+  assert.match(migration, /create or replace function public\.save_email_sender_routes_batch/);
+  assert.match(migration, /security invoker/);
+  assert.match(migration, /grant execute on function public\.save_email_sender_routes_batch\(jsonb, text, uuid, text\) to service_role/);
+  assert.match(server, /emailSenderRouteSave: \['admin'\]/);
+});

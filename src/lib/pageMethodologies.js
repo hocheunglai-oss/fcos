@@ -490,7 +490,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'Access precedence',
-        body: 'User-type defaults establish normal module and capability access. An individual override may narrow or extend it. Module authorization is enforced by the server before personal navigation visibility is applied.',
+        body: 'User-type defaults establish normal module and capability access. An individual override may narrow or extend it. Use the searchable compact tables to review users and templates; the full change history remains in the separate Audit Trail section.',
       },
       {
         title: 'Reporting lines',
@@ -512,7 +512,7 @@ export const SETTINGS_METHODOLOGIES = {
       },
       {
         title: 'Purpose assignments',
-        body: 'Each enabled purpose has exactly one active mailbox. Changes affect newly reserved deliveries; retries retain the sender snapshot from the original attempt.',
+        body: 'Each enabled purpose has exactly one active mailbox. Administrators may amend several assignments, enter one audit reason, and save them in one transaction. If any selected route is stale or invalid, no assignment in the batch changes.',
       },
       {
         title: 'Configuration boundary',
@@ -526,7 +526,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'Purpose separation',
-        body: 'Dashboard Search, Hedge Trading Assistant, and Email Router Advisor share one settings section but retain independent models, usage totals, estimated costs, and management permissions.',
+        body: 'Dashboard Search, Hedge Trading Assistant, and Email Router Advisor use the same selection, status, token, cost, and last-used format while retaining independent models, usage totals, and management permissions.',
       },
       {
         title: 'Data minimization',

@@ -11,7 +11,8 @@ test('Dashboard Search and Trading Assistant models share the AI Models settings
   assert.match(workspace, /id: 'ai', label: 'AI Models'/);
   assert.match(settings, /Dashboard AI Search/);
   assert.match(settings, /<HedgeAssistantAiSettings \/>/);
-  assert.match(read('src/hedge/components/HedgeAssistantAiSettings.jsx'), /Estimated USD/);
+  assert.match(read('src/hedge/components/HedgeAssistantAiSettings.jsx'), /<AiModelSettingsCard/);
+  assert.match(read('src/components/settings/AiModelSettingsCard.jsx'), /Estimated USD/);
   assert.doesNotMatch(hedgeSettings, /title="Trading Assistant"/);
 });
 

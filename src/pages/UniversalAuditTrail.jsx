@@ -93,7 +93,7 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
   }, [rows, sources]);
 
   return (
-    <div className="min-h-screen bg-background px-4 py-5 md:px-6">
+    <div className="mx-auto min-h-screen max-w-[1440px] bg-background p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administrator audit"

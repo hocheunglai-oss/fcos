@@ -136,6 +136,7 @@ export async function saveGraphEmailMailbox(client, profile, body = {}) {
 }
 
 export async function saveGraphEmailRoute(client, profile, body = {}) {
+  if (Array.isArray(body.changes)) return saveGraphEmailRoutesBatch(client, profile, body);
   const purposeKey = assertPurposeKey(body.purposeKey);
   const { data, error } = await client.rpc('save_email_sender_route', {
     p_purpose_key: purposeKey,
@@ -150,6 +151,37 @@ export async function saveGraphEmailRoute(client, profile, body = {}) {
     throw graphEmailError(error.message, status, status === 409 ? 'REVISION_CONFLICT' : 'EMAIL_ROUTE_SAVE_FAILED');
   }
   return { purposeKey: data.purpose_key, mailboxId: data.mailbox_id, revision: Number(data.revision), updatedAt: data.updated_at };
+}
+
+export async function saveGraphEmailRoutesBatch(client, profile, body = {}) {
+  const changes = Array.isArray(body.changes) ? body.changes : [];
+  if (!changes.length || changes.length > 20) {
+    throw graphEmailError('Select between 1 and 20 email sender assignments.', 400, 'EMAIL_ROUTE_BATCH_INVALID');
+  }
+  const normalized = changes.map((change) => ({
+    purposeKey: assertPurposeKey(change?.purposeKey),
+    mailboxId: cleanText(change?.mailboxId, 100) || null,
+    expectedRevision: Number.isInteger(Number(change?.expectedRevision)) ? Number(change.expectedRevision) : null,
+  }));
+  if (new Set(normalized.map((change) => change.purposeKey)).size !== normalized.length) {
+    throw graphEmailError('Each email purpose may appear only once in a batch.', 400, 'EMAIL_ROUTE_BATCH_DUPLICATE');
+  }
+  const { data, error } = await client.rpc('save_email_sender_routes_batch', {
+    p_changes: normalized,
+    p_reason: body.reason,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (error) {
+    const status = /changed after it was opened/i.test(error.message) ? 409 : /Only an active/i.test(error.message) ? 403 : 400;
+    throw graphEmailError(error.message, status, status === 409 ? 'REVISION_CONFLICT' : 'EMAIL_ROUTE_BATCH_SAVE_FAILED');
+  }
+  return (Array.isArray(data) ? data : []).map((route) => ({
+    purposeKey: route.purpose_key,
+    mailboxId: route.mailbox_id,
+    revision: Number(route.revision),
+    updatedAt: route.updated_at,
+  }));
 }
 
 export async function resolveGraphEmailSender(client, purposeKeyValue, { mailboxSnapshot = null, env = process.env } = {}) {

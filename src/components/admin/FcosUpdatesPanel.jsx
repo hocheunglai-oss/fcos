@@ -574,18 +574,11 @@ export default function FcosUpdatesPanel() {
 
   return (
     <div className="min-h-[calc(100vh-322px)]">
-      <div className="border-b border-border px-4 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Megaphone className="h-4 w-4 text-blue-600" />
-              <h2 className="text-sm font-semibold text-foreground">FCOS Updates</h2>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Review release notes from {formatDate(model.settings?.backfillStart)} onward and email active FCOS users.
-            </p>
-          </div>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+          <p className="text-xs text-muted-foreground">
+            Release history from {formatDate(model.settings?.backfillStart)} onward
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className={canControl
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-slate-200 bg-slate-50 text-slate-600'}
@@ -602,7 +595,6 @@ export default function FcosUpdatesPanel() {
               Check releases
             </Button>
           </div>
-        </div>
       </div>
 
       {error && (

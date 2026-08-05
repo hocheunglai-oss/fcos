@@ -93,12 +93,13 @@ export async function hedgeAssistantSettings(client) {
   if (error) throw assistantError(`Trading Assistant usage could not be loaded: ${error.message}`, 502);
   const totals = new Map();
   for (const row of usage || []) {
-    const current = totals.get(row.model_id) || { requests: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 };
+    const current = totals.get(row.model_id) || { requests: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, lastUsedAt: null };
     current.requests += 1;
     current.inputTokens += Number(row.input_tokens || 0);
     current.cachedInputTokens += Number(row.cached_input_tokens || 0);
     current.outputTokens += Number(row.output_tokens || 0);
     current.estimatedCostUsd += Number(row.estimated_cost_usd || 0);
+    if (!current.lastUsedAt || String(row.created_at || '') > current.lastUsedAt) current.lastUsedAt = row.created_at || null;
     totals.set(row.model_id, current);
   }
   return {

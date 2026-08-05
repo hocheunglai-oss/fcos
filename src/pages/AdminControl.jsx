@@ -3,9 +3,11 @@ import {
   GitBranch,
   KeyRound,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Trash2,
   UserCog,
@@ -28,6 +30,10 @@ import {
 } from '@/components/ui/dialog';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import ReportingLinesPanel from '@/components/admin/ReportingLinesPanel';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const emptyUserForm = {
   id: null,
@@ -114,7 +120,7 @@ function SegmentButton({ active, children, icon: Icon, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-semibold ${
+      className={`inline-flex h-8 items-center gap-2 rounded-md px-3 text-xs font-semibold ${
         active ? 'bg-primary text-primary-foreground shadow-sm' : 'border border-border bg-background text-muted-foreground hover:text-foreground'
       }`}
     >
@@ -182,7 +188,7 @@ function CapabilityGrid({ definitions, capabilities, locked = false, onToggle })
       {definitions.map((capability) => (
         <label
           key={capability.id}
-          className={`flex min-h-16 items-start justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-sm ${locked ? 'opacity-75' : ''}`}
+          className={`flex min-h-14 items-start justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-sm ${locked ? 'opacity-75' : ''}`}
         >
           <span>
             <span className="block font-medium text-foreground">{capability.label}</span>
@@ -211,7 +217,8 @@ export default function AdminControl({ methodologyAction = null }) {
   const [capabilityDefinitions, setCapabilityDefinitions] = useState(APP_CAPABILITIES);
   const [typeCapabilities, setTypeCapabilities] = useState({});
   const [generalManager, setGeneralManager] = useState(null);
-  const [auditLogs, setAuditLogs] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState('all');
   const [userForm, setUserForm] = useState(emptyUserForm);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
   const [baseUserForm, setBaseUserForm] = useState(emptyUserForm);
@@ -244,9 +251,22 @@ export default function AdminControl({ methodologyAction = null }) {
     () => users.slice().sort((a, b) => compareText(a.full_name || a.email, b.full_name || b.email)),
     [users]
   );
-  const selectedUser = useMemo(() => users.find((item) => item.id === userForm.id) || null, [users, userForm.id]);
-  const selectedType = useMemo(() => userTypes.find((item) => item.id === typeForm.id) || null, [userTypes, typeForm.id]);
   const userTypeMap = useMemo(() => Object.fromEntries(userTypes.map((item) => [item.id, item])), [userTypes]);
+  const filteredUsers = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    return sortedUsers.filter((item) => {
+      if (userStatusFilter === 'active' && item.active === false) return false;
+      if (userStatusFilter === 'disabled' && item.active !== false) return false;
+      if (!query) return true;
+      const type = typeLabel(userTypeMap[item.user_type] || { id: item.user_type });
+      return `${item.full_name || ''} ${item.email || ''} ${type}`.toLowerCase().includes(query);
+    });
+  }, [searchTerm, sortedUsers, userStatusFilter, userTypeMap]);
+  const filteredUserTypes = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return sortedUserTypes;
+    return sortedUserTypes.filter((item) => `${typeLabel(item)} ${item.description || ''}`.toLowerCase().includes(query));
+  }, [searchTerm, sortedUserTypes]);
   const selectedTypePermissions = useMemo(
     () => normalizedPermissions(sortedModules, typePermissions[userForm.user_type] || {}),
     [sortedModules, typePermissions, userForm.user_type]
@@ -300,10 +320,7 @@ export default function AdminControl({ methodologyAction = null }) {
     setLoading(true);
     setError('');
     try {
-      const [usersRes, logsRes] = await Promise.all([
-        appClient.functions.invoke('adminUsersList', {}, { cache: true, force: options.force }),
-        appClient.functions.invoke('adminAuditLogs', {}, { cache: true, force: options.force }),
-      ]);
+      const usersRes = await appClient.functions.invoke('adminUsersList', {}, { cache: true, force: options.force });
       if (usersRes.data?.error) {
         setError(usersRes.data.error);
       } else {
@@ -317,7 +334,6 @@ export default function AdminControl({ methodologyAction = null }) {
         setTypeCapabilities(usersRes.data.typeCapabilities || {});
         setGeneralManager(usersRes.data.generalManager || null);
       }
-      if (!logsRes.data?.error) setAuditLogs(logsRes.data.logs || []);
     } catch (loadError) {
       setError(loadError.message || 'Unable to load admin data.');
     } finally {
@@ -639,11 +655,6 @@ export default function AdminControl({ methodologyAction = null }) {
   };
 
   const canDeleteSelectedType = typeForm.id && !isAdministratorUserType(typeForm.id) && selectedTypeAssignedCount === 0;
-  const activeListTitle = activeSection === 'users'
-    ? 'Users'
-    : activeSection === 'types'
-      ? 'User Types'
-      : 'Reporting Lines';
   const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
   const discardUserDraft = () => {
     clearDraft(activeUserDraftKey);
@@ -657,7 +668,7 @@ export default function AdminControl({ methodologyAction = null }) {
   };
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administration"
@@ -668,24 +679,26 @@ export default function AdminControl({ methodologyAction = null }) {
             {methodologyAction}
             {activeSection !== 'reporting' && (
               <>
-                <button
+                <Button
                   type="button"
                   onClick={() => (activeSection === 'users' ? openUserDialog(null) : openTypeDialog(null))}
                   disabled={!isSupabaseConfigured}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                  className="gap-2"
                 >
                   {activeSection === 'users' ? <UserPlus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                   {newButtonLabel}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="outline"
+                  size="icon"
                   onClick={load}
                   disabled={loading || !isSupabaseConfigured}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground disabled:opacity-60"
+                  title="Refresh People & Access"
+                  aria-label="Refresh People & Access"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Refresh
-                </button>
+                </Button>
               </>
             )}
           </>
@@ -708,7 +721,7 @@ export default function AdminControl({ methodologyAction = null }) {
       {message && <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{message}</div>}
 
       <section className="mt-5 overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <SegmentButton active={activeSection === 'users'} icon={Users} onClick={() => setActiveSection('users')}>
               Users <span className="font-normal opacity-80">({users.length})</span>
@@ -720,30 +733,28 @@ export default function AdminControl({ methodologyAction = null }) {
               Reporting Lines
             </SegmentButton>
           </div>
-          <div className="text-xs font-medium text-muted-foreground">
-            {activeSection === 'users'
-              ? 'Sorted by name.'
-              : activeSection === 'types'
-                ? 'Sorted alphabetically.'
-                : activeSection === 'reporting'
-                  ? 'Primary-manager links define the formal management chain.'
-                  : 'Primary-manager links define the formal management chain.'}
-          </div>
+          {activeSection !== 'reporting' && (
+            <div className="flex w-full gap-2 sm:w-auto">
+              <div className="relative min-w-0 flex-1 sm:w-72">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder={activeSection === 'users' ? 'Search name, email, or type' : 'Search type or description'} className="h-9 pl-8" />
+              </div>
+              {activeSection === 'users' && (
+                <Select value={userStatusFilter} onValueChange={setUserStatusFilter}>
+                  <SelectTrigger className="h-9 w-28" aria-label="User status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All users</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="min-h-[calc(100vh-260px)]">
-          <aside className="min-h-0">
-            {activeSection !== 'reporting' && (
-              <div className="flex h-12 items-center justify-between border-b border-border px-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
-                  <p className="text-xs text-muted-foreground">
-                    {activeSection === 'users' ? `${users.length} accounts` : `${userTypes.length} types`}
-                  </p>
-                </div>
-              </div>
-            )}
-
+        <div>
+          <div className="min-h-0">
             {activeSection === 'reporting' ? (
               <div className="p-4 lg:p-5">
                 <ReportingLinesPanel />
@@ -751,104 +762,75 @@ export default function AdminControl({ methodologyAction = null }) {
             ) : activeSection === 'users' ? (
               loading ? (
                 <StateBlock icon={Loader2} title="Loading users..." description="Fetching access-control users." />
-              ) : sortedUsers.length ? (
-                <div className="max-h-[calc(100vh-322px)] divide-y divide-border overflow-auto">
-                  {sortedUsers.map((item) => {
+              ) : filteredUsers.length ? (
+                <div className="max-h-[calc(100vh-250px)] overflow-auto">
+                  <table className="w-full min-w-[820px] text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-muted/60 text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">User</th>
+                        <th className="px-3 py-2 font-semibold">User type</th>
+                        <th className="px-3 py-2 font-semibold">Access source</th>
+                        <th className="px-3 py-2 font-semibold">Status</th>
+                        <th className="w-12 px-3 py-2 text-right font-semibold">Edit</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                  {filteredUsers.map((item) => {
                     const permissions = item.use_type_defaults !== false
                       ? typePermissions[item.user_type] || item.permissions || {}
                       : item.permissions || {};
                     return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => openUserDialog(item)}
-                        className={`block w-full px-4 py-3 text-left text-sm hover:bg-muted/30 ${selectedUser?.id === item.id ? 'bg-primary/10' : 'bg-background/40'}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium text-foreground">{item.full_name || item.email}</span>
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${item.active ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                            {item.active ? 'Active' : 'Disabled'}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.email}</div>
-                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
-                          <span className="flex items-center gap-1.5">
+                      <tr key={item.id} className="hover:bg-muted/20">
+                        <td className="px-3 py-2.5">
+                          <div className="font-medium text-foreground">{item.full_name || item.email}</div>
+                          <div className="mt-0.5 text-[11px] text-muted-foreground">{item.email}</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="flex items-center gap-1.5 font-medium text-foreground">
                             {typeLabel(userTypeMap[item.user_type] || { id: item.user_type })}
-                            {item.id === generalManager?.userId && <span className="text-blue-700">· Reporting root</span>}
+                            {item.id === generalManager?.userId && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Reporting root</Badge>}
                           </span>
-                          <span>{item.use_type_defaults !== false ? 'Type default' : permissionSummary(sortedModules, permissions)}</span>
-                        </div>
-                      </button>
+                        </td>
+                        <td className="px-3 py-2.5 text-muted-foreground">{item.use_type_defaults !== false ? 'User type defaults' : permissionSummary(sortedModules, permissions)}</td>
+                        <td className="px-3 py-2.5"><Badge variant="outline" className={item.active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>{item.active ? 'Active' : 'Disabled'}</Badge></td>
+                        <td className="px-3 py-2.5 text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openUserDialog(item)} title={`Edit ${item.full_name || item.email}`} aria-label={`Edit ${item.full_name || item.email}`}><Pencil className="h-4 w-4" /></Button></td>
+                      </tr>
                     );
                   })}
+                    </tbody>
+                  </table>
                 </div>
               ) : (
-                <StateBlock title="No users found" description="Create the first administrator after Supabase is configured." />
+                <StateBlock title="No matching users" description="Change the search or status filter, or create a new user." />
               )
             ) : loading ? (
               <StateBlock icon={Loader2} title="Loading user types..." description="Fetching access templates." />
-            ) : sortedUserTypes.length ? (
-              <div className="max-h-[calc(100vh-322px)] divide-y divide-border overflow-auto">
-                {sortedUserTypes.map((item) => {
+            ) : filteredUserTypes.length ? (
+              <div className="max-h-[calc(100vh-250px)] overflow-auto">
+                <table className="w-full min-w-[760px] text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-muted/60 text-muted-foreground"><tr><th className="px-3 py-2 font-semibold">User type</th><th className="px-3 py-2 font-semibold">Description</th><th className="px-3 py-2 font-semibold">Default access</th><th className="px-3 py-2 text-right font-semibold">Assigned users</th><th className="w-12 px-3 py-2 text-right font-semibold">Edit</th></tr></thead>
+                  <tbody className="divide-y divide-border">
+                {filteredUserTypes.map((item) => {
                   const assignedCount = users.filter((userItem) => userItem.user_type === item.id).length;
                   return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => openTypeDialog(item)}
-                      className={`block w-full px-4 py-3 text-left text-sm hover:bg-muted/30 ${selectedType?.id === item.id ? 'bg-primary/10' : 'bg-background/40'}`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium text-foreground">{typeLabel(item)}</span>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
-                          {item.is_system ? 'Default' : 'Custom'}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.description || 'No description'}</div>
-                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
-                        <span>{permissionSummary(sortedModules, typePermissions[item.id])}</span>
-                        <span>{assignedCount} user{assignedCount === 1 ? '' : 's'}</span>
-                      </div>
-                    </button>
+                    <tr key={item.id} className="hover:bg-muted/20">
+                      <td className="px-3 py-2.5"><div className="flex items-center gap-2"><span className="font-medium text-foreground">{typeLabel(item)}</span><Badge variant="outline">{item.is_system ? 'System' : 'Custom'}</Badge></div></td>
+                      <td className="max-w-lg px-3 py-2.5 text-muted-foreground">{item.description || 'No description'}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{permissionSummary(sortedModules, typePermissions[item.id])}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{assignedCount}</td>
+                      <td className="px-3 py-2.5 text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openTypeDialog(item)} title={`Edit ${typeLabel(item)}`} aria-label={`Edit ${typeLabel(item)}`}><Pencil className="h-4 w-4" /></Button></td>
+                    </tr>
                   );
                 })}
+                  </tbody>
+                </table>
               </div>
             ) : (
-              <StateBlock title="No user types found" description="Create a user type to define reusable access rights." />
+              <StateBlock title="No matching user types" description="Change the search or create a reusable access template." />
             )}
-          </aside>
+          </div>
         </div>
       </section>
-
-      <details className="mt-4 rounded-lg border border-border bg-card">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Audit Log</summary>
-        {auditLogs.length ? (
-          <div className="max-h-[280px] overflow-auto border-t border-border">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-muted/60">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Time</th>
-                  <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Action</th>
-                  <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Target</th>
-                  <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Actor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditLogs.map((log) => (
-                  <tr key={log.id} className="border-t border-border/50">
-                    <td className="px-3 py-2 text-muted-foreground">{log.created_at ? new Date(log.created_at).toLocaleString() : '-'}</td>
-                    <td className="px-3 py-2 font-medium text-foreground">{log.action}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{log.target_email || log.target_user_id || '-'}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{log.actor_email || log.actor_user_id || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <StateBlock title="No audit logs" description="Admin changes will appear here." />
-        )}
-      </details>
 
       <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
         <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
