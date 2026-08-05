@@ -54,6 +54,9 @@ test('application sidebar is a translucent icon dock and session actions belong 
   assert.match(layout, /<TooltipContent side="right" sideOffset=\{12\}/);
   assert.match(layout, /group-hover:scale-125/);
   assert.match(layout, /aria-label="Application navigation"/);
+  assert.match(layout, /function navigationTargetIsActive/);
+  assert.match(layout, /aria-current=\{isActive \? 'page' : undefined\}/);
+  assert.match(layout, /<Link[\s\S]*aria-label=\{label\}/);
   assert.doesNotMatch(layout, />\s*Sign out\s*</);
   assert.match(layout, /fcos:version-audit-open/);
   assert.match(layout, /fcos:sign-out-requested/);

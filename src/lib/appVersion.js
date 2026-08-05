@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.118';
+export const APP_VERSION = '2.0.119';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.119',
+    releasedAt: '2026-08-05',
+    title: 'Icon dock active-state correction',
+    changes: [
+      'Corrected tooltip and navigation composition so inactive dock icons retain their slate color and the current page receives the intended blue active background.',
+    ],
+  },
   {
     version: '2.0.118',
     releasedAt: '2026-08-05',

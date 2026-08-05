@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   ClipboardCheck,
   DollarSign,
@@ -104,6 +104,15 @@ const LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY = 'workspace-sidebar-hidden';
 
 function navigationCacheKey(user) {
   return `fcos:navigation:${user?.id || user?.email || 'anonymous'}`;
+}
+
+function navigationTargetIsActive(location, target) {
+  const [pathname, search = ''] = String(target || '').split('?');
+  if (location.pathname !== pathname && (pathname === '/' || !location.pathname.startsWith(`${pathname}/`))) return false;
+  if (!search) return true;
+  const targetParams = new URLSearchParams(search);
+  const currentParams = new URLSearchParams(location.search);
+  return [...targetParams.entries()].every(([key, value]) => currentParams.get(key) === value);
 }
 
 function normalizedNavigationPreferences(value = {}) {
@@ -491,6 +500,7 @@ export default function Layout() {
                     <div ref={dropProvided.innerRef} {...dropProvided.droppableProps} className="space-y-1">
                       {group.items.map(({ id, to, label, icon: Icon }, index) => {
                         const hidden = activeNavigationPreferences.hiddenItemIds.includes(id);
+                        const isActive = navigationTargetIsActive(location, to);
                         return (
                           <Draggable key={id} draggableId={id} index={index} isDragDisabled={!navigationEditing}>
                             {(dragProvided, dragSnapshot) => (
@@ -509,12 +519,12 @@ export default function Layout() {
                                 ) : (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <NavLink
+                                      <Link
                                         to={to}
-                                        end={to === '/'}
                                         onClick={handleNavigation}
                                         aria-label={label}
-                                        className={({ isActive }) => cn(
+                                        aria-current={isActive ? 'page' : undefined}
+                                        className={cn(
                                           'group mx-auto flex h-11 w-11 items-center justify-center rounded-lg transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-110 focus-visible:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
                                           isActive
                                             ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
@@ -523,7 +533,7 @@ export default function Layout() {
                                       >
                                         <Icon className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
                                         <span className="sr-only">{label}</span>
-                                      </NavLink>
+                                      </Link>
                                     </TooltipTrigger>
                                     <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 px-2.5 py-1.5 text-xs font-medium text-white shadow-xl backdrop-blur-xl">
                                       {label}
@@ -568,18 +578,19 @@ export default function Layout() {
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <NavLink
+                    <Link
                       to="/settings"
                       onClick={handleNavigation}
                       aria-label="Settings"
-                      className={({ isActive }) => cn(
+                      aria-current={location.pathname === '/settings' ? 'page' : undefined}
+                      className={cn(
                         'group flex h-11 w-11 items-center justify-center rounded-lg transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-110 focus-visible:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
-                        isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'text-slate-600 hover:bg-white/[0.85] hover:text-slate-950 hover:shadow-md',
+                        location.pathname === '/settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'text-slate-600 hover:bg-white/[0.85] hover:text-slate-950 hover:shadow-md',
                       )}
                     >
                       <Settings className="h-5 w-5 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
                       <span className="sr-only">Settings</span>
-                    </NavLink>
+                    </Link>
                   </TooltipTrigger>
                   <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 text-white shadow-xl backdrop-blur-xl">Settings</TooltipContent>
                 </Tooltip>
