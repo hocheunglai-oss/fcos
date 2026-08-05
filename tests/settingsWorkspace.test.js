@@ -58,9 +58,14 @@ test('application sidebar is a translucent icon dock and session actions belong 
   assert.match(layout, /<TooltipContent side="right" sideOffset=\{12\}/);
   assert.match(layout, /group-hover:scale-125/);
   assert.match(layout, /sidebarCaptionMode && sidebarHovered/);
-  assert.match(layout, /hover:scale-\[1\.04\]/);
+  assert.doesNotMatch(layout, /origin-left items-center gap-3[\s\S]{0,220}hover:scale-\[1\.04\]/);
   assert.match(layout, /truncate whitespace-nowrap/);
   assert.match(layout, /hidden w-\[72px\] shrink-0 md:block/);
+  assert.match(layout, /data-sidebar-caption-glass="true"/);
+  assert.match(layout, /left-\[64px\][\s\S]*bg-white\/\[0\.44\][\s\S]*backdrop-blur-2xl/);
+  assert.match(layout, /flex w-14 shrink-0 justify-center/);
+  assert.match(layout, /sidebarShowsCaptions \? 'space-y-2 px-2 py-3'/);
+  assert.match(layout, /sidebarMode: 'auto_hide'/);
   assert.match(layout, /aria-label="Application navigation"/);
   assert.match(layout, /function navigationTargetIsActive/);
   assert.match(layout, /aria-current=\{isActive \? 'page' : undefined\}/);
@@ -95,8 +100,9 @@ test('module-owned configuration is linked from its owning workflow', async () =
 });
 
 test('workspace preferences and broker settings are revisioned and service-only', async () => {
-  const [migration, server, admin, modules] = await Promise.all([
+  const [migration, sidebarDefaultMigration, server, admin, modules] = await Promise.all([
     read('../supabase/migrations/20260804181236_settings_workspace_reorganization.sql'),
+    read('../supabase/migrations/20260805163332_default_sidebar_icon_caption.sql'),
     read('../api/functions/[name].js'),
     read('../src/pages/AdminControl.jsx'),
     read('../src/lib/authModules.js'),
@@ -110,6 +116,10 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(migration, /revoke all on table public\.broker_commission_settings from public, anon, authenticated/);
   assert.match(migration, /grant all on table public\.broker_commission_settings to service_role/);
   assert.match(migration, /'broker_settings_manage'/);
+  assert.match(sidebarDefaultMigration, /alter column sidebar_mode set default 'auto_hide'/);
+  assert.match(sidebarDefaultMigration, /where sidebar_mode is distinct from 'auto_hide'/);
+  assert.match(sidebarDefaultMigration, /revision = revision \+ 1/);
+  assert.match(sidebarDefaultMigration, /workspace_preference_events/);
   assert.match(server, /workspacePreferencesGet: \[\]/);
   assert.match(server, /systemHealth: \[\]/);
   assert.match(server, /loadBrokerCommissionSettings\(client\)/);

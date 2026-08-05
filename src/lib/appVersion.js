@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.120';
+export const APP_VERSION = '2.0.121';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.121',
+    releasedAt: '2026-08-06',
+    title: 'Liquid caption dock default',
+    changes: [
+      'Made Icon and caption the default sidebar behavior for existing and future users.',
+      'Confined the liquid translucent treatment to the expanded caption pane while preserving the established icon and label styling.',
+    ],
+  },
   {
     version: '2.0.120',
     releasedAt: '2026-08-05',

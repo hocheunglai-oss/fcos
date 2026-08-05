@@ -176,7 +176,6 @@ export default function Layout() {
   // `fixed` is the compact icon dock and legacy `auto_hide` is the expanding caption dock.
   const sidebarCaptionMode = !sidebarFixed;
   const sidebarShowsCaptions = !navigationEditing && sidebarCaptionMode && sidebarHovered;
-  const sidebarExpanded = navigationEditing || sidebarShowsCaptions;
   const userInitials = (user?.full_name || user?.email || 'FCOS User')
     .split(/\s+/)
     .filter(Boolean)
@@ -226,7 +225,7 @@ export default function Layout() {
         let workspacePreferences = workspaceResponse.data.preferences;
         if (!workspacePreferences.initialized) {
           const migrated = await appClient.functions.invoke('workspacePreferencesSave', {
-            sidebarMode: sidebarFixed ? 'fixed' : 'auto_hide',
+            sidebarMode: 'auto_hide',
             tableDensity: density,
             documentShowOnlyRelevant: browserDocumentSettings.showOnlyRelevant,
             documentSourceGroups: browserDocumentSettings.relevantSourceGroups,
@@ -432,13 +431,27 @@ export default function Layout() {
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 translate-x-0 flex-col border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl transition-[width] duration-200 ease-out supports-[backdrop-filter]:bg-white/[0.64]',
+          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 translate-x-0 flex-col transition-[width] duration-200 ease-out',
           navigationEditing ? 'w-[248px]' : sidebarShowsCaptions ? 'w-[232px]' : 'w-[72px]',
+          navigationEditing && 'border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/[0.64]',
         )}
       >
+        {!navigationEditing && (
+          <div
+            className="pointer-events-none absolute inset-y-0 left-0 z-0 w-[72px] border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/[0.64]"
+            aria-hidden="true"
+          />
+        )}
+        {sidebarShowsCaptions && (
+          <div
+            data-sidebar-caption-glass="true"
+            className="pointer-events-none absolute inset-y-2 left-[64px] right-1 z-0 rounded-r-xl border border-l-0 border-white/80 bg-white/[0.44] shadow-[12px_0_32px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.36]"
+            aria-hidden="true"
+          />
+        )}
         <TooltipProvider delayDuration={80} skipDelayDuration={100}>
-          <div className={cn('border-b border-white/70', sidebarExpanded ? 'px-3 py-3' : 'flex flex-col items-center gap-2.5 px-2 py-3')}>
-            {sidebarExpanded ? (
+          <div className={cn('relative z-10 border-b border-white/70', navigationEditing ? 'px-3 py-3' : sidebarShowsCaptions ? 'flex flex-col gap-2.5 px-2 py-3' : 'flex flex-col items-center gap-2.5 px-2 py-3')}>
+            {navigationEditing ? (
               <div className="flex min-h-10 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/80 bg-white/75 text-[11px] font-bold text-slate-950 shadow-sm backdrop-blur-xl">
@@ -454,6 +467,27 @@ export default function Layout() {
                   <WorkNotifications />
                 </div>
               </div>
+            ) : sidebarShowsCaptions ? (
+              <>
+                <div className="flex h-10 items-center">
+                  <div className="flex w-14 shrink-0 justify-center">
+                    <div className="relative flex h-10 w-10 cursor-default items-center justify-center rounded-lg border border-white/80 bg-white/75 text-[11px] font-bold text-slate-950 shadow-sm backdrop-blur-xl" aria-label="FCOS, Salesforce connected">
+                      FC
+                      <span className="absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-white bg-emerald-500" aria-hidden="true" />
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-950">FCOS</div>
+                    <div className="truncate text-[11px] font-medium text-emerald-700">Salesforce connected</div>
+                  </div>
+                </div>
+                <div className="flex h-10 items-center">
+                  <div className="flex w-14 shrink-0 justify-center transition-transform duration-150 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
+                    <WorkNotifications />
+                  </div>
+                  <span className="text-sm font-medium text-slate-700">Notifications</span>
+                </div>
+              </>
             ) : (
               <>
                 <Tooltip>
@@ -472,7 +506,7 @@ export default function Layout() {
             )}
           </div>
 
-          <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden', navigationEditing ? 'space-y-5 px-3 py-4' : sidebarShowsCaptions ? 'space-y-2 px-2.5 py-3' : 'space-y-2 px-2 py-3')} aria-label="Application navigation">
+          <nav className={cn('relative z-10 min-h-0 flex-1 overflow-y-auto overflow-x-hidden', navigationEditing ? 'space-y-5 px-3 py-4' : 'space-y-2 px-2 py-3')} aria-label="Application navigation">
             {navigationEditing && <div className="flex items-center justify-between px-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
               <div className="flex items-center gap-1">
@@ -522,14 +556,21 @@ export default function Layout() {
                                     aria-label={label}
                                     aria-current={isActive ? 'page' : undefined}
                                     className={cn(
-                                      'group flex h-11 w-full origin-left items-center gap-3 rounded-lg px-3 text-sm font-medium transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-[1.04] focus-visible:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
-                                      isActive
-                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
-                                        : 'text-slate-600 hover:bg-white/[0.9] hover:text-slate-950 hover:shadow-md',
+                                      'group flex h-11 w-full items-center gap-3 rounded-lg px-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
                                     )}
                                   >
-                                    <Icon className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
-                                    <span className="min-w-0 flex-1 origin-left truncate whitespace-nowrap transition-transform duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]">{label}</span>
+                                    <span className={cn(
+                                      'flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,box-shadow] duration-150',
+                                      isActive
+                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                                        : 'text-slate-600 group-hover:bg-white/[0.82] group-hover:text-slate-950 group-hover:shadow-md',
+                                    )}>
+                                      <Icon className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                                    </span>
+                                    <span className={cn(
+                                      'min-w-0 flex-1 origin-left truncate whitespace-nowrap transition-[transform,color] duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]',
+                                      isActive ? 'font-semibold text-blue-700' : 'text-slate-700 group-hover:text-slate-950',
+                                    )}>{label}</span>
                                   </Link>
                                 ) : (
                                   <Tooltip>
@@ -569,7 +610,7 @@ export default function Layout() {
             </DragDropContext>
           </nav>
 
-          <div className={cn('border-t border-white/70', navigationEditing ? 'space-y-3 p-3' : sidebarShowsCaptions ? 'space-y-2 px-2.5 py-3' : 'flex flex-col items-center gap-2 px-2 py-3')}>
+          <div className={cn('relative z-10 border-t border-white/70', navigationEditing ? 'space-y-3 p-3' : sidebarShowsCaptions ? 'space-y-2 px-2 py-3' : 'flex flex-col items-center gap-2 px-2 py-3')}>
             {navigationEditing ? (
               <>
                 <NavLink
@@ -597,15 +638,24 @@ export default function Layout() {
                   aria-label="Settings"
                   aria-current={location.pathname === '/settings' ? 'page' : undefined}
                   className={cn(
-                    'group flex h-11 w-full origin-left items-center gap-3 rounded-lg px-3 text-sm font-medium transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-[1.04] focus-visible:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
-                    location.pathname === '/settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'text-slate-600 hover:bg-white/[0.9] hover:text-slate-950 hover:shadow-md',
+                    'group flex h-11 w-full items-center gap-3 rounded-lg px-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
                   )}
                 >
-                  <Settings className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
-                  <span className="origin-left truncate whitespace-nowrap transition-transform duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]">Settings</span>
+                  <span className={cn(
+                    'flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-[color,background-color,box-shadow] duration-150',
+                    location.pathname === '/settings'
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                      : 'text-slate-600 group-hover:bg-white/[0.82] group-hover:text-slate-950 group-hover:shadow-md',
+                  )}>
+                    <Settings className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                  </span>
+                  <span className={cn(
+                    'origin-left truncate whitespace-nowrap transition-[transform,color] duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]',
+                    location.pathname === '/settings' ? 'font-semibold text-blue-700' : 'text-slate-700 group-hover:text-slate-950',
+                  )}>Settings</span>
                 </Link>
-                {user && <div className="flex min-h-11 items-center gap-3 rounded-lg border border-white/80 bg-white/60 px-2.5 py-2 shadow-sm">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">{userInitials}</div>
+                {user && <div className="flex h-10 items-center gap-3 px-2">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">{userInitials}</div>
                   <div className="min-w-0">
                     <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
                     <div className="truncate text-[10px] text-slate-500">{user.email}</div>
