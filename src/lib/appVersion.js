@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.119';
+export const APP_VERSION = '2.0.120';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.120',
+    releasedAt: '2026-08-05',
+    title: 'Two-mode application dock',
+    changes: [
+      'Removed sidebar auto-hide and replaced the workspace preference with Icon only and Icon and caption modes.',
+      'Added whole-dock caption expansion on sidebar hover, single-line labels, and focused row magnification without resizing the active page.',
+    ],
+  },
   {
     version: '2.0.119',
     releasedAt: '2026-08-05',

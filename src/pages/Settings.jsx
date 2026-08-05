@@ -1121,10 +1121,13 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                   <Select value={sidebarMode} onValueChange={setSidebarMode}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="auto_hide">Auto-hide at the left edge</SelectItem>
-                      <SelectItem value="fixed">Keep fixed space</SelectItem>
+                      <SelectItem value="fixed">Icon only</SelectItem>
+                      <SelectItem value="auto_hide">Icon and caption</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Icon and caption expands the complete dock while the pointer is anywhere over the sidebar, then magnifies the active row.
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Table density</Label>

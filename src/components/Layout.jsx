@@ -172,7 +172,11 @@ export default function Layout() {
       return { ...group, items };
     })
     .filter((group) => group.items.length > 0), [activeNavigationPreferences, hasModuleAccess, navigationEditing]);
-  const effectiveSidebarFixed = sidebarFixed || navigationEditing;
+  // The persisted values remain compatible with existing user preferences:
+  // `fixed` is the compact icon dock and legacy `auto_hide` is the expanding caption dock.
+  const sidebarCaptionMode = !sidebarFixed;
+  const sidebarShowsCaptions = !navigationEditing && sidebarCaptionMode && sidebarHovered;
+  const sidebarExpanded = navigationEditing || sidebarShowsCaptions;
   const userInitials = (user?.full_name || user?.email || 'FCOS User')
     .split(/\s+/)
     .filter(Boolean)
@@ -424,36 +428,31 @@ export default function Layout() {
 
   return (
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
-      {!effectiveSidebarFixed && (
-        <div
-          className="fixed inset-y-0 left-0 z-[39] w-1 bg-transparent"
-          onMouseEnter={() => setSidebarHovered(true)}
-          aria-hidden="true"
-        />
-      )}
-
       <aside
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl transition-[width,transform] duration-200 ease-out supports-[backdrop-filter]:bg-white/[0.64]',
-          navigationEditing ? 'w-[248px]' : 'w-[72px]',
-          effectiveSidebarFixed
-            ? 'translate-x-0 md:relative'
-            : sidebarHovered
-              ? 'translate-x-0'
-              : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-white/70 focus-within:shadow-[8px_0_30px_rgba(15,23,42,0.08)]',
+          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 translate-x-0 flex-col border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl transition-[width] duration-200 ease-out supports-[backdrop-filter]:bg-white/[0.64]',
+          navigationEditing ? 'w-[248px]' : sidebarShowsCaptions ? 'w-[232px]' : 'w-[72px]',
         )}
       >
         <TooltipProvider delayDuration={80} skipDelayDuration={100}>
-          <div className={cn('border-b border-white/70', navigationEditing ? 'px-3 py-4' : 'flex flex-col items-center gap-2.5 px-2 py-3')}>
-            {navigationEditing ? (
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-950">FCOS</div>
-                  <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
+          <div className={cn('border-b border-white/70', sidebarExpanded ? 'px-3 py-3' : 'flex flex-col items-center gap-2.5 px-2 py-3')}>
+            {sidebarExpanded ? (
+              <div className="flex min-h-10 items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/80 bg-white/75 text-[11px] font-bold text-slate-950 shadow-sm backdrop-blur-xl">
+                    FC
+                    <span className="absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-white bg-emerald-500" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-950">FCOS</div>
+                    <div className="truncate text-[11px] font-medium text-emerald-700">Salesforce connected</div>
+                  </div>
                 </div>
-                <WorkNotifications />
+                <div className="shrink-0 transition-transform duration-150 hover:scale-110 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
+                  <WorkNotifications />
+                </div>
               </div>
             ) : (
               <>
@@ -473,7 +472,7 @@ export default function Layout() {
             )}
           </div>
 
-          <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden', navigationEditing ? 'space-y-5 px-3 py-4' : 'space-y-2 px-2 py-3')} aria-label="Application navigation">
+          <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden', navigationEditing ? 'space-y-5 px-3 py-4' : sidebarShowsCaptions ? 'space-y-2 px-2.5 py-3' : 'space-y-2 px-2 py-3')} aria-label="Application navigation">
             {navigationEditing && <div className="flex items-center justify-between px-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
               <div className="flex items-center gap-1">
@@ -516,6 +515,22 @@ export default function Layout() {
                                       {hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                                     </Button>
                                   </div>
+                                ) : sidebarShowsCaptions ? (
+                                  <Link
+                                    to={to}
+                                    onClick={handleNavigation}
+                                    aria-label={label}
+                                    aria-current={isActive ? 'page' : undefined}
+                                    className={cn(
+                                      'group flex h-11 w-full origin-left items-center gap-3 rounded-lg px-3 text-sm font-medium transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-[1.04] focus-visible:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+                                      isActive
+                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                                        : 'text-slate-600 hover:bg-white/[0.9] hover:text-slate-950 hover:shadow-md',
+                                    )}
+                                  >
+                                    <Icon className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                                    <span className="min-w-0 flex-1 origin-left truncate whitespace-nowrap transition-transform duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]">{label}</span>
+                                  </Link>
                                 ) : (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
@@ -554,7 +569,7 @@ export default function Layout() {
             </DragDropContext>
           </nav>
 
-          <div className={cn('border-t border-white/70', navigationEditing ? 'space-y-3 p-3' : 'flex flex-col items-center gap-2 px-2 py-3')}>
+          <div className={cn('border-t border-white/70', navigationEditing ? 'space-y-3 p-3' : sidebarShowsCaptions ? 'space-y-2 px-2.5 py-3' : 'flex flex-col items-center gap-2 px-2 py-3')}>
             {navigationEditing ? (
               <>
                 <NavLink
@@ -572,6 +587,30 @@ export default function Layout() {
                   <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
                   <div className="truncate text-[11px] text-slate-500">{user.email}</div>
                   {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Local admin mode</div>}
+                </div>}
+              </>
+            ) : sidebarShowsCaptions ? (
+              <>
+                <Link
+                  to="/settings"
+                  onClick={handleNavigation}
+                  aria-label="Settings"
+                  aria-current={location.pathname === '/settings' ? 'page' : undefined}
+                  className={cn(
+                    'group flex h-11 w-full origin-left items-center gap-3 rounded-lg px-3 text-sm font-medium transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-[1.04] focus-visible:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+                    location.pathname === '/settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'text-slate-600 hover:bg-white/[0.9] hover:text-slate-950 hover:shadow-md',
+                  )}
+                >
+                  <Settings className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                  <span className="origin-left truncate whitespace-nowrap transition-transform duration-150 group-hover:scale-[1.04] group-focus-visible:scale-[1.04]">Settings</span>
+                </Link>
+                {user && <div className="flex min-h-11 items-center gap-3 rounded-lg border border-white/80 bg-white/60 px-2.5 py-2 shadow-sm">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">{userInitials}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
+                    <div className="truncate text-[10px] text-slate-500">{user.email}</div>
+                    {authMode === 'local' && <div className="text-[9px] font-semibold uppercase text-amber-600">Local admin mode</div>}
+                  </div>
                 </div>}
               </>
             ) : (
@@ -611,6 +650,8 @@ export default function Layout() {
           </div>
         </TooltipProvider>
       </aside>
+
+      <div className="hidden w-[72px] shrink-0 md:block" aria-hidden="true" />
 
       <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
         {versionUpdate && (

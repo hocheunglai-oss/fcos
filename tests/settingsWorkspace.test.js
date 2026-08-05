@@ -37,8 +37,12 @@ test('sidebar preference controls are launched only from My Settings', async () 
 
   assert.doesNotMatch(layout, /toggle-fixed-sidebar|Use auto-hide sidebar|Keep sidebar open/);
   assert.doesNotMatch(layout, /title="Customize navigation"|aria-label="Customize navigation"/);
+  assert.doesNotMatch(layout, /fixed inset-y-0 left-0 z-\[39\] w-1/);
   assert.match(layout, /fcos:navigation-customize/);
-  assert.match(settings, /Auto-hide at the left edge/);
+  assert.doesNotMatch(settings, /Auto-hide at the left edge|Keep fixed space/);
+  assert.match(settings, /<SelectItem value="fixed">Icon only<\/SelectItem>/);
+  assert.match(settings, /<SelectItem value="auto_hide">Icon and caption<\/SelectItem>/);
+  assert.match(settings, /expands the complete dock while the pointer is anywhere over the sidebar/);
   assert.match(settings, /Customize sidebar order and visibility/);
 });
 
@@ -48,11 +52,15 @@ test('application sidebar is a translucent icon dock and session actions belong 
     read('../src/pages/SettingsWorkspace.jsx'),
   ]);
 
-  assert.match(layout, /navigationEditing \? 'w-\[248px\]' : 'w-\[72px\]'/);
+  assert.match(layout, /navigationEditing \? 'w-\[248px\]' : sidebarShowsCaptions \? 'w-\[232px\]' : 'w-\[72px\]'/);
   assert.match(layout, /backdrop-blur-2xl/);
   assert.match(layout, /<span className="sr-only">\{label\}<\/span>/);
   assert.match(layout, /<TooltipContent side="right" sideOffset=\{12\}/);
   assert.match(layout, /group-hover:scale-125/);
+  assert.match(layout, /sidebarCaptionMode && sidebarHovered/);
+  assert.match(layout, /hover:scale-\[1\.04\]/);
+  assert.match(layout, /truncate whitespace-nowrap/);
+  assert.match(layout, /hidden w-\[72px\] shrink-0 md:block/);
   assert.match(layout, /aria-label="Application navigation"/);
   assert.match(layout, /function navigationTargetIsActive/);
   assert.match(layout, /aria-current=\{isActive \? 'page' : undefined\}/);
