@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.122';
+export const APP_VERSION = '2.0.123';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.123',
+    releasedAt: '2026-08-06',
+    title: 'Sidebar glass layering correction',
+    changes: [
+      'Kept the expanded sidebar caption glass above Dashboard filters while preserving its position below application dialogs.',
+      'Reduced the caption sheet opacity and blur radius so underlying page content remains visibly blurred through the liquid material.',
+    ],
+  },
   {
     version: '2.0.122',
     releasedAt: '2026-08-06',

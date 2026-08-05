@@ -431,7 +431,7 @@ export default function Layout() {
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 translate-x-0 flex-col transition-[width] duration-200 ease-out',
+          'app-workspace-sidebar fixed inset-y-0 left-0 z-[45] flex shrink-0 translate-x-0 flex-col transition-[width] duration-200 ease-out',
           navigationEditing ? 'w-[248px]' : sidebarShowsCaptions ? 'w-[232px]' : 'w-[72px]',
           navigationEditing && 'border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/[0.64]',
         )}
@@ -445,7 +445,7 @@ export default function Layout() {
         {sidebarShowsCaptions && (
           <div
             data-sidebar-caption-glass="true"
-            className="pointer-events-none absolute inset-y-2 left-[64px] right-1 z-0 rounded-r-xl border border-l-0 border-white/80 bg-white/[0.44] shadow-[12px_0_32px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.36]"
+            className="pointer-events-none absolute inset-y-2 left-[64px] right-1 z-0 rounded-r-xl border border-l-0 border-white/55 bg-white/[0.18] shadow-[12px_0_32px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-lg backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.12]"
             aria-hidden="true"
           />
         )}
