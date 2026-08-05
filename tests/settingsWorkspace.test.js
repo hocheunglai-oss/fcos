@@ -42,16 +42,18 @@ test('sidebar preference controls are launched only from My Settings', async () 
   assert.match(settings, /Customize sidebar order and visibility/);
 });
 
-test('application sidebar is compact and session actions belong to Settings', async () => {
+test('application sidebar is a translucent icon dock and session actions belong to Settings', async () => {
   const [layout, workspace] = await Promise.all([
     read('../src/components/Layout.jsx'),
     read('../src/pages/SettingsWorkspace.jsx'),
   ]);
 
-  assert.match(layout, /w-\[192px\]/);
-  assert.match(layout, /title=\{label\}/);
-  assert.match(layout, /whitespace-normal break-words leading-tight/);
-  assert.doesNotMatch(layout, /<span className="truncate">\{label\}<\/span>/);
+  assert.match(layout, /navigationEditing \? 'w-\[248px\]' : 'w-\[72px\]'/);
+  assert.match(layout, /backdrop-blur-2xl/);
+  assert.match(layout, /<span className="sr-only">\{label\}<\/span>/);
+  assert.match(layout, /<TooltipContent side="right" sideOffset=\{12\}/);
+  assert.match(layout, /group-hover:scale-125/);
+  assert.match(layout, /aria-label="Application navigation"/);
   assert.doesNotMatch(layout, />\s*Sign out\s*</);
   assert.match(layout, /fcos:version-audit-open/);
   assert.match(layout, /fcos:sign-out-requested/);

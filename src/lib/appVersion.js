@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.117';
+export const APP_VERSION = '2.0.118';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.118',
+    releasedAt: '2026-08-05',
+    title: 'Translucent application icon dock',
+    changes: [
+      'Replaced the text-heavy application sidebar with a 72-pixel translucent icon dock that magnifies icons and shows complete floating captions on hover or keyboard focus.',
+      'Preserved grouped navigation, active-page indication, notifications, user identity, Settings access, auto-hide behavior, and a temporary expanded mode for navigation customization.',
+    ],
+  },
   {
     version: '2.0.117',
     releasedAt: '2026-08-05',

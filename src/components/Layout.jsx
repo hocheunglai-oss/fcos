@@ -35,6 +35,7 @@ import { appClient } from '@/api/appClient';
 import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import WorkNotifications from '@/components/WorkNotifications';
 import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
@@ -163,6 +164,13 @@ export default function Layout() {
     })
     .filter((group) => group.items.length > 0), [activeNavigationPreferences, hasModuleAccess, navigationEditing]);
   const effectiveSidebarFixed = sidebarFixed || navigationEditing;
+  const userInitials = (user?.full_name || user?.email || 'FCOS User')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0))
+    .join('')
+    .toUpperCase();
 
   const pageOwnsScroll = location.pathname === '/disputes'
     || location.pathname.startsWith('/disputes/');
@@ -419,28 +427,46 @@ export default function Layout() {
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex w-[192px] shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-out',
+          'app-workspace-sidebar fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl transition-[width,transform] duration-200 ease-out supports-[backdrop-filter]:bg-white/[0.64]',
+          navigationEditing ? 'w-[248px]' : 'w-[72px]',
           effectiveSidebarFixed
-            ? 'translate-x-0 shadow-xl shadow-slate-900/10 md:relative md:shadow-none'
+            ? 'translate-x-0 md:relative'
             : sidebarHovered
-              ? 'translate-x-0 shadow-xl shadow-slate-900/10'
-              : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-slate-200 focus-within:shadow-xl focus-within:shadow-slate-900/10',
+              ? 'translate-x-0'
+              : '-translate-x-full border-r-transparent shadow-none focus-within:translate-x-0 focus-within:border-white/70 focus-within:shadow-[8px_0_30px_rgba(15,23,42,0.08)]',
         )}
       >
-        <div className="border-b border-slate-200 px-3 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-950">FCOS</div>
-              <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
-            </div>
-            <WorkNotifications />
+        <TooltipProvider delayDuration={80} skipDelayDuration={100}>
+          <div className={cn('border-b border-white/70', navigationEditing ? 'px-3 py-4' : 'flex flex-col items-center gap-2.5 px-2 py-3')}>
+            {navigationEditing ? (
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-950">FCOS</div>
+                  <div className="truncate text-xs font-medium text-emerald-700">Salesforce connected</div>
+                </div>
+                <WorkNotifications />
+              </div>
+            ) : (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="relative flex h-10 w-10 cursor-default items-center justify-center rounded-lg border border-white/80 bg-white/75 text-[11px] font-bold text-slate-950 shadow-sm backdrop-blur-xl" aria-label="FCOS, Salesforce connected">
+                      FC
+                      <span className="absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-white bg-emerald-500" aria-hidden="true" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 text-white shadow-xl backdrop-blur-xl">FCOS · Salesforce connected</TooltipContent>
+                </Tooltip>
+                <div className="transition-transform duration-150 hover:scale-110 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
+                  <WorkNotifications />
+                </div>
+              </>
+            )}
           </div>
-        </div>
 
-        <nav className="min-h-0 flex-1 space-y-5 overflow-auto px-3 py-4">
-          <div className="flex items-center justify-between px-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
-            {navigationEditing && (
+          <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden', navigationEditing ? 'space-y-5 px-3 py-4' : 'space-y-2 px-2 py-3')} aria-label="Application navigation">
+            {navigationEditing && <div className="flex items-center justify-between px-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
               <div className="flex items-center gap-1">
                 <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={resetNavigationPreferences} disabled={navigationSaving} title="Reset navigation" aria-label="Reset navigation">
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -452,15 +478,14 @@ export default function Layout() {
                   <Save className="h-3.5 w-3.5" />
                 </Button>
               </div>
-            )}
-          </div>
-          {navigationError && <div className="mx-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">{navigationError}</div>}
-          <DragDropContext onDragEnd={moveNavigationItem}>
-            {accessibleGroups.map((group) => (
-              <section key={group.id}>
-                <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {group.label}
-                </div>
+            </div>}
+            {navigationError && <div className="mx-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">{navigationError}</div>}
+            <DragDropContext onDragEnd={moveNavigationItem}>
+              {accessibleGroups.map((group) => (
+                <section key={group.id} className={cn(!navigationEditing && 'space-y-1 border-t border-slate-300/[0.55] pt-2 first:border-t-0 first:pt-0')} aria-label={group.label}>
+                  {navigationEditing && <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    {group.label}
+                  </div>}
                 <Droppable droppableId={group.id} isDropDisabled={!navigationEditing}>
                   {(dropProvided) => (
                     <div ref={dropProvided.innerRef} {...dropProvided.droppableProps} className="space-y-1">
@@ -482,21 +507,28 @@ export default function Layout() {
                                     </Button>
                                   </div>
                                 ) : (
-                                  <NavLink
-                                    to={to}
-                                    end={to === '/'}
-                                    onClick={handleNavigation}
-                                    title={label}
-                                    className={({ isActive }) => cn(
-                                      'flex min-h-9 items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors',
-                                      isActive
-                                        ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
-                                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
-                                    )}
-                                  >
-                                    <Icon className="h-4 w-4 shrink-0" />
-                                    <span className="min-w-0 flex-1 whitespace-normal break-words leading-tight">{label}</span>
-                                  </NavLink>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <NavLink
+                                        to={to}
+                                        end={to === '/'}
+                                        onClick={handleNavigation}
+                                        aria-label={label}
+                                        className={({ isActive }) => cn(
+                                          'group mx-auto flex h-11 w-11 items-center justify-center rounded-lg transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-110 focus-visible:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+                                          isActive
+                                            ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                                            : 'text-slate-600 hover:bg-white/[0.85] hover:text-slate-950 hover:shadow-md',
+                                        )}
+                                      >
+                                        <Icon className="h-5 w-5 shrink-0 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                                        <span className="sr-only">{label}</span>
+                                      </NavLink>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 px-2.5 py-1.5 text-xs font-medium text-white shadow-xl backdrop-blur-xl">
+                                      {label}
+                                    </TooltipContent>
+                                  </Tooltip>
                                 )}
                               </div>
                             )}
@@ -507,31 +539,66 @@ export default function Layout() {
                     </div>
                   )}
                 </Droppable>
-              </section>
-            ))}
-          </DragDropContext>
-        </nav>
+                </section>
+              ))}
+            </DragDropContext>
+          </nav>
 
-        <div className="space-y-3 border-t border-slate-200 p-3">
-          <NavLink
-            to="/settings"
-            onClick={handleNavigation}
-            className={({ isActive }) => cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              isActive ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
+          <div className={cn('border-t border-white/70', navigationEditing ? 'space-y-3 p-3' : 'flex flex-col items-center gap-2 px-2 py-3')}>
+            {navigationEditing ? (
+              <>
+                <NavLink
+                  to="/settings"
+                  onClick={handleNavigation}
+                  className={({ isActive }) => cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                    isActive ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                  Settings
+                </NavLink>
+                {user && <div className="rounded-lg border border-slate-200 bg-white/70 px-3 py-2">
+                  <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
+                  <div className="truncate text-[11px] text-slate-500">{user.email}</div>
+                  {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Local admin mode</div>}
+                </div>}
+              </>
+            ) : (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <NavLink
+                      to="/settings"
+                      onClick={handleNavigation}
+                      aria-label="Settings"
+                      className={({ isActive }) => cn(
+                        'group flex h-11 w-11 items-center justify-center rounded-lg transition-[transform,color,background-color,box-shadow] duration-150 hover:scale-110 focus-visible:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+                        isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'text-slate-600 hover:bg-white/[0.85] hover:text-slate-950 hover:shadow-md',
+                      )}
+                    >
+                      <Settings className="h-5 w-5 transition-transform duration-150 group-hover:scale-125 group-focus-visible:scale-125" />
+                      <span className="sr-only">Settings</span>
+                    </NavLink>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 text-white shadow-xl backdrop-blur-xl">Settings</TooltipContent>
+                </Tooltip>
+                {user && <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex h-10 w-10 cursor-default items-center justify-center rounded-full border border-white/80 bg-slate-900 text-xs font-semibold text-white shadow-sm transition-transform duration-150 hover:scale-110" aria-label={`Signed in as ${user.full_name || user.email}`}>
+                      {userInitials}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={12} className="max-w-64 border border-white/15 bg-slate-950/90 text-white shadow-xl backdrop-blur-xl">
+                    <div className="font-semibold">{user.full_name || user.email}</div>
+                    <div className="mt-0.5 text-[11px] text-slate-300">{user.email}</div>
+                    {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase text-amber-300">Local admin mode</div>}
+                  </TooltipContent>
+                </Tooltip>}
+              </>
             )}
-          >
-            <Settings className="h-4 w-4" />
-            Settings
-          </NavLink>
-          {user && (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
-              <div className="truncate text-[11px] text-slate-500">{user.email}</div>
-              {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Local admin mode</div>}
-            </div>
-          )}
-        </div>
+          </div>
+        </TooltipProvider>
       </aside>
 
       <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
