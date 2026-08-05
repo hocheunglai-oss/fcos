@@ -50,6 +50,8 @@ test('application sidebar is compact and session actions belong to Settings', as
 
   assert.match(layout, /w-\[192px\]/);
   assert.match(layout, /title=\{label\}/);
+  assert.match(layout, /whitespace-normal break-words leading-tight/);
+  assert.doesNotMatch(layout, /<span className="truncate">\{label\}<\/span>/);
   assert.doesNotMatch(layout, />\s*Sign out\s*</);
   assert.match(layout, /fcos:version-audit-open/);
   assert.match(layout, /fcos:sign-out-requested/);

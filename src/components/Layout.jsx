@@ -471,12 +471,12 @@ export default function Layout() {
                             {(dragProvided, dragSnapshot) => (
                               <div ref={dragProvided.innerRef} {...dragProvided.draggableProps} className={cn(dragSnapshot.isDragging && 'rounded-lg bg-white shadow-lg')}>
                                 {navigationEditing ? (
-                                  <div className={cn('flex h-9 items-center gap-2 rounded-lg border px-2 text-sm', hidden ? 'border-dashed text-slate-400' : 'border-slate-200 text-slate-700')}>
+                                  <div className={cn('flex min-h-9 items-center gap-2 rounded-lg border px-2 py-1.5 text-sm', hidden ? 'border-dashed text-slate-400' : 'border-slate-200 text-slate-700')}>
                                     <button type="button" {...dragProvided.dragHandleProps} className="cursor-grab text-slate-400" title={`Reorder ${label}`} aria-label={`Reorder ${label}`}>
                                       <GripVertical className="h-4 w-4" />
                                     </button>
                                     <Icon className="h-4 w-4 shrink-0" />
-                                    <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+                                    <span className="min-w-0 flex-1 whitespace-normal break-words leading-tight font-medium">{label}</span>
                                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleNavigationItem(id)} title={hidden ? `Show ${label}` : `Hide ${label}`} aria-label={hidden ? `Show ${label}` : `Hide ${label}`}>
                                       {hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                                     </Button>
@@ -488,14 +488,14 @@ export default function Layout() {
                                     onClick={handleNavigation}
                                     title={label}
                                     className={({ isActive }) => cn(
-                                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                                      'flex min-h-9 items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors',
                                       isActive
                                         ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
                                         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
                                     )}
                                   >
                                     <Icon className="h-4 w-4 shrink-0" />
-                                    <span className="truncate">{label}</span>
+                                    <span className="min-w-0 flex-1 whitespace-normal break-words leading-tight">{label}</span>
                                   </NavLink>
                                 )}
                               </div>

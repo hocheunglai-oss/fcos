@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.116';
+export const APP_VERSION = '2.0.117';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.117',
+    releasedAt: '2026-08-05',
+    title: 'Readable compact sidebar labels',
+    changes: [
+      'Kept the compact application sidebar while allowing long navigation labels to wrap cleanly instead of hiding their final letters.',
+    ],
+  },
   {
     version: '2.0.116',
     releasedAt: '2026-08-05',
