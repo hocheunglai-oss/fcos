@@ -448,7 +448,7 @@ export const FCOS_IMPROVEMENTS_METHODOLOGY = {
     },
     {
       title: 'Controlled discussion and workflow',
-      body: 'Comments, assignments, ticket edits, and status changes are proposals. They remain visibly Pending Approval until the active UUID-backed General Manager approves or rejects them. Proposals created by the General Manager are applied immediately and recorded as approved.',
+      body: 'New tickets default to the active UUID-backed General Manager as accountable assignee. Comments, assignments, ticket edits, and status changes are proposals. They remain visibly Pending Approval until that General Manager approves or rejects them. Proposals created by the General Manager are applied immediately and recorded as approved. Reassignment remains available through the same controlled proposal workflow.',
     },
     {
       title: 'Status progression',
@@ -477,6 +477,10 @@ export const SETTINGS_METHODOLOGIES = {
       {
         title: 'Cross-browser synchronization',
         body: 'FCOS stores the latest saved preferences against your active user account. Browser storage is retained only as an offline cache and is imported once when no server preference exists.',
+      },
+      {
+        title: 'Navigation and refresh',
+        body: 'Returning to a recently opened page reuses its user-specific browser snapshot. Operational data stays fresh for three minutes, collaboration data for 30 seconds, and reference data for 10 minutes. Moderately older data opens immediately and refreshes in the background; the Refresh button always bypasses browser and server caches. Saves and other successful changes invalidate affected browser snapshots, while approval, payment, email, document, and closure checks continue to validate live server data.',
       },
       {
         title: 'Save and conflicts',

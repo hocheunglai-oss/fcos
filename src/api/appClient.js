@@ -1,8 +1,12 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { navigationCacheDecision } from '@/lib/navigationCachePolicy';
 
 const STORAGE_PREFIX = 'fcos';
 const DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000;
+const MAX_FUNCTION_CACHE_ENTRIES = 24;
 const functionResponseCache = new Map();
+const inFlightFunctionRequests = new Map();
+let functionCacheGeneration = 0;
 
 const storage = {
   get(key, fallback) {
@@ -36,6 +40,62 @@ function stableStringify(value) {
 
 function functionCacheKey(name, payload) {
   return `${name}:${stableStringify(payload || {})}`;
+}
+
+async function requestAuthContext() {
+  if (!isSupabaseConfigured) return { accessToken: null, scope: 'local' };
+  const { data } = await supabase.auth.getSession();
+  return {
+    accessToken: data?.session?.access_token || null,
+    scope: data?.session?.user?.id || 'anonymous',
+  };
+}
+
+function browserCacheResponse(cached, cacheStatus, backgroundRefresh = false) {
+  return {
+    data: cloneJson(cached.data),
+    meta: {
+      ...(cached.meta || {}),
+      cached: true,
+      cacheLayer: 'browser',
+      cacheStatus,
+      cachedAt: cached.updatedAt,
+      backgroundRefresh,
+    },
+  };
+}
+
+function touchFunctionCache(key, entry) {
+  functionResponseCache.delete(key);
+  functionResponseCache.set(key, entry);
+}
+
+function trimFunctionCache() {
+  while (functionResponseCache.size > MAX_FUNCTION_CACHE_ENTRIES) {
+    const oldestKey = functionResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    functionResponseCache.delete(oldestKey);
+  }
+}
+
+function isMutationHandler(name) {
+  return /(?:Save|Create|Update|Delete|Submit|Approve|Reject|Return|Close|Send|Retry|Archive|Restore|Complete|Finalize|Decision|Link|Upload|Reconcile|Sync|Assign|Cancel|Move|Record|Propose|Request|Reset|SignOut|Action|Undo|Delta)(?:[A-Z]|$)/.test(String(name || ''));
+}
+
+function invalidateFunctionCache({ names = [], tags = [] } = {}) {
+  functionCacheGeneration += 1;
+  inFlightFunctionRequests.clear();
+  const nameSet = new Set(names);
+  const tagSet = new Set(tags);
+  if (!nameSet.size && !tagSet.size) {
+    functionResponseCache.clear();
+    return;
+  }
+  for (const [key, entry] of functionResponseCache.entries()) {
+    const nameMatches = nameSet.has(entry.name);
+    const tagMatches = (entry.tags || []).some((tag) => tagSet.has(tag));
+    if (nameMatches || tagMatches) functionResponseCache.delete(key);
+  }
 }
 
 function createEntityStore(name) {
@@ -88,32 +148,10 @@ function createEntityStore(name) {
   };
 }
 
-async function invoke(name, payload = {}, options = {}) {
-  const cacheKey = options.cacheKey || (options.cache ? functionCacheKey(name, payload) : null);
-  if (cacheKey && !options.force && functionResponseCache.has(cacheKey)) {
-    const cached = functionResponseCache.get(cacheKey);
-    const ttlMs = Math.max(0, Number(options.cacheTtlMs ?? DEFAULT_FUNCTION_CACHE_TTL_MS));
-    if (Date.now() - cached.cachedAtMs <= ttlMs) {
-      return {
-        data: cloneJson(cached.data),
-        meta: {
-          ...(cached.meta || {}),
-          cached: true,
-          cacheLayer: 'browser',
-          cacheStatus: 'HIT',
-          cachedAt: cached.updatedAt,
-        },
-      };
-    }
-    functionResponseCache.delete(cacheKey);
-  }
-
+async function requestFunction(name, payload, options, cacheKey, authContext, cacheGeneration) {
   const headers = { 'content-type': 'application/json' };
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
-  if (isSupabaseConfigured) {
-    const { data } = await supabase.auth.getSession();
-    if (data?.session?.access_token) headers.authorization = `Bearer ${data.session.access_token}`;
-  }
+  if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
   let res;
   try {
     res = await fetch(`/api/functions/${name}`, {
@@ -184,13 +222,21 @@ async function invoke(name, payload = {}, options = {}) {
     requestId,
     salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
   };
-  if (cacheKey) {
+  if (cacheKey && cacheGeneration === functionCacheGeneration) {
     functionResponseCache.set(cacheKey, {
+      name,
       data: cloneJson(data),
       meta: responseMeta,
       updatedAt: fetchedAt,
       cachedAtMs: Date.now(),
+      tags: [...new Set(options.cacheTags || [])],
     });
+    trimFunctionCache();
+  }
+
+  if (options.invalidateCache === true || (!cacheKey && isMutationHandler(name))) invalidateFunctionCache();
+  else if (options.invalidateNames?.length || options.invalidateTags?.length) {
+    invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
   }
 
   return {
@@ -199,12 +245,95 @@ async function invoke(name, payload = {}, options = {}) {
   };
 }
 
+function startFunctionRequest(name, payload, options, cacheKey, authContext) {
+  const requestKey = !options.force && cacheKey ? cacheKey : null;
+  if (requestKey && inFlightFunctionRequests.has(requestKey)) return inFlightFunctionRequests.get(requestKey);
+  const cacheGeneration = functionCacheGeneration;
+  const request = requestFunction(name, payload, options, cacheKey, authContext, cacheGeneration);
+  if (requestKey) {
+    inFlightFunctionRequests.set(requestKey, request);
+    const removeRequest = () => {
+      if (inFlightFunctionRequests.get(requestKey) === request) inFlightFunctionRequests.delete(requestKey);
+    };
+    request.then(removeRequest, removeRequest);
+  }
+  return request;
+}
+
+async function invoke(name, payload = {}, options = {}) {
+  const authContext = await requestAuthContext();
+  const rawCacheKey = options.cacheKey || (options.cache ? functionCacheKey(name, payload) : null);
+  const cacheKey = rawCacheKey ? `${authContext.scope}:${rawCacheKey}` : null;
+  const cached = cacheKey ? functionResponseCache.get(cacheKey) : null;
+  const ttlMs = Math.max(0, Number(options.cacheTtlMs ?? DEFAULT_FUNCTION_CACHE_TTL_MS));
+  const decision = navigationCacheDecision({
+    hasEntry: Boolean(cached),
+    ageMs: cached ? Date.now() - cached.cachedAtMs : 0,
+    freshMs: ttlMs,
+    maxStaleMs: options.navigationAware ? options.maxStaleMs : ttlMs,
+    force: options.force === true,
+  });
+
+  if (decision === 'fresh') {
+    touchFunctionCache(cacheKey, cached);
+    return browserCacheResponse(cached, 'HIT');
+  }
+  if (decision === 'stale' && options.navigationAware) {
+    touchFunctionCache(cacheKey, cached);
+    const backgroundRequest = startFunctionRequest(name, payload, { ...options, force: false }, cacheKey, authContext);
+    backgroundRequest.then((result) => {
+      if (result.data?.error) {
+        const fallback = browserCacheResponse(cached, 'STALE_ERROR', false);
+        fallback.meta.refreshError = result.data.error;
+        options.onBackgroundUpdate?.(fallback);
+        return;
+      }
+      options.onBackgroundUpdate?.(result);
+    }).catch((error) => {
+      const fallback = browserCacheResponse(cached, 'STALE_ERROR', false);
+      fallback.meta.refreshError = error?.message || 'Background refresh failed.';
+      options.onBackgroundUpdate?.(fallback);
+    });
+    return browserCacheResponse(cached, 'STALE', true);
+  }
+  if (decision === 'expired' && cacheKey) functionResponseCache.delete(cacheKey);
+  return startFunctionRequest(name, payload, options, cacheKey, authContext);
+}
+
+async function download(name, payload = {}, options = {}) {
+  const headers = { 'content-type': 'application/json' };
+  if (options.force) headers['x-fcos-cache-bypass'] = '1';
+  const authContext = await requestAuthContext();
+  if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
+  const response = await fetch(`/api/functions/${name}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    if (response.status >= 500) window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
+    const contentType = response.headers.get('content-type') || '';
+    const errorBody = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+    throw new Error(errorBody.error || `Download failed: ${response.status}`);
+  }
+  const disposition = response.headers.get('content-disposition') || '';
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const quoted = disposition.match(/filename="([^"]+)"/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : quoted || 'download';
+  return { blob: await response.blob(), filename };
+}
+
 function clearFunctionCache() {
-  functionResponseCache.clear();
+  invalidateFunctionCache();
 }
 
 export const appClient = {
-  functions: { invoke, clearCache: clearFunctionCache },
+  functions: {
+    invoke,
+    download,
+    clearCache: clearFunctionCache,
+    invalidateCache: invalidateFunctionCache,
+  },
   entities: {
     AppSettings: createEntityStore('app_settings'),
   },

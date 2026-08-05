@@ -306,7 +306,8 @@ test('server revalidates eligibility and updates every grouped Salesforce Accoun
 test('page edits rows inline with explicit save and cancel controls', async () => {
   const source = await readFile(pageUrl, 'utf8');
   const methodologies = await readFile(methodologiesUrl, 'utf8');
-  assert.match(source, /invoke\('accountManagersList'/);
+  assert.match(source, /name: 'accountManagersList'/);
+  assert.match(source, /useNavigationAwareRequest\('collaboration'\)/);
   assert.match(source, /invoke\('accountManagersSave'/);
   assert.match(source, /invoke\('accountManagersSaveNote'/);
   assert.match(source, /title="Cancel changes"/);

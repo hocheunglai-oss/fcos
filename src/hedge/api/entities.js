@@ -10,8 +10,16 @@ const entityNames = new Set([
   'AppConfig',
 ]);
 
-async function requestEntities(payload) {
-  const response = await appClient.functions.invoke('hedgeDeskEntity', payload, { cache: false });
+async function requestEntities(payload, options = { cache: false }) {
+  const backgroundUpdate = options.onBackgroundUpdate;
+  const mutates = ['create', 'update', 'delete'].includes(payload?.action);
+  const response = await appClient.functions.invoke('hedgeDeskEntity', payload, {
+    ...options,
+    invalidateCache: options.invalidateCache ?? mutates,
+    onBackgroundUpdate: backgroundUpdate
+      ? (result) => backgroundUpdate(result.data?.data)
+      : undefined,
+  });
   if (response.data?.error) throw new Error(response.data.error);
   return response.data?.data;
 }
@@ -21,8 +29,8 @@ async function entityRequest(entity, action, payload = {}) {
   return requestEntities({ entity, action, ...payload });
 }
 
-export function loadDeskSnapshot() {
-  return requestEntities({ action: 'snapshot' });
+export function loadDeskSnapshot(options) {
+  return requestEntities({ action: 'snapshot' }, options);
 }
 
 function createEntity(entityName) {

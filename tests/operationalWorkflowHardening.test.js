@@ -33,7 +33,9 @@ test('sensitive workflow actions use managed capabilities', async () => {
 test('short-lived function cache expires and can be cleared at an auth boundary', async () => {
   const source = await readFile(appClientUrl, 'utf8');
   assert.match(source, /DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000/);
-  assert.match(source, /Date\.now\(\) - cached\.cachedAtMs <= ttlMs/);
+  assert.match(source, /navigationCacheDecision\(/);
+  assert.match(source, /ageMs: cached \? Date\.now\(\) - cached\.cachedAtMs : 0/);
+  assert.match(source, /decision === 'expired'/);
   assert.match(source, /functionResponseCache\.delete\(cacheKey\)/);
   assert.match(source, /clearFunctionCache\(\);\s*\n\s*if \(isSupabaseConfigured\) await supabase\.auth\.signOut/);
 });

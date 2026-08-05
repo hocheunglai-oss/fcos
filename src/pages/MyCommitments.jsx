@@ -16,7 +16,7 @@ import {
   TriangleAlert,
   UserRoundCheck,
 } from "lucide-react";
-import { appClient } from "@/api/appClient";
+import { useNavigationAwareRequest } from "@/hooks/useNavigationAwareRequest";
 import PageHeader from "@/components/common/PageHeader";
 import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
@@ -91,6 +91,7 @@ function sectionTone(key) {
 
 export default function MyCommitments() {
   const navigate = useNavigate();
+  const { request: requestCommitments } = useNavigationAwareRequest("collaboration");
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState({ commitments: [], counts: {} });
   const requestedSource = searchParams.get('source');
@@ -99,25 +100,26 @@ export default function MyCommitments() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async ({ background = false } = {}) => {
+  const load = useCallback(async ({ background = false, force = background } = {}) => {
     if (background) setRefreshing(true);
     else setLoading(true);
     setError("");
     try {
-      const response = await appClient.functions.invoke(
-        "workCommitmentsList",
-        {},
-        { force: true },
-      );
-      if (response.data?.error) throw new Error(response.data.error);
-      setData(response.data || { commitments: [], counts: {} });
+      await requestCommitments({
+        name: "workCommitmentsList",
+        force,
+        apply: (response) => {
+          if (response.data?.error) throw new Error(response.data.error);
+          setData(response.data || { commitments: [], counts: {} });
+        },
+      });
     } catch (loadError) {
       setError(loadError?.message || "Unable to load your commitments.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [requestCommitments]);
 
   useEffect(() => {
     load();

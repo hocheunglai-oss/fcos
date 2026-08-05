@@ -28,6 +28,7 @@ import {
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const BUYER_FIELD = 'Total_Invoice_Amount__c';
 const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
@@ -109,6 +110,7 @@ function ReasonBadge({ reason }) {
 }
 
 export default function ReviewQueue() {
+  const { request: requestExceptionData } = useNavigationAwareRequest('operational');
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
@@ -140,6 +142,7 @@ export default function ReviewQueue() {
     status: 'Open', department: 'Unassigned', ownerUserId: '', priority: 'High', dueDate: '', latestNote: '', resolutionNote: '',
   });
   const debounceRef = useRef(null);
+  const workflowRequestRef = useRef(0);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
     prev.includes(yr) ? (prev.length > 1 ? prev.filter(y => y !== yr) : prev) : [...prev, yr]
@@ -154,41 +157,52 @@ export default function ReviewQueue() {
   );
 
   const load = async (yrs = selectedYears, mos = selectedMonths, options = {}) => {
+    workflowRequestRef.current += 1;
     setLoading(true);
     setError(null);
     setBackboneHandoffError('');
     const where = buildDeliveryWhere(yrs, mos);
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
-    const [res, handoffsRes] = await Promise.all([
-      appClient.functions.invoke('salesforceDashboardFiltered', {
+    const applyExceptionData = (res) => {
+      setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+      if (res.data?.error) {
+        setError(res.data.error);
+        return;
+      }
+      setError(null);
+      setData(res.data);
+      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
+      const stemIds = (res.data?.recentStems || []).map((row) => row.Id).filter(Boolean);
+      const workflowRequestId = ++workflowRequestRef.current;
+      appClient.functions.invoke('exceptionReviewWorkflowList', { stemIds }, { cache: false }).then((workflowRes) => {
+        if (workflowRequestId !== workflowRequestRef.current) return;
+        if (workflowRes.data?.error) setError(workflowRes.data.error);
+        else {
+          setWorkflowByStemId(workflowRes.data.byStemId || {});
+          setOwnerOptions(workflowRes.data.ownerOptions || []);
+        }
+      });
+    };
+    const [, handoffsRes] = await Promise.all([
+      requestExceptionData({
+        name: 'salesforceDashboardFiltered',
+        payload: {
         mode: 'exception_review',
         where,
         trendYear: THIS_YEAR,
         dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
         dateWindows,
-      }, { cache: true, force: options.force }),
-      appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: true, force: options.force }),
+        },
+        force: options.force,
+        apply: applyExceptionData,
+      }),
+      appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: false, force: options.force }),
     ]);
-    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
     if (handoffsRes.data?.error) {
       setBackboneHandoffError(handoffsRes.data.error);
       setBackboneHandoffs([]);
     } else {
       setBackboneHandoffs(handoffsRes.data?.handoffs || []);
-    }
-    if (res.data?.error) {
-      setError(res.data.error);
-    } else {
-      setData(res.data);
-      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
-      const stemIds = (res.data?.recentStems || []).map((row) => row.Id).filter(Boolean);
-      const workflowRes = await appClient.functions.invoke('exceptionReviewWorkflowList', { stemIds }, { cache: true, force: options.force });
-      if (workflowRes.data?.error) {
-        setError(workflowRes.data.error);
-      } else {
-        setWorkflowByStemId(workflowRes.data.byStemId || {});
-        setOwnerOptions(workflowRes.data.ownerOptions || []);
-      }
     }
     setLoading(false);
   };

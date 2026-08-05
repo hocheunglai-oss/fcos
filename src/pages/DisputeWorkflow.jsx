@@ -27,6 +27,7 @@ import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/l
 import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologies';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
@@ -1902,6 +1903,7 @@ function Summary({ label, value, align = 'left', strong = false, tone = 'default
 }
 
 export default function DisputeWorkflow() {
+  const { request: requestDisputes } = useNavigationAwareRequest('collaboration');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1919,26 +1921,34 @@ export default function DisputeWorkflow() {
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('disputeWorkflowList', { limit: 10000 }, { cache: true, force: options.force });
-    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-    if (res.data?.error) {
-      setError(res.data.error);
-      setRows([]);
-      setLoading(false);
-      return [];
-    }
-    const nextRows = res.data?.rows || [];
-    setRows(nextRows);
-    setCapabilities(res.data?.capabilities || {
-      role: 'user',
-      canPrepare: true,
-      canApprove: Boolean(res.data?.isDisputeAdmin),
-      canAccount: Boolean(res.data?.isDisputeAccounting),
-      canClose: Boolean(res.data?.isDisputeAccounting),
-      canViewAllRules: true,
+    let nextRows = [];
+    await requestDisputes({
+      name: 'disputeWorkflowList',
+      payload: { limit: 10000 },
+      force: options.force,
+      apply: (res) => {
+        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+        if (res.data?.error) {
+          setError(res.data.error);
+          setRows([]);
+          nextRows = [];
+          return;
+        }
+        nextRows = res.data?.rows || [];
+        setError(null);
+        setRows(nextRows);
+        setCapabilities(res.data?.capabilities || {
+          role: 'user',
+          canPrepare: true,
+          canApprove: Boolean(res.data?.isDisputeAdmin),
+          canAccount: Boolean(res.data?.isDisputeAccounting),
+          canClose: Boolean(res.data?.isDisputeAccounting),
+          canViewAllRules: true,
+        });
+        setFieldWarning(res.data?.fieldWarning || '');
+        setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
+      },
     });
-    setFieldWarning(res.data?.fieldWarning || '');
-    setLastRefresh(new Date());
     setLoading(false);
     return nextRows;
   };

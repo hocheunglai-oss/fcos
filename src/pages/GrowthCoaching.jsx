@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/use-toast';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const NONE = '__none__';
 const MEASURE_TYPES = [
@@ -291,6 +292,7 @@ function SectionTitle({ icon: Icon, title, description, action }) {
 }
 
 export default function GrowthCoaching() {
+  const { request: requestGrowth } = useNavigationAwareRequest('collaboration');
   const { user } = useAuth();
   const { toast } = useToast();
   const fileInputRef = useRef(null);
@@ -332,22 +334,28 @@ export default function GrowthCoaching() {
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users]);
 
   const load = useCallback(
-    async ({ background = false } = {}) => {
+    async ({ background = false, force = background } = {}) => {
       if (background) setRefreshing(true);
       else setLoading(true);
       setError('');
-      const response = await appClient.functions.invoke('growthCoachingBootstrap', selectedSessionId ? { sessionId: selectedSessionId } : {}, { force: true });
-      if (response.data?.error) {
-        setError(errorText(response));
-      } else {
-        const next = response.data || {};
-        setData(next);
-        setEmailPreferences(next.emailPreferences || next.preferences || {});
-      }
+      await requestGrowth({
+        name: 'growthCoachingBootstrap',
+        payload: selectedSessionId ? { sessionId: selectedSessionId } : {},
+        force,
+        apply: (response) => {
+          if (response.data?.error) setError(errorText(response));
+          else {
+            const next = response.data || {};
+            setError('');
+            setData(next);
+            setEmailPreferences(next.emailPreferences || next.preferences || {});
+          }
+        },
+      });
       setLoading(false);
       setRefreshing(false);
     },
-    [selectedSessionId],
+    [requestGrowth, selectedSessionId],
   );
 
   useEffect(() => {

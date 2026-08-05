@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/use-toast';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const statusClasses = {
   active: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -91,6 +92,7 @@ function reportTypeLabel(value) {
 
 export default function ReportArchive({ defaultReportType = 'all' }) {
   const { toast } = useToast();
+  const { request: requestReports } = useNavigationAwareRequest('collaboration');
   const { isAdministrator, moduleAccessLevels } = useAuth();
   const [reports, setReports] = useState([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -106,21 +108,25 @@ export default function ReportArchive({ defaultReportType = 'all' }) {
   const loadReports = async (options = {}) => {
     setLoading(true);
     setError('');
-    const res = await appClient.functions.invoke('reportExportsList', {
-      includeDeleted: showDeleted,
-      limit: 200,
-    }, { cache: true, force: options.force });
-    if (res.data?.error) {
-      setError(res.data.error);
-      setReports([]);
-    } else {
-      setReports(res.data?.reports || []);
-    }
+    await requestReports({
+      name: 'reportExportsList',
+      payload: { includeDeleted: showDeleted, limit: 200 },
+      force: options.force,
+      apply: (res) => {
+        if (res.data?.error) {
+          setError(res.data.error);
+          setReports([]);
+        } else {
+          setError('');
+          setReports(res.data?.reports || []);
+        }
+      },
+    });
     setLoading(false);
   };
 
   useEffect(() => {
-    loadReports({ force: true });
+    loadReports();
   }, [showDeleted]);
 
   const reportTypeOptions = useMemo(() => [...new Map([

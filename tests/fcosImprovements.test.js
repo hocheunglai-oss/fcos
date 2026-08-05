@@ -88,3 +88,44 @@ test('Codex helper can show and propose but has no approval command', async () =
   assert.match(packageJson, /"improvements:agent"/);
 });
 
+test('new improvement tickets default to the active General Manager without hardcoding a user', async () => {
+  const [service, page, methodology] = await Promise.all([
+    readFile(new URL('api/_fcosImprovements.js', root), 'utf8'),
+    readFile(new URL('src/pages/FcosImprovements.jsx', root), 'utf8'),
+    readFile(new URL('src/lib/pageMethodologies.js', root), 'utf8'),
+  ]);
+  const createStart = service.indexOf('export async function improvementCreate');
+  const createEnd = service.indexOf('\nfunction proposalPayload', createStart);
+  const createSource = service.slice(createStart, createEnd);
+  assert.match(createSource, /const generalManager = await activeGeneralManager\(client\)/);
+  assert.match(createSource, /assignee_user_id: generalManager\.id/);
+  assert.match(createSource, /assignee_name: generalManager\.full_name \|\| generalManager\.email/);
+  assert.match(createSource, /assignee_email: generalManager\.email/);
+  assert.doesNotMatch(createSource, /vincent@cosulich\.com\.hk/i);
+  assert.match(page, /ticket\?\.assignee\?\.id \|\| response\.data\.generalManager\?\.id/);
+  assert.match(methodology, /New tickets default to the active UUID-backed General Manager as accountable assignee/);
+});
+
+test('FCOS-000001 removes PSPRS only from the external payment-reminder invoice table', async () => {
+  const [serverSource, pageSource] = await Promise.all([
+    readFile(new URL('api/functions/[name].js', root), 'utf8'),
+    readFile(new URL('src/pages/BuyerInvoices.jsx', root), 'utf8'),
+  ]);
+  const reminderStart = serverSource.indexOf('function buildBuyerInvoicePaymentReminderEmail');
+  const reminderEnd = serverSource.indexOf('\nasync function loadBuyerInvoicePaymentReminderContext', reminderStart);
+  const reminderSource = serverSource.slice(reminderStart, reminderEnd);
+  assert.doesNotMatch(reminderSource, />PSPRS</);
+  assert.doesNotMatch(reminderSource, /escapeHtml\(row\.prpspStatus/);
+  assert.doesNotMatch(reminderSource, /\| PSPRS \$\{/);
+  assert.match(reminderSource, /colspan="8"/);
+
+  const previewStart = pageSource.indexOf('function invoiceTablePreviewHtml');
+  const previewEnd = pageSource.indexOf('\nfunction emailBodyPreviewHtml', previewStart);
+  const previewSource = pageSource.slice(previewStart, previewEnd);
+  assert.doesNotMatch(previewSource, />PSPRS</);
+  assert.doesNotMatch(previewSource, /escapeHtml\(row\.prpspStatus/);
+
+  const internalReportStart = serverSource.indexOf('function buildBuyerInvoiceReportEmail');
+  const internalReportEnd = serverSource.indexOf('\nfunction reminderCandidateKey', internalReportStart);
+  assert.match(serverSource.slice(internalReportStart, internalReportEnd), />PSPRS</);
+});

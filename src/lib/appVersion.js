@@ -1,6 +1,17 @@
-export const APP_VERSION = '2.0.112';
+export const APP_VERSION = '2.0.113';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.113',
+    releasedAt: '2026-08-05',
+    title: 'Account insight, faster navigation, and controlled improvements',
+    changes: [
+      'Added exact-Account Dashboard insights with role-specific trading, profitability, payment, risk, STEM, and GROUP analysis plus PDF and CSV exports.',
+      'Added navigation-aware browser snapshots so recent pages reopen immediately, moderately stale pages refresh in the background, and manual Refresh continues to retrieve live data.',
+      'Assigned new FCOS Improvements tickets by default to the active UUID-backed General Manager while preserving controlled reassignment and approval history.',
+      'Completed FCOS-000001 by removing the PSPRS column from external payment-reminder invoice tables and previews without changing internal reports or Payment Collections data.',
+    ],
+  },
   {
     version: '2.0.112',
     releasedAt: '2026-08-05',

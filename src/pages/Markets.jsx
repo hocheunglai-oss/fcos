@@ -5,6 +5,7 @@ import { MarketsView } from '@/hedge/views/MarketsView';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
 import { loadMarketSnapshot, MarketPrice, saveForwardSpreads, verifyMopsMonth } from '@/hedge/api/marketData';
+import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
 const EMPTY = { mops: [], mopsMonthVerifications: [], settings: {}, capabilities: {} };
@@ -15,13 +16,20 @@ export default function Markets() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  const reload = useCallback(async ({ silent = false } = {}) => {
+  const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      const next = { ...EMPTY, ...(await loadMarketSnapshot()) };
-      setSnapshot(next);
+      const applySnapshot = (value) => {
+        const next = { ...EMPTY, ...(value || {}) };
+        setSnapshot(next);
+        return next;
+      };
+      const next = applySnapshot(await loadMarketSnapshot({
+        ...navigationCacheOptions('operational', applySnapshot),
+        force,
+      }));
       return next;
     } catch (nextError) {
       setError(nextError);

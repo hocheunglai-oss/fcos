@@ -390,6 +390,7 @@ export async function improvementDetail(body = {}, accessContext) {
 export async function improvementCreate(body = {}, accessContext) {
   const { client, profile } = accessContext;
   const input = normalizedTicketInput(body);
+  const generalManager = await activeGeneralManager(client);
   const { data: ticket, error } = await client.from('fcos_improvement_tickets').insert({
     ticket_type: input.type,
     title: input.title,
@@ -405,15 +406,22 @@ export async function improvementCreate(body = {}, accessContext) {
     reporter_user_id: profile.id,
     reporter_name: profile.full_name || profile.email,
     reporter_email: profile.email,
+    assignee_user_id: generalManager.id,
+    assignee_name: generalManager.full_name || generalManager.email,
+    assignee_email: generalManager.email,
   }).select('*').single();
   if (error) throw error;
-  const generalManager = await activeGeneralManager(client);
   await Promise.all([
     insertEvent(client, {
       ticket_id: ticket.id,
       event_type: 'ticket_created',
       summary: `${ticket.ticket_type === 'bug' ? 'Bug' : 'Feature request'} reported`,
-      metadata: { ticketKey: ticket.ticket_key, moduleKey: ticket.module_key, priority: ticket.priority },
+      metadata: {
+        ticketKey: ticket.ticket_key,
+        moduleKey: ticket.module_key,
+        priority: ticket.priority,
+        defaultAssigneeRole: 'general_manager',
+      },
       actor_user_id: profile.id,
       actor_name: profile.full_name || profile.email,
       actor_email: profile.email,

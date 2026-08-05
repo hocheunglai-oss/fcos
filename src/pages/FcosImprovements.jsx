@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
@@ -164,6 +165,7 @@ function Field({ label, children, required = false, hint }) {
 }
 
 export default function FcosImprovements() {
+  const { request: requestTickets } = useNavigationAwareRequest('collaboration');
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tickets, setTickets] = useState([]);
@@ -195,21 +197,25 @@ export default function FcosImprovements() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef(null);
 
-  const loadTickets = useCallback(async ({ quiet = false } = {}) => {
+  const loadTickets = useCallback(async ({ quiet = false, force = quiet } = {}) => {
     if (quiet) setRefreshing(true); else setLoading(true);
-    const response = await appClient.functions.invoke('improvementsList', {}, { force: true });
-    if (response.data?.error) {
-      setError(errorText(response));
-    } else {
-      setTickets(response.data.tickets || []);
-      setOptions(response.data.options || DEFAULT_OPTIONS);
-      setUsers(response.data.activeUsers || []);
-      setGeneralManager(response.data.generalManager || null);
-      setIsGeneralManager(Boolean(response.data.isGeneralManager));
-      setError('');
-    }
+    await requestTickets({
+      name: 'improvementsList',
+      force,
+      apply: (response) => {
+        if (response.data?.error) setError(errorText(response));
+        else {
+          setTickets(response.data.tickets || []);
+          setOptions(response.data.options || DEFAULT_OPTIONS);
+          setUsers(response.data.activeUsers || []);
+          setGeneralManager(response.data.generalManager || null);
+          setIsGeneralManager(Boolean(response.data.isGeneralManager));
+          setError('');
+        }
+      },
+    });
     if (quiet) setRefreshing(false); else setLoading(false);
-  }, []);
+  }, [requestTickets]);
 
   const openTicket = useCallback(async (ticketRef, { updateUrl = true } = {}) => {
     if (!ticketRef) return;
@@ -222,7 +228,7 @@ export default function FcosImprovements() {
       setUsers(response.data.activeUsers || users);
       setGeneralManager(response.data.generalManager || generalManager);
       setIsGeneralManager(Boolean(response.data.isGeneralManager));
-      setAssigneeId(response.data.ticket?.assignee?.id || '__none__');
+      setAssigneeId(response.data.ticket?.assignee?.id || response.data.generalManager?.id || generalManager?.id || '__none__');
       setNextStatus('');
       setStatusNote('');
       setComment('');
@@ -289,7 +295,7 @@ export default function FcosImprovements() {
 
   const replaceDetail = (data) => {
     setDetail(data);
-    setAssigneeId(data.ticket?.assignee?.id || '__none__');
+    setAssigneeId(data.ticket?.assignee?.id || data.generalManager?.id || generalManager?.id || '__none__');
     loadTickets({ quiet: true });
     window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
   };
@@ -472,7 +478,7 @@ export default function FcosImprovements() {
 
       <Dialog open={createOpen} onOpenChange={(open) => !saving && setCreateOpen(open)}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
-          <DialogHeader><DialogTitle>New FCOS improvement</DialogTitle><DialogDescription>The ticket is immediately visible to every active FCOS user.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>New FCOS improvement</DialogTitle><DialogDescription>The ticket is immediately visible to every active FCOS user and assigned by default to the current General Manager.</DialogDescription></DialogHeader>
           <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
             <Button type="button" variant={form.type === 'bug' ? 'secondary' : 'ghost'} onClick={() => setForm((current) => ({ ...current, type: 'bug' }))}><Bug className="h-4 w-4" />Bug</Button>
             <Button type="button" variant={form.type === 'feature_request' ? 'secondary' : 'ghost'} onClick={() => setForm((current) => ({ ...current, type: 'feature_request' }))}><Lightbulb className="h-4 w-4" />Feature Request</Button>

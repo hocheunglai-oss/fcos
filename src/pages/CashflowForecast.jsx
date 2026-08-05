@@ -24,6 +24,7 @@ import {
   YAxis,
 } from 'recharts';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
@@ -145,6 +146,7 @@ function sortValue(row, key) {
 
 export default function CashflowForecast() {
   const { toast } = useToast();
+  const { request: requestCashflow } = useNavigationAwareRequest('operational');
   const defaults = useMemo(() => {
     const today = hkDateOnly();
     return {
@@ -180,23 +182,23 @@ export default function CashflowForecast() {
   const load = async ({ force = false } = {}) => {
     setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('cashflowForecast', {
-      dateFrom,
-      dateTo,
-      bucket,
-    }, {
-      cache: true,
+    await requestCashflow({
+      name: 'cashflowForecast',
+      payload: { dateFrom, dateTo, bucket },
       force,
       cacheKey: `cashflowForecast:${dateFrom}:${dateTo}:${bucket}`,
+      apply: (response) => {
+        setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
+        if (response.data?.error) {
+          setError(response.data.error);
+          return;
+        }
+        setError('');
+        setData(response.data || {});
+        setSettingsDraft(response.data?.settings || null);
+      },
     });
-    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
     setLoading(false);
-    if (response.data?.error) {
-      setError(response.data.error);
-      return;
-    }
-    setData(response.data || {});
-    setSettingsDraft(response.data?.settings || null);
   };
 
   useEffect(() => {

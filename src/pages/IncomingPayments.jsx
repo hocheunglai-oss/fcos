@@ -4,6 +4,7 @@ import { AlertTriangle, Banknote, Check, Eye, Loader2, Mail, Pencil, RefreshCw, 
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import ReorderableDataTable from '@/components/common/ReorderableDataTable';
 import StemDetailLink from '@/components/common/StemDetailLink';
@@ -392,6 +393,7 @@ function CompactTableEmptyState({ icon: Icon, title, description }) {
 }
 
 export default function IncomingPayments({ reconciliationItems = [] }) {
+  const { request: requestPayments } = useNavigationAwareRequest('collaboration');
   const { toast } = useToast();
   const { isAdministrator } = useAuth();
   const [pageState, setPageState] = useState(initialPageState);
@@ -446,25 +448,27 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const load = async (options = {}) => {
     setLoading(true);
     setError('');
-    const res = await appClient.functions.invoke('incomingPaymentsList', {
-      dateFrom,
-      dateTo,
-      limit: 5000,
-    }, { cache: true, force: options.force });
-    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-    if (res.data?.error) {
-      setError(res.data.error);
-    } else {
-      updatePageState({
-        data: res.data,
-        thresholdDraft: String(res.data?.settings?.fullyPaidThreshold ?? 50),
-      });
-    }
+    await requestPayments({
+      name: 'incomingPaymentsList',
+      payload: { dateFrom, dateTo, limit: 5000 },
+      force: options.force,
+      apply: (res) => {
+        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+        if (res.data?.error) setError(res.data.error);
+        else {
+          setError('');
+          updatePageState({
+            data: res.data,
+            thresholdDraft: String(res.data?.settings?.fullyPaidThreshold ?? 50),
+          });
+        }
+      },
+    });
     setLoading(false);
   };
 
   useEffect(() => {
-    if (!data) load({ force: true });
+    if (!data) load();
   }, []);
 
   const reconciliationByStem = useMemo(() => new Map(

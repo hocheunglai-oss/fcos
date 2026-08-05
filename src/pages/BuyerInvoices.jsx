@@ -23,6 +23,7 @@ import {
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import DataStatus from '@/components/common/DataStatus';
 import DraftNotice from '@/components/common/DraftNotice';
@@ -410,7 +411,6 @@ function invoiceTablePreviewHtml(rows = []) {
         <td style="${cellStyle};text-align:right;font-weight:600">${fmtMoney(row.receivableBalance)}</td>
         <td style="${cellStyle}">${fmtDate(row.buyerInvoiceDueDate)}</td>
         <td style="${cellStyle};white-space:normal;min-width:95px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-        <td style="${cellStyle};white-space:normal;min-width:90px">${escapeHtml(row.prpspStatus || '-')}</td>
         <td style="${cellStyle};text-align:right;font-weight:600">${escapeHtml(overdueDisplayValue(row.daysUntilDue))}</td>
       </tr>`;
   }).join('');
@@ -425,7 +425,6 @@ function invoiceTablePreviewHtml(rows = []) {
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">PSPRS</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
           </tr>
         </thead>
@@ -2418,6 +2417,7 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
 }
 
 export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [], dataRefreshToken = 0 }) {
+  const { request: requestInvoices } = useNavigationAwareRequest('collaboration');
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => hongKongDateKey(), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
@@ -2621,15 +2621,22 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBuyerInvoicesDue', { daysAhead: nextDays }, { cache: true, force: options.force });
-    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-    if (res.data?.error) {
-      setError(res.data.error);
-      setRows([]);
-    } else {
-      setRows(res.data?.rows || []);
-      setMeta(res.data || null);
-    }
+    await requestInvoices({
+      name: 'salesforceBuyerInvoicesDue',
+      payload: { daysAhead: nextDays },
+      force: options.force,
+      apply: (res) => {
+        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+        if (res.data?.error) {
+          setError(res.data.error);
+          setRows([]);
+        } else {
+          setError(null);
+          setRows(res.data?.rows || []);
+          setMeta(res.data || null);
+        }
+      },
+    });
     setLoading(false);
   };
 

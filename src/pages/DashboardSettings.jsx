@@ -8,6 +8,7 @@ import { BarChart, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, Resp
 import StatCard from '@/components/dashboard/StatCard';
 import PnlTable from '@/components/dashboard/PnlTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import AccountInsightModal from '@/components/dashboard/AccountInsightModal';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
@@ -16,6 +17,8 @@ import { Package, Building2, DollarSign, AlertCircle, RefreshCw, SlidersHorizont
 import { format } from 'date-fns';
 import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
 import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologies';
+import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const STORAGE_KEY = 'dashboard_filters';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899'];
@@ -40,6 +43,7 @@ const AI_TABLE_PAGE_SIZE = 100;
 
 export default function DashboardSettings() {
   const location = useLocation();
+  const { request: requestDashboard } = useNavigationAwareRequest('operational');
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
   const savedPortCountry = savedFilters.portCountry ?? (savedFilters.koreanPortOnly ? 'KOREA' : '');
 
@@ -61,6 +65,7 @@ export default function DashboardSettings() {
   const [responseMeta, setResponseMeta] = useState(null);
   const [tableSearch, setTableSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [selectedAccount, setSelectedAccount] = useState(null);
   const [filteredTableWide, setFilteredTableWide] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(savedFilters.showAnalytics === true);
   const debounceRef = useRef(null);
@@ -93,15 +98,18 @@ export default function DashboardSettings() {
   useEffect(() => {
     let cancelled = false;
     const loadPortCountries = async () => {
+      const applyPortCountries = (res) => {
+        if (cancelled || res.data?.error) return;
+        const options = [...new Set((res.data?.records || []).flatMap((row) => [
+          row.Country__c,
+          row.Name,
+        ]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+        setPortCountryOptions(options);
+      };
       const res = await appClient.functions.invoke('salesforceQuery', {
         soql: 'SELECT Name, Country__c FROM Port__c WHERE Country__c != null OR Name != null ORDER BY Country__c, Name LIMIT 2000'
-      }, { cache: true });
-      if (cancelled || res.data?.error) return;
-      const options = [...new Set((res.data?.records || []).flatMap((row) => [
-        row.Country__c,
-        row.Name,
-      ]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-      setPortCountryOptions(options);
+      }, navigationCacheOptions('reference', applyPortCountries));
+      applyPortCountries(res);
     };
     loadPortCountries();
     return () => { cancelled = true; };
@@ -116,18 +124,21 @@ export default function DashboardSettings() {
       const soql = isSupplier
         ? `SELECT ${field}, COUNT(Id) total FROM STEM_Line_Item__c WHERE ${field} != null GROUP BY ${field} ORDER BY ${field} LIMIT 2000`
         : `SELECT Buyer_Name__c, Account__r.Group_Name__c, Account__r.Parent.Name FROM stem__c WHERE Buyer_Name__c != null ORDER BY Delivery_Date__c DESC NULLS LAST LIMIT 2000`;
+      const applyCompanies = (res) => {
+        if (cancelled || res.data?.error) return;
+        const names = isSupplier
+          ? [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
+          : [...new Set((res.data?.records || []).flatMap((row) => [
+              row.Buyer_Name__c,
+              row.Account__r?.Group_Name__c,
+              row.Account__r?.Parent?.Name,
+            ]).filter(Boolean))];
+        setCompanyOptions(names.sort((a, b) => String(a).localeCompare(String(b))));
+      };
       const res = await appClient.functions.invoke('salesforceQuery', {
         soql
-      }, { cache: true });
-      if (cancelled || res.data?.error) return;
-      const names = isSupplier
-        ? [...new Set((res.data?.records || []).map((row) => row[field]).filter(Boolean))]
-        : [...new Set((res.data?.records || []).flatMap((row) => [
-            row.Buyer_Name__c,
-            row.Account__r?.Group_Name__c,
-            row.Account__r?.Parent?.Name,
-          ]).filter(Boolean))];
-      setCompanyOptions(names.sort((a, b) => String(a).localeCompare(String(b))));
+      }, navigationCacheOptions('reference', applyCompanies));
+      applyCompanies(res);
     };
     loadCompanies();
     return () => { cancelled = true; };
@@ -157,22 +168,29 @@ export default function DashboardSettings() {
     const normalizedCountry = String(country || '').trim();
     const normalizedCompany = String(company || '').trim();
     const where = buildWhereClause(yrs, mos, normalizedCountry);
-    const res = await appClient.functions.invoke('salesforceDashboardFiltered', {
-      mode: 'dashboard',
-      where,
-      trendYear: THIS_YEAR,
-      disputeOnly: onlyDisputes,
-      portCountry: normalizedCountry || null,
-      companyFilterMode: mode,
-      companyKeyword: normalizedCompany || null,
-    }, { cache: true, force: options.force });
-    setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-    if (res.data?.error) {
-      setError(res.data.error);
-    } else {
-      setData(res.data);
-      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
-    }
+    const applyDashboard = (res) => {
+      setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+      if (res.data?.error) setError(res.data.error);
+      else {
+        setError(null);
+        setData(res.data);
+        setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
+      }
+    };
+    await requestDashboard({
+      name: 'salesforceDashboardFiltered',
+      payload: {
+        mode: 'dashboard',
+        where,
+        trendYear: THIS_YEAR,
+        disputeOnly: onlyDisputes,
+        portCountry: normalizedCountry || null,
+        companyFilterMode: mode,
+        companyKeyword: normalizedCompany || null,
+      },
+      force: options.force,
+      apply: applyDashboard,
+    });
     setLoading(false);
   };
 
@@ -1131,6 +1149,7 @@ export default function DashboardSettings() {
                 counterpartyMode={counterpartyMode}
                 scrollClassName="h-full min-h-0"
                 onStemClick={setSelectedStemId}
+                onAccountClick={setSelectedAccount}
               />
             </TableShell>
           </div>
@@ -1141,6 +1160,13 @@ export default function DashboardSettings() {
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
         onUpdated={refreshDashboard}
+      />
+      <AccountInsightModal
+        account={selectedAccount}
+        open={Boolean(selectedAccount)}
+        onClose={() => setSelectedAccount(null)}
+        selectedYears={selectedYears}
+        selectedMonths={selectedMonths}
       />
     </div>
   );

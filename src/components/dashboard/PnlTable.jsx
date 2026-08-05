@@ -54,6 +54,9 @@ const BASE_HIDDEN_COLS = new Set([
   '_suppBrokerComm',
   '_Supplier_Name_List',
   '_Supplier_Invoice_Amount_List',
+  '_Buyer_Account',
+  '_Buyer_Group_Account',
+  '_Supplier_Accounts',
   '_Product_Quantity_List',
   '_Extra_Cost_Name_List',
 ]);
@@ -135,7 +138,27 @@ const COL_ORDER = [
   '__pnl__',
 ];
 
-export default function PnlTable({ records = [], onStemClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
+const accountDisplayLabel = (account, fallback = 'Account') => {
+  if (!account) return fallback;
+  return [account.name || fallback, account.clKey].filter(Boolean).join(' · ');
+};
+
+function AccountInsightButton({ account, role, fallback, onOpen, className = '' }) {
+  const label = accountDisplayLabel(account, fallback);
+  if (!account?.accountId || !onOpen) return <span className={className}>{label || '—'}</span>;
+  return (
+    <button
+      type="button"
+      className={cn('text-left font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', className)}
+      onClick={() => onOpen({ ...account, role })}
+      title={`Open Account Insight for ${label}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+export default function PnlTable({ records = [], onStemClick, onAccountClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
   const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
   const [sortDir, setSortDir] = useState(-1);
   const firstRecord = records[0] || {};
@@ -237,20 +260,56 @@ export default function PnlTable({ records = [], onStemClick, counterpartyMode =
                     );
                   }
                   if (col === '_Supplier_Names') {
-                    const supplierNames = Array.isArray(row._Supplier_Name_List)
-                      ? row._Supplier_Name_List
-                      : String(row._Supplier_Names || '').split(',').map((name) => name.trim()).filter(Boolean);
+                    const supplierAccounts = Array.isArray(row._Supplier_Accounts) ? row._Supplier_Accounts : [];
+                    const supplierNames = supplierAccounts.length
+                      ? supplierAccounts
+                      : (Array.isArray(row._Supplier_Name_List)
+                        ? row._Supplier_Name_List.map((name) => ({ name }))
+                        : String(row._Supplier_Names || '').split(',').map((name) => ({ name: name.trim() })).filter((item) => item.name));
                     return (
                       <td key={col} className="py-2.5 px-3 min-w-72 text-foreground">
                         {supplierNames.length ? (
                           <div className="flex flex-wrap gap-1.5">
-                            {supplierNames.map((name) => (
-                              <span key={name} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
-                                {name}
+                            {supplierNames.map((account, index) => account.accountId ? (
+                              <AccountInsightButton
+                                key={account.accountId}
+                                account={account}
+                                role="supplier"
+                                fallback={account.name}
+                                onOpen={onAccountClick}
+                                className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5"
+                              />
+                            ) : (
+                              <span key={`${account.name}-${index}`} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
+                                {account.name}
                               </span>
                             ))}
                           </div>
                         ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === 'Buyer_Name__c') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 min-w-56 text-foreground">
+                        <AccountInsightButton
+                          account={row._Buyer_Account}
+                          role="buyer"
+                          fallback={fmtVal(col, row[col])}
+                          onOpen={onAccountClick}
+                        />
+                      </td>
+                    );
+                  }
+                  if (col === '_Buyer_Group') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 min-w-56 text-foreground">
+                        <AccountInsightButton
+                          account={row._Buyer_Group_Account}
+                          role="group"
+                          fallback={fmtVal(col, row[col])}
+                          onOpen={onAccountClick}
+                        />
                       </td>
                     );
                   }

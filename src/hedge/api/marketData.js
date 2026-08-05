@@ -1,7 +1,15 @@
 import { appClient } from '@/api/appClient';
 
-async function request(payload) {
-  const response = await appClient.functions.invoke('hedgeMarkets', payload, { cache: false });
+async function request(payload, options = { cache: false }) {
+  const backgroundUpdate = options.onBackgroundUpdate;
+  const mutates = ['create', 'update', 'delete', 'save_spreads', 'verify_month'].includes(payload?.action);
+  const response = await appClient.functions.invoke('hedgeMarkets', payload, {
+    ...options,
+    invalidateCache: options.invalidateCache ?? mutates,
+    onBackgroundUpdate: backgroundUpdate
+      ? (result) => backgroundUpdate(result.data?.data)
+      : undefined,
+  });
   if (response.data?.error) throw new Error(response.data.error);
   return response.data?.data;
 }
@@ -21,8 +29,8 @@ export const MarketPrice = {
   },
 };
 
-export function loadMarketSnapshot() {
-  return request({ action: 'snapshot' });
+export function loadMarketSnapshot(options) {
+  return request({ action: 'snapshot' }, options);
 }
 
 export function saveForwardSpreads(value, expectedRevision) {

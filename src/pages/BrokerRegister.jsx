@@ -11,6 +11,7 @@ import PageHeader from '@/components/common/PageHeader';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -150,6 +151,7 @@ const rowIdValue = (row) => textValue(row?.id, '');
 
 export default function BrokerRegister() {
   const { toast } = useToast();
+  const { request: requestBrokerRows } = useNavigationAwareRequest('operational');
   const [initialDateRange] = useState(() => previousQuarterRange());
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -171,9 +173,16 @@ export default function BrokerRegister() {
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBrokerRegister', { limit: 2000 }, { cache: true, force: options.force });
-    if (res.data?.error) setError(res.data.error);
-    setRows(res.data?.rows || []);
+    await requestBrokerRows({
+      name: 'salesforceBrokerRegister',
+      payload: { limit: 2000 },
+      force: options.force,
+      apply: (res) => {
+        if (res.data?.error) setError(res.data.error);
+        else setError(null);
+        setRows(res.data?.rows || []);
+      },
+    });
     setLoading(false);
   };
 

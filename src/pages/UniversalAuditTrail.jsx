@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { History, Loader2, RefreshCw, Search, ShieldCheck } from 'lucide-react';
-import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -9,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 function formatDateTime(value) {
   if (!value) return '—';
@@ -50,6 +50,7 @@ function sourceTone(source) {
 }
 
 export default function UniversalAuditTrail({ methodologyAction = null }) {
+  const { request: requestAudit } = useNavigationAwareRequest('collaboration');
   const [rows, setRows] = useState([]);
   const [sources, setSources] = useState([]);
   const [source, setSource] = useState('all');
@@ -61,28 +62,28 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
   const loadRows = async ({ force = false } = {}) => {
     setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('universalAuditTrail', {
-      source,
-      keyword,
-      limit: 500,
-    }, {
-      cache: true,
+    await requestAudit({
+      name: 'universalAuditTrail',
+      payload: { source, keyword, limit: 500 },
       force,
       cacheKey: `universalAuditTrail:${source}:${keyword}`,
+      apply: (response) => {
+        if (response.data?.error) {
+          setError(response.data.error);
+          setRows([]);
+          setSources([]);
+        } else {
+          setError('');
+          setRows(response.data?.rows || []);
+          setSources(response.data?.sources || []);
+        }
+      },
     });
-    if (response.data?.error) {
-      setError(response.data.error);
-      setRows([]);
-      setSources([]);
-    } else {
-      setRows(response.data?.rows || []);
-      setSources(response.data?.sources || []);
-    }
     setLoading(false);
   };
 
   useEffect(() => {
-    loadRows({ force: true });
+    loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadDeskSnapshot } from "@/hedge/api/entities";
+import { navigationCacheOptions } from "@/lib/navigationCachePolicy";
 
 const EMPTY_DATA = {
   physicals: [],
@@ -20,15 +21,22 @@ export function useDeskData() {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  const reload = useCallback(async ({ silent = false } = {}) => {
+  const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      const snapshot = await loadDeskSnapshot();
-      const nextData = { ...EMPTY_DATA, ...(snapshot || {}) };
-      setData(nextData);
-      setLastUpdated(new Date());
+      const applySnapshot = (snapshot) => {
+        const nextData = { ...EMPTY_DATA, ...(snapshot || {}) };
+        setData(nextData);
+        setLastUpdated(new Date());
+        return nextData;
+      };
+      const snapshot = await loadDeskSnapshot({
+        ...navigationCacheOptions("collaboration", applySnapshot),
+        force,
+      });
+      const nextData = applySnapshot(snapshot);
       return nextData;
     } catch (nextError) {
       setError(nextError);

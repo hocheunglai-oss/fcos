@@ -15,6 +15,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
@@ -107,6 +108,7 @@ function SalesforceRecordLink({ instanceUrl, id, children }) {
 
 export default function UnofficialCompensation() {
   const { toast } = useToast();
+  const { request: requestCompensation } = useNavigationAwareRequest('operational');
   const [workspace, setWorkspace] = useState({ accounts: [], summary: { currencyTotals: [] } });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -135,13 +137,23 @@ export default function UnofficialCompensation() {
   const load = useCallback(async (force = false) => {
     force ? setRefreshing(true) : setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('unofficialCompensationList', { force }, { force });
-    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
-    if (response.data?.error) setError(response.data.error);
-    else setWorkspace(response.data || { accounts: [], summary: { currencyTotals: [] } });
+    await requestCompensation({
+      name: 'unofficialCompensationList',
+      payload: { force },
+      force,
+      cacheKey: 'unofficialCompensationList',
+      apply: (response) => {
+        setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
+        if (response.data?.error) setError(response.data.error);
+        else {
+          setError('');
+          setWorkspace(response.data || { accounts: [], summary: { currencyTotals: [] } });
+        }
+      },
+    });
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [requestCompensation]);
 
   useEffect(() => { load(false); }, [load]);
 

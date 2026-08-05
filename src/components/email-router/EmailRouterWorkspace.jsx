@@ -14,6 +14,7 @@ import EmailMessageList from './EmailMessageList';
 import EmailMessageSheet, { EmailMessageDetail } from './EmailMessageSheet';
 import EmailRedirectPanel from './EmailRedirectPanel';
 import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
+import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 
 const LIMIT = 30;
 function messageError(data, fallback) {
@@ -69,7 +70,24 @@ export default function EmailRouterWorkspace() {
     setDirectoryLoading(true);
     setDirectoryError('');
     try {
-      const [directoryResponse, presetResponse] = await Promise.all([emailRouter.directory({}, { force }), emailRouter.presets({}, { force })]);
+      const applyDirectory = (directoryResponse) => {
+        const directoryFailure = messageError(directoryResponse.data);
+        if (directoryFailure) {
+          setDirectory([]);
+          setDirectoryError(directoryFailure);
+        } else {
+          setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
+        }
+      };
+      const applyPresets = (presetResponse) => {
+        const presetFailure = messageError(presetResponse.data);
+        if (!presetFailure) setPresets(presetResponse.data?.presets || presetResponse.data?.items || []);
+        else setPresets([]);
+      };
+      const [directoryResponse, presetResponse] = await Promise.all([
+        emailRouter.directory({}, { ...navigationCacheOptions('collaboration', applyDirectory), force }),
+        emailRouter.presets({}, { ...navigationCacheOptions('collaboration', applyPresets), force }),
+      ]);
       const directoryFailure = messageError(directoryResponse.data);
       const presetFailure = messageError(presetResponse.data);
       if (directoryFailure) {
@@ -98,21 +116,28 @@ export default function EmailRouterWorkspace() {
     if (foreground) setLoading(true); else setLoadingMore(true);
     setListError('');
     try {
-      const response = await emailRouter.list({ folder, query: search.trim(), cursor, limit: LIMIT }, { force });
-      if (id !== requestId.current) return;
-      const error = messageError(response.data);
-      if (error) {
-        setListError(error);
-        if (foreground) setMessages([]);
-      } else {
+      const applyList = (response) => {
+        if (id !== requestId.current) return;
+        const error = messageError(response.data);
+        if (error) {
+          setListError(error);
+          if (foreground) setMessages([]);
+          return;
+        }
         const result = normaliseListResponse(response.data);
+        setListError('');
         setMessages(result.messages);
         setNextCursor(result.nextCursor);
         setCurrentCursor(cursor);
         setCursorStack(history);
         setSelectedId((selected) => result.messages.some((message) => message.id === selected) ? selected : null);
         setDetail((current) => result.messages.some((message) => message.id === current?.id) ? current : null);
-      }
+      };
+      const response = await emailRouter.list(
+        { folder, query: search.trim(), cursor, limit: LIMIT },
+        cursor ? { cache: true, cacheTtlMs: 30_000, force } : { ...navigationCacheOptions('collaboration', applyList), force },
+      );
+      applyList(response);
     } catch (error) {
       if (id !== requestId.current) return;
       setListError(error?.message || 'The mailbox service is unavailable.');
@@ -139,12 +164,17 @@ export default function EmailRouterWorkspace() {
     setAdvisorError('');
     const fallback = messages.find((message) => message.id === selectedId) || null;
     setDetail(fallback);
-    emailRouter.detail({ messageId: selectedId }).then((response) => {
+    const applyDetail = (response) => {
       if (!active) return;
       const error = messageError(response.data);
       if (error) setDetailError(error);
-      else setDetail(normaliseDetailResponse(response.data));
-    }).catch((error) => { if (active) setDetailError(error?.message || 'Message details are unavailable.'); }).finally(() => { if (active) setDetailLoading(false); });
+      else {
+        setDetailError('');
+        setDetail(normaliseDetailResponse(response.data));
+      }
+      setDetailLoading(false);
+    };
+    emailRouter.detail({ messageId: selectedId }, navigationCacheOptions('collaboration', applyDetail)).then(applyDetail).catch((error) => { if (active) setDetailError(error?.message || 'Message details are unavailable.'); }).finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
   }, [selectedId, messages]);
 

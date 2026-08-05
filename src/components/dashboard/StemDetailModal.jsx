@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
+import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Search, Eye, X, CheckCircle2 } from 'lucide-react';
@@ -681,7 +682,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
     setShowAllDocuments(false);
     setError(null);
     setLoading(true);
-    appClient.functions.invoke('salesforceStemDetail', { stemId }).then(res => {
+    const applyDetail = (res) => {
       if (res.data?.error) setError(res.data.error);
       else {
         setRecord(res.data.record);
@@ -693,14 +694,16 @@ export default function StemDetailModal({ stemId, open, onClose }) {
         setBrokerCommissionPayments(res.data.brokerCommissionPayments || []);
       }
       setLoading(false);
-    });
-    appClient.functions.invoke('salesforceStemDocuments', { stemId }).then(res => {
+    };
+    appClient.functions.invoke('salesforceStemDetail', { stemId }, navigationCacheOptions('collaboration', applyDetail)).then(applyDetail);
+    const applyDocuments = (res) => {
       if (res.data?.error) setDocumentsError(res.data.error);
       else {
         setDocuments(res.data?.documents || []);
       }
       setDocumentsLoading(false);
-    });
+    };
+    appClient.functions.invoke('salesforceStemDocuments', { stemId }, navigationCacheOptions('collaboration', applyDocuments)).then(applyDocuments);
   }, [open, stemId]);
 
   // Build a map from line item ID → buyer broker info

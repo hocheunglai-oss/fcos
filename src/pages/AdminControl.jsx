@@ -34,6 +34,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const emptyUserForm = {
   id: null,
@@ -208,6 +209,7 @@ function CapabilityGrid({ definitions, capabilities, locked = false, onToggle })
 }
 
 export default function AdminControl({ methodologyAction = null }) {
+  const { request: requestUsers } = useNavigationAwareRequest('collaboration');
   const { authMode, isSupabaseConfigured, user: currentUser } = useAuth();
   const [activeSection, setActiveSection] = useState('users');
   const [users, setUsers] = useState([]);
@@ -320,20 +322,25 @@ export default function AdminControl({ methodologyAction = null }) {
     setLoading(true);
     setError('');
     try {
-      const usersRes = await appClient.functions.invoke('adminUsersList', {}, { cache: true, force: options.force });
-      if (usersRes.data?.error) {
-        setError(usersRes.data.error);
-      } else {
-        const nextModules = usersRes.data.modules?.length ? usersRes.data.modules : APP_MODULES;
-        const nextUserTypes = usersRes.data.userTypes?.length ? usersRes.data.userTypes : USER_TYPES;
-        setModules(nextModules);
-        setUsers(usersRes.data.users || []);
-        setUserTypes(nextUserTypes);
-        setTypePermissions(usersRes.data.typePermissions || {});
-        setCapabilityDefinitions(usersRes.data.capabilities?.length ? usersRes.data.capabilities : APP_CAPABILITIES);
-        setTypeCapabilities(usersRes.data.typeCapabilities || {});
-        setGeneralManager(usersRes.data.generalManager || null);
-      }
+      await requestUsers({
+        name: 'adminUsersList',
+        force: options.force,
+        apply: (usersRes) => {
+          if (usersRes.data?.error) {
+            setError(usersRes.data.error);
+          } else {
+            const nextModules = usersRes.data.modules?.length ? usersRes.data.modules : APP_MODULES;
+            const nextUserTypes = usersRes.data.userTypes?.length ? usersRes.data.userTypes : USER_TYPES;
+            setModules(nextModules);
+            setUsers(usersRes.data.users || []);
+            setUserTypes(nextUserTypes);
+            setTypePermissions(usersRes.data.typePermissions || {});
+            setCapabilityDefinitions(usersRes.data.capabilities?.length ? usersRes.data.capabilities : APP_CAPABILITIES);
+            setTypeCapabilities(usersRes.data.typeCapabilities || {});
+            setGeneralManager(usersRes.data.generalManager || null);
+          }
+        },
+      });
     } catch (loadError) {
       setError(loadError.message || 'Unable to load admin data.');
     } finally {

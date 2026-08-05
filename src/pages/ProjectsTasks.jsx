@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { appClient } from "@/api/appClient";
+import { useNavigationAwareRequest } from "@/hooks/useNavigationAwareRequest";
 import PageHeader from "@/components/common/PageHeader";
 import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
@@ -386,6 +387,7 @@ function sameDraft(a, b) {
 }
 
 export default function ProjectsTasks() {
+  const { request: requestWork } = useNavigationAwareRequest("collaboration");
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [scope, setScope] = useState("my");
@@ -523,20 +525,18 @@ export default function ProjectsTasks() {
   );
 
   const loadWork = useCallback(
-    async ({ append = false, background = false } = {}) => {
+    async ({ append = false, background = false, force = background } = {}) => {
       if (append) setLoadingMore(true);
       else if (background) setRefreshing(true);
       else setLoading(true);
       if (!append) setError("");
-      const response = await appClient.functions.invoke(
-        "collaborationList",
-        requestPayload(append ? nextCursor : null),
-        { force: true },
-      );
-      if (response.data?.error) {
-        setError(errorText(response));
-      } else {
+      const applyResponse = (response) => {
+        if (response.data?.error) {
+          setError(errorText(response));
+          return;
+        }
         const data = response.data || {};
+        setError("");
         setItems((previous) =>
           append
             ? [
@@ -559,12 +559,26 @@ export default function ProjectsTasks() {
         setToday(data.today || "");
         setTotal(Number(data.total || 0));
         setNextCursor(data.nextCursor || null);
+      };
+      if (append) {
+        applyResponse(await appClient.functions.invoke(
+          "collaborationList",
+          requestPayload(nextCursor),
+          { force: true },
+        ));
+      } else {
+        await requestWork({
+          name: "collaborationList",
+          payload: requestPayload(null),
+          force,
+          apply: applyResponse,
+        });
       }
       setLoading(false);
       setRefreshing(false);
       setLoadingMore(false);
     },
-    [nextCursor, requestPayload],
+    [nextCursor, requestPayload, requestWork],
   );
 
   useEffect(() => {

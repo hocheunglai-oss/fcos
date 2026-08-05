@@ -3,6 +3,7 @@ import { ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Tr
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
@@ -122,6 +123,7 @@ function LookupField({ label, kind, value, onChange, placeholder }) {
 }
 
 export default function SpecialTerms() {
+  const { request: requestSpecialTerms } = useNavigationAwareRequest('reference');
   const [workspace, setWorkspace] = useState(null);
   const [activeTab, setActiveTab] = useState('terms');
   const [search, setSearch] = useState('');
@@ -140,16 +142,24 @@ export default function SpecialTerms() {
   const load = useCallback(async (force = false) => {
     setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('specialTermsWorkspace', { force }, { force });
-    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
-    if (response.data?.error) {
-      setError(response.data.error);
-      setWorkspace(null);
-    } else {
-      setWorkspace(response.data || null);
-    }
+    await requestSpecialTerms({
+      name: 'specialTermsWorkspace',
+      payload: { force },
+      force,
+      cacheKey: 'specialTermsWorkspace',
+      apply: (response) => {
+        setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
+        if (response.data?.error) {
+          setError(response.data.error);
+          setWorkspace(null);
+        } else {
+          setError('');
+          setWorkspace(response.data || null);
+        }
+      },
+    });
     setLoading(false);
-  }, []);
+  }, [requestSpecialTerms]);
 
   useEffect(() => { load(); }, [load]);
 

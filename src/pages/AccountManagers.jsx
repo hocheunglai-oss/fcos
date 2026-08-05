@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
@@ -125,6 +126,7 @@ function RoleBadges({ roles, isGroupAccount }) {
 
 export default function AccountManagers() {
   const { toast } = useToast();
+  const { request: requestAccounts } = useNavigationAwareRequest('collaboration');
   const [accounts, setAccounts] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -147,31 +149,36 @@ export default function AccountManagers() {
   const [groupNoteEditAccount, setGroupNoteEditAccount] = useState(null);
   const nextDraftKey = useRef(0);
 
-  const loadAccounts = useCallback(async ({ background = false } = {}) => {
+  const loadAccounts = useCallback(async ({ background = false, force = background } = {}) => {
     if (background) setRefreshing(true);
     else setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('accountManagersList', {}, { force: true });
-    setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
-    if (response.data?.error) {
-      setError(response.data.error);
-    } else {
-      setAccounts(response.data?.accounts || []);
-      setUsers(response.data?.users || []);
-      if (!background) {
-        setCurrentPage(1);
-        setSelectedManagerKeys(null);
-        setEditingKey('');
-        setDraftManagers([]);
-        setManagerPropagateToChildren(false);
-        setNoteEditingKey('');
-        setNoteDraft('');
-        setNotePropagateToChildren(false);
-      }
-    }
+    await requestAccounts({
+      name: 'accountManagersList',
+      force,
+      apply: (response) => {
+        setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
+        if (response.data?.error) setError(response.data.error);
+        else {
+          setError('');
+          setAccounts(response.data?.accounts || []);
+          setUsers(response.data?.users || []);
+          if (!background) {
+            setCurrentPage(1);
+            setSelectedManagerKeys(null);
+            setEditingKey('');
+            setDraftManagers([]);
+            setManagerPropagateToChildren(false);
+            setNoteEditingKey('');
+            setNoteDraft('');
+            setNotePropagateToChildren(false);
+          }
+        }
+      },
+    });
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [requestAccounts]);
 
   useEffect(() => {
     loadAccounts();

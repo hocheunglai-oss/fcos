@@ -17,6 +17,8 @@ export function dataStatusFromMeta(meta, explicitState) {
   if (explicitState) return explicitState;
   const status = String(meta?.cacheStatus || '').toUpperCase();
   if (status === 'UNAVAILABLE') return 'unavailable';
+  if (status === 'STALE_ERROR') return 'stale_error';
+  if (status === 'STALE') return 'stale';
   if (status === 'HIT') return 'cached';
   if (['MISS', 'BYPASS', 'SKIP', 'SKIPPED'].includes(status)) return 'live';
   return meta ? 'live' : 'unknown';
@@ -32,6 +34,16 @@ const STATUS = {
     label: 'Cached',
     icon: Clock3,
     className: 'border-blue-200 bg-blue-50 text-blue-800',
+  },
+  stale: {
+    label: 'Updating',
+    icon: RefreshCw,
+    className: 'border-amber-200 bg-amber-50 text-amber-900',
+  },
+  stale_error: {
+    label: 'Cached · Refresh failed',
+    icon: CloudOff,
+    className: 'border-amber-200 bg-amber-50 text-amber-900',
   },
   pending: {
     label: 'Pending Salesforce posting',
@@ -62,6 +74,8 @@ export default function DataStatus({ meta, state, label = 'Data', className }) {
   const time = formattedTime(meta?.cachedAt);
   const details = [
     `${label}: ${definition.label}`,
+    meta?.backgroundRefresh ? 'showing cached data while a live refresh completes' : '',
+    meta?.refreshError ? `refresh failed: ${meta.refreshError}` : '',
     time ? `retrieved ${time} Hong Kong time` : '',
     Number.isFinite(meta?.salesforceCalls) ? `${meta.salesforceCalls} Salesforce quota call${meta.salesforceCalls === 1 ? '' : 's'}` : '',
     meta?.requestId ? `diagnostic reference ${meta.requestId}` : '',
@@ -73,7 +87,7 @@ export default function DataStatus({ meta, state, label = 'Data', className }) {
       title={details}
       aria-label={details}
     >
-      <Icon className={cn('h-3.5 w-3.5', ['pending', 'refreshing'].includes(key) && 'animate-spin')} />
+      <Icon className={cn('h-3.5 w-3.5', ['pending', 'refreshing', 'stale'].includes(key) && 'animate-spin')} />
       <span>{label} · {definition.label}</span>
       {time ? <span className="font-normal opacity-80">· {time}</span> : null}
     </span>
