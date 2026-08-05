@@ -91,7 +91,7 @@ test('FCOS exposes fixed personal, trading, cross-functional, finance and tools 
   assert.match(server, /legacyTradingWasDefault/);
   assert.match(app, /path="\/payment-collections"/);
   assert.match(app, /RedirectWithTab path="\/payment-collections" tab="collections"/);
-  assert.match(app, /RedirectWithSection section="users"/);
+  assert.match(app, /RedirectWithSection section="people"/);
 });
 
 test('Payment Collections connects queue, incoming payments and reconciliation with structured advice evidence', async () => {

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.108';
+export const APP_VERSION = '2.0.109';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.109',
+    releasedAt: '2026-08-05',
+    title: 'Role-aware Settings workspace',
+    changes: [
+      'Reorganized Settings into Personal, Administration, and Operations sections with mobile navigation, role-aware visibility, stable links, and section-specific save actions.',
+      'Synchronized sidebar, table-density, navigation, and STEM document preferences across browsers while retaining local settings only as an offline cache.',
+      'Moved Email Router, Hedge Desk, Broker Commissions, AI Models, FCOS Updates, System Health, and Audit controls to their owning workflows and introduced one authoritative company exchange-rate provider.',
+    ],
+  },
   {
     version: '2.0.108',
     releasedAt: '2026-08-04',

@@ -95,7 +95,7 @@ const AuthenticatedApp = () => {
             <Route path="/fcos-improvements" element={<FcosImprovements />} />
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
-            <Route path="/settings" element={<ModuleGateAny moduleIds={['settings', 'admin']}><SettingsWorkspace /></ModuleGateAny>} />
+            <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
             <Route path="/review" element={<ModuleGate moduleId="review"><ReviewQueue /></ModuleGate>} />
             <Route path="/disputes" element={<ModuleGate moduleId="disputes"><DisputeWorkflow /></ModuleGate>} />
@@ -113,7 +113,7 @@ const AuthenticatedApp = () => {
             <Route path="/hedge-desk" element={<ModuleGate moduleId="hedge_desk"><HedgeDesk /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
             <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />
-            <Route path="/admin" element={<RedirectWithSection section="users" />} />
+            <Route path="/admin" element={<RedirectWithSection section="people" />} />
             <Route path="*" element={<PageNotFound />} />
           </Route>
         </>

@@ -6,8 +6,9 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), '
 
 test('Dashboard Search and Trading Assistant models share the AI Models settings tab', () => {
   const settings = read('src/pages/Settings.jsx');
+  const workspace = read('src/pages/SettingsWorkspace.jsx');
   const hedgeSettings = read('src/hedge/components/HedgeSettingsPanel.jsx');
-  assert.match(settings, /id: 'ai', label: 'AI Models'/);
+  assert.match(workspace, /id: 'ai', label: 'AI Models'/);
   assert.match(settings, /Dashboard AI Search/);
   assert.match(settings, /<HedgeAssistantAiSettings \/>/);
   assert.match(read('src/hedge/components/HedgeAssistantAiSettings.jsx'), /Estimated USD/);

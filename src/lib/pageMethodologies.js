@@ -399,6 +399,16 @@ export const BROKER_METHODOLOGIES = {
       },
     ],
   },
+  configuration: {
+    title: 'Broker Commission Configuration',
+    description: 'How the company exchange-rate provider is controlled and applied.',
+    sections: [
+      { title: 'Company setting', body: 'One server-owned provider setting applies to Broker Commissions, its exports, and related calculations for every user. Browser requests cannot override it.' },
+      { title: 'Management authority', body: 'Finance, Administrators, and the active General Manager may change the provider. A Save button appears only after the selection changes, and revision checks reject stale updates.' },
+      { title: 'Rate treatment', body: 'FCOS uses the latest available Frankfurter USD/CNY rate on or before the applicable quarter-end date. The bank buy rate remains the mid-rate multiplied by 0.998.' },
+      { title: 'Audit', body: 'Provider changes record the actor, prior provider, new provider, revision, and time without storing credentials or request payloads.' },
+    ],
+  },
 };
 
 export const SPECIAL_TERMS_METHODOLOGY = {
@@ -456,48 +466,94 @@ export const FCOS_IMPROVEMENTS_METHODOLOGY = {
 };
 
 export const SETTINGS_METHODOLOGIES = {
-  system: {
-    title: 'System Settings',
-    description: 'How operational configuration, integrations, AI, and health information are managed.',
+  my: {
+    title: 'My Settings',
+    description: 'How personal FCOS workspace preferences are synchronized and applied.',
     sections: [
       {
-        title: 'Configuration authority',
-        body: 'Saved settings apply only to their named FCOS workflow. Server-owned defaults are merged with stored values, and sensitive credentials remain protected Vercel environment variables rather than browser-editable settings.',
+        title: 'Personal scope',
+        body: 'Sidebar behavior, table density, navigation order, hidden navigation items, and STEM document filtering belong to your FCOS account. They do not change another user’s workspace or grant access to a module.',
       },
       {
-        title: 'Email and external actions',
-        body: 'Every email purpose uses its assigned Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Administrators and the General Manager maintain approved mailboxes and purpose assignments in Email Senders, while the Email Router tab manages its native directory, groups, routing presets, routing leave, subscriptions, and mailbox synchronization. Each preset has a Standard route and optional leave-aware versions. A scheduled override wins first, followed by the highest-priority and most-specific matching leave version. Reviewed routes remain fixed for up to 60 minutes unless their configuration changes; manual recipient amendments switch off the preset. Saving a setting does not send an email.',
+        title: 'Cross-browser synchronization',
+        body: 'FCOS stores the latest saved preferences against your active user account. Browser storage is retained only as an offline cache and is imported once when no server preference exists.',
       },
       {
-        title: 'AI configuration',
-        body: 'Administrators select server-allowlisted models for Dashboard AI Search, the Hedge Desk Trading Assistant, and Email Router Advisor in one AI Models tab and can review estimated API cost by purpose. Email Router recommendations are read-only, use minimum live message text, store no email content, and never receive mail-action tools.',
-      },
-      {
-        title: 'System health',
-        body: 'Health states combine direct probes and provider telemetry. FCOS checks the single Microsoft Graph application, approved mailbox registry, and purpose assignments through a non-sending Vercel OIDC token exchange. Mailbox-scoped send authorization is confirmed only by an actual send. Monitoring unavailable is distinct from Online; a missing metric is never presented as a healthy result.',
+        title: 'Save and conflicts',
+        body: 'A Save button appears only after this section changes. Revision checks reject an older browser save if the same preferences were updated elsewhere, allowing the current server version to be reviewed before retrying.',
       },
     ],
   },
-  users: {
-    title: 'Users & Access',
-    description: 'How FCOS user access, application entitlements, reporting lines, and controlled administration work.',
+  people: {
+    title: 'People & Access',
+    description: 'How FCOS users, permissions, capabilities, and reporting lines are controlled.',
     sections: [
       {
-        title: 'User status and modules',
-        body: 'Only active FCOS profiles may use authenticated APIs. Module permissions, including Email Router visibility, are managed by user type or individual override and are applied before personal navigation preferences. Hiding a navigation item does not grant or remove module access.',
-      },
-      {
         title: 'Access precedence',
-        body: 'User-type defaults establish the normal module set and an individual override may narrow or extend it. Protected General Manager and Administrator capabilities are enforced server-side. The retired application switcher and native Email Router do not use external application entitlements.',
+        body: 'User-type defaults establish normal module and capability access. An individual override may narrow or extend it. Module authorization is enforced by the server before personal navigation visibility is applied.',
       },
       {
-        title: 'Reporting lines and authority',
-        body: 'Growth & Coaching reporting assignments are maintained explicitly and reject self-management, duplicates, inactive managers, and primary-manager cycles. General Manager is a protected user type selected in Users & Access. The one active UUID-backed holder is the hierarchy root, requires neither a Primary nor Advisory Manager, and self-manages formal goals while remaining available to manage other employees.',
+        title: 'Reporting lines',
+        body: 'Primary Manager links define the formal management chain. Advisory Managers are read-only participants in development goals. The active UUID-backed General Manager is the hierarchy root and requires neither manager assignment.',
       },
       {
-        title: 'Administrative safeguards',
-        body: 'Revision checks prevent stale saves and important changes require audit context. General Manager authority transfers atomically to one active user; the former holder becomes an Administrator and then requires a reporting line. FCOS blocks direct demotion, deactivation, or deletion of the active General Manager.',
+        title: 'Internal modules only',
+        body: 'FCOS is the only application in this workspace. Obsolete external Application Access controls are not editable, while historical portal events remain available in the Audit Trail.',
       },
+    ],
+  },
+  'email-delivery': {
+    title: 'Email Delivery',
+    description: 'How Microsoft Graph mailboxes are registered and assigned to FCOS email purposes.',
+    sections: [
+      {
+        title: 'Graph-only delivery',
+        body: 'Every FCOS email purpose uses one approved Microsoft 365 mailbox through Microsoft Graph and Vercel OIDC. Workflow requests cannot supply or replace the sender address.',
+      },
+      {
+        title: 'Purpose assignments',
+        body: 'Each enabled purpose has exactly one active mailbox. Changes affect newly reserved deliveries; retries retain the sender snapshot from the original attempt.',
+      },
+      {
+        title: 'Configuration boundary',
+        body: 'Mailbox addresses and purpose assignments are non-secret server settings. Tenant and application credentials remain protected in Vercel, while Exchange administrators control mailbox-scoped authorization.',
+      },
+    ],
+  },
+  ai: {
+    title: 'AI Models',
+    description: 'How FCOS selects models and reports usage without weakening workflow permissions.',
+    sections: [
+      {
+        title: 'Purpose separation',
+        body: 'Dashboard Search, Hedge Trading Assistant, and Email Router Advisor share one settings section but retain independent models, usage totals, estimated costs, and management permissions.',
+      },
+      {
+        title: 'Data minimization',
+        body: 'Dashboard interpretation sends only the natural-language request. Hedge and Email Router assistants receive only the minimum server-prepared context needed for their advisory response. Secrets and Salesforce identifiers are excluded.',
+      },
+      {
+        title: 'Advisory boundary',
+        body: 'AI output never grants access or performs a mail, accounting, settlement, or Salesforce action. Existing server validation and human confirmation remain authoritative.',
+      },
+    ],
+  },
+  updates: {
+    title: 'FCOS Updates',
+    description: 'How release changes are prepared and sent as controlled internal communications.',
+    sections: [
+      { title: 'Independent workflow', body: 'FCOS Updates has its own queue, batches, sent history, and skipped items. It is separate from user-access administration because release communication does not change permissions.' },
+      { title: 'Draft and send authority', body: 'Administrators and the General Manager may draft and save. Only the active UUID-backed General Manager may send, and sending remains a deliberate action separate from saving.' },
+      { title: 'Recipients and delivery', body: 'A send snapshots active FCOS users and reserves one Microsoft Graph delivery per recipient. Failed and uncertain attempts remain visible for controlled review without automatic duplication.' },
+    ],
+  },
+  health: {
+    title: 'System Health',
+    description: 'How live service status and provider monitoring should be interpreted.',
+    sections: [
+      { title: 'Visible to every active user', body: 'All active FCOS users may inspect current service status, operational KPIs, provider links, and connection details. This visibility does not grant configuration or provider-dashboard write access.' },
+      { title: 'Status meaning', body: 'Health states combine direct probes and provider telemetry. Monitoring unavailable is distinct from Online; missing or failed telemetry is never presented as healthy.' },
+      { title: 'Non-sending checks', body: 'Email health verifies configuration and Microsoft token exchange without sending a message. Mailbox-scoped send authorization is conclusively confirmed only by an actual controlled delivery.' },
     ],
   },
   audit: {

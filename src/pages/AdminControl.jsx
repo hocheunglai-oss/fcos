@@ -1,19 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  CheckCircle2,
-  ExternalLink,
   GitBranch,
   KeyRound,
   Loader2,
-  Mail,
-  Megaphone,
   Plus,
   RefreshCw,
-  RotateCcw,
   Save,
   ShieldCheck,
   Trash2,
-  TriangleAlert,
   UserCog,
   UserPlus,
   Users,
@@ -33,7 +27,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
-import FcosUpdatesPanel from '@/components/admin/FcosUpdatesPanel';
 import ReportingLinesPanel from '@/components/admin/ReportingLinesPanel';
 
 const emptyUserForm = {
@@ -114,45 +107,6 @@ function userTypeDraftKey(form) {
 
 function safeUserDraft(form) {
   return { ...form, password: '' };
-}
-
-function portalAccessDrafts(applications, accessByApplication = {}) {
-  return Object.fromEntries(applications.map((application) => {
-    const access = accessByApplication[application.id] || {};
-    const defaultRole = application.roles?.find((role) => role.isDefault)?.id
-      || application.roles?.[0]?.id
-      || '';
-    return [application.id, {
-      entitlementId: access.entitlementId || null,
-      enabled: access.explicitActive === true,
-      roleId: access.explicitRoleId || defaultRole,
-      effectiveActive: access.effectiveActive === true,
-      effectiveRoleId: access.effectiveRoleId || null,
-      effectiveRoleLabel: access.effectiveRoleLabel || '',
-      effectiveSource: access.effectiveSource || null,
-      revision: Number(access.revision || 0),
-      syncStatus: access.syncStatus || (access.effectiveActive ? 'pending' : 'not_required'),
-      lastSyncError: access.lastSyncError || null,
-      lastSyncedAt: access.lastSyncedAt || null,
-      reason: '',
-    }];
-  }));
-}
-
-function accessStatusLabel(status) {
-  if (status === 'synced') return 'Synchronized';
-  if (status === 'syncing') return 'Synchronizing';
-  if (status === 'pending') return 'Pending synchronization';
-  if (status === 'error') return 'Synchronization failed';
-  return 'No synchronization required';
-}
-
-function AccessStatusIcon({ status }) {
-  if (status === 'synced' || status === 'not_required') {
-    return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
-  }
-  if (status === 'error') return <TriangleAlert className="h-4 w-4 text-red-600" />;
-  return <Loader2 className="h-4 w-4 animate-spin text-amber-600" />;
 }
 
 function SegmentButton({ active, children, icon: Icon, onClick }) {
@@ -256,9 +210,7 @@ export default function AdminControl({ methodologyAction = null }) {
   const [typePermissions, setTypePermissions] = useState({});
   const [capabilityDefinitions, setCapabilityDefinitions] = useState(APP_CAPABILITIES);
   const [typeCapabilities, setTypeCapabilities] = useState({});
-  const [portalApplications, setPortalApplications] = useState([]);
   const [generalManager, setGeneralManager] = useState(null);
-  const [portalAccess, setPortalAccess] = useState({});
   const [auditLogs, setAuditLogs] = useState([]);
   const [userForm, setUserForm] = useState(emptyUserForm);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
@@ -273,14 +225,16 @@ export default function AdminControl({ methodologyAction = null }) {
   const [savingType, setSavingType] = useState(false);
   const [deletingUser, setDeletingUser] = useState(false);
   const [deletingType, setDeletingType] = useState(false);
-  const [savingPortalAccess, setSavingPortalAccess] = useState('');
-  const [retryingPortalAccess, setRetryingPortalAccess] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   const sortedModules = useMemo(
     () => modules.slice().sort((a, b) => Number(a.sortOrder || a.sort_order || 0) - Number(b.sortOrder || b.sort_order || 0)),
     [modules]
+  );
+  const editableModules = useMemo(
+    () => sortedModules.filter((module) => !['settings', 'admin'].includes(module.id)),
+    [sortedModules]
   );
   const sortedUserTypes = useMemo(
     () => userTypes.slice().sort((a, b) => compareText(typeLabel(a), typeLabel(b))),
@@ -324,13 +278,6 @@ export default function AdminControl({ methodologyAction = null }) {
   const selectedUserIsGeneralManager = Boolean(userForm.id && userForm.id === generalManager?.userId);
   const generalManagerTransferPending = userForm.user_type === 'general_manager'
     && userForm.id !== generalManager?.userId;
-  const profileChangesPending = Boolean(
-    selectedUser
-    && (
-      selectedUser.user_type !== userForm.user_type
-      || selectedUser.active !== userForm.active
-    )
-  );
   const activeUserDraftKey = userDraftKey(userForm);
   const activeTypeDraftKey = userTypeDraftKey(typeForm);
   const userDraftValue = useMemo(() => safeUserDraft(userForm), [userForm]);
@@ -368,7 +315,6 @@ export default function AdminControl({ methodologyAction = null }) {
         setTypePermissions(usersRes.data.typePermissions || {});
         setCapabilityDefinitions(usersRes.data.capabilities?.length ? usersRes.data.capabilities : APP_CAPABILITIES);
         setTypeCapabilities(usersRes.data.typeCapabilities || {});
-        setPortalApplications(usersRes.data.portalApplications || []);
         setGeneralManager(usersRes.data.generalManager || null);
       }
       if (!logsRes.data?.error) setAuditLogs(logsRes.data.logs || []);
@@ -403,7 +349,6 @@ export default function AdminControl({ methodologyAction = null }) {
         : base;
       setBaseUserForm(base);
       setUserForm(next);
-      setPortalAccess({});
       setUserDraftRestoredAt(draft?.data && !sameDraftValue(safeUserDraft(next), safeUserDraft(base)) ? draft.updatedAt : null);
       setUserDialogOpen(true);
       return;
@@ -436,7 +381,6 @@ export default function AdminControl({ methodologyAction = null }) {
     }
     setBaseUserForm(base);
     setUserForm(next);
-    setPortalAccess(portalAccessDrafts(portalApplications, item.applicationAccess));
     setUserDraftRestoredAt(draft?.data && !sameDraftValue(safeUserDraft(next), safeUserDraft(base)) ? draft.updatedAt : null);
     setUserDialogOpen(true);
   };
@@ -564,92 +508,6 @@ export default function AdminControl({ methodologyAction = null }) {
     setUserDialogOpen(false);
     setUserForm(emptyUserForm);
     await load({ force: true });
-  };
-
-  const updatePortalAccessDraft = (applicationId, changes) => {
-    setPortalAccess((previous) => ({
-      ...previous,
-      [applicationId]: {
-        ...(previous[applicationId] || {}),
-        ...changes,
-      },
-    }));
-  };
-
-  const saveApplicationAccess = async (application) => {
-    const draft = portalAccess[application.id];
-    if (!userForm.id || !draft) return;
-    const reason = String(draft.reason || '').trim();
-    if (reason.length < 8 || reason.length > 255) {
-      setError('Enter an application access reason between 8 and 255 characters.');
-      return;
-    }
-    setSavingPortalAccess(application.id);
-    setError('');
-    setMessage('');
-    try {
-      const { data } = await appClient.functions.invoke('adminPortalAccessSave', {
-        userId: userForm.id,
-        applicationId: application.id,
-        enabled: draft.enabled,
-        roleId: draft.enabled ? draft.roleId : null,
-        expectedRevision: draft.revision,
-        reason,
-      });
-      if (data?.error) {
-        setError(data.error);
-        return;
-      }
-      setMessage(data.syncError
-        ? `${application.name} access saved. Synchronization will be retried.`
-        : `${application.name} access updated.`);
-      await load({ force: true });
-      const returned = data.entitlement || {};
-      updatePortalAccessDraft(application.id, {
-        entitlementId: returned.id || draft.entitlementId,
-        effectiveActive: returned.effective_active === true,
-        effectiveRoleId: returned.effective_role_id || null,
-        effectiveRoleLabel: application.roles?.find((role) => role.id === returned.effective_role_id)?.label || '',
-        effectiveSource: returned.effective_source || null,
-        revision: Number(returned.revision || draft.revision + 1),
-        syncStatus: data.syncError ? 'error' : (returned.sync_status || 'synced'),
-        lastSyncError: data.syncError || null,
-        reason: '',
-      });
-    } catch (saveError) {
-      setError(saveError.message || `${application.name} access could not be updated.`);
-    } finally {
-      setSavingPortalAccess('');
-    }
-  };
-
-  const retryApplicationAccess = async (application) => {
-    const draft = portalAccess[application.id];
-    if (!draft?.entitlementId) return;
-    setRetryingPortalAccess(application.id);
-    setError('');
-    setMessage('');
-    try {
-      const { data } = await appClient.functions.invoke('adminPortalAccessRetry', {
-        entitlementId: draft.entitlementId,
-      });
-      if (data?.error) {
-        setError(data.error);
-        return;
-      }
-      setMessage(`${application.name} access synchronized.`);
-      await load({ force: true });
-      const entitlement = data.entitlement || {};
-      updatePortalAccessDraft(application.id, {
-        syncStatus: entitlement.sync_status || 'synced',
-        lastSyncError: entitlement.last_sync_error || null,
-        lastSyncedAt: entitlement.last_synced_at || new Date().toISOString(),
-      });
-    } catch (retryError) {
-      setError(retryError.message || `${application.name} access could not be synchronized.`);
-    } finally {
-      setRetryingPortalAccess('');
-    }
   };
 
   const openTypeDialog = (item) => {
@@ -785,9 +643,7 @@ export default function AdminControl({ methodologyAction = null }) {
     ? 'Users'
     : activeSection === 'types'
       ? 'User Types'
-      : activeSection === 'reporting'
-        ? 'Reporting Lines'
-        : 'FCOS Updates';
+      : 'Reporting Lines';
   const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
   const discardUserDraft = () => {
     clearDraft(activeUserDraftKey);
@@ -805,12 +661,12 @@ export default function AdminControl({ methodologyAction = null }) {
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administration"
-        title="Admin Control"
-        description="Manage users, access rights, reporting lines, and controlled FCOS update communications."
+        title="People & Access"
+        description="Manage users, user types, module permissions, workflow capabilities, and reporting lines."
         actions={(
           <>
             {methodologyAction}
-            {!['updates', 'reporting'].includes(activeSection) && (
+            {activeSection !== 'reporting' && (
               <>
                 <button
                   type="button"
@@ -863,9 +719,6 @@ export default function AdminControl({ methodologyAction = null }) {
             <SegmentButton active={activeSection === 'reporting'} icon={GitBranch} onClick={() => setActiveSection('reporting')}>
               Reporting Lines
             </SegmentButton>
-            <SegmentButton active={activeSection === 'updates'} icon={Megaphone} onClick={() => setActiveSection('updates')}>
-              FCOS Updates
-            </SegmentButton>
           </div>
           <div className="text-xs font-medium text-muted-foreground">
             {activeSection === 'users'
@@ -874,13 +727,13 @@ export default function AdminControl({ methodologyAction = null }) {
                 ? 'Sorted alphabetically.'
                 : activeSection === 'reporting'
                   ? 'Primary-manager links define the formal management chain.'
-                  : 'Administrators save drafts. Only the active General Manager sends.'}
+                  : 'Primary-manager links define the formal management chain.'}
           </div>
         </div>
 
         <div className="min-h-[calc(100vh-260px)]">
           <aside className="min-h-0">
-            {!['updates', 'reporting'].includes(activeSection) && (
+            {activeSection !== 'reporting' && (
               <div className="flex h-12 items-center justify-between border-b border-border px-4">
                 <div>
                   <h2 className="text-sm font-semibold text-foreground">{activeListTitle}</h2>
@@ -891,9 +744,7 @@ export default function AdminControl({ methodologyAction = null }) {
               </div>
             )}
 
-            {activeSection === 'updates' ? (
-              <FcosUpdatesPanel />
-            ) : activeSection === 'reporting' ? (
+            {activeSection === 'reporting' ? (
               <div className="p-4 lg:p-5">
                 <ReportingLinesPanel />
               </div>
@@ -1093,7 +944,7 @@ export default function AdminControl({ methodologyAction = null }) {
                   </div>
                 </div>
                 <ModuleGrid
-                  modules={sortedModules}
+                  modules={editableModules}
                   permissions={effectiveUserPermissions}
                   locked={isAdministratorUserType(userForm.user_type) || userForm.use_type_defaults}
                   onToggle={toggleUserModule}
@@ -1113,146 +964,6 @@ export default function AdminControl({ methodologyAction = null }) {
                   locked={isAdministratorUserType(userForm.user_type) || userForm.use_type_defaults}
                   onToggle={toggleUserCapability}
                 />
-              </div>
-              <div className="mt-6">
-                <div className="mb-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Application Access</div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    External application access is separate from FCOS module permissions.
-                  </p>
-                </div>
-                {!userForm.id ? (
-                  <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                    Save this user before assigning external applications.
-                  </div>
-                ) : portalApplications.length ? (
-                  <div className="space-y-3">
-                    {portalApplications.map((application) => {
-                      const draft = portalAccess[application.id] || {};
-                      const automaticAdministratorAccess = isAdministratorUserType(userForm.user_type)
-                        && Boolean(application.administratorDefaultRole);
-                      const effectiveRole = automaticAdministratorAccess
-                        ? application.roles?.find((role) => role.id === application.administratorDefaultRole)?.label
-                          || application.administratorDefaultRole
-                        : draft.effectiveRoleLabel || 'No access';
-                      const sourceLabel = automaticAdministratorAccess
-                        ? 'Automatic administrator-level policy'
-                        : draft.effectiveSource === 'explicit'
-                          ? 'Explicit grant'
-                          : 'No entitlement';
-                      const saving = savingPortalAccess === application.id;
-                      const retrying = retryingPortalAccess === application.id;
-                      return (
-                        <section key={application.id} className="rounded-md border border-border bg-background/60 p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background">
-                                <Mail className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-semibold text-foreground">{application.name}</span>
-                                  <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-label="Opens in a new tab" />
-                                  {application.configurationStatus !== 'configured' && (
-                                    <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">
-                                      Configuration unavailable
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="mt-0.5 text-xs text-muted-foreground">{application.description}</p>
-                                <p className="mt-1 text-xs text-foreground">
-                                  Effective access: <span className="font-semibold">{effectiveRole}</span>
-                                  <span className="text-muted-foreground"> · {sourceLabel}</span>
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                              <AccessStatusIcon status={draft.syncStatus} />
-                              {accessStatusLabel(draft.syncStatus)}
-                            </div>
-                          </div>
-
-                          {profileChangesPending && (
-                            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                              Save the Active user or User Type change before editing application access.
-                            </div>
-                          )}
-
-                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(150px,220px)]">
-                            <label className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium">
-                              <input
-                                type="checkbox"
-                                checked={draft.enabled === true}
-                                disabled={profileChangesPending || saving || retrying}
-                                onChange={(event) => updatePortalAccessDraft(application.id, { enabled: event.target.checked })}
-                              />
-                              {automaticAdministratorAccess
-                                ? 'Keep explicit access after administrator-level downgrade'
-                                : `Grant ${application.name} access`}
-                            </label>
-                            <label className="space-y-1">
-                              <span className="sr-only">Application role</span>
-                              <select
-                                value={draft.roleId || ''}
-                                disabled={!draft.enabled || profileChangesPending || saving || retrying}
-                                onChange={(event) => updatePortalAccessDraft(application.id, { roleId: event.target.value })}
-                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
-                              >
-                                {(application.roles || []).map((role) => (
-                                  <option key={role.id} value={role.id}>{role.label}</option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-
-                          <div className="mt-3 flex flex-col gap-2 md:flex-row">
-                            <input
-                              value={draft.reason || ''}
-                              maxLength={255}
-                              disabled={profileChangesPending || saving || retrying}
-                              onChange={(event) => updatePortalAccessDraft(application.id, { reason: event.target.value })}
-                              placeholder="Reason for this access change (required)"
-                              className="h-10 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
-                            />
-                            <button
-                              type="button"
-                              disabled={profileChangesPending || saving || retrying || String(draft.reason || '').trim().length < 8}
-                              onClick={() => saveApplicationAccess(application)}
-                              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-                            >
-                              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                              Update Access
-                            </button>
-                            {draft.syncStatus === 'error' && draft.entitlementId && (
-                              <button
-                                type="button"
-                                disabled={saving || retrying}
-                                onClick={() => retryApplicationAccess(application)}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold"
-                                title={draft.lastSyncError || 'Retry application synchronization'}
-                              >
-                                {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                                Retry
-                              </button>
-                            )}
-                          </div>
-                          {draft.lastSyncError && (
-                            <p className="mt-2 text-xs text-red-700">{draft.lastSyncError}</p>
-                          )}
-                          {draft.lastSyncedAt && (
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              Last synchronized {new Date(draft.lastSyncedAt).toLocaleString()}
-                            </p>
-                          )}
-                        </section>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                    No external applications are configured.
-                  </div>
-                )}
               </div>
             </div>
             <DialogFooter className="border-t border-border px-5 py-4">
@@ -1339,7 +1050,7 @@ export default function AdminControl({ methodologyAction = null }) {
                   )}
                 </div>
                 <ModuleGrid
-                  modules={sortedModules}
+                  modules={editableModules}
                   permissions={activeTypePermissions}
                   locked={isAdministratorUserType(typeForm.id)}
                   onToggle={toggleTypeModule}

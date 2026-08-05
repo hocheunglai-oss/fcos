@@ -41,6 +41,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button';
 import WorkNotifications from '@/components/WorkNotifications';
 import { workspaceNavigation } from '@/lib/workspaceStandards';
+import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 
 const navGroups = [
   {
@@ -143,6 +144,7 @@ export default function Layout() {
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
   const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
+  const [workspacePreferences, setWorkspacePreferences] = useState(null);
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [navigationPreferences, setNavigationPreferences] = useState(() => normalizedNavigationPreferences(DEFAULT_NAVIGATION_PREFERENCES));
   const [navigationDraft, setNavigationDraft] = useState(null);
@@ -189,7 +191,35 @@ export default function Layout() {
     } catch {
       localStorage.removeItem(cacheKey);
     }
+    const applyWorkspacePreferences = (preferences) => {
+      if (!preferences) return;
+      setWorkspacePreferences(preferences);
+      setSidebarFixed(preferences.sidebarMode === 'fixed');
+      setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
+      saveDocumentSettings({
+        showOnlyRelevant: preferences.documentShowOnlyRelevant,
+        relevantSourceGroups: preferences.documentSourceGroups,
+      });
+      window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: preferences }));
+    };
     const load = async () => {
+      const browserDocumentSettings = readDocumentSettings();
+      const workspaceResponse = await appClient.functions.invoke('workspacePreferencesGet');
+      if (!cancelled && workspaceResponse.data?.preferences) {
+        let workspacePreferences = workspaceResponse.data.preferences;
+        if (!workspacePreferences.initialized) {
+          const migrated = await appClient.functions.invoke('workspacePreferencesSave', {
+            sidebarMode: sidebarFixed ? 'fixed' : 'auto_hide',
+            tableDensity: density,
+            documentShowOnlyRelevant: browserDocumentSettings.showOnlyRelevant,
+            documentSourceGroups: browserDocumentSettings.relevantSourceGroups,
+            expectedRevision: workspacePreferences.revision,
+          });
+          if (migrated.data?.preferences) workspacePreferences = migrated.data.preferences;
+          else if (migrated.data?.error) setNavigationError(migrated.data.error);
+        }
+        applyWorkspacePreferences(workspacePreferences);
+      }
       const response = await appClient.functions.invoke('navigationPreferencesGet');
       if (cancelled) return;
       if (response.data?.preferences) {
@@ -203,6 +233,49 @@ export default function Layout() {
     load();
     return () => { cancelled = true; };
   }, [user]);
+
+  useEffect(() => {
+    const openNavigationEditor = () => startNavigationEditing();
+    const applyPreferences = (event) => {
+      const preferences = event.detail || {};
+      if (preferences.sidebarMode) setSidebarFixed(preferences.sidebarMode === 'fixed');
+      if (preferences.tableDensity) setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
+      if (preferences.revision != null) {
+        setWorkspacePreferences(preferences);
+        setNavigationPreferences((current) => ({ ...current, revision: Number(preferences.revision) }));
+      }
+    };
+    window.addEventListener('fcos:navigation-customize', openNavigationEditor);
+    window.addEventListener('fcos:workspace-preferences-updated', applyPreferences);
+    return () => {
+      window.removeEventListener('fcos:navigation-customize', openNavigationEditor);
+      window.removeEventListener('fcos:workspace-preferences-updated', applyPreferences);
+    };
+  }, [navigationPreferences]);
+
+  const toggleSidebarMode = async () => {
+    const previous = sidebarFixed;
+    const nextFixed = !previous;
+    setSidebarFixed(nextFixed);
+    if (!workspacePreferences) return;
+    const documents = readDocumentSettings();
+    const response = await appClient.functions.invoke('workspacePreferencesSave', {
+      sidebarMode: nextFixed ? 'fixed' : 'auto_hide',
+      tableDensity: density,
+      documentShowOnlyRelevant: documents.showOnlyRelevant,
+      documentSourceGroups: documents.relevantSourceGroups,
+      expectedRevision: workspacePreferences.revision,
+    });
+    if (response.data?.error) {
+      setSidebarFixed(previous);
+      setNavigationError(response.data.error);
+      return;
+    }
+    const preferences = response.data.preferences;
+    setWorkspacePreferences(preferences);
+    setNavigationPreferences((current) => ({ ...current, revision: Number(preferences.revision) }));
+    window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: preferences }));
+  };
 
   const startNavigationEditing = () => {
     setNavigationDraft(normalizedNavigationPreferences(navigationPreferences));
@@ -256,6 +329,7 @@ export default function Layout() {
     } else {
       const next = normalizedNavigationPreferences(response.data.preferences);
       setNavigationPreferences(next);
+      setWorkspacePreferences((current) => current ? { ...current, revision: next.revision, updatedAt: next.updatedAt } : current);
       setNavigationDraft(null);
       setNavigationEditing(false);
       if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
@@ -272,6 +346,7 @@ export default function Layout() {
     } else {
       const next = normalizedNavigationPreferences(response.data.preferences || DEFAULT_NAVIGATION_PREFERENCES);
       setNavigationPreferences(next);
+      setWorkspacePreferences((current) => current ? { ...current, revision: next.revision, updatedAt: next.updatedAt } : current);
       setNavigationDraft(null);
       setNavigationEditing(false);
       if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
@@ -358,7 +433,7 @@ export default function Layout() {
             ? 'absolute left-[240px]'
             : 'fixed left-0 rounded-l-none border-l-0',
         )}
-        onClick={() => setSidebarFixed((fixed) => !fixed)}
+        onClick={toggleSidebarMode}
         disabled={navigationEditing}
         aria-label={effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
         title={navigationEditing ? 'Finish editing navigation first' : effectiveSidebarFixed ? 'Use auto-hide sidebar' : 'Keep sidebar open'}
@@ -478,19 +553,17 @@ export default function Layout() {
         </nav>
 
         <div className="space-y-3 border-t border-slate-200 p-3">
-          {(hasModuleAccess('settings') || hasModuleAccess('admin')) && (
-            <NavLink
-              to="/settings"
-              onClick={handleNavigation}
-              className={({ isActive }) => cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                isActive ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
-              )}
-            >
-              <Settings className="h-4 w-4" />
-              Settings
-            </NavLink>
-          )}
+          <NavLink
+            to="/settings"
+            onClick={handleNavigation}
+            className={({ isActive }) => cn(
+              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+              isActive ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950',
+            )}
+          >
+            <Settings className="h-4 w-4" />
+            Settings
+          </NavLink>
           {user && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="truncate text-xs font-semibold text-slate-900">{user.full_name || user.email}</div>
@@ -498,11 +571,8 @@ export default function Layout() {
               {authMode === 'local' && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Local admin mode</div>}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDensity((value) => value === 'compact' ? 'comfort' : 'compact')}>
-              {density === 'compact' ? 'Compact' : 'Comfort'}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setVersionOpen(true)}>
+          <div>
+            <Button variant="outline" size="sm" className="w-full" onClick={() => setVersionOpen(true)}>
               {APP_VERSION}
             </Button>
           </div>

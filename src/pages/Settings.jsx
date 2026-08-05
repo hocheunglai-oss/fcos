@@ -6,14 +6,11 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  CircleDollarSign,
   Clock,
-  ChartNoAxesCombined,
   ExternalLink,
   FileText,
   Loader2,
   Mail,
-  MailSearch,
   Minus,
   RefreshCw,
   Server,
@@ -26,48 +23,49 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import { appClient } from '@/api/appClient';
-import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettings } from '@/lib/exchangeRateSettings';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { useAuth } from '@/lib/AuthContext';
-import { useSearchParams } from 'react-router-dom';
-import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
-import EmailRouterSettings from '@/components/email-router/EmailRouterSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
-const SETTINGS_TAB_KEY = 'settings:active-tab';
+const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
 const HEALTH_SAMPLES_KEY = 'fcos:system-health-samples';
 const HEALTH_SAMPLE_INTERVAL_MS = 60_000;
 const MAX_HEALTH_SAMPLES = 5;
 
-const SETTINGS_TABS = [
-  { id: 'email', label: 'Email Senders', icon: Mail },
-  { id: 'email-router', label: 'Email Router', icon: MailSearch },
-  { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
-  { id: 'documents', label: 'STEM Documents', icon: FileText },
-  { id: 'ai', label: 'AI Models', icon: Sparkles },
-  { id: 'hedge-desk', label: 'Hedge Desk', icon: ChartNoAxesCombined },
-  { id: 'health', label: 'System Health', icon: Activity },
-];
-
-function validSettingsTab(value) {
-  return SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'email';
+function settingsSnapshot() {
+  const documents = readDocumentSettings();
+  return {
+    sidebarMode: localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true' ? 'fixed' : 'auto_hide',
+    tableDensity: localStorage.getItem('table-density') === 'comfort' ? 'comfort' : 'compact',
+    documentShowOnlyRelevant: documents.showOnlyRelevant,
+    documentSourceGroups: documents.relevantSourceGroups,
+    revision: 0,
+    initialized: false,
+  };
 }
 
-function settingsSnapshot() {
+function comparableWorkspaceSettings(value = {}) {
+  const selectedGroups = new Set(Array.isArray(value.documentSourceGroups) ? value.documentSourceGroups : []);
   return {
-    exchangeRateSettings: readExchangeRateSettings(),
-    documentSettings: readDocumentSettings(),
+    sidebarMode: value.sidebarMode === 'fixed' ? 'fixed' : 'auto_hide',
+    tableDensity: value.tableDensity === 'comfort' ? 'comfort' : 'compact',
+    documentShowOnlyRelevant: value.documentShowOnlyRelevant !== false,
+    documentSourceGroups: DOCUMENT_SOURCE_GROUPS.filter((group) => selectedGroups.has(group)),
   };
+}
+
+function sameWorkspaceSettings(a, b) {
+  return sameDraftValue(comparableWorkspaceSettings(a), comparableWorkspaceSettings(b));
 }
 
 function SettingsPanel({ title, description, icon: Icon, meta, children }) {
@@ -575,16 +573,17 @@ function SystemHealthPanel() {
   );
 }
 
-export default function SettingsPage({ methodologyAction = null }) {
-  const { isAdministrator } = useAuth();
-  const [searchParams] = useSearchParams();
+export default function SettingsPage({ section = 'my', methodologyAction = null }) {
+  const { isAdministrator, hasCapability } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
   const [baseSettings, setBaseSettings] = useState(settingsSnapshot);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
-  const [activeTab, setActiveTab] = useState(() => validSettingsTab(searchParams.get('panel') || localStorage.getItem(SETTINGS_TAB_KEY)));
+  const [sidebarMode, setSidebarMode] = useState(() => settingsSnapshot().sidebarMode);
+  const [tableDensity, setTableDensity] = useState(() => settingsSnapshot().tableDensity);
+  const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const [workspaceError, setWorkspaceError] = useState('');
   const [aiSettings, setAiSettings] = useState(null);
   const [aiModels, setAiModels] = useState([]);
   const [aiUsage, setAiUsage] = useState(null);
@@ -602,13 +601,81 @@ export default function SettingsPage({ methodologyAction = null }) {
   useEffect(() => {
     const base = settingsSnapshot();
     const draft = readDraft(SETTINGS_DRAFT_KEY);
-    const next = draft?.data && !sameDraftValue(draft.data, base)
+    const next = draft?.data && !sameWorkspaceSettings(draft.data, base)
       ? { ...base, ...draft.data }
       : base;
-    setExchangeRateSettings(next.exchangeRateSettings || base.exchangeRateSettings);
-    setDocumentSettings(next.documentSettings || base.documentSettings);
+    setSidebarMode(next.sidebarMode || base.sidebarMode);
+    setTableDensity(next.tableDensity || base.tableDensity);
+    setDocumentSettings({
+      showOnlyRelevant: next.documentShowOnlyRelevant ?? base.documentShowOnlyRelevant,
+      relevantSourceGroups: next.documentSourceGroups || base.documentSourceGroups,
+    });
     setBaseSettings(base);
-    setDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
+    setDraftRestoredAt(draft?.data && !sameWorkspaceSettings(next, base) ? draft.updatedAt : null);
+
+    let cancelled = false;
+    const loadWorkspacePreferences = async () => {
+      const response = await appClient.functions.invoke('workspacePreferencesGet', {}, { force: true });
+      if (cancelled) return;
+      if (response.data?.error) {
+        setWorkspaceError(response.data.error);
+        return;
+      }
+      const preferences = response.data?.preferences;
+      if (!preferences) return;
+      const serverSettings = {
+        sidebarMode: preferences.sidebarMode,
+        tableDensity: preferences.tableDensity,
+        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
+        documentSourceGroups: preferences.documentSourceGroups,
+        revision: preferences.revision,
+        initialized: preferences.initialized,
+      };
+      setSidebarMode(serverSettings.sidebarMode);
+      setTableDensity(serverSettings.tableDensity);
+      setDocumentSettings({
+        showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: serverSettings.documentSourceGroups,
+      });
+      setWorkspaceRevision(serverSettings.revision);
+      setBaseSettings(serverSettings);
+      clearDraft(SETTINGS_DRAFT_KEY);
+      setDraftRestoredAt(null);
+      saveDocumentSettings({
+        showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: serverSettings.documentSourceGroups,
+      });
+      localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(serverSettings.sidebarMode === 'fixed'));
+      localStorage.setItem('table-density', serverSettings.tableDensity);
+      window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: serverSettings }));
+    };
+    loadWorkspacePreferences();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const applyWorkspacePreferences = (event) => {
+      const preferences = event.detail;
+      if (!preferences?.initialized) return;
+      setSidebarMode(preferences.sidebarMode);
+      setTableDensity(preferences.tableDensity);
+      setDocumentSettings({
+        showOnlyRelevant: preferences.documentShowOnlyRelevant,
+        relevantSourceGroups: preferences.documentSourceGroups,
+      });
+      setWorkspaceRevision(preferences.revision);
+      setBaseSettings({
+        sidebarMode: preferences.sidebarMode,
+        tableDensity: preferences.tableDensity,
+        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
+        documentSourceGroups: preferences.documentSourceGroups,
+        revision: preferences.revision,
+        initialized: true,
+      });
+      setWorkspaceError('');
+    };
+    window.addEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
+    return () => window.removeEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
   }, []);
 
   const loadAiSettings = useCallback(async () => {
@@ -627,8 +694,8 @@ export default function SettingsPage({ methodologyAction = null }) {
   }, []);
 
   useEffect(() => {
-    loadAiSettings();
-  }, [loadAiSettings]);
+    if (section === 'ai' && isAdministrator) loadAiSettings();
+  }, [isAdministrator, loadAiSettings, section]);
 
   const loadEmailSenders = useCallback(async () => {
     setEmailSendersLoading(true);
@@ -649,8 +716,8 @@ export default function SettingsPage({ methodologyAction = null }) {
   }, []);
 
   useEffect(() => {
-    loadEmailSenders();
-  }, [loadEmailSenders]);
+    if (section === 'email-delivery' && isAdministrator) loadEmailSenders();
+  }, [isAdministrator, loadEmailSenders, section]);
 
   const openMailboxEditor = (mailbox = null) => {
     setMailboxForm({
@@ -694,61 +761,81 @@ export default function SettingsPage({ methodologyAction = null }) {
   };
 
   const settingsDraftValue = useMemo(() => ({
-    exchangeRateSettings,
-    documentSettings,
-  }), [documentSettings, exchangeRateSettings]);
-  const settingsDirty = Boolean(baseSettings && !sameDraftValue(settingsDraftValue, baseSettings));
+    sidebarMode,
+    tableDensity,
+    documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
+    documentSourceGroups: documentSettings.relevantSourceGroups,
+    revision: workspaceRevision,
+    initialized: true,
+  }), [documentSettings, sidebarMode, tableDensity, workspaceRevision]);
+  const settingsDirty = Boolean(baseSettings && !sameWorkspaceSettings(settingsDraftValue, baseSettings));
   useDraftAutosave(SETTINGS_DRAFT_KEY, settingsDraftValue, {
     enabled: true,
     dirty: settingsDirty,
     message: 'Autosaved Settings draft. Save or discard it before leaving.',
   });
 
-  const changeTab = (tab) => {
-    const next = validSettingsTab(tab);
-    setActiveTab(next);
-    localStorage.setItem(SETTINGS_TAB_KEY, next);
-  };
-
-  const saveAll = async () => {
+  const savePersonalSettings = async () => {
     setSaving(true);
-    setAiSettingsError(null);
+    setWorkspaceError('');
     try {
-      if (aiSettings?.modelId && aiSettings.modelId !== baseAiModelId) {
-        if (!isAdministrator) throw new Error('Only Administrators can change the Dashboard AI model.');
-        const response = await appClient.functions.invoke('dashboardAiSettingsSave', {
-          modelId: aiSettings.modelId,
-          expectedRevision: aiSettings.revision,
-        });
-        if (response.data?.error) throw new Error(response.data.error);
-        setAiSettings(response.data.settings);
-        setAiModels(response.data.models || aiModels);
-        setAiUsage(response.data.usage || aiUsage);
-        setBaseAiModelId(response.data.settings?.modelId || aiSettings.modelId);
-      }
-      saveExchangeRateSettings(exchangeRateSettings);
-      saveDocumentSettings(documentSettings);
-      const savedValue = {
-        exchangeRateSettings,
-        documentSettings,
-      };
+      const response = await appClient.functions.invoke('workspacePreferencesSave', {
+        sidebarMode,
+        tableDensity,
+        documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
+        documentSourceGroups: documentSettings.relevantSourceGroups,
+        expectedRevision: workspaceRevision,
+      });
+      if (response.data?.error) throw new Error(response.data.error);
+      const preferences = response.data.preferences;
+      const savedValue = { ...settingsDraftValue, revision: preferences.revision, initialized: true };
+      setWorkspaceRevision(preferences.revision);
       setBaseSettings(savedValue);
+      saveDocumentSettings(documentSettings);
+      localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarMode === 'fixed'));
+      localStorage.setItem('table-density', tableDensity);
+      window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: savedValue }));
       clearDraft(SETTINGS_DRAFT_KEY);
       setDraftRestoredAt(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (saveError) {
-      setAiSettingsError(saveError.message || 'Settings could not be saved.');
+      setWorkspaceError(saveError.message || 'Personal settings could not be saved.');
     } finally {
       setSaving(false);
     }
   };
 
+  const saveDashboardAiSettings = async () => {
+    if (!aiSettings?.modelId || aiSettings.modelId === baseAiModelId) return;
+    setSaving(true);
+    setAiSettingsError(null);
+    const response = await appClient.functions.invoke('dashboardAiSettingsSave', {
+      modelId: aiSettings.modelId,
+      expectedRevision: aiSettings.revision,
+    });
+    if (response.data?.error) {
+      setAiSettingsError(response.data.error);
+    } else {
+      setAiSettings(response.data.settings);
+      setAiModels(response.data.models || aiModels);
+      setAiUsage(response.data.usage || aiUsage);
+      setBaseAiModelId(response.data.settings?.modelId || aiSettings.modelId);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    }
+    setSaving(false);
+  };
+
   const discardSettingsDraft = () => {
     clearDraft(SETTINGS_DRAFT_KEY);
     if (baseSettings) {
-      setExchangeRateSettings(baseSettings.exchangeRateSettings || readExchangeRateSettings());
-      setDocumentSettings(baseSettings.documentSettings || readDocumentSettings());
+      setSidebarMode(baseSettings.sidebarMode);
+      setTableDensity(baseSettings.tableDensity);
+      setDocumentSettings({
+        showOnlyRelevant: baseSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: baseSettings.documentSourceGroups,
+      });
     }
     setDraftRestoredAt(null);
   };
@@ -762,51 +849,72 @@ export default function SettingsPage({ methodologyAction = null }) {
     });
   };
 
+  const activeTab = {
+    my: 'documents',
+    'email-delivery': 'email',
+    ai: 'ai',
+    health: 'health',
+  }[section] || 'documents';
+  const pageMeta = {
+    my: {
+      eyebrow: 'Personal',
+      title: 'My Settings',
+      description: 'Keep your FCOS workspace consistent across browsers and devices.',
+    },
+    'email-delivery': {
+      eyebrow: 'Administration',
+      title: 'Email Delivery',
+      description: 'Manage approved Microsoft Graph mailboxes and their FCOS email-purpose assignments.',
+    },
+    ai: {
+      eyebrow: 'Administration',
+      title: 'AI Models',
+      description: 'Manage authorized AI models and review usage and estimated cost by FCOS purpose.',
+    },
+    health: {
+      eyebrow: 'Operations',
+      title: 'System Health',
+      description: 'Review current service status, workload indicators, and provider connections.',
+    },
+  }[section];
+
   return (
     <div className="mx-auto max-w-6xl p-6 lg:p-8">
       <PageHeader
         icon={Settings}
-        eyebrow="Admin"
-        title="Settings"
-        description="Configure email senders, exchange rates, STEM documents, AI, Hedge Desk, and service health."
+        eyebrow={pageMeta.eyebrow}
+        title={pageMeta.title}
+        description={pageMeta.description}
         actions={(
           <>
             {methodologyAction}
-            <Button onClick={saveAll} disabled={saving} className="gap-2">
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-              {saved ? 'Saved!' : 'Save All Settings'}
-            </Button>
+            {section === 'my' && settingsDirty && (
+              <Button onClick={savePersonalSettings} disabled={saving} className="gap-2">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
+                {saved ? 'Saved' : 'Save My Settings'}
+              </Button>
+            )}
           </>
         )}
       />
 
-      <DraftNotice restoredAt={draftRestoredAt} label="Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />
+      {section === 'my' && <DraftNotice restoredAt={draftRestoredAt} label="My Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />}
 
-      {aiSettingsError && (
+      {section === 'ai' && aiSettingsError && (
         <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{aiSettingsError}</span>
         </div>
       )}
 
-      <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
-        <div className="rounded-2xl border border-border bg-card/70 p-2">
-          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
-            {SETTINGS_TABS.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <TabsTrigger
-                  key={tab.id}
-                  value={tab.id}
-                  className="h-9 gap-2 px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {tab.label}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
+      {workspaceError && section === 'my' && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{workspaceError}</span>
         </div>
+      )}
+
+      <Tabs value={activeTab} className="space-y-4">
 
         <TabsContent value="email" className="mt-0">
           <SettingsPanel
@@ -989,48 +1097,51 @@ export default function SettingsPage({ methodologyAction = null }) {
           </Dialog>
         </TabsContent>
 
-        <TabsContent value="exchange" className="mt-0">
-          <SettingsPanel
-            icon={CircleDollarSign}
-            title="Exchange Rate API"
-            description="Used by Broker's Commission to convert USD payable and receivable summaries into CNY."
-          >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Mid-Rate Source</Label>
-                <Select
-                  value={exchangeRateSettings.provider}
-                  onValueChange={(provider) => setExchangeRateSettings((prev) => ({ ...prev, provider }))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {RATE_PROVIDER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-                <div><span className="font-semibold text-foreground">Source:</span> Frankfurter API</div>
-                <div><span className="font-semibold text-foreground">Rate treatment:</span> API rate is mid-rate</div>
-                <div><span className="font-semibold text-foreground">Bank buy rate:</span> mid-rate less 0.2%</div>
-                <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
-                <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
-              </div>
-            </div>
-          </SettingsPanel>
-        </TabsContent>
-
-        <TabsContent value="email-router" className="mt-0">
-          <EmailRouterSettings />
-        </TabsContent>
-
         <TabsContent value="documents" className="mt-0">
-          <SettingsPanel
-            icon={FileText}
-            title="STEM Documents"
-            description="Choose which discovered Salesforce document sources are relevant for Stem Detail and dispute document browsing."
-          >
+          <div className="space-y-5">
+            <SettingsPanel
+              icon={Settings}
+              title="Workspace"
+              description="Choose how FCOS navigation and data tables behave for your account."
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sidebar behavior</Label>
+                  <Select value={sidebarMode} onValueChange={setSidebarMode}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto_hide">Auto-hide at the left edge</SelectItem>
+                      <SelectItem value="fixed">Keep fixed space</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Table density</Label>
+                  <Select value={tableDensity} onValueChange={setTableDensity}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="compact">Compact</SelectItem>
+                      <SelectItem value="comfort">Comfort</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="mt-4 border-t border-border pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => window.dispatchEvent(new CustomEvent('fcos:navigation-customize'))}
+                >
+                  Customize sidebar order and visibility
+                </Button>
+              </div>
+            </SettingsPanel>
+
+            <SettingsPanel
+              icon={FileText}
+              title="STEM Documents"
+              description="Choose which discovered Salesforce document sources are relevant for Stem Detail and dispute document browsing."
+            >
             <label className="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
               <input
                 type="checkbox"
@@ -1055,17 +1166,26 @@ export default function SettingsPage({ methodologyAction = null }) {
                 );
               })}
             </div>
-          </SettingsPanel>
+            </SettingsPanel>
+          </div>
         </TabsContent>
 
         <TabsContent value="ai" className="mt-0">
           <div className="space-y-5">
-          <SettingsPanel
+          {isAdministrator && <SettingsPanel
             icon={Sparkles}
             title="Dashboard AI Search"
             description="Choose the model that interprets natural-language Dashboard searches. Salesforce records are never sent to the model."
             meta={aiSettings?.updatedAt ? `Updated ${formatHealthDate(aiSettings.updatedAt)}` : null}
           >
+            {isAdministrator && aiSettings?.modelId !== baseAiModelId && (
+              <div className="mb-4 flex justify-end border-b border-border pb-4">
+                <Button type="button" onClick={saveDashboardAiSettings} disabled={saving} className="gap-2">
+                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
+                  {saved ? 'Saved' : 'Save Dashboard AI Model'}
+                </Button>
+              </div>
+            )}
             {aiSettingsLoading ? (
               <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1216,9 +1336,9 @@ export default function SettingsPage({ methodologyAction = null }) {
                 action={<Button variant="outline" size="sm" onClick={loadAiSettings}>Retry</Button>}
               />
             )}
-          </SettingsPanel>
-          <HedgeAssistantAiSettings />
-          <EmailRouterAdvisorAiSettings />
+          </SettingsPanel>}
+          {hasCapability('hedge_admin') && <HedgeAssistantAiSettings />}
+          {isAdministrator && <EmailRouterAdvisorAiSettings />}
           </div>
         </TabsContent>
 
@@ -1226,23 +1346,7 @@ export default function SettingsPage({ methodologyAction = null }) {
           <SystemHealthPanel />
         </TabsContent>
 
-        <TabsContent value="hedge-desk" className="mt-0">
-          <SettingsPanel
-            icon={ChartNoAxesCombined}
-            title="Hedge Desk"
-            description="Shared valuation, settlement, Salesforce, communication, and Trading Assistant configuration for the native FCOS module."
-          >
-            <HedgeSettingsPanel />
-          </SettingsPanel>
-        </TabsContent>
       </Tabs>
-
-      <div className="mt-4 flex justify-end rounded-xl border border-border bg-card/70 p-3">
-        <Button onClick={saveAll} disabled={saving} className="gap-2">
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-          {saved ? 'Saved!' : 'Save All Settings'}
-        </Button>
-      </div>
     </div>
   );
 }

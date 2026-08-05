@@ -29,7 +29,7 @@ export const APP_MODULES = [
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
   { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 89 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
-  { id: 'admin', label: 'Users & Access', path: '/settings?section=users', sortOrder: 100 },
+  { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
 ];
 
 export const FULL_ACCESS = Object.fromEntries(APP_MODULES.map((module) => [module.id, true]));
@@ -44,6 +44,7 @@ export const APP_CAPABILITIES = [
   { id: 'hedge_close_approve', label: 'Approve Hedge Close', description: 'Close or reopen months and approve SFS reports.' },
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
+  { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
 ];
 
 export const FULL_CAPABILITIES = Object.fromEntries(APP_CAPABILITIES.map((capability) => [capability.id, true]));

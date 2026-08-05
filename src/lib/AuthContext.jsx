@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { FULL_ACCESS, isAdministratorUserType } from '@/lib/authModules';
+import { FULL_ACCESS, FULL_CAPABILITIES, isAdministratorUserType } from '@/lib/authModules';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { appClient } from '@/api/appClient';
 
@@ -52,6 +52,7 @@ async function loadSupabaseUser() {
     access: {},
     accessLevels: {},
     applications: [],
+    capabilities: {},
     error: { type: 'auth_required' },
   };
 
@@ -76,6 +77,7 @@ async function loadSupabaseUser() {
     access: data.moduleAccess || {},
     accessLevels: data.moduleAccessLevels || {},
     applications: data.applications || [],
+    capabilities: data.capabilities || {},
     error: null,
   };
 }
@@ -85,6 +87,7 @@ export const AuthProvider = ({ children }) => {
   const [moduleAccess, setModuleAccess] = useState({});
   const [moduleAccessLevels, setModuleAccessLevels] = useState({});
   const [applications, setApplications] = useState([]);
+  const [capabilities, setCapabilities] = useState({});
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingPublicSettings] = useState(false);
@@ -97,6 +100,7 @@ export const AuthProvider = ({ children }) => {
     setModuleAccess(FULL_ACCESS);
     setModuleAccessLevels(fullAccessLevels());
     setApplications(LOCAL_APPLICATIONS);
+    setCapabilities(FULL_CAPABILITIES);
     setIsAuthenticated(true);
     setAuthError(null);
     setAuthChecked(true);
@@ -116,6 +120,7 @@ export const AuthProvider = ({ children }) => {
       setModuleAccess(result.access || {});
       setModuleAccessLevels(result.accessLevels || {});
       setApplications(result.applications || []);
+      setCapabilities(result.capabilities || {});
       setIsAuthenticated(Boolean(result.user));
       setAuthError(result.error);
       setAuthChecked(true);
@@ -126,6 +131,7 @@ export const AuthProvider = ({ children }) => {
       setModuleAccess({});
       setModuleAccessLevels({});
       setApplications([]);
+      setCapabilities({});
       setAuthError(nextError);
       setIsAuthenticated(false);
       setAuthChecked(true);
@@ -149,6 +155,7 @@ export const AuthProvider = ({ children }) => {
         setModuleAccess({});
         setModuleAccessLevels({});
         setApplications([]);
+        setCapabilities({});
         setIsAuthenticated(false);
         setAuthError({ type: 'auth_required' });
         setAuthChecked(true);
@@ -243,6 +250,7 @@ export const AuthProvider = ({ children }) => {
     setModuleAccess({});
     setModuleAccessLevels({});
     setApplications([]);
+    setCapabilities({});
     setIsAuthenticated(false);
     setAuthChecked(true);
     if (!isSupabaseConfigured) applyLocalAdmin();
@@ -257,12 +265,18 @@ export const AuthProvider = ({ children }) => {
     return moduleAccess[moduleId] === true;
   }, [moduleAccess, user?.user_type]);
   const isAdministrator = isAdministratorUserType(user?.user_type);
+  const hasCapability = useCallback((capabilityId) => {
+    if (!capabilityId) return true;
+    if (isAdministratorUserType(user?.user_type)) return true;
+    return capabilities[capabilityId] === true;
+  }, [capabilities, user?.user_type]);
 
   const value = {
     user,
     moduleAccess,
     moduleAccessLevels,
     applications,
+    capabilities,
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,
@@ -278,6 +292,7 @@ export const AuthProvider = ({ children }) => {
     checkUserAuth,
     checkAppState,
     hasModuleAccess,
+    hasCapability,
     refreshApplications,
     launchApplication,
   };

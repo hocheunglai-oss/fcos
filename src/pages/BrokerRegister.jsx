@@ -11,7 +11,6 @@ import PageHeader from '@/components/common/PageHeader';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { numericValue, textValue } from '@/lib/displayValue';
-import { readExchangeRateSettings } from '@/lib/exchangeRateSettings';
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -162,7 +161,6 @@ export default function BrokerRegister() {
   const [fromDate, setFromDate] = useState(() => initialDateRange.from);
   const [toDate, setToDate] = useState(() => initialDateRange.to);
   const [selectedStemId, setSelectedStemId] = useState(null);
-  const [exchangeRateProvider] = useState(() => readExchangeRateSettings().provider);
   const [exchangeRate, setExchangeRate] = useState(null);
   const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
   const [exchangeRateError, setExchangeRateError] = useState(null);
@@ -263,7 +261,6 @@ export default function BrokerRegister() {
       setExchangeRateError(null);
       const res = await appClient.functions.invoke('frankfurterUsdCnyRate', {
         date: exchangeRateTargetDate,
-        provider: exchangeRateProvider,
       });
       if (cancelled) return;
       if (res.data?.error) {
@@ -276,7 +273,7 @@ export default function BrokerRegister() {
     };
     loadExchangeRate();
     return () => { cancelled = true; };
-  }, [exchangeRateProvider, exchangeRateTargetDate, showCny]);
+  }, [exchangeRateTargetDate, showCny]);
 
   const commissionPayableTotal = includedSortedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
   const commissionReceivableTotal = includedSortedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
@@ -478,7 +475,7 @@ export default function BrokerRegister() {
       ['Rows Exported', includedSortedRows.length.toLocaleString()],
       ['Source', exchangeRate?.source || 'Frankfurter API'],
       ['API URL', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
-      ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
+      ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : 'Company setting unavailable'],
       ['Exchange-rate target date', exchangeRateTargetDate],
       ['Requested rate date', exchangeRate?.requestedDate || exchangeRateTargetDate],
       ['Applied rate date', exchangeRate?.date || 'Unavailable'],
@@ -491,7 +488,7 @@ export default function BrokerRegister() {
       ['导出行数', includedSortedRows.length.toLocaleString()],
       ['来源', exchangeRate?.source || 'Frankfurter API'],
       ['API 地址', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
-      ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
+      ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : '公司设置不可用'],
       ['汇率目标日期', exchangeRateTargetDate],
       ['请求汇率日期', exchangeRate?.requestedDate || exchangeRateTargetDate],
       ['实际使用汇率日期', exchangeRate?.date || '不可用'],

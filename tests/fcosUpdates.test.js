@@ -105,7 +105,7 @@ test('Settings manages Graph mailboxes and purpose assignments', async () => {
   assert.match(handlerSource, /microsoft-graph-email/);
   assert.match(handlerSource, /verifyGraphEmailApplication/);
   assert.match(handlerSource, /without sending email/);
-  assert.match(methodologySource, /Every email purpose uses its assigned Microsoft 365 mailbox/);
+  assert.match(methodologySource, /Every FCOS email purpose uses one approved Microsoft 365 mailbox/);
 });
 
 test('FCOS update migration creates service-only workflow and General Manager controls', async () => {

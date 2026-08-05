@@ -212,7 +212,7 @@ test('portal storage is service-only, revisioned, and protects the final Adminis
   assert.match(migration, /At least one active FCOS Administrator is required/);
 });
 
-test('portal routes use bearer assertions and preserve FCOS deep links', async () => {
+test('retired portal routes preserve history and FCOS deep links without editable application access', async () => {
   const [portalSource, functionSource, appSource, loginSource, adminSource] = await Promise.all([
     readFile(new URL('../api/_portal.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
@@ -240,5 +240,6 @@ test('portal routes use bearer assertions and preserve FCOS deep links', async (
   assert.match(appSource, /location\.pathname === '\/' \? undefined : \{ from: location \}/);
   assert.match(loginSource, /const returnTo = from[\s\S]*: '\/'/);
   assert.doesNotMatch(appSource, /AppPortal/);
-  assert.match(adminSource, /syncStatus: data\.syncError \? 'error' : \(returned\.sync_status \|\| 'synced'\)/);
+  assert.doesNotMatch(adminSource, /adminPortalAccessSave/);
+  assert.doesNotMatch(adminSource, />Application Access</);
 });
