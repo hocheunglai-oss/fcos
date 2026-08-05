@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.121';
+export const APP_VERSION = '2.0.122';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.122',
+    releasedAt: '2026-08-06',
+    title: 'Fixed-position dock expansion',
+    changes: [
+      'Kept every sidebar icon at the same horizontal and vertical position when the caption pane expands.',
+    ],
+  },
   {
     version: '2.0.121',
     releasedAt: '2026-08-06',

@@ -64,6 +64,7 @@ test('application sidebar is a translucent icon dock and session actions belong 
   assert.match(layout, /data-sidebar-caption-glass="true"/);
   assert.match(layout, /left-\[64px\][\s\S]*bg-white\/\[0\.44\][\s\S]*backdrop-blur-2xl/);
   assert.match(layout, /flex w-14 shrink-0 justify-center/);
+  assert.match(layout, /flex h-8 items-center[\s\S]*<WorkNotifications \/>/);
   assert.match(layout, /sidebarShowsCaptions \? 'space-y-2 px-2 py-3'/);
   assert.match(layout, /sidebarMode: 'auto_hide'/);
   assert.match(layout, /aria-label="Application navigation"/);

@@ -481,7 +481,7 @@ export default function Layout() {
                     <div className="truncate text-[11px] font-medium text-emerald-700">Salesforce connected</div>
                   </div>
                 </div>
-                <div className="flex h-10 items-center">
+                <div className="flex h-8 items-center">
                   <div className="flex w-14 shrink-0 justify-center transition-transform duration-150 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
                     <WorkNotifications />
                   </div>
