@@ -435,6 +435,10 @@ export const SPECIAL_TERMS_METHODOLOGY = {
       title: 'Controlled changes',
       body: 'Users need Manage Special Terms capability to write. FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, and records idempotent operation history. Removing a term requires its exact name and an audit reason, then removes the term and all linked rules atomically.',
     },
+    {
+      title: 'PDF register',
+      body: 'Download PDF creates a server-generated register from Salesforce. It follows the current Terms or Rules view and search text, includes linked rule conditions without exposing Salesforce IDs, and records the filtered counts in the audit trail.',
+    },
   ],
 };
 

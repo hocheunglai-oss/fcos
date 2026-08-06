@@ -11,6 +11,7 @@ import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
+import { generateSpecialTermsPdf } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
@@ -1255,6 +1256,7 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
   specialTermsWorkspace: ['special_terms'],
+  specialTermsPdfExport: ['special_terms'],
   specialTermsOptions: ['special_terms'],
   specialTermsSave: ['special_terms'],
   specialTermsDelete: ['special_terms'],
@@ -16481,6 +16483,29 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
   return { ...(await listSpecialTerms({ force: body.force === true })), canManage: await userHasCapability(context.client, context.profile, 'special_terms_manage') };
 }
 
+async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const workspace = await listSpecialTerms({ force: body.force === true });
+  const generated = generateSpecialTermsPdf(workspace, {
+    view: body.view,
+    search: body.search,
+    actorName: context.profile.full_name || context.profile.email,
+  });
+  await writeAdminAudit(context.client, context.profile, 'special_terms_pdf_exported', null, null, {
+    view: generated.view,
+    termCount: generated.termCount,
+    ruleCount: generated.ruleCount,
+    filtered: Boolean(String(body.search || '').trim()),
+  });
+  const asciiFilename = generated.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
+  res.statusCode = 200;
+  res.setHeader('cache-control', 'no-store');
+  res.setHeader('content-type', generated.contentType);
+  res.setHeader('content-disposition', `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(generated.filename)}`);
+  for (const [name, value] of Object.entries(telemetryResponseHeaders())) res.setHeader(name, value);
+  res.end(generated.buffer);
+}
+
 async function specialTermsOptions(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   return { options: await specialTermOptions(body) };
@@ -16899,6 +16924,11 @@ export default async function handler(req, res) {
           const accessContext = await requireHandlerAccess(name, req);
           const body = await readBody(req);
           return await dashboardAccountInsightExport(body, req, res, accessContext);
+        }
+        if (name === 'specialTermsPdfExport') {
+          const accessContext = await requireHandlerAccess(name, req);
+          const body = await readBody(req);
+          return await specialTermsPdfExport(body, req, res, accessContext);
         }
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);

@@ -16,6 +16,7 @@ test('Special Terms is a default-visible Trading page with controlled management
   assert.match(app, /path="\/special-terms"[\s\S]*moduleId="special_terms"/);
   assert.match(auth, /id: 'special_terms_manage'/);
   assert.match(functions, /specialTermsSave:[\s\S]*\['special_terms'\]/);
+  assert.match(functions, /specialTermsPdfExport: \['special_terms'\]/);
   assert.match(functions, /requireCapability\(context\.client, context\.profile, 'special_terms_manage'/);
 });
 
@@ -62,6 +63,8 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Salesforce calculates priority after saving/);
   assert.match(page, /Search Account name or CL Key/);
   assert.match(page, /<PageMethodology \{\.\.\.SPECIAL_TERMS_METHODOLOGY\}/);
+  assert.match(page, /appClient\.functions\.download\('specialTermsPdfExport'/);
+  assert.match(page, /Download PDF<\/Button>/);
   assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);
 });

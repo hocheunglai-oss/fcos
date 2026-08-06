@@ -15,6 +15,7 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('outstandingBuyerInvoicesEmailReport').mutation, true);
   assert.equal(registeredHandlerBehavior('hedgeDeskSalesforcePush').externalAction, true);
   assert.equal(registeredHandlerBehavior('dashboardAccountInsight').cache, 'server');
+  assert.equal(registeredHandlerBehavior('specialTermsPdfExport').mutation, false);
 });
 
 test('declared handler capabilities are enforced by the shared access adapter', async () => {

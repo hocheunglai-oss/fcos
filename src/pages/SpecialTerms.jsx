@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
@@ -138,6 +138,7 @@ export default function SpecialTerms() {
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [responseMeta, setResponseMeta] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -162,6 +163,29 @@ export default function SpecialTerms() {
   }, [requestSpecialTerms]);
 
   useEffect(() => { load(); }, [load]);
+
+  const downloadPdf = async () => {
+    setExporting(true);
+    setError('');
+    try {
+      const result = await appClient.functions.download('specialTermsPdfExport', {
+        view: activeTab,
+        search: search.trim(),
+      });
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(downloadError.message || 'The Special Terms PDF could not be downloaded.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const rulesByTerm = useMemo(() => {
     const result = new Map();
@@ -269,6 +293,7 @@ export default function SpecialTerms() {
         actions={(
           <div className="flex flex-wrap gap-2">
             <PageMethodology {...SPECIAL_TERMS_METHODOLOGY} />
+            <Button variant="outline" onClick={downloadPdf} disabled={loading || exporting || !workspace}>{exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}Download PDF</Button>
             <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
             {workspace?.canManage && <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button>}
           </div>

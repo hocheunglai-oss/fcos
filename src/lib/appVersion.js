@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.125';
+export const APP_VERSION = '2.0.126';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.126',
+    releasedAt: '2026-08-06',
+    title: 'Special Terms PDF register',
+    changes: [
+      'Added a PDF download to Special Terms that follows the current Terms or Rules view and search filter.',
+      'Generated the report server-side from authoritative Salesforce data with term wording, document remarks, linked rule conditions, source time, and page numbering.',
+      'Kept Salesforce record IDs out of the visible report and recorded only redacted export scope and counts in the audit trail.',
+    ],
+  },
   {
     version: '2.0.125',
     releasedAt: '2026-08-06',
