@@ -63,6 +63,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   workspacePreferencesGet: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   workspacePreferencesSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterList: readPolicy({"cache":"none","externalAction":false,"capability":null}),
+  emailRouterBackgroundSync: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterLeave: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterLeaveSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterDetail: readPolicy({"cache":"none","externalAction":false,"capability":null}),

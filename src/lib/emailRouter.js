@@ -240,6 +240,7 @@ async function invoke(name, payload, options = {}) {
 }
 
 export const emailRouter = {
+  async backgroundSync(payload = {}, options) { return invoke('emailRouterBackgroundSync', payload, options); },
   async list(payload, options) {
     const folder = payload?.folder === 'sent' ? 'sentitems' : payload?.folder;
     return invoke('emailRouterList', { ...payload, folder }, options);

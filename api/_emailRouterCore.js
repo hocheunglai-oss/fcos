@@ -13,6 +13,7 @@ const MAX_ROUTING_RECIPIENTS = 100;
 const MAX_MIME_BYTES = 25 * 1024 * 1024;
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
 const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
+const EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS = 28_000;
 
 export const EMAIL_ROUTER_STORAGE = Object.freeze({
   mailboxes: 'mailbox_connections',
@@ -1688,6 +1689,89 @@ export async function syncEmailRouterFolderFromStoredCursor({ client, mailbox, f
   if (error) storageUnavailable(error);
   const cursor = data?.cursor_reference || null;
   return syncEmailRouterDelta({ client, mailbox, folder, deltaLink: cursor, maxPages }, dependencies);
+}
+
+export function emailRouterBackgroundSyncDue(lastSyncedAt, {
+  nowMs = Date.now(),
+  minimumIntervalMs = EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS,
+} = {}) {
+  const lastSyncedMs = new Date(lastSyncedAt || 0).getTime();
+  if (!Number.isFinite(lastSyncedMs) || lastSyncedMs <= 0) return true;
+  return Number(nowMs) - lastSyncedMs >= Math.max(5_000, Number(minimumIntervalMs) || EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS);
+}
+
+export async function syncEmailRouterMailboxIfDue({
+  client,
+  mailbox,
+  folders = ['inbox', 'sentitems', 'archive'],
+  minimumIntervalMs = EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS,
+  maxPages = 4,
+} = {}, dependencies = {}) {
+  const nowMs = typeof dependencies.now === 'function' ? Number(dependencies.now()) : Date.now();
+  const claimedAt = new Date(nowMs).toISOString();
+  const { data: connection, error: connectionError } = await routerTable(client, EMAIL_ROUTER_STORAGE.mailboxes)
+    .select('id,last_synced_at')
+    .eq('id', mailbox.id)
+    .maybeSingle();
+  if (connectionError) storageUnavailable(connectionError);
+  if (!connection) throw routerError('The active FCOS Email Router mailbox connection is unavailable.', 503, 'EMAIL_ROUTER_CONNECTION_UNAVAILABLE');
+  if (!emailRouterBackgroundSyncDue(connection.last_synced_at, { nowMs, minimumIntervalMs })) {
+    return { claimed: false, status: 'recent', changed: 0, lastSyncedAt: connection.last_synced_at };
+  }
+
+  let claimQuery = routerTable(client, EMAIL_ROUTER_STORAGE.mailboxes)
+    .update({ last_synced_at: claimedAt, updated_at: claimedAt })
+    .eq('id', mailbox.id);
+  claimQuery = connection.last_synced_at
+    ? claimQuery.eq('last_synced_at', connection.last_synced_at)
+    : claimQuery.is('last_synced_at', null);
+  const { data: claim, error: claimError } = await claimQuery.select('id').maybeSingle();
+  if (claimError) storageUnavailable(claimError);
+  if (!claim) return { claimed: false, status: 'claimed_elsewhere', changed: 0, lastSyncedAt: connection.last_synced_at };
+
+  const allowedFolders = [...new Set((folders || []).filter((folder) => FOLDERS.has(folder)))];
+  const synchronization = {};
+  let changed = 0;
+  let failures = 0;
+  const synchronizeFolder = dependencies.syncFolder || syncEmailRouterFolderFromStoredCursor;
+  const resolveBackgroundAlert = dependencies.resolveAlert || resolveEmailRouterAlert;
+  const recordBackgroundAlert = dependencies.recordAlert || recordEmailRouterAlert;
+  for (const folder of allowedFolders) {
+    const dedupeKey = `mailbox:${mailbox.id}:background-sync:${folder}`;
+    try {
+      const result = await synchronizeFolder({ client, mailbox, folder, maxPages }, dependencies);
+      const folderChanged = Math.max(0, Number(result.synced) || 0) + Math.max(0, Number(result.removed) || 0);
+      changed += folderChanged;
+      synchronization[folder] = {
+        status: result.nextLink ? 'continuing' : 'ready',
+        changed: folderChanged,
+        pages: result.pages,
+      };
+      await resolveBackgroundAlert(client, { dedupeKey }).catch(() => null);
+    } catch (error) {
+      failures += 1;
+      const code = String(error.code || 'email_router_background_sync_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
+      synchronization[folder] = { status: 'failed', changed: 0, code };
+      await recordBackgroundAlert(client, { mailboxId: mailbox.id, code, severity: 'warning', dedupeKey }).catch(() => null);
+    }
+  }
+
+  const completedAt = new Date(typeof dependencies.now === 'function' ? Number(dependencies.now()) : Date.now()).toISOString();
+  const { error: completionError } = await routerTable(client, EMAIL_ROUTER_STORAGE.mailboxes)
+    .update({ last_synced_at: completedAt, updated_at: completedAt })
+    .eq('id', mailbox.id)
+    .eq('last_synced_at', claimedAt)
+    .select('id')
+    .maybeSingle();
+  if (completionError) storageUnavailable(completionError);
+  return {
+    claimed: true,
+    status: failures ? 'warning' : 'synchronized',
+    changed,
+    failures,
+    lastSyncedAt: completedAt,
+    synchronization,
+  };
 }
 
 export async function syncEmailRouterDelta({ client, mailbox, folder = 'inbox', deltaLink = null, maxPages = 2 }, dependencies = {}) {

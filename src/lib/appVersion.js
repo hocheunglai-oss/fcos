@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.129';
+export const APP_VERSION = '2.0.130';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.130',
+    releasedAt: '2026-08-06',
+    title: 'App-wide Email Router synchronization',
+    changes: [
+      'Added a 30-second Email Router mailbox synchronization heartbeat across every FCOS page for users with Email Router access.',
+      'Added a server-side mailbox claim so simultaneous users and tabs share one Graph delta synchronization instead of duplicating calls.',
+      'Refreshes an open Email Router message list when background synchronization detects mailbox changes while retaining Graph notifications and scheduled recovery.',
+    ],
+  },
   {
     version: '2.0.129',
     releasedAt: '2026-08-06',

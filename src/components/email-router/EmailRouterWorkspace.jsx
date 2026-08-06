@@ -57,6 +57,7 @@ export default function EmailRouterWorkspace() {
   const [advisorError, setAdvisorError] = useState('');
   const [leaveOpen, setLeaveOpen] = useState(false);
   const requestId = useRef(0);
+  const loadListRef = useRef(null);
 
   useEffect(() => {
     const query = window.matchMedia('(max-width: 1279px)');
@@ -149,6 +150,16 @@ export default function EmailRouterWorkspace() {
       }
     }
   };
+  loadListRef.current = loadList;
+
+  useEffect(() => {
+    const handleBackgroundSync = (event) => {
+      if (Number(event.detail?.changed || 0) <= 0) return;
+      loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
+    };
+    window.addEventListener('fcos:email-router-synced', handleBackgroundSync);
+    return () => window.removeEventListener('fcos:email-router-synced', handleBackgroundSync);
+  }, [currentCursor, cursorStack]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => loadList({ cursor: null, history: [] }), 250);

@@ -37,6 +37,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import WorkNotifications from '@/components/WorkNotifications';
+import EmailRouterBackgroundSync from '@/components/email-router/EmailRouterBackgroundSync';
 import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 
@@ -427,6 +428,7 @@ export default function Layout() {
 
   return (
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
+      <EmailRouterBackgroundSync enabled={hasModuleAccess('email_router')} />
       <aside
         onMouseEnter={() => setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}

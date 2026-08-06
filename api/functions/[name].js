@@ -146,6 +146,7 @@ import {
   emailRouterActionHandler as nativeEmailRouterAction,
   emailRouterAdvisorHandler as nativeEmailRouterAdvisor,
   emailRouterAttachmentUrlHandler as nativeEmailRouterAttachmentUrl,
+  emailRouterBackgroundSyncHandler as nativeEmailRouterBackgroundSync,
   emailRouterDeltaHandler as nativeEmailRouterDelta,
   emailRouterDetailHandler as nativeEmailRouterDetail,
   emailRouterDirectoryHandler as nativeEmailRouterDirectory,
@@ -1224,6 +1225,7 @@ const HANDLER_MODULE_ACCESS = {
   workspacePreferencesGet: [],
   workspacePreferencesSave: [],
   emailRouterList: ['email_router'],
+  emailRouterBackgroundSync: ['email_router'],
   emailRouterLeave: ['email_router'],
   emailRouterLeaveSave: ['email_router'],
   emailRouterDetail: ['email_router'],
@@ -16543,6 +16545,10 @@ async function emailRouterList(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterList(req, body, nativeEmailRouterDependencies(accessContext));
 }
 
+async function emailRouterBackgroundSync(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterBackgroundSync(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
 async function emailRouterLeave(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterLeave(req, body, nativeEmailRouterDependencies(accessContext));
 }
@@ -16681,6 +16687,7 @@ const handlers = {
   workspacePreferencesGet,
   workspacePreferencesSave,
   emailRouterList,
+  emailRouterBackgroundSync,
   emailRouterLeave,
   emailRouterLeaveSave,
   emailRouterDetail,

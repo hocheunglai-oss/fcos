@@ -18,6 +18,7 @@ import {
   startEmailRouterAction,
   streamEmailRouterAttachment,
   syncEmailRouterDelta,
+  syncEmailRouterMailboxIfDue,
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
 } from './_emailRouterCore.js';
@@ -39,6 +40,17 @@ export async function emailRouterDirectoryRefreshHandler(req, _body = {}, depend
 export async function emailRouterListHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies);
   return listEmailRouterMessages({ client: value.client, mailbox: value.mailbox, folder: body.folder, limit: body.limit, search: body.query, cursor: body.cursor }, dependencies);
+}
+
+export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependencies = {}) {
+  const value = await context(req, dependencies);
+  return syncEmailRouterMailboxIfDue({
+    client: value.client,
+    mailbox: value.mailbox,
+    folders: ['inbox', 'sentitems', 'archive'],
+    minimumIntervalMs: 28_000,
+    maxPages: 4,
+  }, dependencies);
 }
 
 export async function emailRouterDetailHandler(req, body = {}, dependencies = {}) {
