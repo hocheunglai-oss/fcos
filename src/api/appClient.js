@@ -234,7 +234,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     trimFunctionCache();
   }
 
-  if (options.invalidateCache === true || mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')) invalidateFunctionCache();
+  const shouldInvalidateCache = options.invalidateCache === true
+    || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
+  if (shouldInvalidateCache) invalidateFunctionCache();
   else if (options.invalidateNames?.length || options.invalidateTags?.length) {
     invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
   }

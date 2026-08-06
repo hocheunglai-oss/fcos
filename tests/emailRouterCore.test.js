@@ -8,6 +8,7 @@ import {
   currentEmailRouterMailbox,
   emailRouterGraphFetch,
   fetchEmailRouterDetail,
+  getEmailRouterActionStatus,
   extractEmailRouterInlineContentIds,
   listEmailRouterDirectory,
   normalizeEmailRouterDestinationSelections,
@@ -332,6 +333,45 @@ test('Graph requests use immutable identifiers and a started outbox entry is rec
   assert.deepEqual(result, { submitted: 0, confirmed: 0 });
   assert.equal(calls.length, 1);
   assert.doesNotMatch(calls[0].url, /\/send$/);
+});
+
+test('mail action status is mailbox-scoped and identifies active reconciliation', async () => {
+  const rows = {
+    mail_actions: {
+      id: 'action-1',
+      message_id: 'message-1',
+      state: 'submitted',
+      action_type: 'redirect',
+      reserved_at: '2026-08-07T09:00:00.000Z',
+      submitted_at: '2026-08-07T09:00:02.000Z',
+      updated_at: '2026-08-07T09:00:02.000Z',
+    },
+    messages: { id: 'message-1' },
+    mail_action_outbox: { state: 'submitted', reconcile_after: '2026-08-07T09:00:17.000Z', updated_at: '2026-08-07T09:00:02.000Z' },
+  };
+  const filters = [];
+  const client = {
+    schema(schema) {
+      assert.equal(schema, 'emailrouter');
+      return {
+        from(table) {
+          return {
+            select() { return this; },
+            eq(column, value) { filters.push([table, column, value]); return this; },
+            maybeSingle: async () => ({ data: rows[table] || null, error: null }),
+          };
+        },
+      };
+    },
+  };
+  const result = await getEmailRouterActionStatus(client, 'action-1', { mailboxId: 'mailbox-1' });
+  assert.equal(result.status, 'submitted');
+  assert.equal(result.tracking, true);
+  assert.equal(Object.hasOwn(result, 'provider_operation_id'), false);
+  assert.deepEqual(filters.filter(([table]) => table === 'messages'), [
+    ['messages', 'id', 'message-1'],
+    ['messages', 'mailbox_id', 'mailbox-1'],
+  ]);
 });
 
 test('Graph delta cursors accept the mailbox-scoped URL shape returned by Microsoft', async () => {

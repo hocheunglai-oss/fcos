@@ -171,13 +171,29 @@ export async function emailRouterActionHandler(req, body = {}, dependencies = {}
   if (continueEmailRouterWork(submission, runtimeDependencies, 'Draft submission')) {
     const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt, continuedInBackground: true };
     recordEmailRouterOperation(performance);
-    return { ...result, performance };
+    return { ...result, tracking: true, performance };
   }
   await submission;
-  const status = await getEmailRouterActionStatus(value.client, result.id);
+  const status = await getEmailRouterActionStatus(value.client, result.id, { mailboxId: value.mailbox.id });
   const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt };
   recordEmailRouterOperation(performance);
   return { ...status, performance };
+}
+
+export async function emailRouterActionStatusHandler(req, body = {}, dependencies = {}) {
+  const runtimeDependencies = runtimeEmailRouterDependencies(dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
+  const current = await getEmailRouterActionStatus(value.client, body.actionId, { mailboxId: value.mailbox.id });
+  if (current.tracking) {
+    await processEmailRouterOutbox({
+      client: value.client,
+      mailbox: value.mailbox,
+      limit: 1,
+      actionId: current.actionId,
+      confirmNewSubmissions: true,
+    }, runtimeDependencies);
+  }
+  return getEmailRouterActionStatus(value.client, current.actionId, { mailboxId: value.mailbox.id });
 }
 
 export async function emailRouterUndoHandler(req, body = {}, dependencies = {}) {
@@ -197,9 +213,9 @@ export async function emailRouterRetryHandler(req, body = {}, dependencies = {})
   }, runtimeDependencies);
   if (result.status !== 'draft_created') return result;
   const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, runtimeDependencies);
-  if (continueEmailRouterWork(submission, runtimeDependencies, 'Retry submission')) return result;
+  if (continueEmailRouterWork(submission, runtimeDependencies, 'Retry submission')) return { ...result, tracking: true };
   await submission;
-  return getEmailRouterActionStatus(value.client, result.id);
+  return getEmailRouterActionStatus(value.client, result.id, { mailboxId: value.mailbox.id });
 }
 
 export async function emailRouterOutboxHandler(req, body = {}, dependencies = {}) {

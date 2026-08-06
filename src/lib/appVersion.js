@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.138';
+export const APP_VERSION = '2.0.139';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.139',
+    date: '2026-08-07',
+    title: 'Live Microsoft 365 redirect confirmation',
+    changes: [
+      'Made Email Router follow each secured outgoing action through Microsoft 365 submission and Sent Items confirmation without requiring a page refresh.',
+      'Replaced the indefinite Queued securely state with live Sending securely, Confirming, Confirmed, or a bounded uncertain outcome.',
+      'Preserved the durable no-duplicate-send safeguard while using the five-minute maintenance job only as recovery fallback.',
+    ],
+  },
   {
     version: '2.0.138',
     date: '2026-08-07',

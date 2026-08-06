@@ -71,6 +71,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   emailRouterDirectoryRefresh: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterPresets: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailRouterAction: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
+  emailRouterActionStatus: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   emailRouterUndo: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   emailRouterRetry: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   emailRouterAttachmentUrl: readPolicy({"cache":"none","externalAction":false,"capability":null}),

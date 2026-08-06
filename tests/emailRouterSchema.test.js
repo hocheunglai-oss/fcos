@@ -82,6 +82,7 @@ test('Email Router visibility is controlled by module access without removing cu
   assert.match(authModules, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /\{ id: 'email_router', label: 'Email Router', path: '\/email-router', sortOrder: 89 \}/);
   assert.match(server, /emailRouterList: \['email_router'\]/);
+  assert.match(server, /emailRouterActionStatus: \['email_router'\]/);
   assert.match(server, /emailRouterSettingsSave: \['email_router'\]/);
 });
 
@@ -168,6 +169,10 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
   assert.match(workspace, /if \(action === 'archive'\)[\s\S]*setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(\{ action: 'archive' \}, archivedMessage, \{ refreshList: false \}\)/);
   assert.match(handlers, /continueEmailRouterWork\(submission, runtimeDependencies, 'Draft submission'\)/);
+  assert.match(handlers, /emailRouterActionStatusHandler[\s\S]*confirmNewSubmissions: true/);
+  assert.match(workspace, /emailRouter\.actionStatus\(\{ actionId \}, \{ force: true, cache: false, invalidateCache: false \}\)/);
+  assert.match(workspace, /ACTION_STATUS_POLL_TIMEOUT_MS/);
+  assert.match(workspace, /will not resend automatically/);
   assert.match(core, /action\.action_type === 'redirect'[\s\S]*archiveRedirectSourceOrAlert/);
   assert.match(workspace, /payload\.action === 'redirect'[\s\S]*folder === 'inbox'[\s\S]*setMessages\(\(current\) => current\.filter/);
   assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);

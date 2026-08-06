@@ -20,6 +20,8 @@ import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { useAuth } from '@/lib/AuthContext';
 
 const LIMIT = 30;
+const ACTION_STATUS_POLL_DELAYS = [1_500, 2_500, 4_000, 6_000, 8_000, 10_000];
+const ACTION_STATUS_POLL_TIMEOUT_MS = 75_000;
 function messageError(data, fallback) {
   return data?.error || fallback || '';
 }
@@ -36,11 +38,12 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
 
 function ResultNotice({ result, compact = false }) {
   if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />{compact ? <><span className="sm:hidden">Ready</span><span className="hidden sm:inline">Ready for mail actions</span></> : 'Ready for mail actions'}</div>;
-  const pending = result.status === 'submitted';
+  const tracking = result.tracking === true;
+  const pending = tracking || result.status === 'submitted';
   const accepted = result.status === 'draft_created';
-  const Icon = result.status === 'confirmed' || accepted ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
-  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
-  const label = result.status === 'confirmed' ? 'Confirmed' : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
+  const Icon = result.status === 'confirmed' ? CheckCircle2 : result.status === 'uncertain' && !tracking ? ShieldCheck : pending ? Loader2 : accepted ? CheckCircle2 : XCircle;
+  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' && !tracking ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
+  const label = result.status === 'confirmed' ? 'Confirmed' : tracking ? (accepted ? 'Sending securely' : 'Confirming') : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
   return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
 }
 
@@ -78,6 +81,65 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    const actionId = actionResult?.actionId;
+    const shouldTrack = Boolean(actionId) && (actionResult?.tracking === true || ['draft_created', 'submitted'].includes(actionResult?.status));
+    if (!shouldTrack) return undefined;
+    let active = true;
+    let timer = null;
+    let attempt = 0;
+    const startedAt = Date.now();
+    const messageId = actionResult.messageId;
+    const action = actionResult.action;
+
+    const schedule = () => {
+      if (!active) return;
+      const delay = ACTION_STATUS_POLL_DELAYS[Math.min(attempt, ACTION_STATUS_POLL_DELAYS.length - 1)];
+      attempt += 1;
+      timer = window.setTimeout(poll, delay);
+    };
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const response = await emailRouter.actionStatus({ actionId }, { force: true, cache: false, invalidateCache: false });
+        if (!active) return;
+        let next = { ...normaliseActionResult(response.data, action), messageId };
+        const pending = next.tracking === true || ['draft_created', 'submitted'].includes(next.status);
+        if (pending && Date.now() - startedAt >= ACTION_STATUS_POLL_TIMEOUT_MS) {
+          next = {
+            ...next,
+            status: 'uncertain',
+            tracking: false,
+            message: 'Microsoft 365 has not confirmed the outcome yet. FCOS will not resend automatically; review Sent Items before retrying.',
+          };
+        }
+        setActionResult((current) => current?.actionId === actionId ? next : current);
+        if (next.status === 'confirmed') {
+          loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true, silent: true });
+          return;
+        }
+        if (next.tracking === true || ['draft_created', 'submitted'].includes(next.status)) schedule();
+      } catch (error) {
+        if (!active) return;
+        if (Date.now() - startedAt >= ACTION_STATUS_POLL_TIMEOUT_MS) {
+          setActionResult((current) => current?.actionId === actionId ? {
+            ...current,
+            status: 'uncertain',
+            tracking: false,
+            message: 'FCOS could not confirm the Microsoft 365 outcome. It will not resend automatically; review Sent Items before retrying.',
+          } : current);
+          return;
+        }
+        schedule();
+      }
+    };
+    schedule();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [actionResult?.actionId]);
 
   useEffect(() => {
     const query = window.matchMedia('(max-width: 1279px)');

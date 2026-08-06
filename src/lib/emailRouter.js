@@ -144,7 +144,16 @@ export function normaliseActionResult(data = {}, fallbackAction) {
   return {
     status,
     action: firstValue(data, ['action', 'actionType'], fallbackAction),
-    message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed' ? 'Action confirmed by FCOS.' : status === 'draft_created' ? 'The Microsoft 365 draft is secured. Protected submission continues in the background.' : status === 'submitted' ? 'Microsoft Graph accepted the message. FCOS is awaiting Sent Items confirmation.' : 'The action outcome could not be confirmed.')),
+    tracking: data?.tracking === true,
+    message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed'
+      ? 'Microsoft 365 confirmed the message in Sent Items.'
+      : status === 'draft_created'
+        ? 'The draft is secured and FCOS is submitting it to Microsoft 365.'
+        : status === 'submitted'
+          ? 'Microsoft 365 accepted the message. FCOS is confirming it in Sent Items.'
+          : data?.tracking === true
+            ? 'FCOS is checking Microsoft 365 before allowing any retry.'
+            : 'The action outcome could not be confirmed.')),
     undoToken: firstValue(data, ['undoToken', 'undoId', 'reversalToken'], null),
     actionId: firstValue(data, ['actionId', 'id', 'operationId'], null),
     raw: data,
@@ -263,6 +272,7 @@ export const emailRouter = {
       comment: payload?.body,
     }, options);
   },
+  async actionStatus(payload, options) { return invoke('emailRouterActionStatus', payload, options); },
   async undo(payload, options) { return invoke('emailRouterUndo', payload, options); },
   async retry(payload, options) { return invoke('emailRouterRetry', payload, options); },
   async attachmentUrl(payload, options) { return invoke('emailRouterAttachmentUrl', payload, options); },

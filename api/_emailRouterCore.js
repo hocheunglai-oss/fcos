@@ -1330,13 +1330,14 @@ function requestFingerprint({ mailboxId, messageId, actionType, input, routeSnap
   })).digest('hex');
 }
 
-function actionResult(action) {
+function actionResult(action, extra = {}) {
   const reversible = ['archive', 'delete', 'move'].includes(action.action_type) && action.state === 'confirmed';
   return {
     id: action.id,
     actionId: action.id,
     action: action.action_type,
     status: action.state,
+    ...extra,
     ...(reversible ? { undoToken: action.id } : {}),
   };
 }
@@ -1649,14 +1650,38 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10, ac
   return { submitted, confirmed };
 }
 
-export async function getEmailRouterActionStatus(client, actionId) {
+export async function getEmailRouterActionStatus(client, actionId, { mailboxId = null } = {}) {
+  const id = safeId(actionId, 'mail action identifier');
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
-    .select('id,state,action_type,provider_operation_id')
-    .eq('id', safeId(actionId, 'mail action identifier'))
+    .select('id,message_id,state,action_type,reserved_at,draft_created_at,submitted_at,confirmed_at,failed_at,uncertain_at,updated_at')
+    .eq('id', id)
     .maybeSingle();
   if (error) storageUnavailable(error);
   if (!data) throw routerError('Mail action not found.', 404, 'EMAIL_ROUTER_ACTION_NOT_FOUND');
-  return actionResult(data);
+  if (mailboxId) {
+    const { data: message, error: messageError } = await routerTable(client, EMAIL_ROUTER_STORAGE.messages)
+      .select('id')
+      .eq('id', data.message_id)
+      .eq('mailbox_id', safeId(mailboxId, 'mailbox identifier'))
+      .maybeSingle();
+    if (messageError) storageUnavailable(messageError);
+    if (!message) throw routerError('Mail action not found.', 404, 'EMAIL_ROUTER_ACTION_NOT_FOUND');
+  }
+  const { data: outbox, error: outboxError } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+    .select('state,reconcile_after,updated_at')
+    .eq('mail_action_id', id)
+    .maybeSingle();
+  if (outboxError) storageUnavailable(outboxError);
+  const uncertainSince = Date.parse(data.uncertain_at || data.updated_at || 0);
+  const recentUncertain = data.state === 'uncertain'
+    && Number.isFinite(uncertainSince)
+    && Date.now() - uncertainSince < 2 * 60_000;
+  const tracking = ['reserved', 'draft_created', 'submitted'].includes(data.state)
+    || (recentUncertain && ['reserved', 'draft_created', 'submitted', 'uncertain'].includes(outbox?.state));
+  return actionResult(data, {
+    tracking,
+    checkedAt: new Date().toISOString(),
+  });
 }
 
 export async function retryEmailRouterUncertainAction({ client, mailbox, profile, actionId, confirmedNotSent }, dependencies = {}) {

@@ -16,6 +16,7 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('hedgeDeskSalesforcePush').externalAction, true);
   assert.equal(registeredHandlerBehavior('dashboardAccountInsight').cache, 'server');
   assert.equal(registeredHandlerBehavior('specialTermsPdfExport').mutation, false);
+  assert.equal(registeredHandlerBehavior('emailRouterActionStatus').externalAction, true);
 });
 
 test('declared handler capabilities are enforced by the shared access adapter', async () => {
@@ -34,5 +35,6 @@ test('declared handler capabilities are enforced by the shared access adapter', 
 test('browser cache invalidation uses server mutation metadata instead of handler-name guessing', async () => {
   const source = await readFile(new URL('../src/api/appClient.js', import.meta.url), 'utf8');
   assert.match(source, /x-fcos-handler-mutation/i);
+  assert.match(source, /options\.invalidateCache !== false/);
   assert.doesNotMatch(source, /isMutationHandler/);
 });
