@@ -55,7 +55,7 @@ export default function EmailRedirectPanel({
   const presetOptions = useMemo(() => valueList(presets), [presets]);
   const recommendedSelections = useMemo(() => advisorRecipientSelections(advisor, directory), [advisor, directory]);
   const confidence = Math.round((Number(advisor?.confidence) || 0) * 100);
-  const redirectLocked = actionResult?.action === 'redirect' && actionResult?.status !== 'failed';
+  const redirectLocked = actionResult?.messageId === message?.id && actionResult?.action === 'redirect' && actionResult?.status !== 'failed';
 
   useEffect(() => {
     setSelections([]);

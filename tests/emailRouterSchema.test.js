@@ -178,6 +178,21 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(messageSheet, /Archive immediately/);
 });
 
+test('Email Router action status is page-level and not duplicated in the message pane', async () => {
+  const [workspace, messageSheet, pageHeader] = await Promise.all([
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/common/PageHeader.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} \/>\}/);
+  assert.doesNotMatch(workspace, /<ResultNotice result=\{actionResult\} \/>\s*<section/);
+  assert.match(workspace, /messageId: sourceMessage\.id/);
+  assert.doesNotMatch(workspace, /if \(messageId !== selectedId\) setActionResult\(null\)/);
+  assert.match(messageSheet, /actionResult\?\.messageId === message\.id/);
+  assert.doesNotMatch(messageSheet, /actionResult && <div/);
+  assert.match(pageHeader, /status && <div className="min-w-0">\{status\}<\/div>/);
+});
+
 test('Email Router audit events allow whole-directory ordering changes', async () => {
   const [orderedSql, directoryEventSql] = await Promise.all([
     readFile(orderedDirectoryMigrationUrl, 'utf8'),

@@ -4,15 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
 import { formatAddresses, formatEmailDate, plainTextToHtml, sanitizeEmailHtml } from '@/lib/emailRouter';
-
-function statusTone(status) {
-  if (status === 'confirmed') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  if (status === 'uncertain') return 'border-amber-200 bg-amber-50 text-amber-900';
-  if (['draft_created', 'submitted'].includes(status)) return 'border-blue-200 bg-blue-50 text-blue-900';
-  return 'border-red-200 bg-red-50 text-red-800';
-}
 
 function actionStatusLabel(status) {
   return status === 'confirmed' ? 'Confirmed' : status === 'uncertain' ? 'Uncertain' : status === 'draft_created' ? 'Draft created' : status === 'submitted' ? 'Submitted' : 'Failed';
@@ -149,9 +141,8 @@ export function EmailMessageDetail({ message, loading, error, actionResult, acti
         <span className="mx-1 h-5 border-l border-border" />
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('archive')} disabled={actionPending} aria-label="Archive message"><Archive /></Button></TooltipTrigger><TooltipContent>Archive immediately</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('delete')} disabled={actionPending} aria-label="Delete message"><Trash2 /></Button></TooltipTrigger><TooltipContent>Delete</TooltipContent></Tooltip>
-        {actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('undo', actionResult)} disabled={actionPending} aria-label="Undo last action"><Undo2 /></Button></TooltipTrigger><TooltipContent>Undo last action</TooltipContent></Tooltip>}
+        {actionResult?.messageId === message.id && actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('undo', actionResult)} disabled={actionPending} aria-label="Undo last action"><Undo2 /></Button></TooltipTrigger><TooltipContent>Undo last action</TooltipContent></Tooltip>}
       </div>
-      {actionResult && <div className={cn('mx-5 mt-4 flex flex-wrap items-start gap-3 border p-3 text-sm sm:mx-6', statusTone(actionResult.status))}><Mail className="mt-0.5 h-4 w-4 shrink-0" /><div className="min-w-0 flex-1"><p className="font-medium">{actionStatusLabel(actionResult.status)}: {actionResult.action}</p><p className="mt-0.5">{actionResult.message}</p></div>{actionResult.status === 'uncertain' && actionResult.actionId && <Button size="sm" variant="outline" onClick={() => onAction('retry', actionResult)}>Review retry</Button>}</div>}
       {error && <div className="mx-5 mt-4 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:mx-6">The full message could not be refreshed. Showing the available message information. {error}</div>}
       {message.detailWarnings?.map((warning) => <div key={warning} className="mx-5 mt-4 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:mx-6">{warning}</div>)}
       <div className="email-router-content-shell mx-5 my-6 overflow-x-auto bg-white sm:mx-6">

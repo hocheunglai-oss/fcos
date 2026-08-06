@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.136';
+export const APP_VERSION = '2.0.137';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.137',
+    date: '2026-08-07',
+    title: 'Fixed Email Router action-status placement',
+    changes: [
+      'Moved transient Email Router action results into a persistent page-header status area between the mailbox identity and page actions.',
+      'Removed duplicate confirmed, submitted, uncertain, and failed result banners from the selected-message pane while retaining its permanent action history.',
+    ],
+  },
   {
     version: '2.0.136',
     releasedAt: '2026-08-06',

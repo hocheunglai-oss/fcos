@@ -1,11 +1,15 @@
 import { cn } from '@/lib/utils';
 import { getPageCopy } from '@/lib/pageCopy';
 
-export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, actions, className }) {
+export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, status, actions, className }) {
   const copy = getPageCopy({ title, eyebrow, description });
 
   return (
-    <div className={cn('glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-lg px-5 py-4 lg:flex-row lg:items-end lg:justify-between', className)}>
+    <div className={cn(
+      'glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-lg px-5 py-4',
+      status ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)_auto] lg:items-center' : 'lg:flex-row lg:items-end lg:justify-between',
+      className,
+    )}>
       <div className="min-w-0">
         {(eyebrow || Icon) && (
           <div className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
@@ -17,6 +21,7 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
         {copy.description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{copy.description}</p>}
         {meta && <p className="mt-1 text-xs text-muted-foreground">{meta}</p>}
       </div>
+      {status && <div className="min-w-0">{status}</div>}
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );

@@ -32,13 +32,13 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
 }
 
 function ResultNotice({ result }) {
-  if (!result) return null;
+  if (!result) return <div className="flex min-h-12 items-center border border-border bg-background/60 px-4 py-3 text-sm text-muted-foreground" role="status" aria-live="polite"><Mail className="mr-3 h-4 w-4 shrink-0" />Ready for mail actions</div>;
   const pending = result.status === 'submitted';
   const accepted = result.status === 'draft_created';
   const Icon = result.status === 'confirmed' || accepted ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
   const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
   const label = result.status === 'confirmed' ? 'Confirmed' : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
-  return <div className={cn('flex items-start gap-3 border px-4 py-3 text-sm', tone)}><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5">{result.message}</p></div></div>;
+  return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
 }
 
 export default function EmailRouterWorkspace() {
@@ -220,7 +220,7 @@ export default function EmailRouterWorkspace() {
     if (!sourceMessage || (['undo', 'retry'].includes(payload.action) && !actionDialog)) return null;
     const startedAt = window.performance.now();
     const operationId = newOperationId();
-    const submitted = { status: 'submitted', action: payload.action, message: 'FCOS submitted the action request and is waiting for confirmation.' };
+    const submitted = { status: 'submitted', action: payload.action, messageId: sourceMessage.id, message: 'FCOS submitted the action request and is waiting for confirmation.' };
     setSubmitting(true);
     setActionResult(submitted);
     let response;
@@ -230,7 +230,7 @@ export default function EmailRouterWorkspace() {
         : payload.action === 'retry'
           ? await emailRouter.retry({ messageId: sourceMessage.id, actionId: actionDialog.undoResult?.actionId, confirmedNotSent: true, operationId })
         : await emailRouter.action({ messageId: sourceMessage.id, threadId: sourceMessage.threadId || null, operationId, ...payload });
-      const result = normaliseActionResult(response.data, payload.action);
+      const result = { ...normaliseActionResult(response.data, payload.action), messageId: sourceMessage.id };
       recordEmailRouterTiming(`action_${payload.action}`, startedAt, response.data?.performance);
       setActionResult(result);
       setDetail((current) => current?.id === sourceMessage.id ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
@@ -243,7 +243,7 @@ export default function EmailRouterWorkspace() {
       if (refreshList && result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
       return result;
     } catch (error) {
-      const result = { status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, message: error?.message || 'The action did not complete.' };
+      const result = { status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, messageId: sourceMessage.id, message: error?.message || 'The action did not complete.' };
       setActionResult(result);
       setActionDialog(null);
       return result;
@@ -337,7 +337,6 @@ export default function EmailRouterWorkspace() {
   };
   const next = () => nextCursor && loadList({ cursor: nextCursor, history: [...cursorStack, currentCursor], foreground: false });
   const selectMessage = (messageId) => {
-    if (messageId !== selectedId) setActionResult(null);
     setSelectedId(messageId);
   };
   const redirectPanel = (className = '') => <EmailRedirectPanel
@@ -363,9 +362,9 @@ export default function EmailRouterWorkspace() {
       title="Email Router"
       description="Review connected mailbox traffic and submit controlled routing actions."
       meta={loading ? 'Loading mailbox...' : listError ? 'Mailbox service unavailable' : `${messages.length.toLocaleString()} messages loaded`}
+      status={<ResultNotice result={actionResult} />}
       actions={<><Button variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />My Routing Leave</Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
     />
-    <ResultNotice result={actionResult} />
     <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-10rem)] xl:flex-row">
       <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
         <div className="border-b border-border px-4 py-3"><Tabs value={folder} onValueChange={setFolder}><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="inbox" className="gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger></TabsList></Tabs></div>
