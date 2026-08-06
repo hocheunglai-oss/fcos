@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { generateHedgeInvoicePdf, normalizeHedgeInvoice } from '../api/_hedgeDocuments.js';
-import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
+import {
+  DEFAULT_RATES,
+  hedgeSettlementPaymentDirection,
+  monthlyBrokerCommissionSummary,
+  settlementSummary,
+} from '../src/hedge/lib/domain.js';
 
 const fcbs = {
   short_name: 'FCBS',
@@ -106,4 +111,40 @@ test('settlement UI and documents make the payment route explicit', async () => 
     assert.match(service, new RegExp(`'${variable}'`));
     assert.match(settings, new RegExp(`\\{${variable}\\}`));
   }
+});
+
+test('broker commissions are grouped by trade month and every broker', () => {
+  const swaps = [
+    { id: 'jul-ginga-1', trade_date: '2026-07-02', venue: 'ICE', broker: 'Ginga', quantity: 100, unit: 'MT' },
+    { id: 'jul-ginga-2', trade_date: '2026-07-03', venue: 'ICE', broker: ' ginga ', quantity: 100, unit: 'MT', round_trip: true },
+    { id: 'jul-fis', trade_date: '2026-07-04', venue: 'ICE', broker: 'FIS', quantity: 100, unit: 'BBL' },
+    { id: 'jul-new', trade_date: '2026-07-05', venue: 'ICE', broker: 'New Broker', quantity: 100, unit: 'MT' },
+    { id: 'jun-ginga', trade_date: '2026-06-06', venue: 'ICE', broker: 'Ginga', quantity: 200, unit: 'MT' },
+    { id: 'non-ice', trade_date: '2026-07-07', venue: 'FCBS', broker: 'Ginga', quantity: 100, unit: 'MT' },
+    { id: 'missing-broker', trade_date: '2026-07-08', venue: 'ICE', broker: '', quantity: 100, unit: 'MT' },
+  ];
+  const rates = { ...DEFAULT_RATES, broker_mt: 0.05, broker_bbl: 0.1 };
+
+  const result = monthlyBrokerCommissionSummary(swaps, rates);
+  assert.deepEqual(result.map((row) => row.month), ['2026-07', '2026-06']);
+  assert.deepEqual(result[0].rows, [
+    { broker: 'FIS', tradeCount: 1, commission: 10 },
+    { broker: 'Ginga', tradeCount: 2, commission: 15 },
+    { broker: 'New Broker', tradeCount: 1, commission: 5 },
+  ]);
+  assert.equal(result[0].tradeCount, 4);
+  assert.equal(result[0].totalCommission, 30);
+  assert.equal(result[1].totalCommission, 10);
+
+  const july = settlementSummary(swaps, [], rates, '2026-07');
+  assert.equal(july.brokerSwaps.length, 4);
+  assert.equal(july.broker, 30);
+});
+
+test('settlement UI includes the all-month broker commission ledger', async () => {
+  const view = await readFile(new URL('../src/hedge/views/SettlementView.jsx', import.meta.url), 'utf8');
+  assert.match(view, /Monthly broker commissions/);
+  assert.match(view, /Commission payable \(USD\)/);
+  assert.match(view, /Month total \(USD\)/);
+  assert.match(view, /monthlyBrokerCommissionSummary/);
 });

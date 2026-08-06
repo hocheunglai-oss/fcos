@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.132';
+export const APP_VERSION = '2.0.133';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.133',
+    releasedAt: '2026-08-06',
+    title: 'Monthly Hedge broker commissions',
+    changes: [
+      'Added an all-history monthly broker commission ledger to Hedge Desk Settlement, grouped by trade month and broker with trade counts and monthly totals.',
+      'Included newly configured broker names in commission totals instead of restricting the calculation to the original fixed broker list.',
+    ],
+  },
   {
     version: '2.0.132',
     releasedAt: '2026-08-06',

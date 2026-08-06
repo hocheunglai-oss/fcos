@@ -828,7 +828,11 @@ export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRati
 
 export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, month = hktThisMonth(), sgoRatio = 7.45) {
   const monthSwaps = swaps.filter((swap) => swapMonth(swap) === month);
-  const brokerSwaps = swaps.filter((swap) => BROKER_EXCHANGE.includes(swap.broker) && String(swap.trade_date || "").slice(0, 7) === month);
+  const brokerSwaps = swaps.filter((swap) => (
+    String(swap.broker || "").trim()
+    && String(swap.trade_date || "").slice(0, 7) === month
+    && calcSwapFees(swap, rates).broker > 0
+  ));
   const isFinal = month < hktThisMonth();
   let mtm = 0;
   let fcbs = 0;
@@ -856,6 +860,41 @@ export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, 
     net: roundMoney(mtm - totalFees),
     isFinal,
   };
+}
+
+export function monthlyBrokerCommissionSummary(swaps = [], rates = DEFAULT_RATES) {
+  const months = new Map();
+
+  for (const swap of swaps) {
+    const month = String(swap?.trade_date || "").slice(0, 7);
+    const broker = String(swap?.broker || "").trim();
+    const commission = calcSwapFees(swap, rates).broker;
+    if (!/^\d{4}-\d{2}$/.test(month) || !broker || commission <= 0) continue;
+
+    if (!months.has(month)) months.set(month, new Map());
+    const brokers = months.get(month);
+    const brokerKey = broker.toLocaleLowerCase("en-US");
+    const current = brokers.get(brokerKey) || {
+      broker,
+      tradeCount: 0,
+      commission: 0,
+    };
+    current.tradeCount += 1;
+    current.commission = roundMoney(current.commission + commission);
+    brokers.set(brokerKey, current);
+  }
+
+  return [...months.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([month, brokers]) => {
+      const rows = [...brokers.values()].sort((left, right) => left.broker.localeCompare(right.broker));
+      return {
+        month,
+        rows,
+        tradeCount: rows.reduce((sum, row) => sum + row.tradeCount, 0),
+        totalCommission: roundMoney(rows.reduce((sum, row) => sum + row.commission, 0)),
+      };
+    });
 }
 
 export const FCBHK_SETTLEMENT_PARTY = Object.freeze({

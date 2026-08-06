@@ -21,6 +21,7 @@ import {
   hedgeSettlementPaymentDirection,
   hktThisMonth,
   hktToday,
+  monthlyBrokerCommissionSummary,
   monthOptions,
   nextInvoiceNumber,
   resolveTemplate,
@@ -168,6 +169,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   }, [month, months]);
 
   const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt), [data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
+  const brokerCommissionMonths = useMemo(() => monthlyBrokerCommissionSummary(data.swaps, settings.rates), [data.swaps, settings.rates]);
   const groups = useMemo(() => buildCounterpartyGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt), [data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
   const closed = settings.closedMonths.includes(month);
   const filteredInvoices = useMemo(() => data.invoices
@@ -474,7 +476,26 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const renderFees = () => (
     <div className="app-settlement-fees">
       <Panel>
-        <SectionHeading title="Broker and ICE charges" description="Broker groups use trade month; ICE and SFS charges use the pricing month." />
+        <SectionHeading title="Monthly broker commissions" description="Commission payable by trade month and broker, calculated from current configured rates, quantity, UOM, and round-trip treatment." />
+        <div className="app-table-frame app-table-frame--flush">
+          {brokerCommissionMonths.length ? (
+            <table className="app-table app-table--compact">
+              <thead><tr><th>Trade month</th><th>Broker</th><th>Trades</th><th>Commission payable (USD)</th><th>Month total (USD)</th></tr></thead>
+              <tbody>{brokerCommissionMonths.flatMap((monthRow) => monthRow.rows.map((brokerRow, index) => (
+                <tr key={`${monthRow.month}:${brokerRow.broker.toLocaleLowerCase("en-US")}`}>
+                  {index === 0 && <td rowSpan={monthRow.rows.length}><strong>{formatMonth(monthRow.month)}</strong>{monthRow.month === month && <small>Selected month</small>}</td>}
+                  <td><strong>{brokerRow.broker}</strong></td>
+                  <td>{brokerRow.tradeCount}</td>
+                  <td><strong>{formatMoney(brokerRow.commission, { digits: 2 })}</strong></td>
+                  {index === 0 && <td rowSpan={monthRow.rows.length}><strong>{formatMoney(monthRow.totalCommission, { digits: 2 })}</strong><small>{monthRow.tradeCount} trades</small></td>}
+                </tr>
+              )))}</tbody>
+            </table>
+          ) : <EmptyState title="No broker commissions" description="Broker commission totals appear when an ICE hedge has a trade date and broker." />}
+        </div>
+      </Panel>
+      <Panel>
+        <SectionHeading title="Selected-month trade charges" description="Broker groups use trade month; ICE and SFS charges use the pricing month." />
         <div className="app-table-frame app-table-frame--flush">
           <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Broker</th><th>Product</th><th>Quantity</th><th>Broker</th><th>SFS</th><th>Exchange</th><th>Clearing</th><th>Settlement</th><th>Total</th></tr></thead><tbody>{[...new Map([...summary.brokerSwaps, ...summary.monthSwaps].map((swap) => [swap.id, swap])).values()].map((swap) => {
             const fees = calcSwapFees(swap, settings.rates);
