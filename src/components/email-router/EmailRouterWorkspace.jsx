@@ -35,7 +35,7 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
 }
 
 function ResultNotice({ result, compact = false }) {
-  if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />Ready for mail actions</div>;
+  if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />{compact ? <><span className="sm:hidden">Ready</span><span className="hidden sm:inline">Ready for mail actions</span></> : 'Ready for mail actions'}</div>;
   const pending = result.status === 'submitted';
   const accepted = result.status === 'draft_created';
   const Icon = result.status === 'confirmed' || accepted ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
