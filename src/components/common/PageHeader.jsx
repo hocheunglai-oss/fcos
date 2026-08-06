@@ -6,10 +6,10 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
 
   return (
     <div className={cn(
-      'glass-page-header app-page-header mb-6 flex flex-col gap-4 rounded-lg px-5 py-4',
+      'glass-page-header app-page-header mb-6 rounded-lg px-5 py-4',
       compact
         ? 'grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-4 py-2.5 lg:grid-cols-[minmax(10rem,0.55fr)_minmax(18rem,1fr)_auto]'
-        : status ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)_auto] lg:items-center' : 'lg:flex-row lg:items-end lg:justify-between',
+        : status ? 'flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)_auto] lg:items-center' : 'flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between',
       className,
     )}>
       <div className="min-w-0">
