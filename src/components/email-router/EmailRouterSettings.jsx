@@ -3,7 +3,6 @@ import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import {
   AlertTriangle,
   CalendarClock,
-  CalendarOff,
   Contact,
   GripVertical,
   Loader2,
@@ -26,7 +25,6 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import EmailRecipientPicker from './EmailRecipientPicker';
-import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
 
 function keyFromName(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 120);
@@ -90,7 +88,7 @@ function sortedDirectory(configuration) {
     || left.item.displayName.localeCompare(right.item.displayName));
 }
 
-export default function EmailRouterSettings() {
+export default function EmailRouterSettings({ embedded = false }) {
   const [configuration, setConfiguration] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -98,7 +96,6 @@ export default function EmailRouterSettings() {
   const [editor, setEditor] = useState(null);
   const [routingDraft, setRoutingDraft] = useState({});
   const [directoryOrder, setDirectoryOrder] = useState([]);
-  const [leaveOpen, setLeaveOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -381,9 +378,9 @@ export default function EmailRouterSettings() {
     setBusy(false);
   };
 
-  return <section className="rounded-lg border border-border bg-card p-5">
+  return <section className={embedded ? '' : 'rounded-lg border border-border bg-card p-5'}>
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 className="flex items-center gap-2 text-sm font-semibold"><MailSearch className="h-4 w-4" />Email Router</h2><p className="mt-1 max-w-3xl text-xs text-muted-foreground">Manage the native routing directory, groups, presets, mailbox synchronization, and operational warnings.</p></div>
+      {!embedded && <div><h2 className="flex items-center gap-2 text-sm font-semibold"><MailSearch className="h-4 w-4" />Email Router</h2><p className="mt-1 max-w-3xl text-xs text-muted-foreground">Manage the native routing directory, groups, presets, mailbox synchronization, and operational warnings.</p></div>}
       <Button variant="outline" size="icon" onClick={refreshConfiguration} disabled={loading || busy} title="Refresh Email Router settings" aria-label="Refresh Email Router settings"><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
     </div>
     {error && <div className="mt-4 flex items-start gap-2 border-y border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
@@ -428,7 +425,7 @@ export default function EmailRouterSettings() {
       </section>
 
       <section>
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Routing presets and leave</h3><p className="mt-1 text-xs text-muted-foreground">Each preset has a Standard route and optional leave-specific versions. Scheduled overrides take priority.</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />Company routing leave</Button><Button size="sm" onClick={() => editPreset()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add a routing preset'}><Plus />Add preset</Button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Routing presets and leave rules</h3><p className="mt-1 text-xs text-muted-foreground">Each preset has a Standard route and optional leave-specific versions. Scheduled overrides take priority.</p></div><Button size="sm" onClick={() => editPreset()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add a routing preset'}><Plus />Add preset</Button></div>
         <div className="mt-3 divide-y divide-border border-y border-border">{presets.map((item) => <div key={item.id} className="py-4">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-semibold">{item.displayName}</p><p className="mt-0.5 text-xs text-muted-foreground">{item.versions?.length || 0} versions · {item.active ? 'Active' : 'Inactive'}</p></div><div className="flex gap-1"><Button variant="outline" size="sm" onClick={() => editPresetVersion(item)} disabled={directoryChanged}><Plus />Version</Button><Button variant="outline" size="sm" onClick={() => editPresetOverride(item)} disabled={directoryChanged}><CalendarClock />Override</Button><Button variant="ghost" size="icon" onClick={() => editPreset(item)} disabled={directoryChanged} title="Edit preset and Standard route" aria-label={`Edit ${item.displayName}`}><Pencil /></Button></div></div>
           <div className="mt-3 divide-y divide-border border-t border-border">{(item.versions || []).map((version) => <div key={version.id} className="flex items-center justify-between gap-3 py-2 pl-3"><div><p className="text-sm font-medium">{version.label}{version.kind === 'baseline' ? ' · Baseline' : ''}</p><p className="text-xs text-muted-foreground">{version.destinations.length} selections{version.kind === 'conditional' ? ` · ${version.matchMode === 'all' ? 'All' : 'Any'} of ${version.conditionUserIds.length} users · Priority ${version.priority}` : ''}</p></div>{version.kind === 'conditional' && <Button variant="ghost" size="icon" onClick={() => editPresetVersion(item, version)} disabled={directoryChanged} title={`Edit ${version.label}`} aria-label={`Edit ${version.label}`}><Pencil /></Button>}</div>)}</div>
@@ -438,7 +435,6 @@ export default function EmailRouterSettings() {
       {(configuration.alerts?.length || configuration.actionCounts?.uncertain) ? <section className="border-y border-amber-200 bg-amber-50 px-3 py-3"><h3 className="text-sm font-semibold text-amber-950">Operational review</h3><p className="mt-1 text-xs text-amber-900">{configuration.actionCounts?.uncertain || 0} uncertain mail actions and {configuration.alerts?.length || 0} active mailbox alerts require review.</p></section> : null}
     </div> : null}
 
-    <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) load(); }} scope="all" />
     <Dialog open={Boolean(editor)} onOpenChange={(open) => !open && !busy && setEditor(null)}>
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle>{editor?.id ? 'Edit' : 'Add'} {editor?.type === 'destination' ? 'external contact' : editor?.type === 'group' ? 'group' : editor?.type === 'preset_version' ? 'routing version' : editor?.type === 'preset_override' ? 'scheduled override' : 'routing preset'}</DialogTitle><DialogDescription>Changes apply to future routing selections and are revision protected.</DialogDescription></DialogHeader>

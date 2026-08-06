@@ -179,12 +179,17 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
 });
 
 test('Email Router action status is page-level and not duplicated in the message pane', async () => {
-  const [workspace, messageSheet, pageHeader] = await Promise.all([
+  const [page, workspace, messageSheet, pageHeader] = await Promise.all([
+    readFile(new URL('../src/pages/EmailRouter.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/common/PageHeader.jsx', import.meta.url), 'utf8'),
   ]);
   assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} \/>\}/);
+  assert.doesNotMatch(page, /Mailbox<\/Button>|activeTab|MailSearch/);
+  assert.match(workspace, /<Settings2 \/>Routing Setup[\s\S]*<CalendarOff \/>Routing Leave/);
+  assert.match(workspace, /<EmailRouterSettings embedded \/>/);
+  assert.doesNotMatch(workspace, /eyebrow="Operations"|messages loaded|description="Review connected mailbox traffic/);
   assert.doesNotMatch(workspace, /<ResultNotice result=\{actionResult\} \/>\s*<section/);
   assert.match(workspace, /messageId: sourceMessage\.id/);
   assert.doesNotMatch(workspace, /if \(messageId !== selectedId\) setActionResult\(null\)/);
@@ -264,8 +269,10 @@ test('Email Router leave-aware preset versions remain service-only and preserve 
   assert.match(sql, /pg_advisory_xact_lock[\s\S]*preset_override/i);
   assert.match(core, /ROUTE_SNAPSHOT_TTL_MS = 60 \* 60 \* 1000/);
   assert.match(core, /route-snapshot-v1:/);
-  assert.match(settings, /Routing presets and leave/);
-  assert.match(workspace, /My Routing Leave/);
+  assert.match(settings, /Routing presets and leave rules/);
+  assert.doesNotMatch(settings, /Company routing leave/);
+  assert.match(workspace, /canManageAll=\{isAdministrator\}/);
+  assert.match(workspace, />Routing Leave<\/Button>/);
   assert.match(messageSheet, /Inline image unavailable/);
   for (const signature of [
     'public.save_emailrouter_preset_version(jsonb, uuid)',

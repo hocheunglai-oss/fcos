@@ -48,13 +48,18 @@ function blankForm(userProfileId = '') {
   };
 }
 
-export default function EmailRoutingLeaveDialog({ open, onOpenChange, scope = 'self' }) {
+export default function EmailRoutingLeaveDialog({ open, onOpenChange, canManageAll = false }) {
+  const [scope, setScope] = useState(canManageAll ? 'all' : 'self');
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const includeAll = scope === 'all';
+
+  useEffect(() => {
+    if (!canManageAll && scope !== 'self') setScope('self');
+  }, [canManageAll, scope]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,6 +83,12 @@ export default function EmailRoutingLeaveDialog({ open, onOpenChange, scope = 's
 
   const users = data?.users || [];
   const periods = useMemo(() => [...(data?.periods || [])].sort((left, right) => new Date(right.startsAt) - new Date(left.startsAt)), [data?.periods]);
+  const changeScope = (nextScope) => {
+    if (busy || nextScope === scope || (nextScope === 'all' && !canManageAll)) return;
+    setForm(null);
+    setData(null);
+    setScope(nextScope);
+  };
   const beginAdd = () => setForm(blankForm(includeAll ? users[0]?.id || '' : ''));
   const beginEdit = (period) => setForm({
     id: period.id,
@@ -129,9 +140,13 @@ export default function EmailRoutingLeaveDialog({ open, onOpenChange, scope = 's
   return <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
     <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
       <DialogHeader>
-        <DialogTitle>{includeAll ? 'Company routing leave' : 'My routing leave'}</DialogTitle>
-        <DialogDescription>Exact times use Hong Kong time. This schedule changes Email Router coverage only and is not an HR leave request.</DialogDescription>
+        <DialogTitle>Routing Leave</DialogTitle>
+        <DialogDescription>{canManageAll ? 'Manage your own routing availability or the schedules of active FCOS users.' : 'Manage your routing availability.'} Exact times use Hong Kong time. This is not an HR leave request.</DialogDescription>
       </DialogHeader>
+      {canManageAll && <div className="inline-flex w-fit rounded-md border border-border bg-muted/30 p-1" aria-label="Routing leave scope">
+        <Button type="button" size="sm" variant={!includeAll ? 'secondary' : 'ghost'} onClick={() => changeScope('self')} disabled={busy}>My leave</Button>
+        <Button type="button" size="sm" variant={includeAll ? 'secondary' : 'ghost'} onClick={() => changeScope('all')} disabled={busy}>All users</Button>
+      </div>}
       {error && <div className="border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {loading && !data ? <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading routing leave</div> : <div className="space-y-5">
         <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold">Leave periods</p><p className="text-xs text-muted-foreground">Overlapping active periods for one user are rejected.</p></div><Button size="sm" onClick={beginAdd} disabled={busy || (includeAll && !users.length)}><Plus />Add period</Button></div>

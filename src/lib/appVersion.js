@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.137';
+export const APP_VERSION = '2.0.138';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.138',
+    date: '2026-08-07',
+    title: 'Simplified Email Router navigation and leave management',
+    changes: [
+      'Removed the Email Router page tabs and moved Routing Setup into a permission-controlled modal opened from the mailbox toolbar.',
+      'Consolidated personal and company routing availability into one Routing Leave window, with company-wide controls limited to Administrators and the active General Manager.',
+      'Reduced the Email Router header height and removed the Operations label, descriptive copy, and loaded-message count.',
+    ],
+  },
   {
     version: '2.0.137',
     date: '2026-08-07',

@@ -89,8 +89,8 @@ test('module-owned configuration is linked from its owning workflow', async () =
     read('../src/pages/BrokerRegister.jsx'),
   ]);
 
-  assert.match(emailRouter, /Routing Setup/);
-  assert.match(emailRouter, /<EmailRouterSettings \/>/);
+  assert.match(emailRouter, /<EmailRouterWorkspace settingsOpen=\{settingsOpen\}/);
+  assert.doesNotMatch(emailRouter, /activeTab|MailSearch/);
   assert.match(hedgeDesk, /id: 'administration'/);
   assert.match(hedgeDesk, /<HedgeSettingsPanel \/>/);
   assert.match(brokerWorkspace, /activeTab === 'configuration'/);

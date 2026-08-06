@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, CalendarOff, CheckCircle2, Inbox, Loader2, Mail, RefreshCw, Search, Send, ShieldCheck, XCircle } from 'lucide-react';
+import { Archive, CalendarOff, CheckCircle2, Inbox, Loader2, Mail, RefreshCw, Search, Send, Settings2, ShieldCheck, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import PageHeader from '@/components/common/PageHeader';
@@ -14,7 +15,9 @@ import EmailMessageList from './EmailMessageList';
 import EmailMessageSheet, { EmailMessageDetail } from './EmailMessageSheet';
 import EmailRedirectPanel from './EmailRedirectPanel';
 import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
+import EmailRouterSettings from './EmailRouterSettings';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
+import { useAuth } from '@/lib/AuthContext';
 
 const LIMIT = 30;
 function messageError(data, fallback) {
@@ -41,7 +44,8 @@ function ResultNotice({ result }) {
   return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
 }
 
-export default function EmailRouterWorkspace() {
+export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsOpenChange = () => {} }) {
+  const { isAdministrator } = useAuth();
   const [useDetailSheet, setUseDetailSheet] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1280);
   const [folder, setFolder] = useState('inbox');
   const [search, setSearch] = useState('');
@@ -355,17 +359,14 @@ export default function EmailRouterWorkspace() {
     className={className}
   />;
 
-  return <div className="space-y-4">
+  return <div>
     <PageHeader
-      icon={Mail}
-      eyebrow="Operations"
       title="Email Router"
-      description="Review connected mailbox traffic and submit controlled routing actions."
-      meta={loading ? 'Loading mailbox...' : listError ? 'Mailbox service unavailable' : `${messages.length.toLocaleString()} messages loaded`}
       status={<ResultNotice result={actionResult} />}
-      actions={<><Button variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />My Routing Leave</Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
+      actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 />Routing Setup</Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />Routing Leave</Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
+      className="mb-3 gap-2 px-4 py-2.5 lg:grid-cols-[minmax(10rem,0.55fr)_minmax(18rem,1fr)_auto]"
     />
-    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-10rem)] xl:flex-row">
+    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-8rem)] xl:flex-row">
       <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
         <div className="border-b border-border px-4 py-3"><Tabs value={folder} onValueChange={setFolder}><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="inbox" className="gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger></TabsList></Tabs></div>
         <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
@@ -375,6 +376,15 @@ export default function EmailRouterWorkspace() {
     </section>
     {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />
-    <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} />
+    <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} canManageAll={isAdministrator} />
+    {isAdministrator && <Dialog open={settingsOpen} onOpenChange={onSettingsOpenChange}>
+      <DialogContent className="grid h-[min(92dvh,58rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 sm:max-w-[min(96vw,92rem)]">
+        <DialogHeader className="border-b border-border px-5 py-4 pr-12">
+          <DialogTitle>Routing Setup</DialogTitle>
+          <DialogDescription>Manage the routing directory, groups, presets, leave rules, and timed overrides.</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto p-4 lg:p-5"><EmailRouterSettings embedded /></div>
+      </DialogContent>
+    </Dialog>}
   </div>;
 }
