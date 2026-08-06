@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.126';
+export const APP_VERSION = '2.0.127';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.127',
+    releasedAt: '2026-08-06',
+    title: 'Individual Special Terms documents',
+    changes: [
+      'Replaced the Special Terms register with selectable, standalone PDFs containing only the authoritative term name and Terms Text beneath the approved company letterhead.',
+      'Added ordered multiple downloads with progress, duplicate filename suffixes, and retry retention for failed documents.',
+      'Added plain-text copy controls for Confirmation and Nomination special remarks in both the Terms table and editing window.',
+    ],
+  },
   {
     version: '2.0.126',
     releasedAt: '2026-08-06',

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { richTextToCopyText, richTextToPlain, specialTermFilenameKey } from '@/lib/specialTermsText';
 import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
 
 const EMPTY_TERM = { id: null, name: '', termsText: '', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
@@ -38,11 +39,32 @@ function displayDateTime(value) {
   return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Hong_Kong' }).format(date);
 }
 
-function richTextToPlain(value) {
-  if (!value) return '';
-  if (typeof DOMParser === 'undefined') return String(value);
-  const document = new DOMParser().parseFromString(String(value), 'text/html');
-  return String(document.body.textContent || '').replace(/\s+/g, ' ').trim();
+async function writeClipboardText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard access is unavailable.');
+}
+
+function triggerDownload(result) {
+  const url = URL.createObjectURL(result.blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = result.filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 function salesforceUrl(instanceUrl, id) {
@@ -139,6 +161,11 @@ export default function SpecialTerms() {
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [responseMeta, setResponseMeta] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [selectedTermIds, setSelectedTermIds] = useState([]);
+  const [exportProgress, setExportProgress] = useState(null);
+  const [failedTermIds, setFailedTermIds] = useState([]);
+  const [copiedRemarks, setCopiedRemarks] = useState({});
+  const copyTimers = useRef(new Map());
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -164,26 +191,71 @@ export default function SpecialTerms() {
 
   useEffect(() => { load(); }, [load]);
 
-  const downloadPdf = async () => {
+  useEffect(() => () => {
+    for (const timer of copyTimers.current.values()) window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const available = new Set((workspace?.terms || []).map((term) => term.id));
+    setSelectedTermIds((current) => current.filter((id) => available.has(id)));
+    setFailedTermIds((current) => current.filter((id) => available.has(id)));
+  }, [workspace?.terms]);
+
+  const downloadTerms = async (terms) => {
+    if (!terms.length || exporting) return;
     setExporting(true);
     setError('');
+    setFailedTermIds([]);
+    if (terms.length > 1) setMessage('Your browser may ask permission to download multiple files.');
+    const downloaded = [];
+    const failed = [];
+    const duplicateNames = new Map();
+    for (let index = 0; index < terms.length; index += 1) {
+      const term = terms[index];
+      setExportProgress({ current: index + 1, total: terms.length, name: term.name });
+      const nameKey = specialTermFilenameKey(term.name);
+      const duplicateIndex = duplicateNames.get(nameKey) || 0;
+      duplicateNames.set(nameKey, duplicateIndex + 1);
+      try {
+        const result = await appClient.functions.download('specialTermsPdfExport', {
+          termId: term.id,
+          duplicateIndex,
+        });
+        triggerDownload(result);
+        downloaded.push(term.id);
+      } catch (downloadError) {
+        failed.push({ id: term.id, name: term.name, message: downloadError.message || 'Download failed.' });
+      }
+      if (terms.length > 1) await new Promise((resolve) => window.setTimeout(resolve, 180));
+    }
+    setSelectedTermIds((current) => current.filter((id) => !downloaded.includes(id)));
+    setFailedTermIds(failed.map((item) => item.id));
+    if (failed.length) {
+      setError(`${failed.length} Special Term PDF${failed.length === 1 ? '' : 's'} could not be downloaded. The failed selection remains available to retry.`);
+      setMessage(downloaded.length ? `${downloaded.length} Special Term PDF${downloaded.length === 1 ? '' : 's'} downloaded.` : '');
+    } else {
+      setMessage(`${downloaded.length} Special Term PDF${downloaded.length === 1 ? '' : 's'} downloaded.`);
+    }
+    setExportProgress(null);
+    setExporting(false);
+  };
+
+  const copyRemark = async (value, key, label) => {
+    const copyText = richTextToCopyText(value);
+    if (!copyText) return;
+    setError('');
     try {
-      const result = await appClient.functions.download('specialTermsPdfExport', {
-        view: activeTab,
-        search: search.trim(),
-      });
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = result.filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (downloadError) {
-      setError(downloadError.message || 'The Special Terms PDF could not be downloaded.');
-    } finally {
-      setExporting(false);
+      await writeClipboardText(copyText);
+      setCopiedRemarks((current) => ({ ...current, [key]: true }));
+      setMessage(`${label} remark copied.`);
+      const existing = copyTimers.current.get(key);
+      if (existing) window.clearTimeout(existing);
+      copyTimers.current.set(key, window.setTimeout(() => {
+        setCopiedRemarks((current) => ({ ...current, [key]: false }));
+        copyTimers.current.delete(key);
+      }, 2_000));
+    } catch (copyError) {
+      setError(copyError.message || 'The remark could not be copied.');
     }
   };
 
@@ -207,6 +279,34 @@ export default function SpecialTerms() {
     if (!query) return workspace?.rules || [];
     return (workspace?.rules || []).filter((rule) => [rule.name, rule.specialTermName, rule.audience, ...conditionSummary(rule)].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [search, workspace?.rules]);
+
+  const selectedTermSet = useMemo(() => new Set(selectedTermIds), [selectedTermIds]);
+  const selectedTerms = useMemo(
+    () => (workspace?.terms || []).filter((term) => selectedTermSet.has(term.id)),
+    [selectedTermSet, workspace?.terms],
+  );
+  const allFilteredSelected = filteredTerms.length > 0 && filteredTerms.every((term) => selectedTermSet.has(term.id));
+  const someFilteredSelected = filteredTerms.some((term) => selectedTermSet.has(term.id));
+
+  const toggleTerm = (termId, checked) => {
+    setSelectedTermIds((current) => checked
+      ? [...new Set([...current, termId])]
+      : current.filter((id) => id !== termId));
+    setFailedTermIds((current) => current.filter((id) => id !== termId));
+  };
+
+  const toggleFilteredTerms = (checked) => {
+    const filteredIds = new Set(filteredTerms.map((term) => term.id));
+    setSelectedTermIds((current) => checked
+      ? [...new Set([...current, ...filteredIds])]
+      : current.filter((id) => !filteredIds.has(id)));
+    setFailedTermIds((current) => current.filter((id) => !filteredIds.has(id)));
+  };
+
+  const clearTermSelection = () => {
+    setSelectedTermIds([]);
+    setFailedTermIds([]);
+  };
 
   const termValidationIssues = useMemo(() => termForm ? specialTermIssues(termForm) : [], [termForm]);
   const ruleValidationIssues = useMemo(() => ruleForm ? specialTermRuleIssues(ruleForm) : [], [ruleForm]);
@@ -293,7 +393,6 @@ export default function SpecialTerms() {
         actions={(
           <div className="flex flex-wrap gap-2">
             <PageMethodology {...SPECIAL_TERMS_METHODOLOGY} />
-            <Button variant="outline" onClick={downloadPdf} disabled={loading || exporting || !workspace}>{exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}Download PDF</Button>
             <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
             {workspace?.canManage && <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button>}
           </div>
@@ -314,15 +413,115 @@ export default function SpecialTerms() {
         trailing={<div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div>}
       />
 
+      {activeTab === 'terms' && selectedTerms.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">{selectedTerms.length} Special Term{selectedTerms.length === 1 ? '' : 's'} selected</p>
+            <p className="truncate text-xs text-muted-foreground" aria-live="polite">
+              {exportProgress ? `Downloading ${exportProgress.current} of ${exportProgress.total}: ${exportProgress.name}` : selectedTerms.length > 1 ? 'Your browser may ask permission to download multiple files.' : 'The PDF will use the current Salesforce wording.'}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" onClick={clearTermSelection} disabled={exporting}>Clear</Button>
+            <Button onClick={() => downloadTerms(selectedTerms)} disabled={exporting}>
+              {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+              {exporting ? `Downloading ${exportProgress?.current || 1} of ${exportProgress?.total || selectedTerms.length}` : failedTermIds.length ? 'Retry failed' : 'Download selected'}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {loading && !workspace ? <StateBlock title="Loading Special Terms" description="Reading authoritative Salesforce definitions and rules." icon={Loader2} /> : null}
 
       {!loading && workspace && activeTab === 'terms' && (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[980px]">
-            <TableHeader><TableRow><TableHead>Special Term</TableHead><TableHead>Terms Text</TableHead><TableHead>Confirmation</TableHead><TableHead>Nomination</TableHead><TableHead>Rules</TableHead><TableHead>Last Modified</TableHead><TableHead className="w-24" /></TableRow></TableHeader>
+          <Table className="min-w-[1080px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-11">
+                  <Checkbox
+                    checked={allFilteredSelected ? true : someFilteredSelected ? 'indeterminate' : false}
+                    onCheckedChange={(checked) => toggleFilteredTerms(checked === true)}
+                    aria-label="Select all filtered Special Terms"
+                    title="Select all filtered Special Terms"
+                  />
+                </TableHead>
+                <TableHead>Special Term</TableHead>
+                <TableHead>Terms Text</TableHead>
+                <TableHead>Confirmation</TableHead>
+                <TableHead>Nomination</TableHead>
+                <TableHead>Rules</TableHead>
+                <TableHead>Last Modified</TableHead>
+                <TableHead className="w-36" />
+              </TableRow>
+            </TableHeader>
             <TableBody>{filteredTerms.map((term) => {
               const termRules = rulesByTerm.get(term.id) || [];
-              return <TableRow key={term.id}><TableCell className="font-medium"><a href={salesforceUrl(workspace.instanceUrl, term.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">{term.name}<ExternalLink className="h-3 w-3" /></a></TableCell><TableCell className="max-w-md"><p className="line-clamp-3 whitespace-pre-wrap text-sm">{term.termsText || 'Not set'}</p></TableCell><TableCell><Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge>{richTextToPlain(term.confirmationRemark) && <p className="mt-1 max-w-48 truncate text-xs text-muted-foreground">{richTextToPlain(term.confirmationRemark)}</p>}</TableCell><TableCell><Badge variant={term.addToNomination ? 'default' : 'outline'}>{term.addToNomination ? 'Attach PDF' : 'Not attached'}</Badge>{richTextToPlain(term.nominationRemark) && <p className="mt-1 max-w-48 truncate text-xs text-muted-foreground">{richTextToPlain(term.nominationRemark)}</p>}</TableCell><TableCell>{termRules.length}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDateTime(term.lastModifiedAt)}</TableCell><TableCell>{workspace.canManage && <div className="flex justify-end gap-1"><Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button></div>}</TableCell></TableRow>;
+              const confirmationText = richTextToPlain(term.confirmationRemark);
+              const nominationText = richTextToPlain(term.nominationRemark);
+              const confirmationCopyKey = `confirmation:${term.id}`;
+              const nominationCopyKey = `nomination:${term.id}`;
+              return (
+                <TableRow key={term.id} data-state={selectedTermSet.has(term.id) ? 'selected' : undefined}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedTermSet.has(term.id)}
+                      onCheckedChange={(checked) => toggleTerm(term.id, checked === true)}
+                      aria-label={`Select ${term.name}`}
+                      title={`Select ${term.name}`}
+                    />
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    <a href={salesforceUrl(workspace.instanceUrl, term.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                      {term.name}<ExternalLink className="h-3 w-3" />
+                    </a>
+                  </TableCell>
+                  <TableCell className="max-w-md"><p className="line-clamp-3 whitespace-pre-wrap text-sm">{term.termsText || 'Not set'}</p></TableCell>
+                  <TableCell>
+                    <Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge>
+                    <div className="mt-1 flex max-w-56 items-center gap-1">
+                      <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{confirmationText || 'No remark'}</p>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        disabled={!confirmationText}
+                        onClick={() => copyRemark(term.confirmationRemark, confirmationCopyKey, 'Confirmation')}
+                        title="Copy Confirmation special remark"
+                        aria-label={`Copy Confirmation special remark for ${term.name}`}
+                      >
+                        {copiedRemarks[confirmationCopyKey] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={term.addToNomination ? 'default' : 'outline'}>{term.addToNomination ? 'Attach PDF' : 'Not attached'}</Badge>
+                    <div className="mt-1 flex max-w-56 items-center gap-1">
+                      <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{nominationText || 'No remark'}</p>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        disabled={!nominationText}
+                        onClick={() => copyRemark(term.nominationRemark, nominationCopyKey, 'Nomination')}
+                        title="Copy Nomination special remark"
+                        aria-label={`Copy Nomination special remark for ${term.name}`}
+                      >
+                        {copiedRemarks[nominationCopyKey] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                  <TableCell>{termRules.length}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{displayDateTime(term.lastModifiedAt)}</TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => downloadTerms([term])} disabled={exporting} title="Download Special Term PDF" aria-label={`Download ${term.name} PDF`}><Download className="h-4 w-4" /></Button>
+                      {workspace.canManage && <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button>}
+                      {workspace.canManage && <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button>}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
             })}</TableBody>
           </Table>
           {!filteredTerms.length && <div className="p-10 text-center text-sm text-muted-foreground">No matching Special Terms.</div>}
@@ -342,7 +541,57 @@ export default function SpecialTerms() {
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => !open && !busy && setTermForm(null)}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
           <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Rich-text remarks are used in confirmation and nomination documents.</DialogDescription></DialogHeader>
-          {termForm && <div className="space-y-5"><div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div><div className="space-y-1.5"><Label>Terms Text</Label><Textarea rows={6} value={termForm.termsText} onChange={(event) => setTermForm((current) => ({ ...current, termsText: event.target.value }))} /></div><div className="grid gap-4 md:grid-cols-2"><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label><div className="space-y-1.5"><Label>Confirmation special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.confirmationRemark} onChange={(confirmationRemark) => setTermForm((current) => ({ ...current, confirmationRemark }))} /></div></div></section><section className="space-y-3 rounded-lg border border-border p-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach PDF to Nomination</label><div className="space-y-1.5"><Label>Nomination special remark</Label><div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.nominationRemark} onChange={(nominationRemark) => setTermForm((current) => ({ ...current, nominationRemark }))} /></div></div></section></div><WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} /></div>}
+          {termForm && (
+            <div className="space-y-5">
+              <div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div>
+              <div className="space-y-1.5"><Label>Terms Text</Label><Textarea rows={6} value={termForm.termsText} onChange={(event) => setTermForm((current) => ({ ...current, termsText: event.target.value }))} /></div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <section className="space-y-3 rounded-lg border border-border p-3">
+                  <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>Confirmation special remark</Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        disabled={!richTextToCopyText(termForm.confirmationRemark)}
+                        onClick={() => copyRemark(termForm.confirmationRemark, 'form:confirmation', 'Confirmation')}
+                        title="Copy Confirmation special remark"
+                        aria-label="Copy Confirmation special remark"
+                      >
+                        {copiedRemarks['form:confirmation'] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                    <div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.confirmationRemark} onChange={(confirmationRemark) => setTermForm((current) => ({ ...current, confirmationRemark }))} /></div>
+                  </div>
+                </section>
+                <section className="space-y-3 rounded-lg border border-border p-3">
+                  <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach PDF to Nomination</label>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>Nomination special remark</Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        disabled={!richTextToCopyText(termForm.nominationRemark)}
+                        onClick={() => copyRemark(termForm.nominationRemark, 'form:nomination', 'Nomination')}
+                        title="Copy Nomination special remark"
+                        aria-label="Copy Nomination special remark"
+                      >
+                        {copiedRemarks['form:nomination'] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                    <div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.nominationRemark} onChange={(nominationRemark) => setTermForm((current) => ({ ...current, nominationRemark }))} /></div>
+                  </div>
+                </section>
+              </div>
+              <WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} />
+            </div>
+          )}
           <DialogFooter><Button variant="outline" onClick={() => setTermForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>

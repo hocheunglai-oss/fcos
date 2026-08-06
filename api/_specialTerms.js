@@ -212,6 +212,18 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
   };
 }
 
+export async function getSpecialTermForExport(termId, { force = false } = {}) {
+  await resolveSpecialTermsSchema({ force });
+  const id = salesforceId(termId, 'Special Term');
+  const result = await sfQuery(
+    `SELECT Id,Name,Terms_Text__c,LastModifiedDate FROM Special_Term__c WHERE Id = '${soql(id)}' LIMIT 1`,
+    { clean: true, limit: 1 },
+  );
+  const record = result.records[0];
+  if (!record) throw specialTermsError('The selected Special Term is no longer available.', 409, 'SPECIAL_TERMS_STALE');
+  return mapTerm(record);
+}
+
 export async function specialTermOptions({ kind, query = '' } = {}) {
   const schema = await resolveSpecialTermsSchema();
   const search = text(query, 100);

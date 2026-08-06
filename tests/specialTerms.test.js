@@ -33,6 +33,8 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /IsActive = true/);
   assert.match(service, /Account WHERE Inactive_Suspended__c = false AND \(Name LIKE/);
   assert.match(service, /secondary: row\.Company_Code__c \|\| 'No CL Key'/);
+  assert.match(service, /getSpecialTermForExport/);
+  assert.match(service, /WHERE Id = '\$\{soql\(id\)\}' LIMIT 1/);
 });
 
 test('Salesforce owns priority while FCOS protects mutations and deletion', () => {
@@ -64,7 +66,13 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Search Account name or CL Key/);
   assert.match(page, /<PageMethodology \{\.\.\.SPECIAL_TERMS_METHODOLOGY\}/);
   assert.match(page, /appClient\.functions\.download\('specialTermsPdfExport'/);
-  assert.match(page, /Download PDF<\/Button>/);
+  assert.match(page, /Select all filtered Special Terms/);
+  assert.match(page, /Download selected/);
+  assert.match(page, /Retry failed/);
+  assert.match(page, /Copy Confirmation special remark/);
+  assert.match(page, /Copy Nomination special remark/);
+  assert.match(page, /richTextToCopyText/);
+  assert.doesNotMatch(page, /view: activeTab,[\s\S]*search: search\.trim\(\)/);
   assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);
 });

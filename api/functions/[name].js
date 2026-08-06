@@ -11,7 +11,7 @@ import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
-import { generateSpecialTermsPdf } from '../_specialTermsExport.js';
+import { generateSpecialTermPdf } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
@@ -141,7 +141,7 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermForExport, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   emailRouterActionHandler as nativeEmailRouterAction,
   emailRouterAdvisorHandler as nativeEmailRouterAdvisor,
@@ -16485,17 +16485,13 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
 
 async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  const workspace = await listSpecialTerms({ force: body.force === true });
-  const generated = generateSpecialTermsPdf(workspace, {
-    view: body.view,
-    search: body.search,
-    actorName: context.profile.full_name || context.profile.email,
+  const term = await getSpecialTermForExport(body.termId, { force: body.force === true });
+  const generated = generateSpecialTermPdf(term, {
+    duplicateIndex: body.duplicateIndex,
   });
   await writeAdminAudit(context.client, context.profile, 'special_terms_pdf_exported', null, null, {
-    view: generated.view,
-    termCount: generated.termCount,
-    ruleCount: generated.ruleCount,
-    filtered: Boolean(String(body.search || '').trim()),
+    termCount: 1,
+    pageCount: generated.pageCount,
   });
   const asciiFilename = generated.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
   res.statusCode = 200;

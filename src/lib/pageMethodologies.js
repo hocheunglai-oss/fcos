@@ -436,8 +436,12 @@ export const SPECIAL_TERMS_METHODOLOGY = {
       body: 'Users need Manage Special Terms capability to write. FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, and records idempotent operation history. Removing a term requires its exact name and an audit reason, then removes the term and all linked rules atomically.',
     },
     {
-      title: 'PDF register',
-      body: 'Download PDF creates a server-generated register from Salesforce. It follows the current Terms or Rules view and search text, includes linked rule conditions without exposing Salesforce IDs, and records the filtered counts in the audit trail.',
+      title: 'Individual PDFs',
+      body: 'Select one or more Terms to download a separate PDF for each. Every document is generated from the latest Salesforce Terms Text, repeats the approved company letterhead on every page, and excludes rules, remarks, attachment settings, identifiers, and administrative metadata.',
+    },
+    {
+      title: 'Copying remarks',
+      body: 'The Confirmation and Nomination copy controls place only the selected rich-text remark on the clipboard as readable plain text. Paragraphs and list items remain separated. Copying does not edit Salesforce or change an open form.',
     },
   ],
 };
