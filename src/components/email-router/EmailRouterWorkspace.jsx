@@ -188,12 +188,6 @@ export default function EmailRouterWorkspace() {
     return () => { active = false; };
   }, [selectedId, messages]);
 
-  const openAction = async (action, undoResult = null) => {
-    if (!detail) return;
-    setActionDialog({ action, undoResult });
-    if (action === 'forward') loadRoutingOptions({ force: true });
-  };
-
   const loadAdvisor = async () => {
     if (!detail) return;
     setAdvisorLoading(true);
@@ -236,6 +230,16 @@ export default function EmailRouterWorkspace() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const openAction = async (action, undoResult = null) => {
+    if (!detail || submitting) return;
+    if (action === 'archive') {
+      await submitAction({ action: 'archive' });
+      return;
+    }
+    setActionDialog({ action, undoResult });
+    if (action === 'forward') loadRoutingOptions({ force: true });
   };
 
   const fetchAttachment = useCallback(async (attachment) => {
@@ -325,9 +329,9 @@ export default function EmailRouterWorkspace() {
         <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
         <EmailMessageList messages={messages} selectedId={selectedId} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onPrevious={previous} onNext={next} />
       </div>
-      {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
+      {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
     </section>
-    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
+    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />
     <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} />
   </div>;

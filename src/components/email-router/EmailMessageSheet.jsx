@@ -74,7 +74,7 @@ export function replaceEmailRouterInlineSources(value, sources) {
   return document.body.innerHTML;
 }
 
-export function EmailMessageDetail({ message, loading, error, actionResult, onAction, onFetchAttachment, onDownloadAttachment }) {
+export function EmailMessageDetail({ message, loading, error, actionResult, actionPending = false, onAction, onFetchAttachment, onDownloadAttachment }) {
   const [downloadingId, setDownloadingId] = useState(null);
   const [inlineSources, setInlineSources] = useState({});
   const [preview, setPreview] = useState(null);
@@ -144,12 +144,12 @@ export function EmailMessageDetail({ message, loading, error, actionResult, onAc
         {message.cc.length > 0 && <div className="mt-2 flex gap-3"><span className="w-12 shrink-0 text-muted-foreground">Cc</span><span className="min-w-0 break-words">{formatAddresses(message.cc)}</span></div>}
       </div>
       <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('reply')} aria-label="Reply"><Reply /></Button></TooltipTrigger><TooltipContent>Reply</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('forward')} aria-label="Forward"><Forward /></Button></TooltipTrigger><TooltipContent>Forward</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('reply')} disabled={actionPending} aria-label="Reply"><Reply /></Button></TooltipTrigger><TooltipContent>Reply</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('forward')} disabled={actionPending} aria-label="Forward"><Forward /></Button></TooltipTrigger><TooltipContent>Forward</TooltipContent></Tooltip>
         <span className="mx-1 h-5 border-l border-border" />
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('archive')} aria-label="Archive message"><Archive /></Button></TooltipTrigger><TooltipContent>Archive</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('delete')} aria-label="Delete message"><Trash2 /></Button></TooltipTrigger><TooltipContent>Delete</TooltipContent></Tooltip>
-        {actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('undo', actionResult)} aria-label="Undo last action"><Undo2 /></Button></TooltipTrigger><TooltipContent>Undo last action</TooltipContent></Tooltip>}
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('archive')} disabled={actionPending} aria-label="Archive message"><Archive /></Button></TooltipTrigger><TooltipContent>Archive immediately</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('delete')} disabled={actionPending} aria-label="Delete message"><Trash2 /></Button></TooltipTrigger><TooltipContent>Delete</TooltipContent></Tooltip>
+        {actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('undo', actionResult)} disabled={actionPending} aria-label="Undo last action"><Undo2 /></Button></TooltipTrigger><TooltipContent>Undo last action</TooltipContent></Tooltip>}
       </div>
       {actionResult && <div className={cn('mx-5 mt-4 flex flex-wrap items-start gap-3 border p-3 text-sm sm:mx-6', statusTone(actionResult.status))}><Mail className="mt-0.5 h-4 w-4 shrink-0" /><div className="min-w-0 flex-1"><p className="font-medium">{actionStatusLabel(actionResult.status)}: {actionResult.action}</p><p className="mt-0.5">{actionResult.message}</p></div>{actionResult.status === 'uncertain' && actionResult.actionId && <Button size="sm" variant="outline" onClick={() => onAction('retry', actionResult)}>Review retry</Button>}</div>}
       {error && <div className="mx-5 mt-4 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:mx-6">The full message could not be refreshed. Showing the available message information. {error}</div>}

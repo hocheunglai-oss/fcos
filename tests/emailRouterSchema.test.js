@@ -153,6 +153,24 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(redirectPanel, /splitRecipientSelections/);
 });
 
+test('Email Router archive is immediate and foreground redirect work is scoped to one action', async () => {
+  const [core, handlers, workspace, dialog, messageSheet] = await Promise.all([
+    readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_emailRouterHandlers.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailActionDialog.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(core, /processEmailRouterOutbox\(\{ client, mailbox, limit = 10, actionId = null, confirmNewSubmissions = true \}/);
+  assert.match(core, /\.eq\('mail_action_id', targetActionId\)/);
+  assert.match(core, /!submittedNow \|\| confirmNewSubmissions/);
+  assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
+  assert.match(workspace, /if \(action === 'archive'\)[\s\S]*await submitAction\(\{ action: 'archive' \}\)/);
+  assert.doesNotMatch(dialog, /archive:\s*\{/);
+  assert.match(messageSheet, /Archive immediately/);
+});
+
 test('Email Router audit events allow whole-directory ordering changes', async () => {
   const [orderedSql, directoryEventSql] = await Promise.all([
     readFile(orderedDirectoryMigrationUrl, 'utf8'),

@@ -1367,16 +1367,6 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   });
   if (action.duplicate) return actionResult(action);
   await recordEvent(client, { eventType: 'mail_action.reserved', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
-  try {
-    const sourceResponse = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}?$select=id,parentFolderId`), {}, dependencies);
-    const sourceMessage = await graphJson(sourceResponse);
-    if (!sourceMessage?.id) throw routerError('The source message is unavailable.', 404, 'EMAIL_ROUTER_MESSAGE_UNAVAILABLE');
-  } catch (error) {
-    const failureCode = String(error.code || 'email_router_message_unavailable').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
-    await updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() });
-    await recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
-    throw error;
-  }
   if (['redirect', 'forward'].includes(actionType)) {
     try {
       await persistActionDestinations(client, action.id, input, routeSnapshot);
@@ -1400,11 +1390,21 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     try {
       const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}/move`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ destinationId }) }, dependencies);
       const result = await graphJson(response);
-      await updateAction(client, action.id, { state: 'confirmed', provider_operation_id: result?.id || source, confirmed_at: new Date().toISOString() });
-      await recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+      await Promise.all([
+        updateAction(client, action.id, { state: 'confirmed', provider_operation_id: result?.id || source, confirmed_at: new Date().toISOString() }),
+        recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
+      ]);
       return actionResult({ ...action, state: 'confirmed', provider_operation_id: result?.id || source });
     } catch (error) {
       const failureCode = String(error.code || 'email_router_move_unknown').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
+      const status = Number(error.status || 0);
+      if (status >= 400 && status < 500 && ![408, 409, 429].includes(status)) {
+        await Promise.all([
+          updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() }),
+          recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
+        ]);
+        throw error;
+      }
       await updateAction(client, action.id, { failure_code: failureCode });
       await recordEmailRouterAlert(client, { mailboxId: mailbox.id, messageId: indexed.id, mailActionId: action.id, code: failureCode, severity: 'critical', dedupeKey: `mail-action:${action.id}:uncertain` });
       return actionResult({ ...action, state: 'uncertain', uncertain_at: uncertainAt });
@@ -1482,30 +1482,47 @@ async function confirmSubmittedAction({ client, mailbox, action, message, actorU
   return true;
 }
 
-export async function processEmailRouterOutbox({ client, mailbox, limit = 10 }, dependencies = {}) {
+export async function processEmailRouterOutbox({ client, mailbox, limit = 10, actionId = null, confirmNewSubmissions = true }, dependencies = {}) {
   const maximum = Math.min(25, Math.max(1, Number(limit) || 10));
   const currentTime = new Date().toISOString();
   const relation = 'mail_actions(id,action_type,state,provider_operation_id,requested_by,messages(id,provider_message_id,mailbox_id))';
-  const { data: deliveryEntries, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
-    .select(`id,mail_action_id,state,attempt_count,provider_operation_id,${relation}`)
-    .in('state', ['reserved', 'draft_created'])
-    .lte('next_attempt_at', currentTime)
-    .order('next_attempt_at')
-    .limit(maximum);
-  if (error) storageUnavailable(error);
-  const { data: reconciliationEntries, error: reconcileError } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
-    .select(`id,mail_action_id,state,attempt_count,provider_operation_id,${relation}`)
-    .in('state', ['submitted', 'uncertain'])
-    .lte('reconcile_after', currentTime)
-    .order('reconcile_after')
-    .limit(maximum);
-  if (reconcileError) storageUnavailable(reconcileError);
+  let deliveryEntries = [];
+  let reconciliationEntries = [];
+  if (actionId) {
+    const targetActionId = safeId(actionId, 'mail action identifier');
+    const { data: targetEntry, error: targetError } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+      .select(`id,mail_action_id,state,attempt_count,provider_operation_id,${relation}`)
+      .eq('mail_action_id', targetActionId)
+      .in('state', ['reserved', 'draft_created', 'submitted', 'uncertain'])
+      .maybeSingle();
+    if (targetError) storageUnavailable(targetError);
+    if (targetEntry && ['reserved', 'draft_created'].includes(targetEntry.state)) deliveryEntries = [targetEntry];
+    if (targetEntry && ['submitted', 'uncertain'].includes(targetEntry.state)) reconciliationEntries = [targetEntry];
+  } else {
+    const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+      .select(`id,mail_action_id,state,attempt_count,provider_operation_id,${relation}`)
+      .in('state', ['reserved', 'draft_created'])
+      .lte('next_attempt_at', currentTime)
+      .order('next_attempt_at')
+      .limit(maximum);
+    if (error) storageUnavailable(error);
+    deliveryEntries = data || [];
+    const { data: pendingReconciliation, error: reconcileError } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+      .select(`id,mail_action_id,state,attempt_count,provider_operation_id,${relation}`)
+      .in('state', ['submitted', 'uncertain'])
+      .lte('reconcile_after', currentTime)
+      .order('reconcile_after')
+      .limit(maximum);
+    if (reconcileError) storageUnavailable(reconcileError);
+    reconciliationEntries = pendingReconciliation || [];
+  }
   let submitted = 0;
   let confirmed = 0;
-  for (const entry of [...(deliveryEntries || []), ...(reconciliationEntries || [])]) {
+  for (const entry of [...deliveryEntries, ...reconciliationEntries]) {
     const action = Array.isArray(entry.mail_actions) ? entry.mail_actions[0] : entry.mail_actions;
     const message = Array.isArray(action?.messages) ? action.messages[0] : action?.messages;
     if (!action || !message || action.state === 'confirmed') continue;
+    let submittedNow = false;
     if (entry.state === 'reserved' || entry.state === 'draft_created') {
       // The transition to uncertain happens before Graph submission; uncertain entries are reconciliation-only.
       const { data: claimed, error: claimError } = await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
@@ -1524,6 +1541,7 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10 }, 
         await updateAction(client, entry.mail_action_id, { state: 'submitted', submitted_at: new Date().toISOString() });
         await recordEvent(client, { eventType: 'mail_action.submitted', entityType: 'mail_action', entityId: entry.mail_action_id, actorUserId: action.requested_by });
         submitted += 1;
+        submittedNow = true;
       } catch (error) {
         const failureCode = String(error.code || 'email_router_submission_unknown').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
         await routerTable(client, EMAIL_ROUTER_STORAGE.outbox).update({ state: 'uncertain', failure_code: failureCode, reconcile_after: new Date(Date.now() + 60_000).toISOString() }).eq('id', entry.id);
@@ -1531,7 +1549,7 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10 }, 
         continue;
       }
     }
-    if (await sentDraftConfirmed(mailbox, action.provider_operation_id, dependencies)) {
+    if ((!submittedNow || confirmNewSubmissions) && await sentDraftConfirmed(mailbox, action.provider_operation_id, dependencies)) {
       const didConfirm = await confirmSubmittedAction({ client, mailbox, action, message, actorUserId: action.requested_by }, dependencies);
       if (didConfirm) confirmed += 1;
     }

@@ -111,7 +111,7 @@ export async function emailRouterActionHandler(req, body = {}, dependencies = {}
   const value = await context(req, dependencies);
   const result = await startEmailRouterAction({ client: value.client, profile: value.profile, mailbox: value.mailbox, actionType: body.actionType || body.action, sourceMessageId: body.messageId, input: body }, dependencies);
   if (result.status !== 'draft_created') return result;
-  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 10 }, dependencies);
+  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
   return getEmailRouterActionStatus(value.client, result.id);
 }
 
@@ -130,7 +130,7 @@ export async function emailRouterRetryHandler(req, body = {}, dependencies = {})
     confirmedNotSent: body.confirmedNotSent,
   }, dependencies);
   if (result.status !== 'draft_created') return result;
-  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 10 }, dependencies);
+  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
   return getEmailRouterActionStatus(value.client, result.id);
 }
 

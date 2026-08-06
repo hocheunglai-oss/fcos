@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.131';
+export const APP_VERSION = '2.0.132';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.132',
+    releasedAt: '2026-08-06',
+    title: 'Faster Email Router actions',
+    changes: [
+      'Made Archive a one-click action without a confirmation window and removed the redundant Microsoft Graph message preflight.',
+      'Reduced Redirect latency by processing only the newly requested outbox action and leaving Sent Items confirmation to durable background reconciliation.',
+    ],
+  },
   {
     version: '2.0.131',
     releasedAt: '2026-08-06',
