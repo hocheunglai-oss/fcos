@@ -425,7 +425,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     <PageHeader
       title="Email Router"
       status={<ResultNotice result={actionResult} compact />}
-      actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 />Routing Setup</Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />Routing Leave</Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
+      actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 /><span className="sm:hidden">Setup</span><span className="hidden sm:inline">Routing Setup</span></Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff /><span className="sm:hidden">Leave</span><span className="hidden sm:inline">Routing Leave</span></Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
       compact
       className="mb-3"
     />

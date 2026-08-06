@@ -192,7 +192,7 @@ test('Email Router action status is page-level and not duplicated in the message
   ]);
   assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} compact \/>\}/);
   assert.doesNotMatch(page, /Mailbox<\/Button>|activeTab|MailSearch/);
-  assert.match(workspace, /<Settings2 \/>Routing Setup[\s\S]*<CalendarOff \/>Routing Leave/);
+  assert.match(workspace, /<Settings2 \/>[\s\S]*Routing Setup[\s\S]*<CalendarOff \/>[\s\S]*Routing Leave/);
   assert.match(workspace, /<EmailRouterSettings embedded \/>/);
   assert.doesNotMatch(workspace, /eyebrow="Operations"|messages loaded|description="Review connected mailbox traffic/);
   assert.doesNotMatch(workspace, /<ResultNotice result=\{actionResult\} \/>\s*<section/);
@@ -277,7 +277,7 @@ test('Email Router leave-aware preset versions remain service-only and preserve 
   assert.match(settings, /Routing presets and leave rules/);
   assert.doesNotMatch(settings, /Company routing leave/);
   assert.match(workspace, /canManageAll=\{isAdministrator\}/);
-  assert.match(workspace, />Routing Leave<\/Button>/);
+  assert.match(workspace, />Routing Leave<\/span><\/Button>/);
   assert.match(messageSheet, /Inline image unavailable/);
   for (const signature of [
     'public.save_emailrouter_preset_version(jsonb, uuid)',
