@@ -25,6 +25,11 @@ import {
 import { emailRouterConfiguration, saveEmailRouterConfiguration } from './_emailRouterConfig.js';
 import { runEmailRouterAdvisor } from './_emailRouterAdvisor.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
+import { waitUntil } from '@vercel/functions';
+
+function runtimeEmailRouterDependencies(dependencies) {
+  return typeof dependencies.defer === 'function' ? dependencies : { ...dependencies, defer: waitUntil };
+}
 
 async function context(req, dependencies, { allowCachedMailbox = false } = {}) {
   const auth = await requireEmailRouterUser(req, dependencies);
@@ -69,12 +74,13 @@ export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependen
 
 export async function emailRouterDetailHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies, { allowCachedMailbox: true });
+  const runtimeDependencies = runtimeEmailRouterDependencies(dependencies);
   const detail = await fetchEmailRouterDetail({
     client: value.client,
     mailbox: value.mailbox,
     messageId: body.messageId,
     hasAttachmentsHint: body.hasAttachments === true,
-  }, dependencies);
+  }, runtimeDependencies);
   const expiresAtMs = Date.now() + 5 * 60_000;
   const streamPath = String(dependencies.attachmentStreamPath || '/api/email-router-attachment');
   const attachments = (detail.attachments || []).map((attachment) => {
@@ -153,15 +159,16 @@ export async function emailRouterAttachmentStreamHandler(req, body = {}, depende
 
 export async function emailRouterActionHandler(req, body = {}, dependencies = {}) {
   const startedAt = Date.now();
+  const runtimeDependencies = runtimeEmailRouterDependencies(dependencies);
   const value = await context(req, dependencies);
-  const result = await startEmailRouterAction({ client: value.client, profile: value.profile, mailbox: value.mailbox, actionType: body.actionType || body.action, sourceMessageId: body.messageId, input: body }, dependencies);
+  const result = await startEmailRouterAction({ client: value.client, profile: value.profile, mailbox: value.mailbox, actionType: body.actionType || body.action, sourceMessageId: body.messageId, input: body }, runtimeDependencies);
   if (result.status !== 'draft_created') {
     const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt };
     recordEmailRouterOperation(performance);
     return { ...result, performance };
   }
-  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
-  if (continueEmailRouterWork(submission, dependencies, 'Draft submission')) {
+  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, runtimeDependencies);
+  if (continueEmailRouterWork(submission, runtimeDependencies, 'Draft submission')) {
     const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt, continuedInBackground: true };
     recordEmailRouterOperation(performance);
     return { ...result, performance };
@@ -179,6 +186,7 @@ export async function emailRouterUndoHandler(req, body = {}, dependencies = {}) 
 }
 
 export async function emailRouterRetryHandler(req, body = {}, dependencies = {}) {
+  const runtimeDependencies = runtimeEmailRouterDependencies(dependencies);
   const value = await context(req, dependencies);
   const result = await retryEmailRouterUncertainAction({
     client: value.client,
@@ -186,10 +194,10 @@ export async function emailRouterRetryHandler(req, body = {}, dependencies = {})
     profile: value.profile,
     actionId: body.actionId,
     confirmedNotSent: body.confirmedNotSent,
-  }, dependencies);
+  }, runtimeDependencies);
   if (result.status !== 'draft_created') return result;
-  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
-  if (continueEmailRouterWork(submission, dependencies, 'Retry submission')) return result;
+  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, runtimeDependencies);
+  if (continueEmailRouterWork(submission, runtimeDependencies, 'Retry submission')) return result;
   await submission;
   return getEmailRouterActionStatus(value.client, result.id);
 }
