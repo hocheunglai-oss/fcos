@@ -1,6 +1,14 @@
-export const APP_VERSION = '2.0.127';
+export const APP_VERSION = '2.0.128';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.128',
+    releasedAt: '2026-08-06',
+    title: 'Readable mobile workspaces',
+    changes: [
+      'Reserved the icon dock width on mobile so page headings, controls, selection toolbars, and table content remain visible beside the sidebar.',
+    ],
+  },
   {
     version: '2.0.127',
     releasedAt: '2026-08-06',

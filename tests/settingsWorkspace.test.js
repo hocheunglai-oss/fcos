@@ -60,7 +60,7 @@ test('application sidebar is a translucent icon dock and session actions belong 
   assert.match(layout, /sidebarCaptionMode && sidebarHovered/);
   assert.doesNotMatch(layout, /origin-left items-center gap-3[\s\S]{0,220}hover:scale-\[1\.04\]/);
   assert.match(layout, /truncate whitespace-nowrap/);
-  assert.match(layout, /hidden w-\[72px\] shrink-0 md:block/);
+  assert.match(layout, /<div className="w-\[72px\] shrink-0" aria-hidden="true" \/>/);
   assert.match(layout, /data-sidebar-caption-glass="true"/);
   assert.match(layout, /app-workspace-sidebar fixed[\s\S]*z-\[45\]/);
   assert.match(layout, /left-\[64px\][\s\S]*bg-white\/\[0\.18\][\s\S]*backdrop-blur-lg[\s\S]*supports-\[backdrop-filter\]:bg-white\/\[0\.12\]/);

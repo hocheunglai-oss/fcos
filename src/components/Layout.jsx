@@ -701,7 +701,7 @@ export default function Layout() {
         </TooltipProvider>
       </aside>
 
-      <div className="hidden w-[72px] shrink-0 md:block" aria-hidden="true" />
+      <div className="w-[72px] shrink-0" aria-hidden="true" />
 
       <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
         {versionUpdate && (
