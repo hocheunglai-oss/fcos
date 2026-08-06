@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.133';
+export const APP_VERSION = '2.0.134';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.134',
+    releasedAt: '2026-08-06',
+    title: 'Trade-date broker settlements',
+    changes: [
+      'Separated broker settlement from the general Hedge pricing-month close and now assigns each broker commission to the month of its trade date.',
+      'Reopened every historical broker/month settlement for review without changing FCBS invoices or SFS report history.',
+      'Added per-broker settlement status, revision protection, audit history, and change detection when trades or commission rates change after settlement.',
+    ],
+  },
   {
     version: '2.0.133',
     releasedAt: '2026-08-06',

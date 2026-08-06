@@ -12,7 +12,7 @@ const entityNames = new Set([
 
 async function requestEntities(payload, options = { cache: false }) {
   const backgroundUpdate = options.onBackgroundUpdate;
-  const mutates = ['create', 'update', 'delete'].includes(payload?.action);
+  const mutates = ['create', 'update', 'delete', 'brokerSettlementUpdate'].includes(payload?.action);
   const response = await appClient.functions.invoke('hedgeDeskEntity', payload, {
     ...options,
     invalidateCache: options.invalidateCache ?? mutates,
@@ -31,6 +31,10 @@ async function entityRequest(entity, action, payload = {}) {
 
 export function loadDeskSnapshot(options) {
   return requestEntities({ action: 'snapshot' }, options);
+}
+
+export function updateBrokerSettlement(payload) {
+  return requestEntities({ action: 'brokerSettlementUpdate', ...payload }, { cache: false, invalidateCache: true });
 }
 
 function createEntity(entityName) {

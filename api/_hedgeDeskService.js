@@ -1,5 +1,11 @@
+import { createHash } from 'node:crypto';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
-import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
+import {
+  calcSwapFees,
+  DEFAULT_RATES,
+  hedgeSettlementPaymentDirection,
+  roundMoney,
+} from '../src/hedge/lib/domain.js';
 import { decorateMopsMonthVerifications, mopsMonthDateBounds, prepareManualMopsVerification } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
 
@@ -61,12 +67,146 @@ const ENTITY_CONFIG = {
 
 const SNAPSHOT_ENTITIES = [
   ['physicals', 'PhysicalTrade', 2000],
-  ['swaps', 'SwapHedge', 2000],
+  ['swaps', 'SwapHedge', 5000],
   ['mops', 'MopsPrice', 2000],
   ['clearing', 'ClearingAccount', 2000],
   ['counterparties', 'Counterparty', 2000],
   ['invoices', 'Invoice', 2000],
 ];
+
+function normalizedBrokerKey(value) {
+  return String(value || '').trim().toLocaleLowerCase('en-US');
+}
+
+function validTradeMonth(value) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ''));
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  }
+  return value;
+}
+
+export function brokerSettlementCalculation(swaps = [], rates = DEFAULT_RATES, tradeMonth, brokerKey) {
+  const month = String(tradeMonth || '');
+  const key = normalizedBrokerKey(brokerKey);
+  if (!validTradeMonth(month) || !key) throw httpError('Choose a valid broker and trade month.', 400);
+  const lines = swaps
+    .filter((swap) => String(swap?.trade_date || '').slice(0, 7) === month)
+    .filter((swap) => normalizedBrokerKey(swap?.broker) === key)
+    .map((swap) => ({
+      id: String(swap.id || ''),
+      tradeDate: swap.trade_date,
+      quantity: Number(swap.quantity || 0),
+      unit: String(swap.unit || '').toUpperCase(),
+      roundTrip: swap.round_trip === true,
+      venue: String(swap.venue || ''),
+      commission: calcSwapFees(swap, rates).broker,
+    }))
+    .filter((line) => line.commission > 0)
+    .sort((left, right) => `${left.tradeDate}:${left.id}`.localeCompare(`${right.tradeDate}:${right.id}`));
+  const commissionAmount = roundMoney(lines.reduce((sum, line) => sum + line.commission, 0));
+  const snapshot = { basis: 'trade_date', tradeMonth: month, brokerKey: key, lines, tradeCount: lines.length, commissionAmount };
+  const calculationFingerprint = createHash('sha256').update(JSON.stringify(stableValue(snapshot))).digest('hex');
+  return { ...snapshot, calculationFingerprint };
+}
+
+async function hedgeRates(client) {
+  const result = await client.from('hedge_settings').select('value').eq('key', 'rates').maybeSingle();
+  if (result.error) throw httpError(`Broker settlement rates could not be loaded: ${result.error.message}`, 502);
+  return { ...DEFAULT_RATES, ...(result.data?.value || {}) };
+}
+
+async function loadBrokerSettlements(client, swaps) {
+  const [storedResult, rates] = await Promise.all([
+    client.from('hedge_broker_settlements').select('*').order('trade_month', { ascending: false }).order('broker_name'),
+    hedgeRates(client),
+  ]);
+  if (storedResult.error) throw httpError(`Broker settlements could not be loaded: ${storedResult.error.message}`, 502);
+  const storedMap = new Map((storedResult.data || []).map((row) => [`${row.trade_month}:${row.broker_key}`, row]));
+  const currentPairs = new Map();
+  for (const swap of swaps) {
+    const tradeMonth = String(swap?.trade_date || '').slice(0, 7);
+    const brokerKey = normalizedBrokerKey(swap?.broker);
+    if (!validTradeMonth(tradeMonth) || !brokerKey || calcSwapFees(swap, rates).broker <= 0) continue;
+    const pairKey = `${tradeMonth}:${brokerKey}`;
+    if (!currentPairs.has(pairKey)) currentPairs.set(pairKey, { tradeMonth, brokerKey, brokerName: String(swap.broker || '').trim() });
+  }
+  const rows = [];
+  for (const [pairKey, pair] of currentPairs) {
+    const stored = storedMap.get(pairKey) || null;
+    const calculation = brokerSettlementCalculation(swaps, rates, pair.tradeMonth, pair.brokerKey);
+    const changed = stored?.status === 'settled' && stored.calculation_fingerprint !== calculation.calculationFingerprint;
+    rows.push({
+      ...(stored || {}),
+      id: stored?.id || null,
+      revision: Number(stored?.revision || 0),
+      trade_month: pair.tradeMonth,
+      broker_key: pair.brokerKey,
+      broker_name: pair.brokerName || stored?.broker_name,
+      status: stored?.status || 'open',
+      effective_status: changed ? 'changed' : stored?.status || 'open',
+      current_trade_count: calculation.tradeCount,
+      current_commission_amount: calculation.commissionAmount,
+      changed,
+    });
+    storedMap.delete(pairKey);
+  }
+  for (const stored of storedMap.values()) {
+    rows.push({
+      ...stored,
+      effective_status: stored.status === 'settled' ? 'changed' : stored.status,
+      current_trade_count: 0,
+      current_commission_amount: 0,
+      changed: stored.status === 'settled',
+      warning: 'No qualifying broker trades remain for this trade month.',
+    });
+  }
+  return rows.sort((left, right) => right.trade_month.localeCompare(left.trade_month) || left.broker_name.localeCompare(right.broker_name));
+}
+
+async function saveBrokerSettlement(client, profile, capabilities, body) {
+  if (capabilities?.hedge_settlement_manage !== true && capabilities?.hedge_close_approve !== true) {
+    throw httpError('Hedge settlement permission is required to update a broker settlement.', 403);
+  }
+  const tradeMonth = String(body.tradeMonth || '');
+  const brokerName = String(body.broker || '').trim();
+  const brokerKey = normalizedBrokerKey(brokerName);
+  const status = String(body.status || '').toLowerCase();
+  const expectedRevision = Number(body.expectedRevision);
+  if (!validTradeMonth(tradeMonth) || !brokerKey || !['open', 'settled'].includes(status) || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw httpError('Choose a valid broker settlement and refresh before saving.', 400);
+  }
+  const [swaps, rates] = await Promise.all([
+    listRows(client, 'SwapHedge', configFor('SwapHedge'), { sort: 'trade_date', limit: 5000 }),
+    hedgeRates(client),
+  ]);
+  const calculation = brokerSettlementCalculation(swaps, rates, tradeMonth, brokerKey);
+  if (!calculation.tradeCount) throw httpError('No qualifying ICE broker trades remain for this trade month.', 409);
+  const result = await client.rpc('save_hedge_broker_settlement', {
+    p_trade_month: tradeMonth,
+    p_broker_key: brokerKey,
+    p_broker_name: brokerName,
+    p_status: status,
+    p_trade_count: calculation.tradeCount,
+    p_commission_amount: calculation.commissionAmount,
+    p_calculation_fingerprint: calculation.calculationFingerprint,
+    p_calculation_snapshot: calculation,
+    p_expected_revision: expectedRevision,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+  });
+  if (result.error) {
+    if (/REVISION_CONFLICT/i.test(result.error.message || '')) {
+      throw httpError('This broker settlement changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT');
+    }
+    throw httpError(`Broker settlement could not be saved: ${result.error.message}`, 502);
+  }
+  return result.data;
+}
 
 function httpError(message, statusCode = 400, code = null, details = null) {
   const error = new Error(message);
@@ -426,14 +566,18 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
     await listRows(client, entity, configFor(entity), { limit }),
   ]));
   const entityData = Object.fromEntries(entries);
-  const mopsMonthVerifications = await loadMopsMonthVerifications(client, entityData.mops);
+  const [mopsMonthVerifications, brokerSettlements] = await Promise.all([
+    loadMopsMonthVerifications(client, entityData.mops),
+    loadBrokerSettlements(client, entityData.swaps),
+  ]);
   const auditLogs = await recentEvents(client);
-  return { ...entityData, mopsMonthVerifications, auditLogs, capabilities, expiryAutomation };
+  return { ...entityData, mopsMonthVerifications, brokerSettlements, auditLogs, capabilities, expiryAutomation };
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
   const action = String(body?.action || 'list');
   if (action === 'snapshot') return loadHedgeDeskSnapshot({ client, capabilities });
+  if (action === 'brokerSettlementUpdate') return saveBrokerSettlement(client, profile, capabilities, body);
   const entity = String(body?.entity || '');
   const config = configFor(entity);
 

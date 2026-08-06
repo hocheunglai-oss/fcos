@@ -52,6 +52,7 @@ import {
 } from "../components/ui";
 import { SfsReportPanel } from "../components/SfsReportPanel";
 import { generateOtcInvoice, saveInvoicePdf, sendInvoiceEmail } from "@/hedge/api/backendFunctions";
+import { updateBrokerSettlement } from "@/hedge/api/entities";
 
 const EMAIL_EDITOR_MODULES = {
   toolbar: [
@@ -145,7 +146,7 @@ function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth,
   };
 }
 
-export function SettlementView({ data, settings, readOnly = false, canClose = false }) {
+export function SettlementView({ data, settings, readOnly = false, canClose = false, canManageBrokerSettlements = false }) {
   const actions = useActions();
   const months = useMemo(() => monthOptions(data.swaps, data.physicals, data.mops), [data.mops, data.physicals, data.swaps]);
   const [month, setMonth] = useState(() => months.find((value) => value <= hktThisMonth()) || hktThisMonth());
@@ -161,6 +162,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const [emailIdempotencyKey, setEmailIdempotencyKey] = useState("");
   const [confirmUncertainResend, setConfirmUncertainResend] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [brokerSettlementTarget, setBrokerSettlementTarget] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -170,6 +172,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
 
   const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt), [data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
   const brokerCommissionMonths = useMemo(() => monthlyBrokerCommissionSummary(data.swaps, settings.rates), [data.swaps, settings.rates]);
+  const brokerSettlementMap = useMemo(() => new Map((data.brokerSettlements || []).map((row) => [`${row.trade_month}:${row.broker_key}`, row])), [data.brokerSettlements]);
   const groups = useMemo(() => buildCounterpartyGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt), [data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
   const closed = settings.closedMonths.includes(month);
   const filteredInvoices = useMemo(() => data.invoices
@@ -181,6 +184,28 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
     netAmount,
     counterpartyMap.get(counterparty) || counterparty,
   );
+
+  const saveBrokerSettlement = async () => {
+    if (!brokerSettlementTarget) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const nextStatus = brokerSettlementTarget.effective_status === "open" ? "settled" : "open";
+      await updateBrokerSettlement({
+        tradeMonth: brokerSettlementTarget.trade_month,
+        broker: brokerSettlementTarget.broker_name,
+        status: nextStatus,
+        expectedRevision: brokerSettlementTarget.revision,
+      });
+      await data.reload({ silent: true });
+      actions.notify({ message: `${brokerSettlementTarget.broker_name} ${formatMonth(brokerSettlementTarget.trade_month)} ${nextStatus === "settled" ? "marked settled" : "reopened"}` });
+      setBrokerSettlementTarget(null);
+    } catch (nextError) {
+      setError(nextError);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggleClosed = async () => {
     const next = closed ? settings.closedMonths.filter((value) => value !== month) : [...settings.closedMonths, month];
@@ -480,16 +505,21 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
         <div className="app-table-frame app-table-frame--flush">
           {brokerCommissionMonths.length ? (
             <table className="app-table app-table--compact">
-              <thead><tr><th>Trade month</th><th>Broker</th><th>Trades</th><th>Commission payable (USD)</th><th>Month total (USD)</th></tr></thead>
-              <tbody>{brokerCommissionMonths.flatMap((monthRow) => monthRow.rows.map((brokerRow, index) => (
-                <tr key={`${monthRow.month}:${brokerRow.broker.toLocaleLowerCase("en-US")}`}>
+              <thead><tr><th>Trade month</th><th>Broker</th><th>Trades</th><th>Commission payable (USD)</th><th>Status</th><th>Month total (USD)</th>{canManageBrokerSettlements && <th aria-label="Actions" />}</tr></thead>
+              <tbody>{brokerCommissionMonths.flatMap((monthRow) => monthRow.rows.map((brokerRow, index) => {
+                const brokerKey = brokerRow.broker.trim().toLocaleLowerCase("en-US");
+                const settlement = brokerSettlementMap.get(`${monthRow.month}:${brokerKey}`) || { trade_month: monthRow.month, broker_key: brokerKey, broker_name: brokerRow.broker, effective_status: "open", revision: 0 };
+                return (
+                <tr key={`${monthRow.month}:${brokerKey}`}>
                   {index === 0 && <td rowSpan={monthRow.rows.length}><strong>{formatMonth(monthRow.month)}</strong>{monthRow.month === month && <small>Selected month</small>}</td>}
                   <td><strong>{brokerRow.broker}</strong></td>
                   <td>{brokerRow.tradeCount}</td>
                   <td><strong>{formatMoney(brokerRow.commission, { digits: 2 })}</strong></td>
+                  <td><StatusBadge tone={settlement.effective_status === "settled" ? "positive" : settlement.effective_status === "changed" ? "warning" : "neutral"}>{settlement.effective_status === "changed" ? "Changed - review" : settlement.effective_status}</StatusBadge></td>
                   {index === 0 && <td rowSpan={monthRow.rows.length}><strong>{formatMoney(monthRow.totalCommission, { digits: 2 })}</strong><small>{monthRow.tradeCount} trades</small></td>}
+                  {canManageBrokerSettlements && <td><Button size="sm" variant={settlement.effective_status === "open" ? "positive" : "secondary"} onClick={() => setBrokerSettlementTarget(settlement)}>{settlement.effective_status === "open" ? "Mark settled" : settlement.effective_status === "changed" ? "Reopen and review" : "Reopen"}</Button></td>}
                 </tr>
-              )))}</tbody>
+              );}))}</tbody>
             </table>
           ) : <EmptyState title="No broker commissions" description="Broker commission totals appear when an ICE hedge has a trade date and broker." />}
         </div>
@@ -538,9 +568,9 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       <PageHeader
         eyebrow="Month close"
         title="Settlement"
-        description="Review monthly P&L, allocate broker and exchange charges, prepare invoices, and close the month."
-        status={<StatusBadge tone={closed ? "positive" : "warning"}>{closed ? "Settled" : "In progress"}</StatusBadge>}
-        actions={<><Select value={month} onChange={(event) => setMonth(event.target.value)}>{months.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}</Select>{canClose && <Button variant={closed ? "secondary" : "positive"} icon={CheckCircle2} onClick={toggleClosed} disabled={busy}>{closed ? "Reopen month" : "Mark settled"}</Button>}</>}
+        description={tab === "fees" ? "Broker commission settlement follows the trade-date month. Other settlement views continue to follow the pricing month." : "Review monthly P&L, allocate charges, prepare invoices, and close the pricing month."}
+        status={tab === "fees" ? <StatusBadge tone="warning">Independent broker status</StatusBadge> : <StatusBadge tone={closed ? "positive" : "warning"}>{closed ? "Settled" : "In progress"}</StatusBadge>}
+        actions={<><Select value={month} onChange={(event) => setMonth(event.target.value)}>{months.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}</Select>{tab !== "fees" && canClose && <Button variant={closed ? "secondary" : "positive"} icon={CheckCircle2} onClick={toggleClosed} disabled={busy}>{closed ? "Reopen month" : "Mark settled"}</Button>}</>}
       />
       {error && <InlineError error={error} action={<Button size="sm" onClick={() => setError(null)}>Dismiss</Button>} />}
       <SegmentedControl value={tab} onChange={setTab} label="Settlement view" options={[{ value: "sfs", label: "SFS realised P&L" }, { value: "overview", label: "Overview" }, { value: "counterparties", label: "Counterparties", count: groups.length }, { value: "fees", label: "Broker and ICE" }, { value: "invoices", label: "FCBHK Invoices", count: data.invoices.length }]} />
@@ -588,6 +618,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       </Drawer>
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={removeInvoice} busy={busy} title="Delete invoice?" description={deleteTarget ? `${deleteTarget.invoice_number || "Invoice"}. Stored invoice PDFs will also be permanently deleted.` : ""} />
+      <ConfirmDialog open={Boolean(brokerSettlementTarget)} onClose={() => setBrokerSettlementTarget(null)} onConfirm={saveBrokerSettlement} busy={busy} title={brokerSettlementTarget?.effective_status === "open" ? "Mark broker settlement complete?" : "Reopen broker settlement?"} description={brokerSettlementTarget ? `${brokerSettlementTarget.broker_name} for ${formatMonth(brokerSettlementTarget.trade_month)}. Broker commission is calculated only from trades executed in that trade-date month.` : ""} />
     </div>
   );
 }

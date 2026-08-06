@@ -54,6 +54,8 @@ export const PAGE_METHODOLOGIES = {
       "A positive FCBHK net means the counterparty pays FCBHK; a negative FCBHK net means FCBHK pays the counterparty. The payee is always the document beneficiary.",
       "When FCBHK pays the counterparty, FCOS omits counterparty banking details because payment instructions come from the counterparty's own invoice.",
       "Monthly broker commissions group every qualifying ICE trade by its trade month and broker. Amounts use the current configured UOM rate and double for round-trip trades.",
+      "Broker settlement status is independent for each broker and trade month. Closing a pricing month or sending an SFS report never closes a broker settlement.",
+      "If trades or fee settings change after settlement, FCOS marks that broker month Changed and requires it to be reopened and reviewed before settling again.",
       "The selected-month charge detail combines broker groups by trade month with ICE and SFS charges by pricing month, without duplicating automatically posted records.",
       "Closing a month records its control state; generated FCBHK invoices and credit notes preserve the month, counterparty, amount, PDF, and delivery status.",
     ],

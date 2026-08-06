@@ -10,6 +10,7 @@ const EMPTY_DATA = {
   clearing: [],
   counterparties: [],
   invoices: [],
+  brokerSettlements: [],
   auditLogs: [],
   capabilities: {},
 };
