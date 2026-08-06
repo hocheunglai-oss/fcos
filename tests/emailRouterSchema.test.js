@@ -167,7 +167,7 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(core, /!submittedNow \|\| confirmNewSubmissions/);
   assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
   assert.match(workspace, /if \(action === 'archive'\)[\s\S]*setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(\{ action: 'archive' \}, archivedMessage, \{ refreshList: false \}\)/);
-  assert.match(handlers, /continueEmailRouterWork\(submission, dependencies, 'Draft submission'\)/);
+  assert.match(handlers, /continueEmailRouterWork\(submission, runtimeDependencies, 'Draft submission'\)/);
   assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);
   assert.doesNotMatch(workspace, /emailRouter\.presets\(/);
   assert.match(workspace, /\}, \[selectedId\]\);/);
