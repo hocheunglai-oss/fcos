@@ -30,8 +30,13 @@ export function stripEmailPresentationComments(value) {
 
 export function safeEmailImageSource(value) {
   const source = String(value || '').trim();
-  if (/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]+={0,2}$/i.test(source) && source.length <= 8 * 1024 * 1024) {
-    return source;
+  const embeddedImage = source.match(/^data:image\/(png|jpeg|gif|webp);base64,([\s\S]+)$/i);
+  if (embeddedImage) {
+    const payload = embeddedImage[2].replace(/[\t\n\f\r ]+/g, '');
+    if (payload.length <= 8 * 1024 * 1024 && payload.length % 4 === 0 && /^[a-z0-9+/]+={0,2}$/i.test(payload)) {
+      return `data:image/${embeddedImage[1].toLowerCase()};base64,${payload}`;
+    }
+    return '';
   }
   try {
     const url = new URL(source);

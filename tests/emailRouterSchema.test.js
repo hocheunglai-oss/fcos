@@ -317,6 +317,7 @@ test('Email Router viewer preserves safe newsletter layout without unsafe active
   assert.equal(safeEmailImageSource('https://prices.example.net/chart.png'), 'https://prices.example.net/chart.png');
   assert.equal(safeEmailImageSource('blob:https://fcos.fcuno.com/inline-image'), 'blob:https://fcos.fcuno.com/inline-image');
   assert.equal(safeEmailImageSource('data:image/png;base64,iVBORw0KGgo='), 'data:image/png;base64,iVBORw0KGgo=');
+  assert.equal(safeEmailImageSource('data:image/png;base64,iVBO\r\n Rw0KGgo='), 'data:image/png;base64,iVBORw0KGgo=');
   assert.equal(safeEmailImageSource('data:image/jpeg;base64,/9j/4AAQSkZJRg=='), 'data:image/jpeg;base64,/9j/4AAQSkZJRg==');
   assert.equal(safeEmailImageSource('data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4='), '');
   assert.equal(safeEmailImageSource('data:text/html;base64,PHNjcmlwdD4='), '');
