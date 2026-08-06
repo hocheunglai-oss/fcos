@@ -1533,25 +1533,31 @@ async function archiveConfirmedRedirectSource(mailbox, message, dependencies) {
   );
 }
 
+async function archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies) {
+  try {
+    await archiveConfirmedRedirectSource(mailbox, message, dependencies);
+    return true;
+  } catch (error) {
+    const failureCode = String(error.code || 'email_router_archive_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
+    await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+      .update({ state: 'submitted', failure_code: failureCode, reconcile_after: new Date(Date.now() + 60_000).toISOString() })
+      .eq('mail_action_id', action.id);
+    await recordEmailRouterAlert(client, {
+      mailboxId: mailbox.id,
+      messageId: message.id,
+      mailActionId: action.id,
+      code: failureCode,
+      severity: 'warning',
+      dedupeKey: `mail-action:${action.id}:archive`,
+    });
+    return false;
+  }
+}
+
 async function confirmSubmittedAction({ client, mailbox, action, message, actorUserId }, dependencies) {
   if (action.action_type === 'redirect') {
-    try {
-      await archiveConfirmedRedirectSource(mailbox, message, dependencies);
-    } catch (error) {
-      const failureCode = String(error.code || 'email_router_archive_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
-      await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
-        .update({ state: 'submitted', failure_code: failureCode, reconcile_after: new Date(Date.now() + 60_000).toISOString() })
-        .eq('mail_action_id', action.id);
-      await recordEmailRouterAlert(client, {
-        mailboxId: mailbox.id,
-        messageId: message.id,
-        mailActionId: action.id,
-        code: failureCode,
-        severity: 'warning',
-        dedupeKey: `mail-action:${action.id}:archive`,
-      });
-      return false;
-    }
+    const archived = await archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies);
+    if (!archived) return false;
   }
   await updateAction(client, action.id, { state: 'confirmed', confirmed_at: new Date().toISOString() });
   await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
@@ -1623,6 +1629,9 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10, ac
         await routerTable(client, EMAIL_ROUTER_STORAGE.outbox).update({ state: 'submitted', reconcile_after: new Date(Date.now() + 15_000).toISOString() }).eq('id', entry.id);
         await updateAction(client, entry.mail_action_id, { state: 'submitted', submitted_at: new Date().toISOString() });
         await recordEvent(client, { eventType: 'mail_action.submitted', entityType: 'mail_action', entityId: entry.mail_action_id, actorUserId: action.requested_by });
+        if (action.action_type === 'redirect') {
+          await archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies);
+        }
         submitted += 1;
         submittedNow = true;
       } catch (error) {

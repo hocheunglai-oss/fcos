@@ -235,6 +235,11 @@ export default function EmailRouterWorkspace() {
       setActionResult(result);
       setDetail((current) => current?.id === sourceMessage.id ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
       setActionDialog(null);
+      if (payload.action === 'redirect' && folder === 'inbox' && ['draft_created', 'submitted', 'confirmed'].includes(result.status)) {
+        setMessages((current) => current.filter((message) => message.id !== sourceMessage.id));
+        setSelectedId((current) => current === sourceMessage.id ? null : current);
+        setDetail((current) => current?.id === sourceMessage.id ? null : current);
+      }
       if (refreshList && result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
       return result;
     } catch (error) {

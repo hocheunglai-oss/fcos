@@ -168,6 +168,8 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
   assert.match(workspace, /if \(action === 'archive'\)[\s\S]*setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(\{ action: 'archive' \}, archivedMessage, \{ refreshList: false \}\)/);
   assert.match(handlers, /continueEmailRouterWork\(submission, runtimeDependencies, 'Draft submission'\)/);
+  assert.match(core, /action\.action_type === 'redirect'[\s\S]*archiveRedirectSourceOrAlert/);
+  assert.match(workspace, /payload\.action === 'redirect'[\s\S]*folder === 'inbox'[\s\S]*setMessages\(\(current\) => current\.filter/);
   assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);
   assert.doesNotMatch(workspace, /emailRouter\.presets\(/);
   assert.match(workspace, /\}, \[selectedId\]\);/);
@@ -314,6 +316,10 @@ test('Email Router viewer preserves safe newsletter layout without unsafe active
 
   assert.equal(safeEmailImageSource('https://prices.example.net/chart.png'), 'https://prices.example.net/chart.png');
   assert.equal(safeEmailImageSource('blob:https://fcos.fcuno.com/inline-image'), 'blob:https://fcos.fcuno.com/inline-image');
+  assert.equal(safeEmailImageSource('data:image/png;base64,iVBORw0KGgo='), 'data:image/png;base64,iVBORw0KGgo=');
+  assert.equal(safeEmailImageSource('data:image/jpeg;base64,/9j/4AAQSkZJRg=='), 'data:image/jpeg;base64,/9j/4AAQSkZJRg==');
+  assert.equal(safeEmailImageSource('data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4='), '');
+  assert.equal(safeEmailImageSource('data:text/html;base64,PHNjcmlwdD4='), '');
   assert.equal(safeEmailImageSource('http://prices.example.net/tracker.png'), '');
   assert.equal(safeEmailImageSource('javascript:alert(1)'), '');
 

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.135';
+export const APP_VERSION = '2.0.136';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.136',
+    releasedAt: '2026-08-06',
+    title: 'Embedded email images and immediate redirect archiving',
+    changes: [
+      'Restored embedded PNG, JPEG, GIF, and WebP letterhead images while continuing to block SVG, HTML, scriptable, malformed, and oversized data sources.',
+      'Moved redirected source messages to Archive immediately after Microsoft Graph accepts the outgoing message instead of waiting for the five-minute reconciliation job.',
+      'Removed successfully queued redirects from the open Inbox immediately while durable Sent Items confirmation continues in the background.',
+    ],
+  },
   {
     version: '2.0.135',
     releasedAt: '2026-08-06',

@@ -29,8 +29,12 @@ export function stripEmailPresentationComments(value) {
 }
 
 export function safeEmailImageSource(value) {
+  const source = String(value || '').trim();
+  if (/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]+={0,2}$/i.test(source) && source.length <= 8 * 1024 * 1024) {
+    return source;
+  }
   try {
-    const url = new URL(value);
+    const url = new URL(source);
     return ['blob:', 'https:'].includes(url.protocol) ? url.href : '';
   } catch {
     return '';
