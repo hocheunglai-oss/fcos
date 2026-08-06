@@ -65,10 +65,11 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Salesforce calculates priority after saving/);
   assert.match(page, /Search Account name or CL Key/);
   assert.match(page, /<PageMethodology \{\.\.\.SPECIAL_TERMS_METHODOLOGY\}/);
-  assert.match(page, /appClient\.functions\.download\('specialTermsPdfExport'/);
-  assert.match(page, /Select all filtered Special Terms/);
-  assert.match(page, /Download selected/);
-  assert.match(page, /Retry failed/);
+  assert.match(page, /const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false/);
+  assert.match(page, /SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && activeTab === 'terms'/);
+  assert.match(page, /SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <Button variant="ghost" size="icon" onClick=\{\(\) => downloadTerms\(\[term\]\)\}/);
+  assert.match(functions, /const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false/);
+  assert.match(functions, /SPECIAL_TERMS_PDF_DISABLED/);
   assert.match(page, /Copy Confirmation special remark/);
   assert.match(page, /Copy Nomination special remark/);
   assert.match(page, /richTextToCopyText/);

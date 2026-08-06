@@ -27,6 +27,7 @@ import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidati
 const EMPTY_TERM = { id: null, name: '', termsText: '', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
 const QUILL_MODULES = { toolbar: [[{ header: [false, 3, 4] }], ['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['link'], ['clean']] };
+const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 
 function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -202,6 +203,7 @@ export default function SpecialTerms() {
   }, [workspace?.terms]);
 
   const downloadTerms = async (terms) => {
+    if (!SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED) return;
     if (!terms.length || exporting) return;
     setExporting(true);
     setError('');
@@ -413,7 +415,7 @@ export default function SpecialTerms() {
         trailing={<div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div>}
       />
 
-      {activeTab === 'terms' && selectedTerms.length > 0 && (
+      {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && activeTab === 'terms' && selectedTerms.length > 0 && (
         <div className="flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">{selectedTerms.length} Special Term{selectedTerms.length === 1 ? '' : 's'} selected</p>
@@ -438,14 +440,14 @@ export default function SpecialTerms() {
           <Table className="min-w-[1080px]">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-11">
+                {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <TableHead className="w-11">
                   <Checkbox
                     checked={allFilteredSelected ? true : someFilteredSelected ? 'indeterminate' : false}
                     onCheckedChange={(checked) => toggleFilteredTerms(checked === true)}
                     aria-label="Select all filtered Special Terms"
                     title="Select all filtered Special Terms"
                   />
-                </TableHead>
+                </TableHead>}
                 <TableHead>Special Term</TableHead>
                 <TableHead>Terms Text</TableHead>
                 <TableHead>Confirmation</TableHead>
@@ -462,15 +464,15 @@ export default function SpecialTerms() {
               const confirmationCopyKey = `confirmation:${term.id}`;
               const nominationCopyKey = `nomination:${term.id}`;
               return (
-                <TableRow key={term.id} data-state={selectedTermSet.has(term.id) ? 'selected' : undefined}>
-                  <TableCell>
+                <TableRow key={term.id} data-state={SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && selectedTermSet.has(term.id) ? 'selected' : undefined}>
+                  {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <TableCell>
                     <Checkbox
                       checked={selectedTermSet.has(term.id)}
                       onCheckedChange={(checked) => toggleTerm(term.id, checked === true)}
                       aria-label={`Select ${term.name}`}
                       title={`Select ${term.name}`}
                     />
-                  </TableCell>
+                  </TableCell>}
                   <TableCell className="font-medium">
                     <a href={salesforceUrl(workspace.instanceUrl, term.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       {term.name}<ExternalLink className="h-3 w-3" />
@@ -515,7 +517,7 @@ export default function SpecialTerms() {
                   <TableCell className="text-xs text-muted-foreground">{displayDateTime(term.lastModifiedAt)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => downloadTerms([term])} disabled={exporting} title="Download Special Term PDF" aria-label={`Download ${term.name} PDF`}><Download className="h-4 w-4" /></Button>
+                      {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <Button variant="ghost" size="icon" onClick={() => downloadTerms([term])} disabled={exporting} title="Download Special Term PDF" aria-label={`Download ${term.name} PDF`}><Download className="h-4 w-4" /></Button>}
                       {workspace.canManage && <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button>}
                       {workspace.canManage && <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button>}
                     </div>

@@ -307,6 +307,7 @@ const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capa
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
+const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 const DEFAULT_USER_TYPES = [
   {
     id: 'general_manager',
@@ -16485,6 +16486,9 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
 
 async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  if (!SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED) {
+    throw appError('Special Terms PDF downloading is temporarily unavailable while the document layout is being revised.', 503, 'SPECIAL_TERMS_PDF_DISABLED', undefined, true);
+  }
   const term = await getSpecialTermForExport(body.termId, { force: body.force === true });
   const generated = generateSpecialTermPdf(term, {
     duplicateIndex: body.duplicateIndex,

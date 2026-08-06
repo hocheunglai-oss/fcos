@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.128';
+export const APP_VERSION = '2.0.129';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.129',
+    releasedAt: '2026-08-06',
+    title: 'Special Terms document review',
+    changes: [
+      'Temporarily disabled FCOS-generated Special Term PDF downloads in both the workspace and server while typography, margins, and numbered-list alignment are redesigned.',
+      'Kept Salesforce Confirmation and Nomination attachment settings and Special Term remark copying unchanged.',
+    ],
+  },
   {
     version: '2.0.128',
     releasedAt: '2026-08-06',
