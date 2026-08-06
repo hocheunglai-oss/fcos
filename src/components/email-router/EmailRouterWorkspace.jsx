@@ -112,9 +112,9 @@ export default function EmailRouterWorkspace() {
     loadRoutingOptions();
   }, [loadRoutingOptions]);
 
-  const loadList = async ({ cursor = null, history = [], foreground = true, force = false } = {}) => {
+  const loadList = async ({ cursor = null, history = [], foreground = true, force = false, silent = false } = {}) => {
     const id = ++requestId.current;
-    if (foreground) setLoading(true); else setLoadingMore(true);
+    if (foreground) setLoading(true); else if (!silent) setLoadingMore(true);
     setListError('');
     try {
       const applyList = (response) => {
@@ -153,9 +153,8 @@ export default function EmailRouterWorkspace() {
   loadListRef.current = loadList;
 
   useEffect(() => {
-    const handleBackgroundSync = (event) => {
-      if (Number(event.detail?.changed || 0) <= 0) return;
-      loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
+    const handleBackgroundSync = () => {
+      loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true, silent: true });
     };
     window.addEventListener('fcos:email-router-synced', handleBackgroundSync);
     return () => window.removeEventListener('fcos:email-router-synced', handleBackgroundSync);

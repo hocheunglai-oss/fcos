@@ -18,10 +18,11 @@ export default function EmailRouterBackgroundSync({ enabled }) {
         window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
         return;
       }
-      if (Number(response.data?.changed || 0) > 0) {
-        appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
-        window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: response.data }));
-      }
+      // Another user or tab may have won the shared mailbox sync claim. Refresh
+      // every open Email Router list so that claimant-local change counts cannot
+      // leave other users looking at stale mail.
+      appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
+      window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: response.data }));
       if (Number(response.data?.failures || 0) > 0) {
         window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
       }

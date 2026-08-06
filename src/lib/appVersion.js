@@ -1,6 +1,15 @@
-export const APP_VERSION = '2.0.130';
+export const APP_VERSION = '2.0.131';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.131',
+    releasedAt: '2026-08-06',
+    title: 'Live Email Router Inbox refresh',
+    changes: [
+      'Fixed open Email Router lists remaining stale when another user or tab won the shared 30-second mailbox synchronization claim.',
+      'Every successful heartbeat now refreshes an open Inbox silently, including when the current tab reports that synchronization was completed elsewhere.',
+    ],
+  },
   {
     version: '2.0.130',
     releasedAt: '2026-08-06',
@@ -8,7 +17,7 @@ export const APP_VERSION_HISTORY = [
     changes: [
       'Added a 30-second Email Router mailbox synchronization heartbeat across every FCOS page for users with Email Router access.',
       'Added a server-side mailbox claim so simultaneous users and tabs share one Graph delta synchronization instead of duplicating calls.',
-      'Refreshes an open Email Router message list when background synchronization detects mailbox changes while retaining Graph notifications and scheduled recovery.',
+      'Refreshes open Email Router message lists from the background heartbeat while retaining Graph notifications and scheduled recovery.',
     ],
   },
   {
