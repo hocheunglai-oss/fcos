@@ -34,8 +34,8 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
   window.dispatchEvent(new CustomEvent('fcos:email-router-performance', { detail }));
 }
 
-function ResultNotice({ result }) {
-  if (!result) return <div className="flex min-h-12 items-center border border-border bg-background/60 px-4 py-3 text-sm text-muted-foreground" role="status" aria-live="polite"><Mail className="mr-3 h-4 w-4 shrink-0" />Ready for mail actions</div>;
+function ResultNotice({ result, compact = false }) {
+  if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />Ready for mail actions</div>;
   const pending = result.status === 'submitted';
   const accepted = result.status === 'draft_created';
   const Icon = result.status === 'confirmed' || accepted ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
@@ -362,9 +362,10 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   return <div>
     <PageHeader
       title="Email Router"
-      status={<ResultNotice result={actionResult} />}
+      status={<ResultNotice result={actionResult} compact />}
       actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 />Routing Setup</Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff />Routing Leave</Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
-      className="mb-3 gap-2 px-4 py-2.5 lg:grid-cols-[minmax(10rem,0.55fr)_minmax(18rem,1fr)_auto]"
+      compact
+      className="mb-3"
     />
     <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-8rem)] xl:flex-row">
       <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">

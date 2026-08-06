@@ -46,9 +46,9 @@ export default function EmailMessageList({
           </button>
         ))}
       </div>
-      <div className="flex h-12 shrink-0 items-center justify-between border-t border-border px-3">
-        <p className="text-xs text-muted-foreground">{loadingMore ? 'Loading more messages...' : `${messages.length.toLocaleString()} loaded`}</p>
+      <div className="flex h-10 shrink-0 items-center justify-end border-t border-border px-3">
         <div className="flex items-center gap-1">
+          {loadingMore && <Loader2 className="mr-1 h-4 w-4 animate-spin text-muted-foreground" aria-label="Loading more messages" />}
           <Button variant="ghost" size="icon" onClick={onPrevious} disabled={!hasPrevious || loadingMore} aria-label="Previous messages" title="Previous messages"><ChevronLeft /></Button>
           <Button variant="ghost" size="icon" onClick={onNext} disabled={!hasNext || loadingMore} aria-label="Next messages" title="Next messages"><ChevronRight /></Button>
         </div>

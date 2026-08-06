@@ -185,7 +185,7 @@ test('Email Router action status is page-level and not duplicated in the message
     readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/common/PageHeader.jsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} \/>\}/);
+  assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} compact \/>\}/);
   assert.doesNotMatch(page, /Mailbox<\/Button>|activeTab|MailSearch/);
   assert.match(workspace, /<Settings2 \/>Routing Setup[\s\S]*<CalendarOff \/>Routing Leave/);
   assert.match(workspace, /<EmailRouterSettings embedded \/>/);
