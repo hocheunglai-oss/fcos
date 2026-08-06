@@ -9,6 +9,7 @@ function json(res, status, error) {
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return json(res, 405, 'Method not allowed.');
+  const startedAt = Date.now();
   try {
     const url = new URL(req.url, 'http://localhost');
     const token = url.searchParams.get('token');
@@ -16,6 +17,7 @@ export default async function handler(req, res) {
     res.statusCode = 200;
     res.setHeader('content-type', attachment.contentType);
     res.setHeader('cache-control', 'private, no-store, max-age=0');
+    res.setHeader('server-timing', `fcos-attachment-setup;dur=${Date.now() - startedAt}`);
     res.setHeader('x-content-type-options', 'nosniff');
     if (attachment.contentLength) res.setHeader('content-length', attachment.contentLength);
     if (!attachment.body) return res.end();

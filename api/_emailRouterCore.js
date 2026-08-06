@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { createClient } from '@supabase/supabase-js';
 import { getVercelOidcToken } from '@vercel/oidc';
 import { requireExternalActionGate } from './_externalActionGates.js';
+import { recordEmailRouterOperation } from './_requestTelemetry.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -146,8 +147,11 @@ function mailboxShape(row) {
   };
 }
 
+let emailRouterMailboxReadCache = null;
+
 /** The router mailbox is configured by a registry row, never a workflow field. */
-export async function currentEmailRouterMailbox(client) {
+export async function currentEmailRouterMailbox(client, { allowCached = false } = {}) {
+  if (allowCached && emailRouterMailboxReadCache?.expiresAt > Date.now()) return emailRouterMailboxReadCache.value;
   const { data: route, error: routeError } = await client
     .from('email_sender_routes')
     .select('mailbox_id,email_sender_purposes(enabled),email_sender_mailboxes(id,email_address,label,active,verification_state,updated_at)')
@@ -164,7 +168,9 @@ export async function currentEmailRouterMailbox(client) {
     .maybeSingle();
   if (error) storageUnavailable(error);
   if (!connection) throw routerError('The active FCOS Email Router mailbox connection is unavailable.', 503, 'EMAIL_ROUTER_CONNECTION_UNAVAILABLE');
-  return { ...mailboxShape({ ...sender, ...connection }), senderMailboxId: sender.id, emailAddress: sender.email_address };
+  const value = { ...mailboxShape({ ...sender, ...connection }), senderMailboxId: sender.id, emailAddress: sender.email_address };
+  emailRouterMailboxReadCache = { value, expiresAt: Date.now() + 30_000 };
+  return value;
 }
 
 let tokenCache = null;
@@ -392,6 +398,7 @@ function graphSearchTerm(value) {
 }
 
 export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox', limit = 30, search = '', cursor = null }, dependencies = {}) {
+  const startedAt = Date.now();
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const maximum = Math.min(50, Math.max(1, Number(limit) || 30));
   const selected = 'id,subject,from,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
@@ -401,79 +408,169 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
   if (searchTerm) params.set('$search', searchTerm);
   else params.set('$orderby', 'receivedDateTime desc');
   const path = nextUrl || mailboxPath(mailbox, `/mailFolders/${folder}/messages?${params.toString()}`);
+  const graphStartedAt = Date.now();
   const response = await emailRouterGraphFetch(path, {
     headers: searchTerm ? { consistencyLevel: 'eventual' } : {},
   }, dependencies);
   const payload = await graphJson(response) || {};
+  const graphMs = Date.now() - graphStartedAt;
   const messages = Array.isArray(payload.value) ? payload.value : [];
+  const metadataStartedAt = Date.now();
   await syncEmailRouterMetadata({ client, mailbox, folder, messages });
+  const metadataMs = Date.now() - metadataStartedAt;
+  const performance = { operation: 'mailbox_list', totalMs: Date.now() - startedAt, graphMs, metadataMs };
+  recordEmailRouterOperation({ ...performance, storageMs: metadataMs });
   return {
     mailbox: mailboxShape(mailbox),
     folder,
     items: messages,
     nextCursor: encodeGraphCursor(payload['@odata.nextLink']),
     total: messages.length,
+    performance,
   };
 }
 
-export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dependencies = {}) {
+async function listEmailRouterGraphAttachments(mailbox, messageId, dependencies) {
+  const listAttachments = async (includeContentId) => {
+    const selected = ['id', 'name', 'contentType', 'size', 'isInline', ...(includeContentId ? ['contentId'] : [])].join(',');
+    const attachmentQuery = new URLSearchParams({ '$select': selected, '$top': '100' });
+    let nextPath = mailboxPath(mailbox, `/messages/${encodeURIComponent(messageId)}/attachments?${attachmentQuery}`);
+    const attachments = [];
+    for (let page = 0; nextPath && page < 10; page += 1) {
+      const pageResponse = await emailRouterGraphFetch(nextPath, {}, dependencies);
+      const pagePayload = await graphJson(pageResponse) || {};
+      attachments.push(...(Array.isArray(pagePayload.value) ? pagePayload.value : []));
+      nextPath = pagePayload['@odata.nextLink'] || null;
+    }
+    return attachments;
+  };
+  try {
+    return await listAttachments(true);
+  } catch (error) {
+    if (error?.status !== 400) throw error;
+    return listAttachments(false);
+  }
+}
+
+async function enrichEmailRouterInlineAttachments(mailbox, messageId, attachments, inlineContentIds, dependencies) {
+  const metadataIndexes = inlineContentIds.length ? attachments
+    .map((attachment, index) => attachment?.id
+      && !attachment?.contentId
+      && String(attachment?.contentType || '').toLowerCase().startsWith('image/')
+      ? index
+      : -1)
+    .filter((index) => index >= 0)
+    .slice(0, 50) : [];
+  const inlineDetails = await Promise.all(metadataIndexes.map(async (index) => {
+    const attachment = attachments[index];
+    const inlineQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
+    try {
+      const inlineResponse = await emailRouterGraphFetch(
+        mailboxPath(mailbox, `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachment.id)}?${inlineQuery}`),
+        {},
+        dependencies,
+      );
+      return [index, await graphJson(inlineResponse)];
+    } catch {
+      return [index, null];
+    }
+  }));
+  for (const [index, inlineDetail] of inlineDetails) {
+    if (inlineDetail) attachments[index] = { ...attachments[index], ...inlineDetail };
+  }
+  return { attachments, metadataIndexes };
+}
+
+async function synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments) {
+  const rows = attachments.filter((attachment) => attachment?.id).map((attachment) => ({
+    message_id: indexed.id,
+    provider_attachment_id: safeId(attachment.id, 'attachment identifier'),
+    content_type: text(attachment.contentType, 255) || null,
+    byte_size: Math.max(0, Number(attachment.size) || 0),
+    attachment_kind: String(attachment['@odata.type'] || '').toLowerCase().includes('itemattachment')
+      ? 'item'
+      : String(attachment['@odata.type'] || '').toLowerCase().includes('referenceattachment')
+        ? 'reference'
+        : String(attachment['@odata.type'] || '').toLowerCase().includes('fileattachment')
+          ? 'file'
+          : 'unknown',
+    is_inline: attachment.isInline === true,
+  }));
+  if (rows.length) {
+    const { error } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata)
+      .upsert(rows, { onConflict: 'message_id,provider_attachment_id' });
+    if (error) storageUnavailable(error);
+  }
+  const { data: currentAttachments, error: currentError } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata)
+    .select('id,provider_attachment_id')
+    .eq('message_id', indexed.id);
+  if (currentError) storageUnavailable(currentError);
+  const currentIds = new Set(rows.map((row) => row.provider_attachment_id));
+  const staleIds = (currentAttachments || []).filter((row) => !currentIds.has(row.provider_attachment_id)).map((row) => row.id);
+  if (staleIds.length) {
+    const { error: staleError } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata).delete().in('id', staleIds);
+    if (staleError) storageUnavailable(staleError);
+  }
+  const { error: countError } = await routerTable(client, EMAIL_ROUTER_STORAGE.messages)
+    .update({ has_attachments: rows.length > 0, attachment_count: rows.length })
+    .eq('id', indexed.id);
+  if (countError) storageUnavailable(countError);
+}
+
+async function loadEmailRouterActionHistory(client, indexed) {
+  if (!indexed) return [];
+  const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
+    .select('id,action_type,state,requested_by,reserved_at,draft_created_at,submitted_at,confirmed_at,failed_at,uncertain_at')
+    .eq('message_id', indexed.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) storageUnavailable(error);
+  return (data || []).map((action) => ({
+    id: action.id,
+    action: action.action_type,
+    status: action.state,
+    at: action.confirmed_at || action.submitted_at || action.draft_created_at || action.failed_at || action.uncertain_at || action.reserved_at,
+  }));
+}
+
+export async function fetchEmailRouterDetail({ client, mailbox, messageId, hasAttachmentsHint = false }, dependencies = {}) {
+  const startedAt = Date.now();
   const id = safeId(messageId, 'message identifier');
   const detailWarnings = [];
+  const performance = {};
   const query = new URLSearchParams({
     '$select': 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,body,bodyPreview,receivedDateTime,sentDateTime,parentFolderId,hasAttachments,isRead,importance,internetMessageId',
   });
-  const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {}, dependencies);
-  const message = await graphJson(response);
+  const timed = async (key, operation) => {
+    const stageStartedAt = Date.now();
+    try { return await operation; } finally { performance[key] = Date.now() - stageStartedAt; }
+  };
+  const messagePromise = timed('messageMs', (async () => {
+    const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}?${query}`), {
+      headers: { prefer: 'outlook.body-content-type="html"' },
+    }, dependencies);
+    return graphJson(response);
+  })());
+  const indexedPromise = timed('messageIndexMs', actionMessage(client, mailbox.id, id).catch((error) => {
+    if (error?.code === 'EMAIL_ROUTER_MESSAGE_NOT_INDEXED') return null;
+    throw error;
+  }));
+  const actionHistoryPromise = indexedPromise.then((indexed) => timed('actionHistoryMs', loadEmailRouterActionHistory(client, indexed)));
+  let attachmentPromise = hasAttachmentsHint
+    ? timed('attachmentMetadataMs', listEmailRouterGraphAttachments(mailbox, id, dependencies))
+    : null;
+  const message = await messagePromise;
   const inlineContentIds = String(message?.body?.contentType || '').toLowerCase() === 'html'
     ? extractEmailRouterInlineContentIds(message?.body?.content)
     : [];
-  if (message?.hasAttachments || inlineContentIds.length) {
+  if (message?.hasAttachments || inlineContentIds.length || attachmentPromise) {
     try {
-      const listAttachments = async (includeContentId) => {
-        const selected = ['id', 'name', 'contentType', 'size', 'isInline', ...(includeContentId ? ['contentId'] : [])].join(',');
-        const attachmentQuery = new URLSearchParams({ '$select': selected, '$top': '100' });
-        let nextPath = mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments?${attachmentQuery}`);
-        const attachments = [];
-        for (let page = 0; nextPath && page < 10; page += 1) {
-          const pageResponse = await emailRouterGraphFetch(nextPath, {}, dependencies);
-          const pagePayload = await graphJson(pageResponse) || {};
-          attachments.push(...(Array.isArray(pagePayload.value) ? pagePayload.value : []));
-          nextPath = pagePayload['@odata.nextLink'] || null;
-        }
-        return attachments;
-      };
-      let attachments;
-      try {
-        attachments = await listAttachments(true);
-      } catch (error) {
-        if (error?.status !== 400) throw error;
-        attachments = await listAttachments(false);
-      }
-      const metadataIndexes = inlineContentIds.length ? attachments
-        .map((attachment, index) => attachment?.id
-          && !attachment?.contentId
-          && String(attachment?.contentType || '').toLowerCase().startsWith('image/')
-          ? index
-          : -1)
-        .filter((index) => index >= 0)
-        .slice(0, 50) : [];
-      const inlineDetails = await Promise.all(metadataIndexes.map(async (index) => {
-        const attachment = attachments[index];
-        const inlineQuery = new URLSearchParams({ '$select': 'id,name,contentType,size,isInline,contentId' });
-        try {
-          const inlineResponse = await emailRouterGraphFetch(
-            mailboxPath(mailbox, `/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachment.id)}?${inlineQuery}`),
-            {},
-            dependencies,
-          );
-          return [index, await graphJson(inlineResponse)];
-        } catch {
-          return [index, null];
-        }
-      }));
-      for (const [index, inlineDetail] of inlineDetails) {
-        if (inlineDetail) attachments[index] = { ...attachments[index], ...inlineDetail };
-      }
+      attachmentPromise ||= timed('attachmentMetadataMs', listEmailRouterGraphAttachments(mailbox, id, dependencies));
+      const listedAttachments = await attachmentPromise;
+      const { attachments, metadataIndexes } = await timed(
+        'inlineResolutionMs',
+        enrichEmailRouterInlineAttachments(mailbox, id, listedAttachments, inlineContentIds, dependencies),
+      );
       if (inlineContentIds.length && metadataIndexes.length < attachments.filter((attachment) => attachment?.id && !attachment?.contentId && String(attachment?.contentType || '').toLowerCase().startsWith('image/')).length) {
         detailWarnings.push('Some inline images were omitted because the message contains too many embedded items.');
       }
@@ -490,61 +587,22 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId }, dep
   } else if (message) {
     message.attachments = [];
   }
-  const indexed = await actionMessage(client, mailbox.id, id).catch((error) => {
-    if (error?.code === 'EMAIL_ROUTER_MESSAGE_NOT_INDEXED') return null;
-    throw error;
-  });
-  let actionHistory = [];
+  const indexed = await indexedPromise;
+  const actionHistory = await actionHistoryPromise;
   if (indexed) {
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
-    const rows = attachments.filter((attachment) => attachment?.id).map((attachment) => ({
-      message_id: indexed.id,
-      provider_attachment_id: safeId(attachment.id, 'attachment identifier'),
-      content_type: text(attachment.contentType, 255) || null,
-      byte_size: Math.max(0, Number(attachment.size) || 0),
-      attachment_kind: String(attachment['@odata.type'] || '').toLowerCase().includes('itemattachment')
-        ? 'item'
-        : String(attachment['@odata.type'] || '').toLowerCase().includes('referenceattachment')
-          ? 'reference'
-          : String(attachment['@odata.type'] || '').toLowerCase().includes('fileattachment')
-            ? 'file'
-            : 'unknown',
-      is_inline: attachment.isInline === true,
-    }));
-    if (rows.length) {
-      const { error } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata)
-        .upsert(rows, { onConflict: 'message_id,provider_attachment_id' });
-      if (error) storageUnavailable(error);
-    }
-    const { data: currentAttachments, error: currentError } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata)
-      .select('id,provider_attachment_id')
-      .eq('message_id', indexed.id);
-    if (currentError) storageUnavailable(currentError);
-    const currentIds = new Set(rows.map((row) => row.provider_attachment_id));
-    const staleIds = (currentAttachments || []).filter((row) => !currentIds.has(row.provider_attachment_id)).map((row) => row.id);
-    if (staleIds.length) {
-      const { error: staleError } = await routerTable(client, EMAIL_ROUTER_STORAGE.attachmentMetadata).delete().in('id', staleIds);
-      if (staleError) storageUnavailable(staleError);
-    }
-    const { error: countError } = await routerTable(client, EMAIL_ROUTER_STORAGE.messages)
-      .update({ has_attachments: rows.length > 0, attachment_count: rows.length })
-      .eq('id', indexed.id);
-    if (countError) storageUnavailable(countError);
-
-    const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
-      .select('id,action_type,state,requested_by,reserved_at,draft_created_at,submitted_at,confirmed_at,failed_at,uncertain_at')
-      .eq('message_id', indexed.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    if (error) storageUnavailable(error);
-    actionHistory = (data || []).map((action) => ({
-      id: action.id,
-      action: action.action_type,
-      status: action.state,
-      at: action.confirmed_at || action.submitted_at || action.draft_created_at || action.failed_at || action.uncertain_at || action.reserved_at,
-    }));
+    const metadataJob = synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments).catch(() => null);
+    if (typeof dependencies.defer === 'function') dependencies.defer(metadataJob);
+    else await timed('attachmentIndexMs', metadataJob);
   }
-  return { ...message, actionHistory, detailWarnings };
+  performance.totalMs = Date.now() - startedAt;
+  recordEmailRouterOperation({
+    operation: 'message_detail',
+    totalMs: performance.totalMs,
+    graphMs: Math.max(performance.messageMs || 0, performance.attachmentMetadataMs || 0) + (performance.inlineResolutionMs || 0),
+    storageMs: (performance.messageIndexMs || 0) + (performance.actionHistoryMs || 0) + (performance.attachmentIndexMs || 0),
+  });
+  return { ...message, actionHistory, detailWarnings, performance: { operation: 'message_detail', ...performance } };
 }
 
 export async function listEmailRouterDirectory({ client, search = '' }) {
@@ -1285,9 +1343,11 @@ function actionResult(action) {
 
 async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, input, routeSnapshot = null }, dependencies) {
   if (actionType === 'redirect') {
-    const source = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/$value`), { headers: { accept: 'message/rfc822' } }, dependencies);
+    const [source, recipients] = await Promise.all([
+      emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/$value`), { headers: { accept: 'message/rfc822' } }, dependencies),
+      resolveEmailRouterActionRecipients(client, input, routeSnapshot),
+    ]);
     const raw = new Uint8Array(await source.arrayBuffer());
-    const recipients = await resolveEmailRouterActionRecipients(client, input, routeSnapshot);
     const prepared = buildEmailRouterRedirectMime({ raw, mailboxAddress: mailbox.emailAddress, recipients });
     const response = await emailRouterGraphFetch(mailboxPath(mailbox, '/messages'), { method: 'POST', headers: { 'content-type': 'text/plain' }, body: prepared.raw.toString('base64') }, dependencies);
     const draft = await graphJson(response);
@@ -1305,11 +1365,14 @@ async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, 
     return draftId;
   }
   const route = actionType === 'reply' ? 'createReply' : 'createForward';
+  const recipientsPromise = actionType === 'forward' && hasRecipientInput(input)
+    ? resolveEmailRouterActionRecipients(client, input, routeSnapshot)
+    : Promise.resolve(null);
   const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/${route}`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comment: text(input.comment || input.body, 20_000) }) }, dependencies);
   const draft = await graphJson(response);
   const draftId = safeId(draft?.id, 'draft identifier');
   if (actionType === 'forward' && hasRecipientInput(input)) {
-    const recipients = await resolveEmailRouterActionRecipients(client, input, routeSnapshot);
+    const recipients = await recipientsPromise;
     const graphRecipients = (kind) => recipients.filter((recipient) => recipient.kind === kind).map((recipient) => ({ emailAddress: { address: recipient.address } }));
     await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toRecipients: graphRecipients('to'), ccRecipients: graphRecipients('cc'), bccRecipients: graphRecipients('bcc') }) }, dependencies);
   }
@@ -1349,6 +1412,8 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     throw routerError('The mail operation identifier is invalid.', 400, 'EMAIL_ROUTER_IDEMPOTENCY_INVALID');
   }
   const idempotencyKey = suppliedIdempotencyKey || randomUUID();
+  const movesMessage = ['archive', 'delete', 'move'].includes(actionType);
+  const reservedAt = new Date().toISOString();
   const action = await createAction(client, {
     message_id: indexed.id,
     preset_id: input.presetId || null,
@@ -1360,35 +1425,46 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     route_snapshot_issued_at: routeSnapshot?.issuedAt || null,
     route_snapshot_expires_at: routeSnapshot?.expiresAt || null,
     action_type: actionType,
-    state: 'reserved',
+    state: movesMessage ? 'uncertain' : 'reserved',
+    ...(movesMessage ? { uncertain_at: reservedAt } : {}),
     requested_by: profile.id,
     idempotency_key: idempotencyKey,
     request_fingerprint: requestFingerprint({ mailboxId: mailbox.id, messageId: indexed.id, actionType, input, routeSnapshot }),
   });
   if (action.duplicate) return actionResult(action);
-  await recordEvent(client, { eventType: 'mail_action.reserved', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+  const reservedEvent = recordEvent(client, { eventType: 'mail_action.reserved', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }).catch(() => null);
   if (['redirect', 'forward'].includes(actionType)) {
     try {
       await persistActionDestinations(client, action.id, input, routeSnapshot);
     } catch (error) {
       const failureCode = String(error.code || 'email_router_route_invalid').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
-      await updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() });
-      await recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+      await reservedEvent;
+      await Promise.all([
+        updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() }),
+        recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
+      ]);
       throw error;
     }
   }
   if (actionType === 'archive' || actionType === 'delete' || actionType === 'move' || actionType === 'mark_read') {
     if (actionType === 'mark_read') {
-      await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ isRead: true }) }, dependencies);
-      await updateAction(client, action.id, { state: 'confirmed', confirmed_at: new Date().toISOString() });
-      await recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+      await Promise.all([
+        emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ isRead: true }) }, dependencies),
+        reservedEvent,
+      ]);
+      await Promise.all([
+        updateAction(client, action.id, { state: 'confirmed', confirmed_at: new Date().toISOString() }),
+        recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
+      ]);
       return actionResult({ ...action, state: 'confirmed' });
     }
     const destinationId = actionType === 'archive' ? 'archive' : actionType === 'delete' ? 'deleteditems' : safeId(input.destinationFolderId, 'destination folder identifier');
-    const uncertainAt = new Date().toISOString();
-    await updateAction(client, action.id, { state: 'uncertain', uncertain_at: uncertainAt });
+    const uncertainAt = reservedAt;
     try {
-      const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}/move`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ destinationId }) }, dependencies);
+      const [response] = await Promise.all([
+        emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(source)}/move`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ destinationId }) }, dependencies),
+        reservedEvent,
+      ]);
       const result = await graphJson(response);
       await Promise.all([
         updateAction(client, action.id, { state: 'confirmed', provider_operation_id: result?.id || source, confirmed_at: new Date().toISOString() }),
@@ -1398,6 +1474,7 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     } catch (error) {
       const failureCode = String(error.code || 'email_router_move_unknown').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
       const status = Number(error.status || 0);
+      await reservedEvent;
       if (status >= 400 && status < 500 && ![408, 409, 429].includes(status)) {
         await Promise.all([
           updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() }),
@@ -1412,14 +1489,20 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   }
   try {
     const draftId = await createGraphDraft({ client, mailbox, actionType, sourceMessageId: source, input, routeSnapshot }, dependencies);
-    await updateAction(client, action.id, { state: 'draft_created', provider_operation_id: draftId, draft_created_at: new Date().toISOString() });
-    await enqueueOutbox(client, { mail_action_id: action.id, state: 'draft_created', provider_operation_id: draftId, next_attempt_at: new Date().toISOString() });
-    await recordEvent(client, { eventType: 'mail_action.draft_created', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+    await reservedEvent;
+    await Promise.all([
+      updateAction(client, action.id, { state: 'draft_created', provider_operation_id: draftId, draft_created_at: new Date().toISOString() }),
+      enqueueOutbox(client, { mail_action_id: action.id, state: 'draft_created', provider_operation_id: draftId, next_attempt_at: new Date().toISOString() }),
+      recordEvent(client, { eventType: 'mail_action.draft_created', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }).catch(() => null),
+    ]);
     return actionResult({ ...action, state: 'draft_created', provider_operation_id: draftId });
   } catch (error) {
     const failureCode = String(error.code || 'email_router_draft_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
-    await updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() });
-    await recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+    await reservedEvent;
+    await Promise.all([
+      updateAction(client, action.id, { state: 'failed', failure_code: failureCode, failed_at: new Date().toISOString() }),
+      recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
+    ]);
     throw error;
   }
 }

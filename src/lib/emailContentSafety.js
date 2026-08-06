@@ -8,6 +8,26 @@ const ALLOWED_STYLE_PROPERTIES = new Set([
   'text-transform', 'vertical-align', 'white-space', 'width', 'word-break', 'word-wrap',
 ]);
 
+const PRESENTATION_COMMENT_PATTERNS = [
+  /<!--([\s\S]*?)-->/g,
+  /(?:&lt;|&#0*60;|&#x0*3c;)!--([\s\S]*?)--(?:&gt;|&#0*62;|&#x0*3e;)/gi,
+];
+
+function isPresentationStylesheet(value) {
+  const source = String(value || '').trim();
+  if (!source || source.length > 50_000) return false;
+  const hasSelector = /(?:^|[}\s])(?:\.[a-z][\w-]*|body|html|p|table|td|th)\s*(?:,[^{]+)?\{/i.test(source);
+  const hasDeclaration = /\b(?:background(?:-color)?|border|color|display|font(?:-family|-size|-style|-weight)?|line-height|margin|padding|text-align|width)\s*:/i.test(source);
+  return hasSelector && hasDeclaration && source.includes('}');
+}
+
+export function stripEmailPresentationComments(value) {
+  return PRESENTATION_COMMENT_PATTERNS.reduce(
+    (content, pattern) => content.replace(pattern, (match, body) => isPresentationStylesheet(body) ? '' : match),
+    String(value || ''),
+  );
+}
+
 export function safeEmailImageSource(value) {
   try {
     const url = new URL(value);

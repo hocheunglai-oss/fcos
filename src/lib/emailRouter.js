@@ -1,5 +1,5 @@
 import { appClient } from '@/api/appClient';
-import { safeEmailImageSource, sanitizeEmailInlineStyle } from './emailContentSafety';
+import { safeEmailImageSource, sanitizeEmailInlineStyle, stripEmailPresentationComments } from './emailContentSafety';
 
 const ACTION_LABELS = {
   redirect: 'Redirect',
@@ -75,8 +75,9 @@ export function formatEmailDate(value) {
 export function normaliseMessage(raw = {}) {
   const flags = raw.flags || {};
   const body = raw.body || {};
-  const bodyContent = typeof body === 'object' ? body.content : body;
+  const bodyContent = stripEmailPresentationComments(typeof body === 'object' ? body.content : body);
   const bodyType = String(body?.contentType || '').toLowerCase();
+  const recoveredHtml = bodyType !== 'html' && /<(?:!doctype|html|head|body|div|p|br|table|tbody|thead|tr|td|th|ul|ol|li|span|blockquote)\b/i.test(bodyContent);
   return {
     id: stringValue(firstValue(raw, ['id', 'messageId', 'emailId', 'provider_message_id'])),
     threadId: stringValue(firstValue(raw, ['threadId', 'conversationId', 'conversation_id'])),
@@ -92,8 +93,8 @@ export function normaliseMessage(raw = {}) {
     isFlagged: Boolean(firstValue(raw, ['isFlagged', 'flagged'], flags.flagged ?? false)),
     hasAttachments: Boolean(firstValue(raw, ['hasAttachments', 'has_attachments'], false)) || arrayValue(raw.attachments).length > 0,
     attachments: arrayValue(raw.attachments),
-    bodyHtml: bodyType === 'html' ? stringValue(bodyContent) : stringValue(firstValue(raw, ['bodyHtml', 'html', 'contentHtml'])),
-    bodyText: bodyType && bodyType !== 'html' ? stringValue(bodyContent) : stringValue(firstValue(raw, ['bodyText', 'text', 'contentText'])),
+    bodyHtml: bodyType === 'html' || recoveredHtml ? stringValue(bodyContent) : stripEmailPresentationComments(firstValue(raw, ['bodyHtml', 'html', 'contentHtml'])),
+    bodyText: bodyType && bodyType !== 'html' && !recoveredHtml ? stringValue(bodyContent) : stripEmailPresentationComments(firstValue(raw, ['bodyText', 'text', 'contentText'])),
     actionHistory: arrayValue(firstValue(raw, ['actionHistory', 'history', 'actions'], [])),
     detailWarnings: arrayValue(raw.detailWarnings).map((warning) => stringValue(warning)).filter(Boolean),
     raw,
@@ -143,7 +144,7 @@ export function normaliseActionResult(data = {}, fallbackAction) {
   return {
     status,
     action: firstValue(data, ['action', 'actionType'], fallbackAction),
-    message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed' ? 'Action confirmed by FCOS.' : status === 'draft_created' ? 'Draft created. FCOS is preparing the controlled Graph submission.' : status === 'submitted' ? 'Microsoft Graph accepted the message. FCOS is awaiting Sent Items confirmation.' : 'The action outcome could not be confirmed.')),
+    message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed' ? 'Action confirmed by FCOS.' : status === 'draft_created' ? 'The Microsoft 365 draft is secured. Protected submission continues in the background.' : status === 'submitted' ? 'Microsoft Graph accepted the message. FCOS is awaiting Sent Items confirmation.' : 'The action outcome could not be confirmed.')),
     undoToken: firstValue(data, ['undoToken', 'undoId', 'reversalToken'], null),
     actionId: firstValue(data, ['actionId', 'id', 'operationId'], null),
     raw: data,
@@ -160,7 +161,7 @@ function safeHref(value) {
 }
 
 function fallbackSanitize(value) {
-  return stringValue(value)
+  return stripEmailPresentationComments(value)
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
     .replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '')
@@ -170,7 +171,7 @@ function fallbackSanitize(value) {
 }
 
 export function sanitizeEmailHtml(value) {
-  const html = stringValue(value);
+  const html = stripEmailPresentationComments(value);
   if (!html || typeof DOMParser === 'undefined') return fallbackSanitize(html);
 
   const document = new DOMParser().parseFromString(html, 'text/html');
@@ -225,7 +226,7 @@ export function sanitizeEmailHtml(value) {
 }
 
 export function plainTextToHtml(value) {
-  const escaped = stringValue(value)
+  const escaped = stripEmailPresentationComments(value)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')

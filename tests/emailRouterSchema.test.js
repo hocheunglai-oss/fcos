@@ -166,7 +166,12 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(core, /\.eq\('mail_action_id', targetActionId\)/);
   assert.match(core, /!submittedNow \|\| confirmNewSubmissions/);
   assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
-  assert.match(workspace, /if \(action === 'archive'\)[\s\S]*await submitAction\(\{ action: 'archive' \}\)/);
+  assert.match(workspace, /if \(action === 'archive'\)[\s\S]*setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(\{ action: 'archive' \}, archivedMessage, \{ refreshList: false \}\)/);
+  assert.match(handlers, /continueEmailRouterWork\(submission, dependencies, 'Draft submission'\)/);
+  assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);
+  assert.doesNotMatch(workspace, /emailRouter\.presets\(/);
+  assert.match(workspace, /\}, \[selectedId\]\);/);
+  assert.match(workspace, /attachment\.streamUrl/);
   assert.doesNotMatch(dialog, /archive:\s*\{/);
   assert.match(messageSheet, /Archive immediately/);
 });
@@ -301,7 +306,7 @@ test('Email Router routing mutations preserve active group and preset integrity 
 });
 
 test('Email Router viewer preserves safe newsletter layout without unsafe active content', async () => {
-  const [{ safeEmailImageSource, sanitizeEmailInlineStyle }, stylesheet, messageSheet] = await Promise.all([
+  const [{ safeEmailImageSource, sanitizeEmailInlineStyle, stripEmailPresentationComments }, stylesheet, messageSheet] = await Promise.all([
     import('../src/lib/emailContentSafety.js'),
     readFile(new URL('../src/index.css', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
@@ -317,6 +322,11 @@ test('Email Router viewer preserves safe newsletter layout without unsafe active
   assert.match(style, /text-align: center/);
   assert.match(style, /color: #174f86/);
   assert.doesNotMatch(style, /position|url\s*\(/i);
+
+  const wysiwygCss = '.wysiwyg-color-silver {color:silver} p {margin:0; padding:0} body {font-family:Calibri,Arial,sans-serif}';
+  assert.equal(stripEmailPresentationComments(`<!-- ${wysiwygCss} --><p>Visible message</p>`), '<p>Visible message</p>');
+  assert.equal(stripEmailPresentationComments(`&lt;!-- ${wysiwygCss} --&gt;<p>Visible message</p>`), '<p>Visible message</p>');
+  assert.equal(stripEmailPresentationComments('<!-- ordinary sender note --><p>Visible message</p>'), '<!-- ordinary sender note --><p>Visible message</p>');
 
   assert.match(messageSheet, /email-router-content-shell/);
   assert.match(stylesheet, /\.email-router-content-shell[\s\S]*overflow-wrap: break-word/);

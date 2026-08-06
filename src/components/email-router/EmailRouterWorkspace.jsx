@@ -21,12 +21,23 @@ function messageError(data, fallback) {
   return data?.error || fallback || '';
 }
 
+function recordEmailRouterTiming(operation, startedAt, server = null) {
+  if (typeof window === 'undefined' || typeof window.performance?.now !== 'function') return;
+  const detail = {
+    operation,
+    durationMs: Math.max(0, Math.round(window.performance.now() - startedAt)),
+    ...(server && typeof server === 'object' ? { server } : {}),
+  };
+  window.dispatchEvent(new CustomEvent('fcos:email-router-performance', { detail }));
+}
+
 function ResultNotice({ result }) {
   if (!result) return null;
-  const pending = ['draft_created', 'submitted'].includes(result.status);
-  const Icon = result.status === 'confirmed' ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
-  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' ? 'border-amber-200 bg-amber-50 text-amber-950' : pending ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
-  const label = result.status === 'confirmed' ? 'Confirmed' : result.status === 'uncertain' ? 'Outcome uncertain' : result.status === 'draft_created' ? 'Draft created' : result.status === 'submitted' ? 'Submitted' : 'Failed';
+  const pending = result.status === 'submitted';
+  const accepted = result.status === 'draft_created';
+  const Icon = result.status === 'confirmed' || accepted ? CheckCircle2 : result.status === 'uncertain' ? ShieldCheck : pending ? Loader2 : XCircle;
+  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
+  const label = result.status === 'confirmed' ? 'Confirmed' : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
   return <div className={cn('flex items-start gap-3 border px-4 py-3 text-sm', tone)}><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5">{result.message}</p></div></div>;
 }
 
@@ -58,6 +69,11 @@ export default function EmailRouterWorkspace() {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const requestId = useRef(0);
   const loadListRef = useRef(null);
+  const messagesRef = useRef([]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const query = window.matchMedia('(max-width: 1279px)');
@@ -73,32 +89,20 @@ export default function EmailRouterWorkspace() {
     try {
       const applyDirectory = (directoryResponse) => {
         const directoryFailure = messageError(directoryResponse.data);
-        if (directoryFailure) {
-          setDirectory([]);
-          setDirectoryError(directoryFailure);
-        } else {
-          setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
-        }
+        if (directoryFailure) return;
+        setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
+        setPresets(directoryResponse.data?.presets || []);
       };
-      const applyPresets = (presetResponse) => {
-        const presetFailure = messageError(presetResponse.data);
-        if (!presetFailure) setPresets(presetResponse.data?.presets || presetResponse.data?.items || []);
-        else setPresets([]);
-      };
-      const [directoryResponse, presetResponse] = await Promise.all([
-        emailRouter.directory({}, { ...navigationCacheOptions('collaboration', applyDirectory), force }),
-        emailRouter.presets({}, { ...navigationCacheOptions('collaboration', applyPresets), force }),
-      ]);
+      const directoryResponse = await emailRouter.directory({}, { ...navigationCacheOptions('collaboration', applyDirectory), force });
       const directoryFailure = messageError(directoryResponse.data);
-      const presetFailure = messageError(presetResponse.data);
       if (directoryFailure) {
         setDirectory([]);
+        setPresets([]);
         setDirectoryError(directoryFailure);
       } else {
         setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
+        setPresets(directoryResponse.data?.presets || []);
       }
-      if (!presetFailure) setPresets(presetResponse.data?.presets || presetResponse.data?.items || directoryResponse.data?.presets || []);
-      else setPresets([]);
     } catch (error) {
       setDirectory([]);
       setPresets([]);
@@ -113,6 +117,7 @@ export default function EmailRouterWorkspace() {
   }, [loadRoutingOptions]);
 
   const loadList = async ({ cursor = null, history = [], foreground = true, force = false, silent = false } = {}) => {
+    const startedAt = typeof window !== 'undefined' ? window.performance.now() : 0;
     const id = ++requestId.current;
     if (foreground) setLoading(true); else if (!silent) setLoadingMore(true);
     setListError('');
@@ -139,6 +144,7 @@ export default function EmailRouterWorkspace() {
         cursor ? { cache: true, cacheTtlMs: 30_000, force } : { ...navigationCacheOptions('collaboration', applyList), force },
       );
       applyList(response);
+      recordEmailRouterTiming('mailbox_list', startedAt, response.data?.performance);
     } catch (error) {
       if (id !== requestId.current) return;
       setListError(error?.message || 'The mailbox service is unavailable.');
@@ -172,7 +178,7 @@ export default function EmailRouterWorkspace() {
     setDetailError('');
     setAdvisor(null);
     setAdvisorError('');
-    const fallback = messages.find((message) => message.id === selectedId) || null;
+    const fallback = messagesRef.current.find((message) => message.id === selectedId) || null;
     setDetail(fallback);
     const applyDetail = (response) => {
       if (!active) return;
@@ -184,9 +190,16 @@ export default function EmailRouterWorkspace() {
       }
       setDetailLoading(false);
     };
-    emailRouter.detail({ messageId: selectedId }, navigationCacheOptions('collaboration', applyDetail)).then(applyDetail).catch((error) => { if (active) setDetailError(error?.message || 'Message details are unavailable.'); }).finally(() => { if (active) setDetailLoading(false); });
+    const startedAt = window.performance.now();
+    emailRouter.detail(
+      { messageId: selectedId, hasAttachments: fallback?.hasAttachments === true },
+      navigationCacheOptions('collaboration', applyDetail),
+    ).then((response) => {
+      applyDetail(response);
+      recordEmailRouterTiming('message_detail', startedAt, response.data?.performance);
+    }).catch((error) => { if (active) setDetailError(error?.message || 'Message details are unavailable.'); }).finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
-  }, [selectedId, messages]);
+  }, [selectedId]);
 
   const loadAdvisor = async () => {
     if (!detail) return;
@@ -203,8 +216,9 @@ export default function EmailRouterWorkspace() {
     }
   };
 
-  const submitAction = async (payload) => {
-    if (!detail || (['undo', 'retry'].includes(payload.action) && !actionDialog)) return null;
+  const submitAction = async (payload, sourceMessage = detail, { refreshList = true } = {}) => {
+    if (!sourceMessage || (['undo', 'retry'].includes(payload.action) && !actionDialog)) return null;
+    const startedAt = window.performance.now();
     const operationId = newOperationId();
     const submitted = { status: 'submitted', action: payload.action, message: 'FCOS submitted the action request and is waiting for confirmation.' };
     setSubmitting(true);
@@ -212,15 +226,16 @@ export default function EmailRouterWorkspace() {
     let response;
     try {
       response = payload.action === 'undo'
-        ? await emailRouter.undo({ messageId: detail.id, undoToken: actionDialog.undoResult?.undoToken, actionId: actionDialog.undoResult?.actionId, operationId })
+        ? await emailRouter.undo({ messageId: sourceMessage.id, undoToken: actionDialog.undoResult?.undoToken, actionId: actionDialog.undoResult?.actionId, operationId })
         : payload.action === 'retry'
-          ? await emailRouter.retry({ messageId: detail.id, actionId: actionDialog.undoResult?.actionId, confirmedNotSent: true, operationId })
-        : await emailRouter.action({ messageId: detail.id, threadId: detail.threadId || null, operationId, ...payload });
+          ? await emailRouter.retry({ messageId: sourceMessage.id, actionId: actionDialog.undoResult?.actionId, confirmedNotSent: true, operationId })
+        : await emailRouter.action({ messageId: sourceMessage.id, threadId: sourceMessage.threadId || null, operationId, ...payload });
       const result = normaliseActionResult(response.data, payload.action);
+      recordEmailRouterTiming(`action_${payload.action}`, startedAt, response.data?.performance);
       setActionResult(result);
-      setDetail((current) => current ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
+      setDetail((current) => current?.id === sourceMessage.id ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
       setActionDialog(null);
-      if (result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
+      if (refreshList && result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
       return result;
     } catch (error) {
       const result = { status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, message: error?.message || 'The action did not complete.' };
@@ -235,7 +250,22 @@ export default function EmailRouterWorkspace() {
   const openAction = async (action, undoResult = null) => {
     if (!detail || submitting) return;
     if (action === 'archive') {
-      await submitAction({ action: 'archive' });
+      const archivedMessage = detail;
+      const archivedIndex = Math.max(0, messagesRef.current.findIndex((message) => message.id === archivedMessage.id));
+      setMessages((current) => current.filter((message) => message.id !== archivedMessage.id));
+      setSelectedId(null);
+      setDetail(null);
+      const result = await submitAction({ action: 'archive' }, archivedMessage, { refreshList: false });
+      if (result?.status === 'failed') {
+        setMessages((current) => {
+          if (current.some((message) => message.id === archivedMessage.id)) return current;
+          const restored = [...current];
+          restored.splice(Math.min(archivedIndex, restored.length), 0, archivedMessage);
+          return restored;
+        });
+        setSelectedId(archivedMessage.id);
+        setDetail(archivedMessage);
+      }
       return;
     }
     setActionDialog({ action, undoResult });
@@ -244,25 +274,32 @@ export default function EmailRouterWorkspace() {
 
   const fetchAttachment = useCallback(async (attachment) => {
     if (!detail) return;
+    const startedAt = window.performance.now();
     try {
-      const response = await emailRouter.attachmentUrl({ messageId: detail.id, attachmentId: attachment.id || attachment.attachmentId }, { force: true });
-      const token = response.data?.token;
-      if (!token) {
-        setDetailError(messageError(response.data, 'Attachment download is unavailable.'));
-        return null;
-      }
       const session = await supabase.auth.getSession();
       const accessToken = session.data?.session?.access_token;
       if (!accessToken) throw new Error('Sign in again to download this attachment.');
-      const download = await fetch(`/api/email-router-attachment?token=${encodeURIComponent(token)}`, {
-        headers: { authorization: `Bearer ${accessToken}` },
-        cache: 'no-store',
-      });
+      const downloadFrom = (url) => fetch(url, { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' });
+      let streamUrl = attachment.streamUrl && new Date(attachment.streamExpiresAt || 0).getTime() > Date.now()
+        ? attachment.streamUrl
+        : null;
+      if (!streamUrl) {
+        const response = await emailRouter.attachmentUrl({ messageId: detail.id, attachmentId: attachment.id || attachment.attachmentId }, { force: true });
+        streamUrl = response.data?.url || (response.data?.token ? `/api/email-router-attachment?token=${encodeURIComponent(response.data.token)}` : null);
+        if (!streamUrl) throw new Error(messageError(response.data, 'Attachment download is unavailable.'));
+      }
+      let download = await downloadFrom(streamUrl);
+      if (!download.ok && attachment.streamUrl && [401, 403].includes(download.status)) {
+        const response = await emailRouter.attachmentUrl({ messageId: detail.id, attachmentId: attachment.id || attachment.attachmentId }, { force: true });
+        const refreshedUrl = response.data?.url || (response.data?.token ? `/api/email-router-attachment?token=${encodeURIComponent(response.data.token)}` : null);
+        if (refreshedUrl) download = await downloadFrom(refreshedUrl);
+      }
       if (!download.ok) {
         const failure = await download.json().catch(() => ({}));
         throw new Error(failure.error || 'Attachment download is unavailable.');
       }
       const blob = await download.blob();
+      recordEmailRouterTiming('attachment_open', startedAt);
       return { blob, contentType: download.headers.get('content-type') || blob.type || attachment.contentType || 'application/octet-stream' };
     } catch (error) {
       setDetailError(error?.message || 'Attachment download is unavailable.');
@@ -308,6 +345,7 @@ export default function EmailRouterWorkspace() {
     advisor={advisor}
     advisorLoading={advisorLoading}
     advisorError={advisorError}
+    actionResult={actionResult}
     onAdvisor={loadAdvisor}
     onSubmit={submitAction}
     className={className}

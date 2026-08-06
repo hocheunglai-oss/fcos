@@ -4,6 +4,7 @@ import {
   logRequestTelemetry,
   parseSforceLimitInfo,
   recordCacheEvent,
+  recordEmailRouterOperation,
   recordRequestFailure,
   recordSalesforceCall,
   recordSupabaseRequest,
@@ -79,6 +80,11 @@ test('builds redacted request summaries and response metadata', async () => {
       supabaseRequests: 1,
       supabaseFailures: 0,
       supabaseDurationMs: 7,
+      emailRouterOperation: null,
+      emailRouterDurationMs: 0,
+      emailRouterGraphMs: 0,
+      emailRouterStorageMs: 0,
+      emailRouterBackground: false,
       errorName: 'Error',
       errorCode: null,
       errorMessage: '[email] cannot update [salesforce-id]',
@@ -105,6 +111,19 @@ test('logs expected validation failures as warnings', async () => {
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].status, 422);
   assert.equal(errors.length, 0);
+});
+
+test('records redacted Email Router operation timing without message data', async () => {
+  await runWithRequestTelemetry({ handler: 'emailRouterDetail', requestId: 'router-request' }, async () => {
+    recordEmailRouterOperation({ operation: 'message_detail', totalMs: 420, graphMs: 300, storageMs: 80, continuedInBackground: false });
+    const summary = requestTelemetrySummary(200);
+    assert.equal(summary.emailRouterOperation, 'message_detail');
+    assert.equal(summary.emailRouterDurationMs, 420);
+    assert.equal(summary.emailRouterGraphMs, 300);
+    assert.equal(summary.emailRouterStorageMs, 80);
+    assert.equal(summary.emailRouterBackground, false);
+    assert.equal(JSON.stringify(summary).includes('message-id'), false);
+  });
 });
 
 test('uses an incoming request identifier without accepting unbounded input', () => {

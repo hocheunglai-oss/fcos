@@ -64,6 +64,13 @@ function initialTelemetry({ handler, requestId } = {}) {
       writeAllowed: true,
       skipReason: null,
     },
+    emailRouter: {
+      operation: null,
+      durationMs: 0,
+      graphMs: 0,
+      storageMs: 0,
+      continuedInBackground: false,
+    },
     error: null,
   };
 }
@@ -109,6 +116,18 @@ export function recordSupabaseRequest({ durationMs = 0, ok = true } = {}) {
   telemetry.supabase.requests += 1;
   telemetry.supabase.durationMs += Math.max(0, Number(durationMs) || 0);
   if (!ok) telemetry.supabase.failures += 1;
+}
+
+export function recordEmailRouterOperation({ operation, totalMs = 0, graphMs = 0, storageMs = 0, continuedInBackground = false } = {}) {
+  const telemetry = currentRequestTelemetry();
+  if (!telemetry) return;
+  telemetry.emailRouter = {
+    operation: String(operation || 'unknown').replaceAll(/[^a-z0-9_.-]/gi, '_').slice(0, 80),
+    durationMs: Math.max(0, Number(totalMs) || 0),
+    graphMs: Math.max(0, Number(graphMs) || 0),
+    storageMs: Math.max(0, Number(storageMs) || 0),
+    continuedInBackground: continuedInBackground === true,
+  };
 }
 
 export function recordCacheEvent(status, fetchedAt = null) {
@@ -197,6 +216,11 @@ export function requestTelemetrySummary(status = 200) {
     supabaseRequests: telemetry.supabase.requests,
     supabaseFailures: telemetry.supabase.failures,
     supabaseDurationMs: Math.round(telemetry.supabase.durationMs),
+    emailRouterOperation: telemetry.emailRouter.operation,
+    emailRouterDurationMs: Math.round(telemetry.emailRouter.durationMs),
+    emailRouterGraphMs: Math.round(telemetry.emailRouter.graphMs),
+    emailRouterStorageMs: Math.round(telemetry.emailRouter.storageMs),
+    emailRouterBackground: telemetry.emailRouter.continuedInBackground,
     errorName: telemetry.error?.name || null,
     errorCode: telemetry.error?.code || null,
     errorMessage: telemetry.error?.message || null,

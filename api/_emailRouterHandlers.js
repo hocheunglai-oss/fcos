@@ -24,10 +24,24 @@ import {
 } from './_emailRouterCore.js';
 import { emailRouterConfiguration, saveEmailRouterConfiguration } from './_emailRouterConfig.js';
 import { runEmailRouterAdvisor } from './_emailRouterAdvisor.js';
+import { recordEmailRouterOperation } from './_requestTelemetry.js';
 
-async function context(req, dependencies) {
+async function context(req, dependencies, { allowCachedMailbox = false } = {}) {
   const auth = await requireEmailRouterUser(req, dependencies);
-  return { ...auth, mailbox: await currentEmailRouterMailbox(auth.client) };
+  return { ...auth, mailbox: await currentEmailRouterMailbox(auth.client, { allowCached: allowCachedMailbox }) };
+}
+
+function continueEmailRouterWork(promise, dependencies, label) {
+  const guarded = promise.catch((error) => {
+    console.warn(`[email-router] ${label} will be retried by the durable outbox.`, {
+      code: error?.code || 'EMAIL_ROUTER_BACKGROUND_WORK_FAILED',
+    });
+  });
+  if (typeof dependencies.defer === 'function') {
+    dependencies.defer(guarded);
+    return true;
+  }
+  return false;
 }
 
 export async function emailRouterDirectoryRefreshHandler(req, _body = {}, dependencies = {}) {
@@ -38,12 +52,12 @@ export async function emailRouterDirectoryRefreshHandler(req, _body = {}, depend
 }
 
 export async function emailRouterListHandler(req, body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
   return listEmailRouterMessages({ client: value.client, mailbox: value.mailbox, folder: body.folder, limit: body.limit, search: body.query, cursor: body.cursor }, dependencies);
 }
 
 export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
   return syncEmailRouterMailboxIfDue({
     client: value.client,
     mailbox: value.mailbox,
@@ -54,12 +68,38 @@ export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependen
 }
 
 export async function emailRouterDetailHandler(req, body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
-  return fetchEmailRouterDetail({ client: value.client, mailbox: value.mailbox, messageId: body.messageId }, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
+  const detail = await fetchEmailRouterDetail({
+    client: value.client,
+    mailbox: value.mailbox,
+    messageId: body.messageId,
+    hasAttachmentsHint: body.hasAttachments === true,
+  }, dependencies);
+  const expiresAtMs = Date.now() + 5 * 60_000;
+  const streamPath = String(dependencies.attachmentStreamPath || '/api/email-router-attachment');
+  const attachments = (detail.attachments || []).map((attachment) => {
+    if (!attachment?.id) return attachment;
+    try {
+      const token = createEmailRouterAttachmentToken({
+        mailboxId: value.mailbox.id,
+        messageId: body.messageId,
+        attachmentId: attachment.id,
+        expiresAt: expiresAtMs,
+      }, dependencies.env || process.env);
+      return {
+        ...attachment,
+        streamUrl: `${streamPath}?token=${encodeURIComponent(token)}`,
+        streamExpiresAt: new Date(expiresAtMs).toISOString(),
+      };
+    } catch {
+      return attachment;
+    }
+  });
+  return { ...detail, attachments };
 }
 
 export async function emailRouterDirectoryHandler(req, body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
   const [directory, presets] = await Promise.all([
     listEmailRouterDirectory({ client: value.client, search: body.search }),
     listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }),
@@ -68,7 +108,7 @@ export async function emailRouterDirectoryHandler(req, body = {}, dependencies =
 }
 
 export async function emailRouterPresetsHandler(req, body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
   return { presets: await listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }) };
 }
 
@@ -91,12 +131,14 @@ export async function emailRouterLeaveSaveHandler(req, body = {}, dependencies =
 
 export async function emailRouterAttachmentUrlHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies);
-  const token = createEmailRouterAttachmentToken({ mailboxId: value.mailbox.id, messageId: body.messageId, attachmentId: body.attachmentId }, dependencies.env || process.env);
-  const path = String(dependencies.attachmentStreamPath || '/api/functions/emailRouterAttachmentStream');
-  return { token, url: `${path}?token=${encodeURIComponent(token)}`, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const expiresAtMs = Date.now() + 5 * 60_000;
+  const token = createEmailRouterAttachmentToken({ mailboxId: value.mailbox.id, messageId: body.messageId, attachmentId: body.attachmentId, expiresAt: expiresAtMs }, dependencies.env || process.env);
+  const path = String(dependencies.attachmentStreamPath || '/api/email-router-attachment');
+  return { token, url: `${path}?token=${encodeURIComponent(token)}`, expiresAt: new Date(expiresAtMs).toISOString() };
 }
 
 export async function emailRouterAttachmentStreamHandler(req, body = {}, dependencies = {}) {
+  const startedAt = Date.now();
   const queryToken = (() => {
     try { return new URL(req?.url || '', 'http://localhost').searchParams.get('token'); } catch { return null; }
   })();
@@ -104,15 +146,31 @@ export async function emailRouterAttachmentStreamHandler(req, body = {}, depende
   const auth = await requireEmailRouterUser(req, dependencies);
   const mailbox = await currentEmailRouterMailbox(auth.client);
   if (token.mailboxId !== mailbox.id) throw Object.assign(new Error('Attachment link is unavailable.'), { status: 403, code: 'EMAIL_ROUTER_ATTACHMENT_FORBIDDEN' });
-  return streamEmailRouterAttachment({ mailbox, messageId: token.messageId, attachmentId: token.attachmentId }, dependencies);
+  const attachment = await streamEmailRouterAttachment({ mailbox, messageId: token.messageId, attachmentId: token.attachmentId }, dependencies);
+  recordEmailRouterOperation({ operation: 'attachment_open', totalMs: Date.now() - startedAt });
+  return attachment;
 }
 
 export async function emailRouterActionHandler(req, body = {}, dependencies = {}) {
+  const startedAt = Date.now();
   const value = await context(req, dependencies);
   const result = await startEmailRouterAction({ client: value.client, profile: value.profile, mailbox: value.mailbox, actionType: body.actionType || body.action, sourceMessageId: body.messageId, input: body }, dependencies);
-  if (result.status !== 'draft_created') return result;
-  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
-  return getEmailRouterActionStatus(value.client, result.id);
+  if (result.status !== 'draft_created') {
+    const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt };
+    recordEmailRouterOperation(performance);
+    return { ...result, performance };
+  }
+  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
+  if (continueEmailRouterWork(submission, dependencies, 'Draft submission')) {
+    const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt, continuedInBackground: true };
+    recordEmailRouterOperation(performance);
+    return { ...result, performance };
+  }
+  await submission;
+  const status = await getEmailRouterActionStatus(value.client, result.id);
+  const performance = { operation: body.actionType || body.action, totalMs: Date.now() - startedAt };
+  recordEmailRouterOperation(performance);
+  return { ...status, performance };
 }
 
 export async function emailRouterUndoHandler(req, body = {}, dependencies = {}) {
@@ -130,7 +188,9 @@ export async function emailRouterRetryHandler(req, body = {}, dependencies = {})
     confirmedNotSent: body.confirmedNotSent,
   }, dependencies);
   if (result.status !== 'draft_created') return result;
-  await processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
+  const submission = processEmailRouterOutbox({ client: value.client, mailbox: value.mailbox, limit: 1, actionId: result.id, confirmNewSubmissions: false }, dependencies);
+  if (continueEmailRouterWork(submission, dependencies, 'Retry submission')) return result;
+  await submission;
   return getEmailRouterActionStatus(value.client, result.id);
 }
 
@@ -164,7 +224,7 @@ export async function emailRouterSettingsSaveHandler(req, body = {}, dependencie
 }
 
 export async function emailRouterAdvisorHandler(req, body = {}, dependencies = {}) {
-  const value = await context(req, dependencies);
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
   return runEmailRouterAdvisor({ client: value.client, profile: value.profile, mailbox: value.mailbox, messageId: body.messageId }, dependencies);
 }
 

@@ -362,8 +362,8 @@ test('Graph delta cursors accept the mailbox-scoped URL shape returned by Micros
 test('message detail loads attachments separately from the Graph body request', async () => {
   const calls = [];
   const message = { id: 'provider-message-1', subject: 'Subject', body: { contentType: 'html', content: '<p>Body</p><img src="cid:inline-logo">' }, hasAttachments: true };
-  const fetchImpl = async (url) => {
-    calls.push(String(url));
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), prefer: new Headers(options.headers || {}).get('prefer') });
     const requestedUrl = String(url);
     const payload = requestedUrl.includes('/attachments/attachment-1?')
       ? { id: 'attachment-1', name: 'logo.png', contentType: 'image/png', size: 100, isInline: true, contentId: 'inline-logo' }
@@ -383,15 +383,46 @@ test('message detail loads attachments separately from the Graph body request', 
     messageId: message.id,
   }, { accessToken: 'access-token', fetchImpl });
   assert.equal(calls.length, 3);
-  assert.doesNotMatch(calls[0], /\$expand=/);
-  assert.match(calls[1], /\/attachments\?/);
-  assert.match(calls[1], /contentId/);
-  assert.match(calls[2], /\/attachments\/attachment-1\?/);
-  assert.match(calls[2], /contentId/);
+  assert.doesNotMatch(calls[0].url, /\$expand=/);
+  assert.match(calls[0].prefer, /outlook\.body-content-type="html"/);
+  assert.match(calls[0].prefer, /IdType="ImmutableId"/);
+  assert.match(calls[1].url, /\/attachments\?/);
+  assert.match(calls[1].url, /contentId/);
+  assert.match(calls[2].url, /\/attachments\/attachment-1\?/);
+  assert.match(calls[2].url, /contentId/);
   assert.equal(result.attachments.length, 1);
   assert.equal(result.attachments[0].contentId, 'inline-logo');
   assert.deepEqual(result.attachments[0].inlineAliases, ['inline-logo']);
   assert.deepEqual(result.detailWarnings, []);
+  assert.equal(result.performance.operation, 'message_detail');
+  assert.equal(Number.isFinite(result.performance.totalMs), true);
+});
+
+test('known attachment metadata starts while the Graph message body is still loading', async () => {
+  let releaseBody;
+  let attachmentStarted = false;
+  const bodyGate = new Promise((resolve) => { releaseBody = resolve; });
+  const message = { id: 'provider-message-concurrent', body: { contentType: 'html', content: '<p>Body</p>' }, hasAttachments: true };
+  const fetchImpl = async (url) => {
+    if (String(url).includes('/attachments?')) {
+      attachmentStarted = true;
+      return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    await bodyGate;
+    return new Response(JSON.stringify(message), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const client = { from: () => ({ select: () => ({ eq() { return this; }, maybeSingle: async () => ({ data: null, error: null }) }) }) };
+  const detailPromise = fetchEmailRouterDetail({
+    client,
+    mailbox: { id: 'mailbox-1', emailAddress: 'router@example.net' },
+    messageId: message.id,
+    hasAttachmentsHint: true,
+  }, { accessToken: 'access-token', fetchImpl });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attachmentStarted, true);
+  releaseBody();
+  const result = await detailPromise;
+  assert.deepEqual(result.attachments, []);
 });
 
 test('CID-only message images load even when Graph hasAttachments is false and contentId metadata is incomplete', async () => {

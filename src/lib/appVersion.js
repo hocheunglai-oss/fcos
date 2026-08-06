@@ -1,6 +1,18 @@
-export const APP_VERSION = '2.0.134';
+export const APP_VERSION = '2.0.135';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.135',
+    releasedAt: '2026-08-06',
+    title: 'Faster Email Router and message rendering repair',
+    changes: [
+      'Fixed emails such as AICC FENGHUANG displaying hidden WYSIWYG stylesheet comments as visible message content.',
+      'Made message bodies, action history, and known attachment metadata load concurrently, stopped 30-second inbox refreshes from reopening the selected message, and removed duplicate routing-directory requests.',
+      'Prepared short-lived attachment streams with message details so previews and downloads normally avoid an extra request, while preserving authorization and expiry checks.',
+      'Made Archive update the inbox immediately and let Redirect return after its Microsoft 365 draft is durably recorded while protected submission continues in the background.',
+      'Added redacted operation timing for mailbox lists, message details, attachments, and mail actions without recording message or recipient data.',
+    ],
+  },
   {
     version: '2.0.134',
     releasedAt: '2026-08-06',

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Loader2, Send, Sparkles } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Send, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import EmailPresetPicker from './EmailPresetPicker';
@@ -42,6 +42,7 @@ export default function EmailRedirectPanel({
   advisor,
   advisorLoading = false,
   advisorError = '',
+  actionResult = null,
   onAdvisor,
   onSubmit,
   className = '',
@@ -54,6 +55,7 @@ export default function EmailRedirectPanel({
   const presetOptions = useMemo(() => valueList(presets), [presets]);
   const recommendedSelections = useMemo(() => advisorRecipientSelections(advisor, directory), [advisor, directory]);
   const confidence = Math.round((Number(advisor?.confidence) || 0) * 100);
+  const redirectLocked = actionResult?.action === 'redirect' && actionResult?.status !== 'failed';
 
   useEffect(() => {
     setSelections([]);
@@ -82,7 +84,7 @@ export default function EmailRedirectPanel({
       return item.onLeave ? [item.label] : [];
     }))];
   }, [directory, selectedPreset, selections]);
-  const canSend = Boolean(message) && !directoryLoading && !submitting && selections.length > 0
+  const canSend = Boolean(message) && !directoryLoading && !submitting && !redirectLocked && selections.length > 0
     && (presetId === 'none' || Boolean(selectedPreset?.routeSnapshotToken));
   const selectPreset = (value) => {
     setPresetId(value);
@@ -143,7 +145,7 @@ export default function EmailRedirectPanel({
             onBccVisibleChange={setBccVisible}
           />
         </div>
-        <Button className="w-full" size="lg" onClick={submit} disabled={!canSend}>{submitting ? <Loader2 className="animate-spin" /> : <Send />}{submitting ? 'Sending...' : 'Send Redirect'}</Button>
+        <Button className="w-full" size="lg" onClick={submit} disabled={!canSend}>{submitting ? <Loader2 className="animate-spin" /> : redirectLocked ? <CheckCircle2 /> : <Send />}{submitting ? 'Preparing...' : redirectLocked ? 'Redirect queued' : 'Send Redirect'}</Button>
         <section className="border-t border-border pt-4">
           <div className="flex items-start justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />Email Router Advisor</h3><p className="mt-1 text-xs text-muted-foreground">Suggestions above 60% confidence are preselected for review. The advisor never sends email.</p></div><Button variant="outline" size="sm" onClick={onAdvisor} disabled={advisorLoading}>{advisorLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}{advisorLoading ? 'Reviewing' : advisor ? 'Review again' : 'Suggest'}</Button></div>
           {advisorError && <p className="mt-3 text-sm text-destructive">{advisorError}</p>}
