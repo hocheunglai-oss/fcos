@@ -265,7 +265,7 @@ async function invoke(name, payload, options = {}) {
 export const emailRouter = {
   async backgroundSync(payload = {}, options) { return invoke('emailRouterBackgroundSync', payload, options); },
   async list(payload, options) {
-    const folder = payload?.folder === 'sent' ? 'sentitems' : payload?.folder;
+    const folder = ({ sent: 'sentitems', trash: 'deleteditems', junk: 'junkemail' })[payload?.folder] || payload?.folder;
     return invoke('emailRouterList', { ...payload, folder }, options);
   },
   async detail(payload, options) { return invoke('emailRouterDetail', payload, options); },

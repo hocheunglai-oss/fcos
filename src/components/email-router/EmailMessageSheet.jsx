@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, Download, Eye, File, FolderInput, Forward, Loader2, Mail, Paperclip, Reply, RotateCcw, Trash2, Undo2 } from 'lucide-react';
+import { Archive, Download, Eye, File, FolderInput, Loader2, Mail, Paperclip, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -71,8 +71,6 @@ export function EmailMessageActions({ message, actionResult, actionPending = fal
   const buttonClassName = 'h-8 shrink-0 gap-1.5 border-blue-200 bg-blue-50 px-2.5 text-blue-800 hover:border-blue-300 hover:bg-blue-100 hover:text-blue-900 disabled:border-border disabled:bg-muted/30 disabled:text-muted-foreground';
   return <TooltipProvider delayDuration={250}>
     <div className={`flex min-w-max items-center gap-1.5 ${className}`} aria-label="Message actions">
-      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('reply')} disabled={disabled}><Reply className="h-3.5 w-3.5" />Reply</Button></TooltipTrigger><TooltipContent>Reply to this message</TooltipContent></Tooltip>
-      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('forward')} disabled={disabled}><Forward className="h-3.5 w-3.5" />Forward</Button></TooltipTrigger><TooltipContent>Forward this message</TooltipContent></Tooltip>
       <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('archive')} disabled={disabled}><Archive className="h-3.5 w-3.5" />Archive</Button></TooltipTrigger><TooltipContent>Move immediately to Archive</TooltipContent></Tooltip>
       <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('delete')} disabled={disabled}><Trash2 className="h-3.5 w-3.5" />Trash</Button></TooltipTrigger><TooltipContent>Move this message to Deleted Items</TooltipContent></Tooltip>
       <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('move_market_report')} disabled={disabled}><FolderInput className="h-3.5 w-3.5" />Market Report</Button></TooltipTrigger><TooltipContent>Move immediately to the Market Report folder</TooltipContent></Tooltip>

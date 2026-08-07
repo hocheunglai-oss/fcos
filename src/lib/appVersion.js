@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.141';
+export const APP_VERSION = '2.0.142';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.142',
+    date: '2026-08-07',
+    title: 'Expanded Email Router mailboxes',
+    changes: [
+      'Added Market Report, Trash, and Junk mailbox views beside Inbox, Sent, and Archive, with Junk clearly highlighted in red.',
+      'Removed the duplicate Reply and Forward action buttons because Forward remains available in the reviewed Route Message panel.',
+      'Made Market Report routing recognize the connected mailbox folder whether Microsoft 365 names it Market Report or Market Reports.',
+    ],
+  },
   {
     version: '2.0.141',
     date: '2026-08-07',

@@ -7,7 +7,7 @@ import { recordEmailRouterOperation } from './_requestTelemetry.js';
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
-const FOLDERS = new Set(['inbox', 'sentitems', 'archive', 'deleteditems']);
+const FOLDERS = new Set(['inbox', 'sentitems', 'archive', 'deleteditems', 'junkemail', 'market_report']);
 const ACTIONS = new Set(['redirect', 'reply', 'forward', 'archive', 'move', 'delete', 'undo', 'mark_read']);
 const RECIPIENT_KINDS = new Set(['to', 'cc', 'bcc']);
 const MAX_ROUTING_RECIPIENTS = 100;
@@ -15,7 +15,7 @@ const MAX_MIME_BYTES = 25 * 1024 * 1024;
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
 const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS = 28_000;
-const MARKET_REPORT_FOLDER_NAME = 'Market Report';
+const MARKET_REPORT_FOLDER_NAMES = new Set(['market report', 'market reports']);
 const MARKET_REPORT_FOLDER_CACHE_MS = 5 * 60 * 1000;
 const marketReportFolderCache = new Map();
 
@@ -417,6 +417,7 @@ function graphSearchTerm(value) {
 
 export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox', limit = 30, search = '', cursor = null }, dependencies = {}) {
   const startedAt = Date.now();
+  folder = String(folder || 'inbox').trim().toLowerCase();
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const maximum = Math.min(50, Math.max(1, Number(limit) || 30));
   const selected = 'id,subject,from,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
@@ -425,7 +426,10 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
   const searchTerm = graphSearchTerm(search);
   if (searchTerm) params.set('$search', searchTerm);
   else params.set('$orderby', 'receivedDateTime desc');
-  const path = nextUrl || mailboxPath(mailbox, `/mailFolders/${folder}/messages?${params.toString()}`);
+  const providerFolder = folder === 'market_report'
+    ? await resolveEmailRouterMarketReportFolder(mailbox, dependencies)
+    : folder;
+  const path = nextUrl || mailboxPath(mailbox, `/mailFolders/${encodeURIComponent(providerFolder)}/messages?${params.toString()}`);
   const graphStartedAt = Date.now();
   const response = await emailRouterGraphFetch(path, {
     headers: searchTerm ? { consistencyLevel: 'eventual' } : {},
@@ -1431,7 +1435,7 @@ export async function resolveEmailRouterMarketReportFolder(mailbox, dependencies
       const folders = Array.isArray(payload.value) ? payload.value : [];
       inspected += folders.length;
       for (const folder of folders) {
-        if (String(folder?.displayName || '').trim().toLowerCase() === MARKET_REPORT_FOLDER_NAME.toLowerCase()) {
+        if (MARKET_REPORT_FOLDER_NAMES.has(String(folder?.displayName || '').trim().toLowerCase())) {
           matches.push(safeId(folder.id, 'Market Report folder identifier'));
         }
         if (Number(folder?.childFolderCount || 0) > 0 && current.depth < 4) {

@@ -5,6 +5,7 @@ const WELL_KNOWN_BLOCKED = ['inbox', 'sentitems', 'drafts', 'outbox', 'deletedit
 const FOLDER_PAGE_LIMIT = 10;
 const FOLDER_DEPTH_LIMIT = 8;
 const FOLDER_TOTAL_LIMIT = 1000;
+const MARKET_REPORT_FOLDER_NAMES = new Set(['market report', 'market reports']);
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -126,7 +127,7 @@ export async function discoverEmailRouterFolders({ client, mailbox, actorUserId 
       .eq('provider_folder_id', archive.id);
     if (error) throw folderError('Archive folder approval could not be confirmed.', 503, 'EMAIL_ROUTER_FOLDER_STORAGE_UNAVAILABLE');
   }
-  const marketReportMatches = unique.filter((folder) => folder.display_name.trim().toLowerCase() === 'market report');
+  const marketReportMatches = unique.filter((folder) => MARKET_REPORT_FOLDER_NAMES.has(folder.display_name.trim().toLowerCase()));
   if (marketReportMatches.length === 1) {
     const { error } = await table(client, 'routing_folders')
       .update({ approved: true, updated_by: actorUserId, updated_at: new Date().toISOString() })

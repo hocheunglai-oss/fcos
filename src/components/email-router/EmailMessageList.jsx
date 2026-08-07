@@ -1,4 +1,4 @@
-import { Archive, ChevronLeft, ChevronRight, FileText, Inbox, Loader2, Paperclip, Send, Star } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, FileText, Inbox, Loader2, Newspaper, Paperclip, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { formatEmailDate } from '@/lib/emailRouter';
@@ -7,6 +7,9 @@ const EMPTY_COPY = {
   inbox: { icon: Inbox, title: 'Inbox is clear', description: 'No messages match this mailbox and search.' },
   sent: { icon: Send, title: 'No sent messages', description: 'No messages match this mailbox and search.' },
   archive: { icon: Archive, title: 'Archive is empty', description: 'No archived messages match this search.' },
+  market_report: { icon: Newspaper, title: 'Market Report is empty', description: 'No market report messages match this search.' },
+  trash: { icon: Trash2, title: 'Trash is empty', description: 'No deleted messages match this search.' },
+  junk: { icon: ShieldAlert, title: 'Junk is empty', description: 'No junk messages match this search.' },
 };
 
 export default function EmailMessageList({
