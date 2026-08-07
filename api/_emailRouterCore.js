@@ -213,16 +213,28 @@ export async function emailRouterGraphFetch(pathOrUrl, options = {}, dependencie
   if (url.protocol !== 'https:' || url.hostname !== 'graph.microsoft.com' || !url.pathname.startsWith('/v1.0/')) {
     throw routerError('Microsoft Graph request URL is invalid.', 400, 'EMAIL_ROUTER_GRAPH_URL_INVALID');
   }
-  const headers = new Headers(options.headers || {});
+  const { retryThrottled = false, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers || {});
   headers.set('authorization', `Bearer ${token}`);
   headers.set('prefer', [headers.get('prefer'), 'IdType="ImmutableId"'].filter(Boolean).join(', '));
   if (!headers.has('accept')) headers.set('accept', 'application/json');
-  const response = await (dependencies.fetchImpl || fetch)(url, { ...options, headers, cache: 'no-store' });
-  if (!response.ok && response.status !== 202) {
+  const method = String(fetchOptions.method || 'GET').toUpperCase();
+  const retryable = ['GET', 'HEAD'].includes(method) || retryThrottled === true;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await (dependencies.fetchImpl || fetch)(url, { ...fetchOptions, headers, cache: 'no-store' });
+    if (response.ok || response.status === 202) return response;
+    if (response.status === 429 && retryable && attempt < 2) {
+      const retryAfter = String(response.headers.get('retry-after') || '').trim();
+      const seconds = Number(retryAfter);
+      const dateDelay = Number.isNaN(Date.parse(retryAfter)) ? 0 : Date.parse(retryAfter) - Date.now();
+      const delayMs = Math.min(10_000, Math.max(250, Number.isFinite(seconds) ? seconds * 1000 : dateDelay || (attempt + 1) * 1_000));
+      await (dependencies.sleep || ((delay) => new Promise((resolve) => setTimeout(resolve, delay))))(delayMs);
+      continue;
+    }
     const payload = await response.clone().json().catch(() => ({}));
     throw routerError('Microsoft Graph request failed.', response.status >= 500 ? 503 : response.status, payload?.error?.code || 'EMAIL_ROUTER_GRAPH_REQUEST_FAILED');
   }
-  return response;
+  throw routerError('Microsoft Graph request failed.', 503, 'EMAIL_ROUTER_GRAPH_REQUEST_FAILED');
 }
 
 export function emailRouterMailboxPath(mailbox, path) {

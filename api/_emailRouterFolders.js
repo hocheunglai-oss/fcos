@@ -23,25 +23,38 @@ function safeProviderId(value, label = 'folder identifier') {
   return result;
 }
 
-async function graphFolder(mailbox, folder, dependencies) {
+async function systemFolderMetadata(mailbox, dependencies) {
+  const folders = [...WELL_KNOWN_BLOCKED, 'archive'];
   const response = await emailRouterGraphFetch(
-    emailRouterMailboxPath(mailbox, `/mailFolders/${folder}?$select=id,displayName,parentFolderId,childFolderCount`),
-    {},
+    '/$batch',
+    {
+      method: 'POST',
+      retryThrottled: true,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requests: folders.map((folder, index) => ({
+          id: String(index + 1),
+          method: 'GET',
+          url: `${emailRouterMailboxPath(mailbox, `/mailFolders/${folder}`)}?$select=id,displayName,parentFolderId,childFolderCount`,
+        })),
+      }),
+    },
     dependencies,
   );
-  return emailRouterGraphJson(response);
-}
-
-async function blockedFolderIds(mailbox, dependencies) {
-  const results = await Promise.all(WELL_KNOWN_BLOCKED.map((folder) => graphFolder(mailbox, folder, dependencies).catch(() => null)));
-  return new Set(results.map((folder) => folder?.id).filter(Boolean));
+  const payload = await emailRouterGraphJson(response) || {};
+  const results = new Map((payload.responses || []).map((result) => [result.id, result]));
+  if (folders.some((_folder, index) => Number(results.get(String(index + 1))?.status) !== 200)) {
+    throw folderError('Microsoft 365 system folders could not be validated safely.', 503, 'EMAIL_ROUTER_FOLDER_DISCOVERY_UNAVAILABLE');
+  }
+  const values = folders.map((_folder, index) => results.get(String(index + 1))?.body || null);
+  return {
+    blockedIds: new Set(values.slice(0, WELL_KNOWN_BLOCKED.length).map((folder) => folder?.id).filter(Boolean)),
+    archive: values.at(-1),
+  };
 }
 
 export async function discoverEmailRouterFolders({ client, mailbox, actorUserId = null }, dependencies = {}) {
-  const [blockedIds, archive] = await Promise.all([
-    blockedFolderIds(mailbox, dependencies),
-    graphFolder(mailbox, 'archive', dependencies),
-  ]);
+  const { blockedIds, archive } = await systemFolderMetadata(mailbox, dependencies);
   const parameters = new URLSearchParams({
     '$select': 'id,displayName,parentFolderId,childFolderCount',
     '$top': '100',

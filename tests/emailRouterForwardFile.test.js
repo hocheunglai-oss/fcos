@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { resolveEmailRouterPostAction } from '../api/_emailRouterFolders.js';
@@ -61,4 +62,11 @@ test('arbitrary folder identifiers and contradictory choices fail closed', async
     resolveEmailRouterPostAction({}, mailbox, 'forward', { postActionMode: 'keep_current', postActionFolderKey: 'archive' }),
     (error) => error.code === 'EMAIL_ROUTER_FOLDER_INVALID',
   );
+});
+
+test('folder discovery batches system-folder validation before traversing the mailbox', async () => {
+  const source = await readFile(new URL('../api/_emailRouterFolders.js', import.meta.url), 'utf8');
+  assert.match(source, /emailRouterGraphFetch\(\s*'\/\$batch'/);
+  assert.match(source, /retryThrottled: true/);
+  assert.doesNotMatch(source, /Promise\.all\(WELL_KNOWN_BLOCKED\.map/);
 });

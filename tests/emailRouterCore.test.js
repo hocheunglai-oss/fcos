@@ -390,6 +390,38 @@ test('Graph requests use immutable identifiers and a started outbox entry is rec
   assert.doesNotMatch(calls[0].url, /\/send$/);
 });
 
+test('Graph throttling retries only explicitly safe requests and honors Retry-After', async () => {
+  let calls = 0;
+  const delays = [];
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls < 3) return new Response(JSON.stringify({ error: { code: 'ApplicationThrottled' } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '1' } });
+    return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const response = await emailRouterGraphFetch('/users/test/mailFolders', {}, {
+    accessToken: 'access-token',
+    fetchImpl,
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [1_000, 1_000]);
+
+  let postCalls = 0;
+  await assert.rejects(
+    () => emailRouterGraphFetch('/users/test/sendMail', { method: 'POST' }, {
+      accessToken: 'access-token',
+      fetchImpl: async () => {
+        postCalls += 1;
+        return new Response(JSON.stringify({ error: { code: 'ApplicationThrottled' } }), { status: 429, headers: { 'content-type': 'application/json' } });
+      },
+      sleep: async () => { throw new Error('Unsafe writes must not be retried.'); },
+    }),
+    (error) => error.code === 'ApplicationThrottled',
+  );
+  assert.equal(postCalls, 1);
+});
+
 test('mail action status is mailbox-scoped and identifies active reconciliation', async () => {
   const rows = {
     mail_actions: {
