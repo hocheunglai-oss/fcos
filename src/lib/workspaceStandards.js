@@ -94,7 +94,7 @@ export const WORKSPACE_STANDARDS = Object.freeze({
     title: 'Payment Collections',
     route: '/payment-collections',
     section: 'Cross Functions',
-    authority: 'Salesforce receivable balance with FCOS workflow state',
+    authority: 'Salesforce receivables and ship-agent charges with FCOS workflow state',
     views: ['needs_action', 'open', 'closed', 'exceptions', 'activity'],
     freshness: 'Short Salesforce snapshot',
     consequentialActionsRefresh: true,

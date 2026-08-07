@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Banknote, CheckCircle2, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import { useAuth } from '@/lib/AuthContext';
@@ -25,11 +25,13 @@ import StemDetailLink from '@/components/common/StemDetailLink';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import ShipAgentCharges from '@/components/payments/ShipAgentCharges';
 
 const TABS = [
   { id: 'collections', label: 'Collection Queue', icon: ListChecks, moduleId: 'buyer_invoices' },
   { id: 'incoming', label: 'Incoming Payments', icon: Banknote, moduleId: 'incoming_payments' },
   { id: 'reconciliation', label: 'Reconciliation Exceptions', icon: Scale, moduleIds: ['buyer_invoices', 'incoming_payments'] },
+  { id: 'ship-agent-charges', label: 'Ship-Agent Charges', icon: ClipboardCheck, moduleIds: ['buyer_invoices', 'incoming_payments'] },
 ];
 
 function money(value) {
@@ -200,6 +202,7 @@ export default function PaymentCollections() {
 
       {activeTab === 'collections' && <BuyerInvoices defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
       {activeTab === 'incoming' && <IncomingPayments reconciliationItems={reconciliation?.items || []} />}
+      {activeTab === 'ship-agent-charges' && <ShipAgentCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} />}
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">
           <div className="flex flex-wrap items-start justify-between gap-3">

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.145';
+export const APP_VERSION = '2.0.146';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.146',
+    date: '2026-08-08',
+    title: 'Gate final invoices on ship-agent charges',
+    changes: [
+      'Added the Ship-Agent Charges Payment Collections queue with delivery timing, assigned Buyer Trader review, controlled Salesforce extra-cost changes, and documented General Manager overrides.',
+      'Added service-only revisioned confirmation, operation, event, notification, and commitment workflows without mirroring Salesforce financial records.',
+      'Blocked final buyer invoice creation, generation, and sending until shared live Salesforce readiness passes, while preserving proforma and credit-note flows.',
+    ],
+  },
   {
     version: '2.0.145',
     date: '2026-08-08',

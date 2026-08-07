@@ -355,6 +355,32 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
     ],
   },
+  'ship-agent-charges': {
+    title: 'Ship-Agent Charges',
+    description: 'How final ship-agent costs are reviewed before a final buyer invoice can proceed.',
+    sections: [
+      {
+        title: 'Live case detection',
+        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs, then treats an Account as a ship agent only when Imported Particulars contains Ship Agent case-insensitively. Salesforce financial rows remain authoritative and are re-read before every consequential action.',
+      },
+      {
+        title: 'Delivery and ownership',
+        body: 'A case becomes actionable only after its Salesforce Delivery Date and is due on the next Hong Kong business day. The active Buyer Confirmation Trader resolves to one active FCOS profile by normalized email first and unique normalized name only as a fallback.',
+      },
+      {
+        title: 'Review and controlled changes',
+        body: 'Every current row requires an explicit review, buyer-charge decision, and a reference or Salesforce File. Existing line items are read-only. Existing ship-agent extra costs may be edited, new STEM Charge extra costs must use an active Product, the exact supplier Account, inherited payment terms and fixed or per-unit pricing, and cancellation always sets Cancelled without deleting history.',
+      },
+      {
+        title: 'Permissions and overrides',
+        body: 'All Payment Collections users may view. Only the assigned Buyer Trader normally edits or confirms; Finance and Administrators remain read-only. The one active UUID-backed General Manager may temporarily reassign or override with a mandatory recorded reason.',
+      },
+      {
+        title: 'Invoice gate and later changes',
+        body: 'Final buyer invoice creation, generation and sending remain blocked until the live Salesforce readiness check passes. Proformas and credit notes bypass the gate. Relevant later changes invalidate confirmation; a change after invoicing becomes an urgent Post-Invoice Change resolved as no adjustment, revised invoice, or credit note with a reference.',
+      },
+    ],
+  },
 };
 
 export const BROKER_METHODOLOGIES = {

@@ -171,7 +171,7 @@ function sortCommitments(left, right) {
 export async function workCommitmentsList(_body = {}, accessContext) {
   const { client, profile, capabilities = {} } = accessContext;
   const today = hongKongDate();
-  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
+  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, shipAgentCasesResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
     client
       .from("collaboration_items")
       .select(
@@ -211,6 +211,15 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           .eq('owner_user_id', profile.id)
           .neq('status', 'Paid / Closed')
           .order('updated_at', { ascending: false })
+          .limit(250)
+      : Promise.resolve({ data: [], error: null }),
+    capabilities.paymentCollections
+      ? client
+          .from('ship_agent_charge_cases')
+          .select('id,stem_id,stem_name,workflow_status,due_date,assigned_buyer_user_id,revision,updated_at')
+          .eq('assigned_buyer_user_id', profile.id)
+          .in('workflow_status', ['needs_action', 'post_invoice_change'])
+          .order('due_date', { ascending: true, nullsFirst: false })
           .limit(250)
       : Promise.resolve({ data: [], error: null }),
     capabilities.disputes
@@ -255,6 +264,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   const goals = ensureResult(goalsResult);
   const relationships = ensureResult(relationshipsResult);
   const collections = ensureResult(collectionsResult);
+  const shipAgentCases = ensureResult(shipAgentCasesResult);
   const disputes = ensureResult(disputesResult);
   const hedgeCloses = ensureResult(hedgeClosesResult);
   const improvementTickets = ensureResult(improvementTicketsResult);
@@ -501,6 +511,29 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           urgency: collectionUrgency(item),
           link: `/payment-collections?tab=collections&collectionStemId=${encodeURIComponent(item.stem_id)}`,
           actionLabel: 'Open collection',
+        },
+        today,
+      ),
+    );
+  }
+
+  for (const item of shipAgentCases) {
+    const postInvoice = item.workflow_status === 'post_invoice_change';
+    commitments.push(
+      normalizeCommitment(
+        {
+          id: `ship-agent-charges:${item.id}:${item.revision}`,
+          source: 'payment_collections',
+          kind: 'ship_agent_charges',
+          title: `${item.stem_name || item.stem_id} · Ship-agent charges`,
+          subtitle: postInvoice
+            ? 'Urgent post-invoice change · Document a resolution'
+            : 'Row-by-row review and confirmation required',
+          status: postInvoice ? 'Post-Invoice Change' : 'Needs Action',
+          dueAt: item.due_date,
+          urgency: postInvoice ? 'needs_action' : null,
+          link: `/payment-collections?tab=ship-agent-charges&stemId=${encodeURIComponent(item.stem_id)}`,
+          actionLabel: postInvoice ? 'Resolve change' : 'Review charges',
         },
         today,
       ),

@@ -77,6 +77,15 @@ import { workNotificationsList as workNotificationsListService, workNotification
 import { reportSystemError, resolveSystemErrorIncident, shouldNotifySystemError } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
+  getShipAgentChargeDetail,
+  listShipAgentCharges,
+  overrideShipAgentChargeAssignment,
+  resolveShipAgentPostInvoiceChange,
+  saveAndConfirmShipAgentCharges,
+  shipAgentChargeOptions,
+  syncShipAgentCharges,
+} from '../_shipAgentCharges.js';
+import {
   improvementAttachmentComplete as improvementAttachmentCompleteService,
   improvementAttachmentDelete as improvementAttachmentDeleteService,
   improvementAttachmentPrepare as improvementAttachmentPrepareService,
@@ -1347,6 +1356,13 @@ const HANDLER_MODULE_ACCESS = {
   buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
   buyerInvoicePaymentAdviceSave: ['buyer_invoices'],
   paymentCollectionsReconcile: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesList: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesDetail: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesOptions: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesSaveConfirm: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
+  shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
   buyerInvoicePostingReminderOverrideSave: ['incoming_payments'],
   buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
   buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
@@ -2232,7 +2248,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows] = await Promise.all([
+  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2476,9 +2492,29 @@ async function universalAuditTrail(body, req) {
       summary: compactAuditSummary([row.previous_provider, row.next_provider, `Revision ${row.resulting_revision}`]),
       metadata: { previousProvider: row.previous_provider, nextProvider: row.next_provider, revision: row.resulting_revision },
     })),
+    safeAuditRows(client.from('ship_agent_charge_events').select('id,event_type,summary,metadata,actor_email,created_at,ship_agent_charge_cases(stem_id,stem_name)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `ship-agent-charge:${row.id}`,
+      source: 'Ship-Agent Charges',
+      module: 'Payment Collections',
+      action: normalizedAuditAction(row.event_type),
+      createdAt: row.created_at,
+      actor: row.actor_email || 'System',
+      target: row.ship_agent_charge_cases?.stem_name || row.ship_agent_charge_cases?.stem_id || 'Ship-Agent case',
+      summary: row.summary || 'Ship-Agent workflow event.',
+      metadata: {
+        caseState: row.metadata?.caseState || null,
+        previousState: row.metadata?.previousState || null,
+        sourceChanged: row.metadata?.sourceChanged === true,
+        assignmentChanged: row.metadata?.assignmentChanged === true,
+        chargeToBuyer: row.metadata?.chargeToBuyer === true,
+        evidencePresent: row.metadata?.evidencePresent === true,
+        reasonProvided: row.metadata?.reasonProvided === true,
+        resolution: row.metadata?.resolution || null,
+      },
+    })),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -4545,13 +4581,75 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
 
 async function paymentCollectionsReconcile(body, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
-  const result = await reconcileBuyerInvoiceCollections({ client, profile, accessContext: accessContext || { client, profile }, stemIds: body.stemIds });
+  const context = accessContext || { client, profile };
+  const result = await reconcileBuyerInvoiceCollections({ client, profile, accessContext: context, stemIds: body.stemIds });
+  const stemAccessCondition = isInterofficeAccess(context)
+    ? await interofficeStemAccessCondition(context)
+    : null;
+  const shipAgentCharges = await syncShipAgentCharges({ ...context, stemAccessCondition }, { stemIds: body.stemIds });
   return {
     ...result,
+    shipAgentCharges,
     capabilities: {
       canOverridePostingReminder: canOverridePaymentPostingReminder(profile),
     },
   };
+}
+
+async function shipAgentChargesContext(req, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const stemAccessCondition = isInterofficeAccess(context)
+    ? await interofficeStemAccessCondition(context)
+    : null;
+  return { ...context, stemAccessCondition };
+}
+
+async function requireShipAgentStemAccess(body, context) {
+  const stemId = String(body?.stemId || '').trim();
+  if (!isSalesforceId(stemId)) throw appError('A valid Salesforce STEM is required.', 400);
+  await requireInterofficeStemAccess(stemId, context);
+  return stemId;
+}
+
+async function shipAgentChargesList(body, req, accessContext = null) {
+  return listShipAgentCharges(body, await shipAgentChargesContext(req, accessContext));
+}
+
+async function shipAgentChargesDetail(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return getShipAgentChargeDetail(body, context);
+}
+
+async function shipAgentChargesOptions(body, req, accessContext = null) {
+  return shipAgentChargeOptions(body, await shipAgentChargesContext(req, accessContext));
+}
+
+async function shipAgentChargesSaveConfirm(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return saveAndConfirmShipAgentCharges(body, context);
+}
+
+async function shipAgentChargesGmOverride(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return overrideShipAgentChargeAssignment(body, context);
+}
+
+async function shipAgentChargesPostInvoiceResolve(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return resolveShipAgentPostInvoiceChange(body, context);
+}
+
+async function shipAgentChargesSync(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  const stemIds = Array.isArray(body?.stemIds) ? body.stemIds : null;
+  if (stemIds?.length) {
+    for (const stemId of stemIds) await requireShipAgentStemAccess({ stemId }, context);
+  }
+  return syncShipAgentCharges(context, { stemIds });
 }
 
 async function buyerInvoicePostingReminderOverrideSave(body, req, accessContext = null) {
@@ -4641,7 +4739,9 @@ async function paymentCollectionsReconcileCron(body, req) {
   requireCronAuthorization(req);
   const client = safeSupabaseAdminClient();
   if (!client) throw appError('Supabase service configuration is required for Payment Collections reconciliation.', 503);
-  return reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
+  const collections = await reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
+  const shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
+  return { ...collections, shipAgentCharges };
 }
 
 function paymentAdviceExtension(fileName) {
@@ -16802,6 +16902,13 @@ const handlers = {
   buyerInvoiceCollectionEventCreate,
   buyerInvoicePaymentAdviceSave,
   paymentCollectionsReconcile,
+  shipAgentChargesList,
+  shipAgentChargesDetail,
+  shipAgentChargesOptions,
+  shipAgentChargesSaveConfirm,
+  shipAgentChargesGmOverride,
+  shipAgentChargesPostInvoiceResolve,
+  shipAgentChargesSync,
   buyerInvoicePostingReminderOverrideSave,
   paymentCollectionsReconcileCron,
   buyerInvoiceEmailSettingsGet,

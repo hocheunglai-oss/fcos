@@ -100,6 +100,30 @@ function systemErrorNotification(row, state = {}) {
   };
 }
 
+function shipAgentNotification(row, state = {}) {
+  const notificationKey = `${row.id}:${row.revision}:${row.workflow_status}`;
+  const postInvoice = row.workflow_status === 'post_invoice_change';
+  const needsAction = row.workflow_status === 'needs_action';
+  return {
+    id: `ship_agent_charges:${notificationKey}`,
+    source: 'ship_agent_charges',
+    sourceId: row.id,
+    type: postInvoice ? 'post_invoice_change' : row.workflow_status,
+    severity: postInvoice ? 'critical' : 'warning',
+    title: postInvoice ? 'Urgent ship-agent post-invoice change' : needsAction ? 'Ship-agent charges need review' : 'Ship-agent charges ready for invoice',
+    message: postInvoice
+      ? `${row.stem_name || row.stem_id} changed after its final buyer invoice and needs a documented resolution.`
+      : needsAction
+        ? `${row.stem_name || row.stem_id} is assigned to you for row-by-row review and confirmation.`
+        : `${row.stem_name || row.stem_id} passed row review and is ready for Finance invoice processing.`,
+    link: `/payment-collections?tab=ship-agent-charges&stemId=${encodeURIComponent(row.stem_id)}`,
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: row.updated_at,
+  };
+}
+
 function notificationVisible(row, body, now) {
   const state = String(body.state || 'active');
   const snoozed = row.snoozedUntil && row.snoozedUntil > now;
@@ -123,7 +147,7 @@ export async function workNotificationsList(body = {}, accessContext) {
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const router = client.schema('emailrouter');
-  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates] = await Promise.all([
+  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, shipAgentCases, shipAgentStates, generalManagerRoles] = await Promise.all([
     client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('fcos_improvement_notifications').select('id,ticket_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
@@ -134,6 +158,9 @@ export async function workNotificationsList(body = {}, accessContext) {
     router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
     client.from('system_error_events').select('id,dedupe_key,handler,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
     client.from('system_error_notification_states').select('event_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
+    client.from('ship_agent_charge_cases').select('id,stem_id,stem_name,workflow_status,assigned_buyer_user_id,revision,due_date,updated_at').in('workflow_status', ['needs_action', 'ready_for_invoice', 'post_invoice_change']).order('updated_at', { ascending: false }).limit(queryLimit),
+    client.from('ship_agent_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
+    client.from('collaboration_roles').select('user_id').eq('role', 'general_manager').eq('active', true),
   ]);
 
   const unavailableSources = [];
@@ -162,20 +189,40 @@ export async function workNotificationsList(body = {}, accessContext) {
     unavailableSources.push('System');
   }
   if (systemStates.error && !unavailableTable(systemStates.error)) throw systemStates.error;
+  if (shipAgentCases.error) {
+    if (!unavailableTable(shipAgentCases.error)) throw shipAgentCases.error;
+    unavailableSources.push('Ship-Agent Charges');
+  }
+  if (shipAgentStates.error && !unavailableTable(shipAgentStates.error)) throw shipAgentStates.error;
+  if (generalManagerRoles.error && !unavailableTable(generalManagerRoles.error)) throw generalManagerRoles.error;
 
   const routerStateByAlert = new Map((emailRouterStates.data || []).map((row) => [row.alert_id, row]));
   const routerNotifications = (emailRouterAlerts.data || []).map((row) => emailRouterNotification(row, routerStateByAlert.get(row.id)));
   const systemStateByEvent = new Map((systemStates.data || []).map((row) => [row.event_id, row]));
   const systemNotifications = (systemEvents.data || []).map((row) => systemErrorNotification(row, systemStateByEvent.get(row.id)));
+  const generalManagerIds = [...new Set((generalManagerRoles.data || []).map((row) => row.user_id).filter(Boolean))];
+  const isGeneralManager = profile.user_type === 'general_manager' && generalManagerIds.length === 1 && generalManagerIds[0] === profile.id;
+  const readyRecipient = ['finance', 'administrator'].includes(profile.user_type) || isGeneralManager;
+  const shipAgentStateByKey = new Map((shipAgentStates.data || []).map((row) => [row.notification_key, row]));
+  const shipAgentNotifications = (shipAgentCases.data || [])
+    .filter((row) => (
+      (row.workflow_status === 'ready_for_invoice' && readyRecipient)
+      || (['needs_action', 'post_invoice_change'].includes(row.workflow_status) && row.assigned_buyer_user_id === profile.id)
+      || (row.workflow_status === 'post_invoice_change' && isGeneralManager)
+    ))
+    .map((row) => {
+      const key = `${row.id}:${row.revision}:${row.workflow_status}`;
+      return shipAgentNotification(row, shipAgentStateByKey.get(key));
+    });
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications]
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...shipAgentNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...shipAgentNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',
@@ -193,6 +240,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
   const improvementIds = ids.filter((value) => value.startsWith('fcos_improvements:')).map((value) => value.slice('fcos_improvements:'.length));
   let emailRouterIds = ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length));
   let systemErrorIds = ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length));
+  let shipAgentIds = ids.filter((value) => value.startsWith('ship_agent_charges:')).map((value) => value.slice('ship_agent_charges:'.length));
   const readAt = new Date().toISOString();
 
   const updateTable = async (table, selectedIds) => {
@@ -206,14 +254,16 @@ export async function workNotificationsRead(body = {}, accessContext) {
   };
 
   if (!ids.length) {
-    const [routerResult, systemResult] = await Promise.all([
+    const [routerResult, systemResult, currentNotifications] = await Promise.all([
       client.schema('emailrouter').from('alerts').select('id').in('state', ['open', 'acknowledged']),
       client.from('system_error_events').select('id').gte('last_seen_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+      workNotificationsList({ limit: 100, state: 'active' }, accessContext),
     ]);
     if (routerResult.error && !unavailableTable(routerResult.error)) throw routerResult.error;
     if (systemResult.error && !unavailableTable(systemResult.error)) throw systemResult.error;
     emailRouterIds = (routerResult.data || []).map((row) => row.id);
     systemErrorIds = (systemResult.data || []).map((row) => row.id);
+    shipAgentIds = (currentNotifications.notifications || []).filter((row) => row.source === 'ship_agent_charges').map((row) => row.id.slice('ship_agent_charges:'.length));
   }
   const markEmailRouterRead = async () => {
     if (!emailRouterIds.length) return;
@@ -237,7 +287,21 @@ export async function workNotificationsRead(body = {}, accessContext) {
     if (error && !unavailableTable(error)) throw error;
   };
 
-  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), updateTable('fcos_improvement_notifications', improvementIds), markEmailRouterRead(), markSystemErrorsRead()]);
+  const markShipAgentRead = async () => {
+    for (const notificationKey of shipAgentIds) {
+      const caseId = notificationKey.split(':')[0];
+      const { error } = await client.rpc('set_ship_agent_charge_notification_state', {
+        p_notification_key: notificationKey,
+        p_case_id: caseId,
+        p_user_id: profile.id,
+        p_state: 'read',
+        p_snoozed_until: null,
+      });
+      if (error && !unavailableTable(error)) throw error;
+    }
+  };
+
+  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), updateTable('fcos_improvement_notifications', improvementIds), markEmailRouterRead(), markSystemErrorsRead(), markShipAgentRead()]);
   return workNotificationsList({ limit: body.limit }, accessContext);
 }
 
@@ -273,10 +337,26 @@ export async function workNotificationsState(body = {}, accessContext) {
     ['fcos_improvements', ids.filter((value) => value.startsWith('fcos_improvements:')).map((value) => value.slice('fcos_improvements:'.length))],
     ['email_router', ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length))],
     ['system_error', ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length))],
+    ['ship_agent_charges', ids.filter((value) => value.startsWith('ship_agent_charges:')).map((value) => value.slice('ship_agent_charges:'.length))],
   ];
   let updated = 0;
   for (const [source, sourceIds] of groups) {
     if (!sourceIds.length) continue;
+    if (source === 'ship_agent_charges') {
+      for (const notificationKey of sourceIds) {
+        const caseId = notificationKey.split(':')[0];
+        const { data, error } = await client.rpc('set_ship_agent_charge_notification_state', {
+          p_notification_key: notificationKey,
+          p_case_id: caseId,
+          p_user_id: profile.id,
+          p_state: state,
+          p_snoozed_until: snoozedUntil,
+        });
+        if (error) throw error;
+        updated += Number(data || 0);
+      }
+      continue;
+    }
     if (source === 'email_router' || source === 'system_error') {
       const current = new Date().toISOString();
       const values = sourceIds.map((sourceId) => ({
