@@ -424,7 +424,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Term wording',
-      body: 'Terms Text contains the contractual wording. Confirmation and Nomination controls determine whether the PDF is attached, while their rich-text remarks supply document-specific wording.',
+      body: 'Terms Text contains the contractual wording and is edited through a sanitized rich-text surface with numbered-list support. Existing plain-text wording remains unchanged until a user deliberately saves the term. Confirmation and Nomination controls determine whether the PDF is attached, while their rich-text remarks supply document-specific wording.',
     },
     {
       title: 'Rule matching',

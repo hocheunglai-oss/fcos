@@ -35,6 +35,7 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /secondary: row\.Company_Code__c \|\| 'No CL Key'/);
   assert.match(service, /getSpecialTermForExport/);
   assert.match(service, /WHERE Id = '\$\{soql\(id\)\}' LIMIT 1/);
+  assert.match(service, /Terms Text exceeds the Salesforce field limit/);
 });
 
 test('Salesforce owns priority while FCOS protects mutations and deletion', () => {
@@ -73,6 +74,9 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Copy Confirmation special remark/);
   assert.match(page, /Copy Nomination special remark/);
   assert.match(page, /richTextToCopyText/);
+  assert.match(page, /TERMS_QUILL_MODULES/);
+  assert.match(page, /value=\{specialTermEditorValue\(termForm\.termsText\)\}/);
+  assert.match(page, /Use the numbered-list control for contractual clauses/);
   assert.doesNotMatch(page, /view: activeTab,[\s\S]*search: search\.trim\(\)/);
   assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);

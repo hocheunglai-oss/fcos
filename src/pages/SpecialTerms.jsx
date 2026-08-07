@@ -21,12 +21,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
-import { richTextToCopyText, richTextToPlain, specialTermFilenameKey } from '@/lib/specialTermsText';
+import { richTextToCopyText, richTextToPlain, specialTermEditorValue, specialTermFilenameKey } from '@/lib/specialTermsText';
 import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
 
 const EMPTY_TERM = { id: null, name: '', termsText: '', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
 const QUILL_MODULES = { toolbar: [[{ header: [false, 3, 4] }], ['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['link'], ['clean']] };
+const TERMS_QUILL_MODULES = { toolbar: [['bold', 'italic', 'underline'], [{ list: 'ordered' }], [{ indent: '-1' }, { indent: '+1' }], ['clean']] };
 const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 
 function operationId() {
@@ -273,7 +274,7 @@ export default function SpecialTerms() {
   const filteredTerms = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return workspace?.terms || [];
-    return (workspace?.terms || []).filter((term) => [term.name, term.termsText, richTextToPlain(term.confirmationRemark), richTextToPlain(term.nominationRemark)].some((value) => String(value || '').toLowerCase().includes(query)));
+    return (workspace?.terms || []).filter((term) => [term.name, richTextToPlain(term.termsText), richTextToPlain(term.confirmationRemark), richTextToPlain(term.nominationRemark)].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [search, workspace?.terms]);
 
   const filteredRules = useMemo(() => {
@@ -478,7 +479,7 @@ export default function SpecialTerms() {
                       {term.name}<ExternalLink className="h-3 w-3" />
                     </a>
                   </TableCell>
-                  <TableCell className="max-w-md"><p className="line-clamp-3 whitespace-pre-wrap text-sm">{term.termsText || 'Not set'}</p></TableCell>
+                  <TableCell className="max-w-md"><p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'Not set'}</p></TableCell>
                   <TableCell>
                     <Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge>
                     <div className="mt-1 flex max-w-56 items-center gap-1">
@@ -542,11 +543,22 @@ export default function SpecialTerms() {
 
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => !open && !busy && setTermForm(null)}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Rich-text remarks are used in confirmation and nomination documents.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text and document remarks support sanitized rich formatting.</DialogDescription></DialogHeader>
           {termForm && (
             <div className="space-y-5">
               <div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div>
-              <div className="space-y-1.5"><Label>Terms Text</Label><Textarea rows={6} value={termForm.termsText} onChange={(event) => setTermForm((current) => ({ ...current, termsText: event.target.value }))} /></div>
+              <div className="space-y-1.5">
+                <Label>Terms Text</Label>
+                <div className="[&_.ql-container]:min-h-64 [&_.ql-editor]:min-h-64 [&_.ql-editor_ol]:pl-7 [&_.ql-editor_li]:mb-2">
+                  <ReactQuill
+                    theme="snow"
+                    modules={TERMS_QUILL_MODULES}
+                    value={specialTermEditorValue(termForm.termsText)}
+                    onChange={(termsText) => setTermForm((current) => ({ ...current, termsText }))}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">Use the numbered-list control for contractual clauses. Existing wording is not changed until this form is saved.</p>
+              </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <section className="space-y-3 rounded-lg border border-border p-3">
                   <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label>

@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.142';
+export const APP_VERSION = '2.0.143';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.143',
+    date: '2026-08-07',
+    title: 'Rich-text Special Terms editing',
+    changes: [
+      'Replaced the Special Terms wording textarea with a sanitized rich-text editor designed around numbered contractual clauses.',
+      'Kept existing Salesforce plain-text wording unchanged until a user deliberately edits and saves the term.',
+      'Prepared Special Terms display and search to handle both existing plain text and reviewed rich-text wording while PDF downloads remain disabled.',
+    ],
+  },
   {
     version: '2.0.142',
     date: '2026-08-07',

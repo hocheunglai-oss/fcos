@@ -25,6 +25,15 @@ function text(value, max = 10000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+function termsText(value) {
+  const source = String(value ?? '').trim();
+  if (!source) return null;
+  if (source.length > 130768) throw specialTermsError('Terms Text exceeds the Salesforce field limit.', 400, 'SPECIAL_TERMS_TEXT_TOO_LONG');
+  const containsRichText = /<\/?(?:p|br|strong|b|em|i|u|s|ul|ol|li|h3|h4|blockquote|a|span)\b/i.test(source);
+  const normalized = containsRichText ? sanitizeRichText(source, 130768) : text(source, 130768);
+  return normalized || null;
+}
+
 function isSalesforceRecordId(value) {
   return SALESFORCE_ID.test(text(value, 18));
 }
@@ -295,11 +304,11 @@ function assertCurrent(record, expectedLastModifiedAt) {
 
 function termPayload(body) {
   const name = text(body.name, 80);
-  const termsText = text(body.termsText, 130768) || null;
+  const normalizedTermsText = termsText(body.termsText);
   if (name.length < 2) throw specialTermsError('Special Term name must contain at least two characters.');
   return {
     Name: name,
-    Terms_Text__c: termsText,
+    Terms_Text__c: normalizedTermsText,
     Add_to_Confirmation__c: body.addToConfirmation === true,
     Add_to_Nomination__c: body.addToNomination === true,
     Special_Remark_in_Confirmation__c: sanitizeRichText(body.confirmationRemark),
