@@ -178,13 +178,13 @@ test('routing groups expand external contacts in directory order', async () => {
   ]);
 });
 
-test('redirect draft keeps reviewed To and Cc visible, Bcc private, and replies with the original sender', () => {
+test('redirect draft keeps reviewed To and Cc visible, Bcc private, and restores original Reply All participants', () => {
   const raw = Buffer.from([
     'Return-Path: <source@example.net>',
     'Received: by relay',
     'From: Source Desk <source@example.net>',
     'Reply-To: Replies <reply@example.net>',
-    'To: router@example.net',
+    'To: router@example.net, Original Peer <peer@example.net>',
     'Cc: original-copy@example.net',
     'Subject: Status update',
     'Message-ID: <source@example.net>',
@@ -194,6 +194,7 @@ test('redirect draft keeps reviewed To and Cc visible, Bcc private, and replies 
   ].join('\r\n'));
   const result = buildEmailRouterRedirectDraft({
     raw,
+    mailboxAddress: 'router@example.net',
     recipients: [
       { address: 'first@example.net', kind: 'to', position: 1 },
       { address: 'second@example.net', kind: 'to', position: 2 },
@@ -202,18 +203,43 @@ test('redirect draft keeps reviewed To and Cc visible, Bcc private, and replies 
     ],
   });
   assert.equal(result.message.subject, '[Status update]');
-  assert.deepEqual(result.message.replyTo, [{ emailAddress: { address: 'reply@example.net' } }]);
+  assert.deepEqual(result.message.replyTo, [
+    { emailAddress: { address: 'reply@example.net' } },
+    { emailAddress: { address: 'peer@example.net' } },
+    { emailAddress: { address: 'original-copy@example.net' } },
+  ]);
   assert.deepEqual(result.message.toRecipients.map((recipient) => recipient.emailAddress.address), ['first@example.net', 'second@example.net']);
   assert.deepEqual(result.message.ccRecipients.map((recipient) => recipient.emailAddress.address), ['copy@example.net']);
   assert.deepEqual(result.message.bccRecipients.map((recipient) => recipient.emailAddress.address), ['hidden@example.net']);
-  assert.deepEqual(result.message.internetMessageHeaders, [{ name: 'x-emailrouter-redirect', value: 'graph-forward-v2' }]);
-  assert.doesNotMatch(JSON.stringify(result.message), /router@example\.net|original-copy@example\.net/);
+  assert.deepEqual(result.message.internetMessageHeaders, [{ name: 'x-emailrouter-redirect', value: 'graph-forward-v3' }]);
+  assert.doesNotMatch(JSON.stringify(result.message), /router@example\.net/);
+});
+
+test('redirect Reply All includes the original sender and Cc but excludes the connected mailbox', () => {
+  const result = buildEmailRouterRedirectDraft({
+    raw: Buffer.from([
+      'From: abc@company.com',
+      'To: bunker@cosulich.com.hk',
+      'Cc: Laureen <laureen@cosulich.com.hk>',
+      'Subject: Routing example',
+      '',
+      'Body',
+    ].join('\r\n')),
+    mailboxAddress: 'bunker@cosulich.com.hk',
+    recipients: [{ address: 'vincent@cosulich.com.hk', kind: 'to' }],
+  });
+  assert.deepEqual(result.message.toRecipients, [{ emailAddress: { address: 'vincent@cosulich.com.hk' } }]);
+  assert.deepEqual(result.message.replyTo, [
+    { emailAddress: { address: 'abc@company.com' } },
+    { emailAddress: { address: 'laureen@cosulich.com.hk' } },
+  ]);
 });
 
 test('redirect draft preserves reviewed recipient positions within each recipient type', () => {
   const raw = Buffer.from('From: Source <source@example.net>\r\nSubject: Ordered route\r\nContent-Type: text/plain\r\n\r\nBody');
   const result = buildEmailRouterRedirectDraft({
     raw,
+    mailboxAddress: 'router@example.net',
     recipients: [
       { address: 'second@example.net', kind: 'to', position: 2 },
       { address: 'first@example.net', kind: 'to', position: 1 },
@@ -224,7 +250,7 @@ test('redirect draft preserves reviewed recipient positions within each recipien
 
 test('redirect draft ignores original BCC and Resent headers without requiring Message-ID', () => {
   const raw = Buffer.from('From: source@example.net\r\nBcc: private@example.net\r\nResent-From: relay@example.net\r\nResent-To: old@example.net\r\nSubject: Safe redirect\r\n\r\nbody');
-  const result = buildEmailRouterRedirectDraft({ raw, recipients: [{ address: 'to@example.net', kind: 'to' }] });
+  const result = buildEmailRouterRedirectDraft({ raw, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] });
   assert.deepEqual(result.message.toRecipients, [{ emailAddress: { address: 'to@example.net' } }]);
   assert.deepEqual(result.message.bccRecipients, []);
   assert.doesNotMatch(JSON.stringify(result.message), /private@example\.net|relay@example\.net|old@example\.net/);
@@ -232,14 +258,15 @@ test('redirect draft ignores original BCC and Resent headers without requiring M
 
 test('redirect draft rejects protected and previously redirected messages with specific reasons', () => {
   const protectedMessage = Buffer.from('From: source@example.net\r\nContent-Type: multipart/signed\r\n\r\nbody');
-  assert.throws(() => buildEmailRouterRedirectDraft({ raw: protectedMessage, recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED' && /Protected/.test(error.message));
+  assert.throws(() => buildEmailRouterRedirectDraft({ raw: protectedMessage, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED' && /Protected/.test(error.message));
   const redirected = Buffer.from('From: source@example.net\r\nX-EmailRouter-Redirect: graph-mime-v1\r\n\r\nbody');
-  assert.throws(() => buildEmailRouterRedirectDraft({ raw: redirected, recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED' && error.status === 409);
+  assert.throws(() => buildEmailRouterRedirectDraft({ raw: redirected, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED' && error.status === 409);
 });
 
 test('redirect draft verification fails closed when Microsoft changes recipients or reply behavior', () => {
   const expected = buildEmailRouterRedirectDraft({
     raw: Buffer.from('From: source@example.net\r\nSubject: Verified route\r\n\r\nbody'),
+    mailboxAddress: 'router@example.net',
     recipients: [{ address: 'a@example.net', kind: 'to' }, { address: 'c@example.net', kind: 'cc' }],
   }).message;
   const verified = { ...expected, id: 'draft-1', isDraft: true };

@@ -13,7 +13,7 @@ const RECIPIENT_KINDS = new Set(['to', 'cc', 'bcc']);
 const MAX_ROUTING_RECIPIENTS = 100;
 const MAX_MIME_BYTES = 25 * 1024 * 1024;
 const REDIRECT_MARKER_HEADER = 'x-emailrouter-redirect';
-const REDIRECT_MARKER_VALUE = 'graph-forward-v2';
+const REDIRECT_MARKER_VALUE = 'graph-forward-v3';
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
 const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS = 28_000;
@@ -998,6 +998,20 @@ function parsedMailbox(value) {
   return { address, name };
 }
 
+const HEADER_EMAIL = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/gi;
+
+function parsedMailboxList(fields, name, label) {
+  const values = fields.filter((field) => field.name === name).map((field) => field.value);
+  if (!values.length) return [];
+  const source = values.join(', ');
+  const candidates = source.match(HEADER_EMAIL) || [];
+  const atSigns = source.match(/@/g) || [];
+  if (!candidates.length || candidates.length !== atSigns.length) {
+    throw routerError(`The original message has an unavailable or ambiguous ${label}.`, 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  }
+  return [...new Set(candidates.map((address) => safeAddress(address)))];
+}
+
 function normalizedRecipients(recipients) {
   const known = new Set();
   const output = [];
@@ -1017,7 +1031,7 @@ function normalizedRecipients(recipients) {
   return output;
 }
 
-export function inspectEmailRouterRedirectSource(raw) {
+export function inspectEmailRouterRedirectSource(raw, mailboxAddress) {
   const input = Buffer.from(raw);
   if (input.byteLength > MAX_MIME_BYTES) throw routerError('The original message is too large for safe redirect.', 400, 'EMAIL_ROUTER_REDIRECT_TOO_LARGE');
   const boundary = headerBoundary(input);
@@ -1030,20 +1044,31 @@ export function inspectEmailRouterRedirectSource(raw) {
   const sender = parsedMailbox(singleHeader(fields, 'from', 'sender header').value);
   const replyTo = fields.filter((field) => field.name === 'reply-to');
   if (replyTo.length > 1) throw routerError('The original message has ambiguous reply addresses.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
-  const reply = replyTo.length ? parsedMailbox(replyTo[0].value).address : sender.address;
+  const primaryReplyAddresses = replyTo.length
+    ? parsedMailboxList(fields, 'reply-to', 'reply addresses')
+    : [sender.address];
+  const originalToAddresses = parsedMailboxList(fields, 'to', 'To recipients');
+  const originalCcAddresses = parsedMailboxList(fields, 'cc', 'Cc recipients');
+  const connectedMailbox = safeAddress(mailboxAddress);
+  const replyAddresses = [...new Set([...primaryReplyAddresses, ...originalToAddresses, ...originalCcAddresses])]
+    .filter((address) => address !== connectedMailbox);
+  if (replyAddresses.length > MAX_ROUTING_RECIPIENTS) {
+    throw routerError('The original message has too many visible recipients for a safe Reply All route.', 400, 'EMAIL_ROUTER_REDIRECT_TOO_MANY_REPLY_RECIPIENTS');
+  }
+  if (!replyAddresses.length) throw routerError('The original message has no safe reply recipients.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const subjectFields = fields.filter((field) => field.name === 'subject');
   if (subjectFields.length > 1) throw routerError('The original message has ambiguous subject headers.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const subject = text(subjectFields[0]?.value, 900);
   if (/[\0-\x1f\x7f]/.test(subject)) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
-  return { replyAddress: reply, senderAddress: sender.address, subject };
+  return { replyAddresses, senderAddress: sender.address, originalToAddresses, originalCcAddresses, subject };
 }
 
 function graphRecipient(address) {
   return { emailAddress: { address: safeAddress(address) } };
 }
 
-export function buildEmailRouterRedirectDraft({ raw, recipients }) {
-  const source = inspectEmailRouterRedirectSource(raw);
+export function buildEmailRouterRedirectDraft({ raw, mailboxAddress, recipients }) {
+  const source = inspectEmailRouterRedirectSource(raw, mailboxAddress);
   const routes = normalizedRecipients(recipients);
   const recipientsOfKind = (kind) => routes.filter((route) => route.kind === kind).map((route) => graphRecipient(route.address));
   return {
@@ -1054,7 +1079,7 @@ export function buildEmailRouterRedirectDraft({ raw, recipients }) {
       toRecipients: recipientsOfKind('to'),
       ccRecipients: recipientsOfKind('cc'),
       bccRecipients: recipientsOfKind('bcc'),
-      replyTo: [graphRecipient(source.replyAddress)],
+      replyTo: source.replyAddresses.map(graphRecipient),
       internetMessageHeaders: [{ name: REDIRECT_MARKER_HEADER, value: REDIRECT_MARKER_VALUE }],
     },
   };
@@ -1503,7 +1528,7 @@ async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, 
       resolveEmailRouterActionRecipients(client, input, routeSnapshot),
     ]);
     const raw = new Uint8Array(await source.arrayBuffer());
-    const prepared = buildEmailRouterRedirectDraft({ raw, recipients });
+    const prepared = buildEmailRouterRedirectDraft({ raw, mailboxAddress: mailbox.emailAddress, recipients });
     const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/createForward`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

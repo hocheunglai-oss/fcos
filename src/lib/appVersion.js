@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.144';
+export const APP_VERSION = '2.0.145';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.145',
+    date: '2026-08-08',
+    title: 'Restore original recipients in Redirect Reply All',
+    changes: [
+      'Restored the original sender and visible original To and Cc participants when a redirected-message recipient uses Reply All.',
+      'Excluded the connected shared mailbox and all original Bcc recipients from the restored reply route.',
+      'Added Microsoft 365 draft verification and a regression case covering an external sender, shared mailbox, original Cc, and one redirect recipient.',
+    ],
+  },
   {
     version: '2.0.144',
     date: '2026-08-08',
