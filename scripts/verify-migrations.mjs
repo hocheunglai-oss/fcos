@@ -31,6 +31,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
 const releaseMigrationNames = new Set([
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
+  '20260807120000_email_router_forward_file_learning.sql',
 ]);
 const baseline = migrationSources.filter((migration) => !releaseMigrationNames.has(migration.name));
 const upgrade = migrationSources.filter((migration) => releaseMigrationNames.has(migration.name));
@@ -96,6 +97,49 @@ async function verifyRuntimeObjects(label) {
     5,
     `${label} external-closure columns`,
     [['external_closure_detected_at', 'external_closure_salesforce_status', 'external_closure_accepted_at', 'external_closure_accepted_by', 'external_closure_acceptance_reason']],
+  );
+  const emailRouterTables = [
+    'routing_folders',
+    'advisor_recommendations',
+    'advisor_learning_outcomes',
+    'advisor_learning_outcome_destinations',
+    'advisor_learning_jobs',
+    'advisor_feedback',
+  ];
+  await assertRows(
+    `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'emailrouter' and c.relname = any($1::text[]) and c.relrowsecurity`,
+    emailRouterTables.length,
+    `${label} Email Router RLS verification`,
+    [emailRouterTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) table_name where has_table_privilege('anon', 'emailrouter.' || table_name, 'select') or has_table_privilege('authenticated', 'emailrouter.' || table_name, 'select')`,
+    0,
+    `${label} Email Router browser-role grant verification`,
+    [emailRouterTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) table_name where has_table_privilege('service_role', 'emailrouter.' || table_name, 'select,insert,update,delete')`,
+    emailRouterTables.length,
+    `${label} Email Router service-role grant verification`,
+    [emailRouterTables],
+  );
+  await assertRows(
+    `select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = any($1::text[]) and not p.prosecdef`,
+    3,
+    `${label} Email Router security-invoker RPC verification`,
+    [['save_emailrouter_routing_folders', 'forget_emailrouter_learning_outcome', 'forget_emailrouter_learning_pattern']],
+  );
+  await assertRows(
+    `select count(*)::int from information_schema.columns where table_schema = 'emailrouter' and table_name = 'mail_actions' and column_name = any($1::text[])`,
+    11,
+    `${label} Email Router post-action columns`,
+    [[
+      'post_action_mode', 'post_action_folder_id', 'post_action_folder_provider_id_snapshot',
+      'post_action_folder_path_snapshot', 'post_action_state', 'post_action_attempt_count',
+      'post_action_failure_code', 'post_action_confirmed_at', 'learning_state',
+      'learning_recipients_complete', 'advisor_recommendation_id',
+    ]],
   );
 }
 

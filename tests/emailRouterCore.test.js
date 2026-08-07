@@ -69,6 +69,18 @@ test('manual recipients are normalized, ordered, and accepted without directory 
   assert.throws(() => normalizeEmailRouterManualRecipients({
     manualRecipients: [{ address: 'same@example.net', kind: 'to' }, { address: 'same@example.net', kind: 'cc' }],
   }), (error) => error.code === 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
+  assert.deepEqual(normalizeEmailRouterManualRecipients({
+    manualRecipients: [
+      { address: 'second@example.net', kind: 'to', position: 2 },
+      { address: 'first@example.net', kind: 'to', position: 1 },
+    ],
+  }).map((recipient) => recipient.position), [2, 1]);
+  assert.throws(() => normalizeEmailRouterManualRecipients({
+    manualRecipients: [
+      { address: 'first@example.net', kind: 'to', position: 1 },
+      { address: 'second@example.net', kind: 'to', position: 1 },
+    ],
+  }), (error) => error.code === 'EMAIL_ROUTER_RECIPIENT_POSITION_INVALID');
 });
 
 test('routing preset recipients have deterministic To, Cc, and Bcc order', () => {
@@ -192,6 +204,19 @@ test('redirect MIME keeps body bytes while removing unsafe transport headers and
   assert.doesNotMatch(headers, /^(?:Return-Path|Received):/im);
   assert.deepEqual(result.envelopeRecipients, ['to@example.net', 'hidden@example.net']);
   assert.deepEqual(result.raw.subarray(split + 4), body);
+});
+
+test('redirect MIME preserves reviewed recipient positions within each recipient type', () => {
+  const raw = Buffer.from('From: Source <source@example.net>\r\nSubject: Ordered route\r\nContent-Type: text/plain\r\n\r\nBody');
+  const result = buildEmailRouterRedirectMime({
+    raw,
+    mailboxAddress: 'router@example.net',
+    recipients: [
+      { address: 'second@example.net', kind: 'to', position: 2 },
+      { address: 'first@example.net', kind: 'to', position: 1 },
+    ],
+  }).raw.toString('utf8');
+  assert.ok(result.indexOf('<first@example.net>') < result.indexOf('<second@example.net>'));
 });
 
 test('redirect MIME strips original BCC and Resent headers without requiring Message-ID', () => {

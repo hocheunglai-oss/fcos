@@ -1,5 +1,7 @@
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, isAllowedDashboardAiModel } from './_dashboardAi.js';
 import { currentEmailRouterMailbox, emailRouterProfilesById, sortEmailRouterPresetDestinations } from './_emailRouterCore.js';
+import { listEmailRouterRoutingFolders, saveEmailRouterRoutingFolders } from './_emailRouterFolders.js';
+import { listEmailRouterLearnedRoutes } from './_emailRouterLearning.js';
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -44,7 +46,7 @@ function usageTotals(rows) {
 
 export async function emailRouterConfiguration(client) {
   const mailbox = await currentEmailRouterMailbox(client);
-  const [destinations, groups, presets, presetVersions, presetVersionDestinations, presetVersionConditions, presetOverrides, routingLeaves, settings, subscriptions, alerts, folderCountResults, actions, usage] = await Promise.all([
+  const [destinations, groups, presets, presetVersions, presetVersionDestinations, presetVersionConditions, presetOverrides, routingLeaves, settings, subscriptions, alerts, folderCountResults, actions, usage, routingFolders, learnedRoutes] = await Promise.all([
     table(client, 'destinations')
       .select('id,destination_kind,user_profile_id,display_name,email_address,nickname,redirect_enabled,active,sort_order,revision,updated_at')
       .eq('active', true)
@@ -66,6 +68,8 @@ export async function emailRouterConfiguration(client) {
     }))),
     table(client, 'mail_actions').select('state').order('created_at', { ascending: false }).limit(1000),
     table(client, 'ai_usage_events').select('model_id,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,cost_usd,created_at').order('created_at', { ascending: false }).limit(5000),
+    listEmailRouterRoutingFolders(client, mailbox.id, { includeUnapproved: true }),
+    listEmailRouterLearnedRoutes(client, mailbox.id),
   ]);
   const failed = [destinations, groups, presets, presetVersions, presetVersionDestinations, presetVersionConditions, presetOverrides, routingLeaves, settings, subscriptions, alerts, ...folderCountResults.map((entry) => entry.result), actions, usage].find((result) => result.error);
   if (failed?.error) throw configError(`Email Router settings could not be loaded: ${failed.error.message}`, 503, 'EMAIL_ROUTER_CONFIGURATION_UNAVAILABLE');
@@ -165,11 +169,14 @@ export async function emailRouterConfiguration(client) {
       revision: Number(row.revision),
       updatedAt: row.updated_at,
     })),
+    routingFolders,
+    learnedRoutes,
     settings: settings.data || [],
     subscriptions: subscriptions.data || [],
     alerts: alerts.data || [],
     advisor: {
       enabled: enabledSetting.enabled !== false,
+      learningEnabled: settingValue(settings.data, 'advisor.learning_enabled', { enabled: true }).enabled !== false,
       modelId: isAllowedDashboardAiModel(advisorSetting.modelId) ? advisorSetting.modelId : DEFAULT_DASHBOARD_AI_MODEL,
       models: DASHBOARD_AI_MODELS,
       usage: usageTotals(usage.data),
@@ -180,8 +187,47 @@ export async function emailRouterConfiguration(client) {
 
 export async function saveEmailRouterConfiguration(client, profile, operation = {}) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) throw configError('A configuration change is required.');
-  if (!['routing_directory_save', 'destination_save', 'group_save', 'preset_save', 'preset_version_save', 'preset_override_save', 'setting_save'].includes(operation.type)) {
+  if (!['routing_directory_save', 'routing_folders_save', 'learning_outcome_forget', 'learning_pattern_forget', 'destination_save', 'group_save', 'preset_save', 'preset_version_save', 'preset_override_save', 'setting_save'].includes(operation.type)) {
     throw configError('This Email Router configuration operation is no longer supported. Refresh Settings and try again.');
+  }
+  if (operation.type === 'routing_folders_save') {
+    return saveEmailRouterRoutingFolders(client, profile, operation.items);
+  }
+  if (operation.type === 'learning_outcome_forget') {
+    if (!/^[0-9a-f-]{36}$/i.test(String(operation.id || '')) || !Number.isInteger(Number(operation.expectedRevision))) {
+      throw configError('Refresh the learned routes before removing this pattern.');
+    }
+    const reason = String(operation.reason || '').trim();
+    if (reason.length < 3 || reason.length > 500) throw configError('Enter a reason between 3 and 500 characters.');
+    const { data, error } = await client.rpc('forget_emailrouter_learning_outcome', {
+      p_outcome_id: operation.id,
+      p_expected_revision: Number(operation.expectedRevision),
+      p_reason: reason,
+      p_actor: profile.id,
+    });
+    if (error) {
+      const stale = /revision conflict/i.test(error.message || '');
+      throw configError(stale ? 'This learned route changed after it was loaded. Refresh and try again.' : 'The learned route could not be removed.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_LEARNING_FORGET_FAILED');
+    }
+    return data;
+  }
+  if (operation.type === 'learning_pattern_forget') {
+    const items = Array.isArray(operation.items) ? operation.items : [];
+    if (!items.length || items.length > 250 || items.some((item) => !/^[0-9a-f-]{36}$/i.test(String(item?.id || '')) || !Number.isInteger(Number(item?.expectedRevision)))) {
+      throw configError('Refresh the learned routes before removing this pattern.');
+    }
+    const reason = String(operation.reason || '').trim();
+    if (reason.length < 3 || reason.length > 500) throw configError('Enter a reason between 3 and 500 characters.');
+    const { data, error } = await client.rpc('forget_emailrouter_learning_pattern', {
+      p_items: items,
+      p_reason: reason,
+      p_actor: profile.id,
+    });
+    if (error) {
+      const stale = /revision conflict/i.test(error.message || '');
+      throw configError(stale ? 'This learned route changed after it was loaded. Refresh and try again.' : 'The learned route could not be removed.', stale ? 409 : 400, stale ? 'EMAIL_ROUTER_REVISION_CONFLICT' : 'EMAIL_ROUTER_LEARNING_FORGET_FAILED');
+    }
+    return data;
   }
   if (operation.type === 'routing_directory_save') {
     const items = Array.isArray(operation.items) ? operation.items : [];
@@ -255,6 +301,9 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
   if (operation.type === 'setting_save' && operation.key === 'advisor.model') {
     const modelId = operation.value?.modelId;
     if (!isAllowedDashboardAiModel(modelId)) throw configError('Select a supported Email Router Advisor model.');
+  }
+  if (operation.type === 'setting_save' && operation.key === 'advisor.learning_enabled' && typeof operation.value?.enabled !== 'boolean') {
+    throw configError('Choose whether company-wide Email Router learning is enabled.');
   }
   const { data, error } = await client.rpc('save_emailrouter_configuration', {
     p_operation: operation,

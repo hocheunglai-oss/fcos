@@ -158,12 +158,14 @@ import {
   emailRouterOutboxHandler as nativeEmailRouterOutbox,
   emailRouterPresetsHandler as nativeEmailRouterPresets,
   emailRouterRetryHandler as nativeEmailRouterRetry,
+  emailRouterFilingRetryHandler as nativeEmailRouterFilingRetry,
   emailRouterSettingsHandler as nativeEmailRouterSettings,
   emailRouterSettingsSaveHandler as nativeEmailRouterSettingsSave,
   emailRouterSubscriptionHandler as nativeEmailRouterSubscription,
   emailRouterUndoHandler as nativeEmailRouterUndo,
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
+import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -1237,6 +1239,7 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterActionStatus: ['email_router'],
   emailRouterUndo: ['email_router'],
   emailRouterRetry: ['email_router'],
+  emailRouterFilingRetry: ['email_router'],
   emailRouterAttachmentUrl: ['email_router'],
   emailRouterAdvisor: ['email_router'],
   emailRouterSettings: ['email_router'],
@@ -16591,6 +16594,10 @@ async function emailRouterRetry(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterRetry(req, body, nativeEmailRouterDependencies(accessContext));
 }
 
+async function emailRouterFilingRetry(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterFilingRetry(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
 async function emailRouterAttachmentUrl(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterAttachmentUrl(req, body, nativeEmailRouterDependencies(accessContext));
 }
@@ -16625,6 +16632,7 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   const directorySync = await client.rpc('sync_emailrouter_fcos_destinations', { p_actor: null });
   const mailbox = await currentEmailRouterMailbox(client);
   const outbox = await processEmailRouterOutbox({ client, mailbox, limit: 25 });
+  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
   const synchronization = {};
   for (const folder of ['inbox', 'sentitems', 'archive']) {
     synchronization[folder] = await syncEmailRouterFolderFromStoredCursor({ client, mailbox, folder, maxPages: 10 });
@@ -16641,6 +16649,7 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
     ok: true,
     directory: directorySync.error ? { status: 'warning' } : { status: 'synchronized' },
     outbox,
+    learning,
     synchronization: Object.fromEntries(Object.entries(synchronization).map(([folder, result]) => [folder, { synced: result.synced, removed: result.removed, pages: result.pages, complete: !result.nextLink }])),
     subscriptions: subscriptions.map((item) => ({ folder: item.folder, state: item.state, expiresAt: item.expiresAt })),
   };
@@ -16704,6 +16713,7 @@ const handlers = {
   emailRouterActionStatus,
   emailRouterUndo,
   emailRouterRetry,
+  emailRouterFilingRetry,
   emailRouterAttachmentUrl,
   emailRouterAdvisor,
   emailRouterSettings,

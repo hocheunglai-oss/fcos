@@ -147,6 +147,11 @@ export function normaliseActionResult(data = {}, fallbackAction) {
     status,
     action,
     tracking: data?.tracking === true,
+    deliveryConfirmed: data?.deliveryConfirmed === true,
+    filingNeedsReview: data?.filingNeedsReview === true,
+    filingRetryAllowed: data?.filingRetryAllowed === true,
+    filingState: data?.filingState || null,
+    filingDestination: data?.filingDestination || null,
     message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed'
       ? action === 'archive'
         ? 'Microsoft 365 moved the message to Archive.'
@@ -283,6 +288,7 @@ export const emailRouter = {
   async actionStatus(payload, options) { return invoke('emailRouterActionStatus', payload, options); },
   async undo(payload, options) { return invoke('emailRouterUndo', payload, options); },
   async retry(payload, options) { return invoke('emailRouterRetry', payload, options); },
+  async retryFiling(payload, options) { return invoke('emailRouterFilingRetry', payload, options); },
   async attachmentUrl(payload, options) { return invoke('emailRouterAttachmentUrl', payload, options); },
   async advisor(payload, options) { return invoke('emailRouterAdvisor', payload, options); },
 };

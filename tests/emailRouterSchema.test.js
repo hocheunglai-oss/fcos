@@ -13,6 +13,7 @@ const routingIntegrityMigrationUrl = new URL('../supabase/migrations/20260803172
 const simplifiedPresetMigrationUrl = new URL('../supabase/migrations/20260803182723_simplify_emailrouter_routing_presets.sql', import.meta.url);
 const caseSensitiveLabelsMigrationUrl = new URL('../supabase/migrations/20260803185144_make_emailrouter_routing_labels_case_sensitive.sql', import.meta.url);
 const leavePresetMigrationUrl = new URL('../supabase/migrations/20260804022141_email_router_inline_images_leave_presets.sql', import.meta.url);
+const forwardFileMigrationUrl = new URL('../supabase/migrations/20260807120000_email_router_forward_file_learning.sql', import.meta.url);
 
 test('native Email Router schema is service-only and metadata-only', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -51,6 +52,26 @@ test('native Email Router migration preserves Graph registry ownership and durab
   assert.match(sql, /events is append-only/i);
   assert.match(sql, /application_kind = 'native'/i);
   assert.match(sql, /status = 'retired'/i);
+});
+
+test('Forward-and-File storage is service-only, content-free, and revision protected', async () => {
+  const [sql, core, settings, routePanel] = await Promise.all([
+    readFile(forwardFileMigrationUrl, 'utf8'),
+    readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterSettings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRedirectPanel.jsx', import.meta.url), 'utf8'),
+  ]);
+  for (const table of ['routing_folders', 'advisor_recommendations', 'advisor_learning_outcomes', 'advisor_learning_jobs', 'advisor_feedback']) {
+    assert.match(sql, new RegExp(`create table if not exists emailrouter\\.${table} \\(`, 'i'));
+    assert.match(sql, new RegExp(`revoke all on table emailrouter\\.%I from public, anon, authenticated`, 'i'));
+  }
+  assert.match(sql, /save_emailrouter_routing_folders/);
+  assert.match(sql, /expectedRevision/);
+  assert.match(sql, /post_action_state[\s\S]*'pending'[\s\S]*'confirmed'[\s\S]*'failed'[\s\S]*'uncertain'/);
+  assert.doesNotMatch(sql, /body_html|raw_mime|recipient_email|attachment_bytes/i);
+  assert.match(core, /sentDraftConfirmed[\s\S]*completeConfirmedSourceFiling/);
+  assert.match(routePanel, /Forward and Redirect|Send Forward|postActionMode/);
+  assert.match(settings, /Post-action folders|Company routing learning|Forget pattern/);
 });
 
 test('migration and configuration RPCs remain service-role only', async () => {
@@ -132,12 +153,12 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(configuration, /operation\.type === 'routing_directory_save'/);
   assert.match(configuration, /save_emailrouter_routing_change/);
   assert.match(recipientPicker, /export const RECIPIENT_KINDS = \['to', 'cc', 'bcc'\]/);
-  assert.match(dialog, /splitRecipientSelections/);
+  assert.doesNotMatch(dialog, /forward:/);
   assert.match(recipientPicker, /Loading routing directory/);
   assert.match(recipientPicker, /findIndex\([^\n]+\) \+ 1/);
   assert.match(redirectPanel, /Send Redirect/);
   assert.match(redirectPanel, /bccVisible, setBccVisible.*false/);
-  assert.match(redirectPanel, /Number\(advisor\?\.confidence\) <= PRESELECT_CONFIDENCE/);
+  assert.match(redirectPanel, /advisor\?\.preselectRecipients !== true \|\| Number\(advisor\?\.recipientConfidence\) <= PRESELECT_CONFIDENCE/);
   assert.doesNotMatch(messageSheet, /Redirect message.*onAction/s);
   assert.match(externalRestoreSql, /configuration\.destination_restore/);
   assert.match(externalRestoreSql, /where destination\.email_address = requested_email[\s\S]*for update/i);
@@ -149,12 +170,11 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(settings, /draggableId=\{key\}/);
   assert.match(workspace, /directoryLoading=\{directoryLoading\}/);
   assert.match(workspace, /<EmailRedirectPanel/);
-  assert.match(dialog, /splitRecipientSelections\(selections\)/);
   assert.match(recipientPicker, /Manual \$\{kind\.toUpperCase\(\)\} email/);
   assert.match(redirectPanel, /splitRecipientSelections/);
 });
 
-test('Email Router archive and Market Report moves are immediate while redirect work is scoped to one action', async () => {
+test('Email Router filing waits for Sent Items and retries only the source move', async () => {
   const [core, handlers, workspace, dialog, messageSheet] = await Promise.all([
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_emailRouterHandlers.js', import.meta.url), 'utf8'),
@@ -175,8 +195,10 @@ test('Email Router archive and Market Report moves are immediate while redirect 
   assert.match(workspace, /emailRouter\.actionStatus\(\{ actionId \}, \{ force: true, cache: false, invalidateCache: false \}\)/);
   assert.match(workspace, /ACTION_STATUS_POLL_TIMEOUT_MS/);
   assert.match(workspace, /will not resend automatically/);
-  assert.match(core, /action\.action_type === 'redirect'[\s\S]*archiveRedirectSourceOrAlert/);
-  assert.match(workspace, /payload\.action === 'redirect'[\s\S]*folder === 'inbox'[\s\S]*setMessages\(\(current\) => current\.filter/);
+  assert.match(core, /sentDraftConfirmed[\s\S]*completeConfirmedSourceFiling/);
+  assert.match(core, /retryEmailRouterSourceFiling/);
+  assert.match(core, /post_action_state: definiteFailure \? 'failed' : 'uncertain'/);
+  assert.doesNotMatch(workspace, /payload\.action === 'redirect'[\s\S]*setMessages\(\(current\) => current\.filter/);
   assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);
   assert.doesNotMatch(workspace, /emailRouter\.presets\(/);
   assert.match(workspace, /\}, \[selectedId\]\);/);
@@ -195,7 +217,7 @@ test('Email Router action status is page-level and not duplicated in the message
     readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/common/PageHeader.jsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(workspace, /status=\{<ResultNotice result=\{actionResult\} compact \/>\}/);
+  assert.match(workspace, /<ResultNotice result=\{actionResult\} compact \/>/);
   assert.doesNotMatch(page, /Mailbox<\/Button>|activeTab|MailSearch/);
   assert.match(workspace, /<Settings2 \/>[\s\S]*Routing Setup[\s\S]*<CalendarOff \/>[\s\S]*Routing Leave/);
   assert.match(workspace, /<EmailRouterSettings embedded \/>/);
@@ -321,8 +343,7 @@ test('routing presets are editable recipient templates identified by a unique di
   assert.match(redirectPanel, /setSelections\(next\)/);
   assert.match(redirectPanel, /onChange=\{\(next\) => \{ setPresetId\('none'\)/);
   assert.doesNotMatch(redirectPanel, /disabled=\{presetId !== 'none'/);
-  assert.match(actionDialog, /setSelections\(presetRecipientSelections\(preset\)\)/);
-  assert.match(actionDialog, /onChange=\{\(next\) => \{ setPresetId\('none'\)/);
+  assert.doesNotMatch(actionDialog, /presetRecipientSelections|EmailRecipientPicker/);
 });
 
 test('Email Router routing mutations preserve active group and preset integrity atomically', async () => {

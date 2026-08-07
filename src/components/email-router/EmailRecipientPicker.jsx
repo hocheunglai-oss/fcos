@@ -51,11 +51,17 @@ export function selectionKey(selection) {
 
 export function splitRecipientSelections(selections) {
   const values = Array.isArray(selections) ? selections : [];
+  const positions = { to: 0, cc: 0, bcc: 0 };
+  const ordered = values.map((selection) => {
+    const kind = RECIPIENT_KINDS.includes(selection.kind) ? selection.kind : 'to';
+    positions[kind] += 1;
+    return { ...selection, kind, position: positions[kind] };
+  });
   return {
-    destinationSelections: values.filter((selection) => selection.destinationId || selection.groupId),
-    manualRecipients: values
+    destinationSelections: ordered.filter((selection) => selection.destinationId || selection.groupId),
+    manualRecipients: ordered
       .filter((selection) => selection.address)
-      .map((selection) => ({ address: String(selection.address).trim().toLowerCase(), kind: selection.kind })),
+      .map((selection) => ({ address: String(selection.address).trim().toLowerCase(), kind: selection.kind, position: selection.position })),
   };
 }
 

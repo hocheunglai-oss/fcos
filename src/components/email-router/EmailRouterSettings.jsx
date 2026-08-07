@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import {
   AlertTriangle,
+  BrainCircuit,
   CalendarClock,
   Contact,
+  FolderCheck,
   GripVertical,
   Loader2,
   MailSearch,
@@ -96,6 +98,11 @@ export default function EmailRouterSettings({ embedded = false }) {
   const [editor, setEditor] = useState(null);
   const [routingDraft, setRoutingDraft] = useState({});
   const [directoryOrder, setDirectoryOrder] = useState([]);
+  const [folderDraft, setFolderDraft] = useState({});
+  const [folderOrder, setFolderOrder] = useState([]);
+  const [learningEnabled, setLearningEnabled] = useState(true);
+  const [forgetTarget, setForgetTarget] = useState(null);
+  const [forgetReason, setForgetReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,17 +125,25 @@ export default function EmailRouterSettings({ embedded = false }) {
       nickname: row.entityType === 'destination' ? row.item.nickname || '' : '',
       included: row.item.included === true,
     }])));
+    const folders = [...(configuration.routingFolders || [])].sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.path.localeCompare(right.path));
+    setFolderOrder(folders.map((folder) => folder.id));
+    setFolderDraft(Object.fromEntries(folders.map((folder) => [folder.id, folder.system || folder.approved === true])));
+    setLearningEnabled(configuration.advisor?.learningEnabled !== false);
   }, [configuration]);
 
   const destinations = useMemo(() => (configuration?.destinations || []).filter((item) => item.active), [configuration]);
   const groups = useMemo(() => (configuration?.groups || []).filter((item) => item.active), [configuration]);
   const presets = configuration?.presets || [];
+  const routingFolders = configuration?.routingFolders || [];
+  const learnedRoutes = configuration?.learnedRoutes || [];
   const routingUsers = configuration?.routingUsers || [];
   const entryByKey = useMemo(() => new Map([
     ...destinations.map((item) => [entryKey('destination', item.id), { entityType: 'destination', id: item.id, item }]),
     ...groups.map((item) => [entryKey('group', item.id), { entityType: 'group', id: item.id, item }]),
   ]), [destinations, groups]);
   const directoryRows = useMemo(() => directoryOrder.map((key) => entryByKey.get(key)).filter(Boolean), [directoryOrder, entryByKey]);
+  const folderById = useMemo(() => new Map(routingFolders.map((folder) => [folder.id, folder])), [routingFolders]);
+  const folderRows = useMemo(() => folderOrder.map((id) => folderById.get(id)).filter(Boolean), [folderById, folderOrder]);
   const includedDestinations = useMemo(() => destinations.filter((item) => routingDraft[entryKey('destination', item.id)]?.included === true), [destinations, routingDraft]);
   const includedGroups = useMemo(() => groups.filter((item) => routingDraft[entryKey('group', item.id)]?.included === true), [groups, routingDraft]);
   const presetDirectory = useMemo(() => [
@@ -144,6 +159,11 @@ export default function EmailRouterSettings({ embedded = false }) {
       return draft && (draft.included !== row.item.included || (row.entityType === 'destination' && draft.nickname !== row.item.nickname));
     });
   }, [baselineOrder, directoryOrder, directoryRows, routingDraft]);
+  const baselineFolderOrder = useMemo(() => [...routingFolders].sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.path.localeCompare(right.path)).map((folder) => folder.id), [routingFolders]);
+  const foldersChanged = useMemo(() => folderOrder.join('|') !== baselineFolderOrder.join('|')
+    || folderRows.some((folder) => Boolean(folderDraft[folder.id]) !== Boolean(folder.approved)), [baselineFolderOrder, folderDraft, folderOrder, folderRows]);
+  const learningSetting = useMemo(() => configuration?.settings?.find((item) => item.key === 'advisor.learning_enabled'), [configuration]);
+  const learningChanged = learningEnabled !== (configuration?.advisor?.learningEnabled !== false);
 
   const routingValidationError = useMemo(() => {
     const nicknames = destinations.map((item) => routingDraft[entryKey('destination', item.id)]?.nickname || '');
@@ -267,6 +287,72 @@ export default function EmailRouterSettings({ embedded = false }) {
     setBusy(false);
   };
 
+  const saveFolders = async () => {
+    if (!foldersChanged || !folderRows.length) return;
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('emailRouterSettingsSave', {
+      operation: {
+        type: 'routing_folders_save',
+        items: folderRows.map((folder) => ({
+          id: folder.id,
+          approved: folder.system || folderDraft[folder.id] === true,
+          expectedRevision: folder.revision,
+        })),
+      },
+    });
+    if (response.data?.error) setError(response.data.error);
+    else setConfiguration(response.data);
+    setBusy(false);
+  };
+
+  const refreshFolders = async () => {
+    if (foldersChanged && !window.confirm('Discard the unsaved folder changes?')) return;
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('emailRouterSettingsSave', { operation: { type: 'routing_folders_refresh' } });
+    if (response.data?.error) setError(response.data.error);
+    else setConfiguration(response.data);
+    setBusy(false);
+  };
+
+  const saveLearning = async () => {
+    if (!learningChanged) return;
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('emailRouterSettingsSave', {
+      operation: {
+        type: 'setting_save',
+        key: 'advisor.learning_enabled',
+        value: { enabled: learningEnabled },
+        expectedRevision: learningSetting?.revision,
+      },
+    });
+    if (response.data?.error) setError(response.data.error);
+    else setConfiguration(response.data);
+    setBusy(false);
+  };
+
+  const forgetLearnedRoute = async () => {
+    if (!forgetTarget || forgetReason.trim().length < 3) return;
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('emailRouterSettingsSave', {
+      operation: {
+        type: 'learning_pattern_forget',
+        items: forgetTarget.outcomes,
+        reason: forgetReason.trim(),
+      },
+    });
+    if (response.data?.error) setError(response.data.error);
+    else {
+      setConfiguration(response.data);
+      setForgetTarget(null);
+      setForgetReason('');
+    }
+    setBusy(false);
+  };
+
   const removeEntry = async (row) => {
     const usedByPreset = presets.some((preset) => preset.active && (preset.versions || []).some((version) => version.active && (version.destinations || []).some((selection) =>
       row.entityType === 'destination' ? selection.destinationId === row.id : selection.groupId === row.id)));
@@ -322,6 +408,16 @@ export default function EmailRouterSettings({ embedded = false }) {
   const onDirectoryDragEnd = ({ source, destination }) => {
     if (!destination || destination.index === source.index) return;
     setDirectoryOrder((current) => {
+      const next = [...current];
+      const [moved] = next.splice(source.index, 1);
+      next.splice(destination.index, 0, moved);
+      return next;
+    });
+  };
+
+  const onFolderDragEnd = ({ source, destination }) => {
+    if (!destination || destination.index === source.index) return;
+    setFolderOrder((current) => {
       const next = [...current];
       const [moved] = next.splice(source.index, 1);
       next.splice(destination.index, 0, moved);
@@ -392,6 +488,21 @@ export default function EmailRouterSettings({ embedded = false }) {
 
       <section>
         <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h3 className="flex items-center gap-2 text-sm font-semibold"><FolderCheck className="h-4 w-4" />Post-action folders</h3><p className="mt-1 text-xs text-muted-foreground">Approve writable Microsoft 365 folders that users may select after a Forward or Redirect. Archive is always available.</p></div>
+          <div className="flex gap-2"><Button size="sm" variant="outline" onClick={refreshFolders} disabled={busy}><RefreshCw />Refresh folders</Button>{foldersChanged && <Button size="sm" onClick={saveFolders} disabled={busy || !folderRows.length}>{busy ? <Loader2 className="animate-spin" /> : <Save />}Save folders</Button>}</div>
+        </div>
+        {folderRows.length ? <DragDropContext onDragEnd={onFolderDragEnd}><Droppable droppableId="email-router-folders">{(dropProvided) => <div ref={dropProvided.innerRef} {...dropProvided.droppableProps} className="mt-3 divide-y divide-border border-y border-border">
+          {folderRows.map((folder, index) => <Draggable key={folder.id} draggableId={`folder:${folder.id}`} index={index} isDragDisabled={busy || folder.system}>{(dragProvided, dragSnapshot) => <div ref={dragProvided.innerRef} {...dragProvided.draggableProps} className={`grid grid-cols-[2.5rem_5rem_minmax(0,1fr)] items-center gap-2 bg-background px-2 py-3 text-sm ${dragSnapshot.isDragging ? 'shadow-lg ring-1 ring-primary' : ''}`}>
+            <button type="button" {...dragProvided.dragHandleProps} disabled={folder.system} className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30" title={folder.system ? 'System folders keep their fixed position' : `Drag to reorder ${folder.path}`} aria-label={`Reorder ${folder.path}`}><GripVertical className="h-4 w-4" /></button>
+            <Checkbox checked={folder.system || folderDraft[folder.id] === true} disabled={folder.system || !folder.active} onCheckedChange={(checked) => setFolderDraft((current) => ({ ...current, [folder.id]: checked === true }))} aria-label={`Approve ${folder.path}`} />
+            <div className="min-w-0"><p className="truncate font-medium">{folder.path}</p><p className="mt-0.5 text-xs text-muted-foreground">{folder.system ? 'Permanent system choice' : folder.active ? folder.approved ? 'Approved destination' : 'Available for approval' : 'No longer found in Microsoft 365'}</p></div>
+          </div>}</Draggable>)}
+          {dropProvided.placeholder}
+        </div>}</Droppable></DragDropContext> : <p className="mt-3 border-y border-border py-4 text-sm text-muted-foreground">Refresh folders to discover writable Microsoft 365 destinations.</p>}
+      </section>
+
+      <section>
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h3 className="text-sm font-semibold">Routing directory</h3><p className="mt-1 text-xs text-muted-foreground">Drag people and groups into the order shown during Redirect and Forward. External contacts are marked separately from FCOS users.</p></div>
           <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={refreshFcosUsers} disabled={busy} title="Refresh active FCOS users in the routing directory"><RefreshCw />Refresh FCOS users</Button><Button size="sm" variant="outline" onClick={() => editDestination()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add an external contact'}><Contact />Add external contact</Button><Button size="sm" variant="outline" onClick={() => editGroup()} disabled={directoryChanged} title={directoryChanged ? 'Save the routing directory first' : 'Add a routing group'}><Users />Add group</Button>{directoryChanged && <Button size="sm" onClick={saveDirectory} disabled={busy || Boolean(routingValidationError)}>{busy ? <Loader2 className="animate-spin" /> : <Save />}Save directory</Button>}</div>
         </div>
@@ -432,6 +543,15 @@ export default function EmailRouterSettings({ embedded = false }) {
           {(item.overrides || []).length > 0 && <div className="mt-2 space-y-1 border-l-2 border-amber-300 pl-3">{item.overrides.map((override) => <button key={override.id} type="button" className="block w-full text-left text-xs text-amber-900 hover:underline" onClick={() => editPresetOverride(item, override)}>Override: {hongKongDateTimeInput(override.startsAt).replace('T', ' ')} to {hongKongDateTimeInput(override.endsAt).replace('T', ' ')} · {override.reason}</button>)}</div>}
         </div>)}</div>
       </section>
+      <section>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h3 className="flex items-center gap-2 text-sm font-semibold"><BrainCircuit className="h-4 w-4" />Company routing learning</h3><p className="mt-1 max-w-3xl text-xs text-muted-foreground">The Advisor learns only from confirmed human routes. A component is preselected only after three consistent outcomes and confidence above 60%.</p></div>
+          <div className="flex items-center gap-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={learningEnabled} onCheckedChange={(checked) => setLearningEnabled(checked === true)} />Learning enabled</label>{learningChanged && <Button size="sm" onClick={saveLearning} disabled={busy}>{busy ? <Loader2 className="animate-spin" /> : <Save />}Save learning</Button>}</div>
+        </div>
+        <div className="mt-3 divide-y divide-border border-y border-border">
+          {learnedRoutes.length ? learnedRoutes.map((route) => <div key={route.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{String(route.category || 'other').replaceAll('_', ' ')} · {route.action === 'forward' ? 'Forward' : 'Redirect'}</p><p className="mt-0.5 text-xs text-muted-foreground">{route.folderChoice === 'keep_current' ? 'Leave in current folder' : route.folderChoice === 'archive' ? 'Archive' : folderById.get(route.folderChoice)?.path || 'Approved folder'} · {route.count} confirmed {route.count === 1 ? 'outcome' : 'outcomes'}</p></div><Button variant="outline" size="sm" onClick={() => { setForgetTarget(route); setForgetReason(''); }} disabled={busy}><Trash2 />Forget pattern</Button></div>) : <p className="py-4 text-sm text-muted-foreground">No confirmed routing patterns have been learned yet.</p>}
+        </div>
+      </section>
       {(configuration.alerts?.length || configuration.actionCounts?.uncertain) ? <section className="border-y border-amber-200 bg-amber-50 px-3 py-3"><h3 className="text-sm font-semibold text-amber-950">Operational review</h3><p className="mt-1 text-xs text-amber-900">{configuration.actionCounts?.uncertain || 0} uncertain mail actions and {configuration.alerts?.length || 0} active mailbox alerts require review.</p></section> : null}
     </div> : null}
 
@@ -468,6 +588,14 @@ export default function EmailRouterSettings({ embedded = false }) {
           </>}
         </div>}
         <DialogFooter className="gap-2">{editor?.id && ['preset_version', 'preset_override'].includes(editor.type) && <Button variant="destructive" onClick={() => saveEditor(false)} disabled={busy}>{editor.type === 'preset_override' ? 'Cancel override' : 'Remove version'}</Button>}<Button variant="outline" onClick={() => setEditor(null)} disabled={busy}>Cancel</Button><Button onClick={() => saveEditor()} disabled={busy || editorInvalid}>{busy ? <Loader2 className="animate-spin" /> : <Save />}{busy ? 'Saving' : 'Save'}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={Boolean(forgetTarget)} onOpenChange={(open) => !open && !busy && setForgetTarget(null)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader><DialogTitle>Forget learned route</DialogTitle><DialogDescription>Remove every confirmed outcome in this aggregate pattern. Future messages will no longer use it as Advisor evidence.</DialogDescription></DialogHeader>
+        <div className="space-y-2"><Label htmlFor="email-router-forget-reason">Reason</Label><Textarea id="email-router-forget-reason" value={forgetReason} onChange={(event) => setForgetReason(event.target.value.slice(0, 500))} maxLength={500} placeholder="Explain why this routing pattern is incorrect" /></div>
+        <DialogFooter><Button variant="outline" onClick={() => setForgetTarget(null)} disabled={busy}>Cancel</Button><Button variant="destructive" onClick={forgetLearnedRoute} disabled={busy || forgetReason.trim().length < 3}>{busy ? <Loader2 className="animate-spin" /> : <Trash2 />}Forget pattern</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </section>;

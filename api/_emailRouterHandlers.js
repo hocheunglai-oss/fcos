@@ -14,6 +14,7 @@ import {
   requireEmailRouterConfigurationUser,
   requireEmailRouterUser,
   retryEmailRouterUncertainAction,
+  retryEmailRouterSourceFiling,
   saveEmailRouterRoutingLeave,
   startEmailRouterAction,
   streamEmailRouterAttachment,
@@ -24,6 +25,7 @@ import {
 } from './_emailRouterCore.js';
 import { emailRouterConfiguration, saveEmailRouterConfiguration } from './_emailRouterConfig.js';
 import { runEmailRouterAdvisor } from './_emailRouterAdvisor.js';
+import { discoverEmailRouterFolders, listEmailRouterRoutingFolders } from './_emailRouterFolders.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
 import { waitUntil } from '@vercel/functions';
 
@@ -106,11 +108,12 @@ export async function emailRouterDetailHandler(req, body = {}, dependencies = {}
 
 export async function emailRouterDirectoryHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies, { allowCachedMailbox: true });
-  const [directory, presets] = await Promise.all([
+  const [directory, presets, folders] = await Promise.all([
     listEmailRouterDirectory({ client: value.client, search: body.search }),
     listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }),
+    listEmailRouterRoutingFolders(value.client, value.mailbox.id),
   ]);
-  return { directory, presets };
+  return { directory, presets, folders };
 }
 
 export async function emailRouterPresetsHandler(req, body = {}, dependencies = {}) {
@@ -218,6 +221,16 @@ export async function emailRouterRetryHandler(req, body = {}, dependencies = {})
   return getEmailRouterActionStatus(value.client, result.id, { mailboxId: value.mailbox.id });
 }
 
+export async function emailRouterFilingRetryHandler(req, body = {}, dependencies = {}) {
+  const value = await context(req, dependencies);
+  return retryEmailRouterSourceFiling({
+    client: value.client,
+    mailbox: value.mailbox,
+    profile: value.profile,
+    actionId: body.actionId,
+  }, dependencies);
+}
+
 export async function emailRouterOutboxHandler(req, body = {}, dependencies = {}) {
   const value = await requireEmailRouterConfigurationUser(req, dependencies);
   const mailbox = await currentEmailRouterMailbox(value.client);
@@ -243,7 +256,13 @@ export async function emailRouterSettingsHandler(req, _body = {}, dependencies =
 
 export async function emailRouterSettingsSaveHandler(req, body = {}, dependencies = {}) {
   const value = await requireEmailRouterConfigurationUser(req, dependencies);
-  await saveEmailRouterConfiguration(value.client, value.profile, body.operation || body);
+  const operation = body.operation || body;
+  if (operation.type === 'routing_folders_refresh') {
+    const mailbox = await currentEmailRouterMailbox(value.client);
+    await discoverEmailRouterFolders({ client: value.client, mailbox, actorUserId: value.profile.id }, dependencies);
+  } else {
+    await saveEmailRouterConfiguration(value.client, value.profile, operation);
+  }
   return emailRouterConfiguration(value.client);
 }
 

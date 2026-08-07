@@ -39,11 +39,12 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
 function ResultNotice({ result, compact = false }) {
   if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />{compact ? <><span className="sm:hidden">Ready</span><span className="hidden sm:inline">Ready for mail actions</span></> : 'Ready for mail actions'}</div>;
   const tracking = result.tracking === true;
-  const pending = tracking || result.status === 'submitted';
+  const filingReview = result.filingNeedsReview === true;
+  const pending = !filingReview && (tracking || result.status === 'submitted');
   const accepted = result.status === 'draft_created';
-  const Icon = result.status === 'confirmed' ? CheckCircle2 : result.status === 'uncertain' && !tracking ? ShieldCheck : pending ? Loader2 : accepted ? CheckCircle2 : XCircle;
-  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' && !tracking ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
-  const label = result.status === 'confirmed' ? 'Confirmed' : tracking ? (accepted ? 'Sending securely' : 'Confirming') : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
+  const Icon = result.status === 'confirmed' ? CheckCircle2 : filingReview || result.status === 'uncertain' && !tracking ? ShieldCheck : pending ? Loader2 : accepted ? CheckCircle2 : XCircle;
+  const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : filingReview || result.status === 'uncertain' && !tracking ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
+  const label = result.status === 'confirmed' ? 'Confirmed' : filingReview ? 'Sent · filing needs review' : tracking ? (accepted ? 'Sending securely' : 'Confirming') : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
   return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{actionLabel(result.action)}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
 }
 
@@ -66,6 +67,8 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   const [actionDialog, setActionDialog] = useState(null);
   const [directory, setDirectory] = useState([]);
   const [presets, setPresets] = useState([]);
+  const [routingFolders, setRoutingFolders] = useState([]);
+  const [routeAction, setRouteAction] = useState('redirect');
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -84,7 +87,8 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
 
   useEffect(() => {
     const actionId = actionResult?.actionId;
-    const shouldTrack = Boolean(actionId) && (actionResult?.tracking === true || ['draft_created', 'submitted'].includes(actionResult?.status));
+    const shouldTrack = Boolean(actionId) && actionResult?.filingNeedsReview !== true
+      && (actionResult?.tracking === true || ['draft_created', 'submitted'].includes(actionResult?.status));
     if (!shouldTrack) return undefined;
     let active = true;
     let timer = null;
@@ -105,7 +109,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
         const response = await emailRouter.actionStatus({ actionId }, { force: true, cache: false, invalidateCache: false });
         if (!active) return;
         let next = { ...normaliseActionResult(response.data, action), messageId };
-        const pending = next.tracking === true || ['draft_created', 'submitted'].includes(next.status);
+        const pending = next.filingNeedsReview !== true && (next.tracking === true || ['draft_created', 'submitted'].includes(next.status));
         if (pending && Date.now() - startedAt >= ACTION_STATUS_POLL_TIMEOUT_MS) {
           next = {
             ...next,
@@ -119,7 +123,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
           loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true, silent: true });
           return;
         }
-        if (next.tracking === true || ['draft_created', 'submitted'].includes(next.status)) schedule();
+        if (next.filingNeedsReview !== true && (next.tracking === true || ['draft_created', 'submitted'].includes(next.status))) schedule();
       } catch (error) {
         if (!active) return;
         if (Date.now() - startedAt >= ACTION_STATUS_POLL_TIMEOUT_MS) {
@@ -158,20 +162,24 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
         if (directoryFailure) return;
         setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
         setPresets(directoryResponse.data?.presets || []);
+        setRoutingFolders(directoryResponse.data?.folders || []);
       };
       const directoryResponse = await emailRouter.directory({}, { ...navigationCacheOptions('collaboration', applyDirectory), force });
       const directoryFailure = messageError(directoryResponse.data);
       if (directoryFailure) {
         setDirectory([]);
         setPresets([]);
+        setRoutingFolders([]);
         setDirectoryError(directoryFailure);
       } else {
         setDirectory(directoryResponse.data?.directory || directoryResponse.data?.destinations || directoryResponse.data?.items || []);
         setPresets(directoryResponse.data?.presets || []);
+        setRoutingFolders(directoryResponse.data?.folders || []);
       }
     } catch (error) {
       setDirectory([]);
       setPresets([]);
+      setRoutingFolders([]);
       setDirectoryError(error?.message || 'The routing directory is unavailable.');
     } finally {
       setDirectoryLoading(false);
@@ -301,11 +309,6 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
       setActionResult(result);
       setDetail((current) => current?.id === sourceMessage.id ? { ...current, actionHistory: [{ id: result.actionId || operationId, action: result.action, status: result.status, detail: result.message, at: new Date().toISOString() }, ...(current.actionHistory || [])] } : current);
       setActionDialog(null);
-      if (payload.action === 'redirect' && folder === 'inbox' && ['draft_created', 'submitted', 'confirmed'].includes(result.status)) {
-        setMessages((current) => current.filter((message) => message.id !== sourceMessage.id));
-        setSelectedId((current) => current === sourceMessage.id ? null : current);
-        setDetail((current) => current?.id === sourceMessage.id ? null : current);
-      }
       if (refreshList && result.status === 'confirmed') loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true });
       return result;
     } catch (error) {
@@ -342,8 +345,26 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
       }
       return;
     }
+    if (action === 'forward') {
+      setRouteAction('forward');
+      loadRoutingOptions({ force: true });
+      return;
+    }
     setActionDialog({ action, undoResult });
-    if (action === 'forward') loadRoutingOptions({ force: true });
+  };
+
+  const retryFiling = async () => {
+    if (!actionResult?.actionId || submitting) return;
+    setSubmitting(true);
+    try {
+      const response = await emailRouter.retryFiling({ actionId: actionResult.actionId }, { force: true, cache: false });
+      setActionResult({ ...normaliseActionResult(response.data, actionResult.action), messageId: actionResult.messageId });
+      loadList({ cursor: currentCursor, history: cursorStack, foreground: false, force: true, silent: true });
+    } catch (error) {
+      setActionResult((current) => ({ ...current, status: 'failed', message: error?.message || 'The source message could not be filed.' }));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const fetchAttachment = useCallback(async (attachment) => {
@@ -412,6 +433,9 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     message={detail}
     directory={directory}
     presets={presets}
+    folders={routingFolders}
+    actionMode={routeAction}
+    onActionModeChange={setRouteAction}
     directoryLoading={directoryLoading}
     directoryError={directoryError}
     submitting={submitting}
@@ -427,7 +451,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   return <div>
     <PageHeader
       title="Email Router"
-      status={<ResultNotice result={actionResult} compact />}
+      status={<div className="flex items-center gap-2"><ResultNotice result={actionResult} compact />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
       actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 /><span className="sm:hidden">Setup</span><span className="hidden sm:inline">Routing Setup</span></Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff /><span className="sm:hidden">Leave</span><span className="hidden sm:inline">Routing Leave</span></Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
       compact
       className="mb-3"
@@ -448,13 +472,13 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
       </div>
     </section>
     {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
-    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />
+    <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} submitting={submitting} onSubmit={submitAction} />
     <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} canManageAll={isAdministrator} />
     {isAdministrator && <Dialog open={settingsOpen} onOpenChange={onSettingsOpenChange}>
       <DialogContent className="grid h-[min(92dvh,58rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 sm:max-w-[min(96vw,92rem)]">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">
           <DialogTitle>Routing Setup</DialogTitle>
-          <DialogDescription>Manage the routing directory, groups, presets, leave rules, and timed overrides.</DialogDescription>
+          <DialogDescription>Manage the routing directory, presets, leave rules, approved filing folders, and company routing learning.</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto p-4 lg:p-5"><EmailRouterSettings embedded /></div>
       </DialogContent>

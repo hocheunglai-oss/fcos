@@ -6,6 +6,14 @@ import {
   isAllowedDashboardAiModel,
 } from './_dashboardAi.js';
 import { fetchEmailRouterDetail, listEmailRouterDirectory } from './_emailRouterCore.js';
+import { listEmailRouterRoutingFolders } from './_emailRouterFolders.js';
+import {
+  EMAIL_ROUTER_CATEGORIES,
+  buildEmailRouterLearningFeatures,
+  evaluateEmailRouterLearningEvidence,
+  loadEmailRouterLearningEvidence,
+  recordEmailRouterAdvisorRecommendation,
+} from './_emailRouterLearning.js';
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -44,26 +52,33 @@ function cleanMessageText(message) {
 }
 
 async function advisorSettings(client) {
-  const { data, error } = await table(client, 'settings').select('key,value').in('key', ['advisor.enabled', 'advisor.model']);
+  const { data, error } = await table(client, 'settings').select('key,value').in('key', ['advisor.enabled', 'advisor.model', 'advisor.learning_enabled']);
   if (error) throw advisorError('Email Router Advisor settings are unavailable.', 503, 'EMAIL_ROUTER_ADVISOR_SETTINGS_UNAVAILABLE');
   const settings = new Map((data || []).map((row) => [row.key, row.value]));
   const requestedModel = settings.get('advisor.model')?.modelId;
   return {
     enabled: settings.get('advisor.enabled')?.enabled !== false,
+    learningEnabled: settings.get('advisor.learning_enabled')?.enabled !== false,
     modelId: isAllowedDashboardAiModel(requestedModel) ? requestedModel : DEFAULT_DASHBOARD_AI_MODEL,
   };
 }
 
-export function emailRouterAdvisorRecommendationSchema(candidateIds) {
+export function emailRouterAdvisorRecommendationSchema(candidateIds, folderIds = []) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['selections', 'confidence', 'rationale', 'question'],
+    required: [
+      'routingCategory', 'suggestedAction', 'suggestedFolder', 'selections',
+      'actionConfidence', 'recipientConfidence', 'folderConfidence', 'rationale', 'question',
+    ],
     properties: {
+      routingCategory: { type: 'string', enum: EMAIL_ROUTER_CATEGORIES },
+      suggestedAction: { type: 'string', enum: ['redirect', 'forward'] },
+      suggestedFolder: { type: 'string', enum: ['keep_current', 'archive', ...folderIds] },
       selections: {
         type: 'array',
         minItems: 0,
-        maxItems: 3,
+        maxItems: 10,
         items: {
           type: 'object',
           additionalProperties: false,
@@ -74,35 +89,34 @@ export function emailRouterAdvisorRecommendationSchema(candidateIds) {
           },
         },
       },
-      confidence: { type: 'number', minimum: 0, maximum: 1 },
+      actionConfidence: { type: 'number', minimum: 0, maximum: 1 },
+      recipientConfidence: { type: 'number', minimum: 0, maximum: 1 },
+      folderConfidence: { type: 'number', minimum: 0, maximum: 1 },
       rationale: { type: 'string', maxLength: 500 },
       question: { anyOf: [{ type: 'string', maxLength: 300 }, { type: 'null' }] },
     },
   };
 }
 
-export function normaliseEmailRouterAdvisorRecommendation(parsed, candidates) {
-  const byId = new Map(candidates.map((item) => [item.id, item]));
-  const confidence = Math.min(1, Math.max(0, Number(parsed?.confidence) || 0));
-  const seen = new Set();
-  const selections = [];
-  if (confidence > 0.6) {
-    for (const input of Array.isArray(parsed?.selections) ? parsed.selections : []) {
-      const candidate = byId.get(input?.candidateId);
-      const recipientKind = String(input?.recipientKind || '').toLowerCase();
-      if (!candidate || !['to', 'cc', 'bcc'].includes(recipientKind) || seen.has(candidate.id)) continue;
-      seen.add(candidate.id);
-      selections.push({ ...candidate, recipientKind });
-      if (selections.length === 3) break;
-    }
-  }
-  return {
-    selections,
-    destinations: selections.map(({ recipientKind: _recipientKind, ...candidate }) => candidate),
-    confidence,
-    rationale: String(parsed?.rationale || '').trim().slice(0, 500),
-    question: parsed?.question ? String(parsed.question).trim().slice(0, 300) : null,
-  };
+export function normaliseEmailRouterAdvisorRecommendation(parsed, candidates, folders = [], evidence = { outcomes: [] }) {
+  const legacyConfidence = Number(parsed?.confidence);
+  const normalized = evaluateEmailRouterLearningEvidence({
+    parsed: {
+      routingCategory: parsed?.routingCategory || 'other',
+      suggestedAction: parsed?.suggestedAction || 'redirect',
+      suggestedFolder: parsed?.suggestedFolder || 'archive',
+      selections: parsed?.selections,
+      actionConfidence: parsed?.actionConfidence ?? legacyConfidence,
+      recipientConfidence: parsed?.recipientConfidence ?? legacyConfidence,
+      folderConfidence: parsed?.folderConfidence ?? legacyConfidence,
+      rationale: parsed?.rationale,
+      question: parsed?.question,
+    },
+    evidence,
+    candidates,
+    folders,
+  });
+  return { ...normalized, confidence: normalized.recipientConfidence };
 }
 
 function providerFailure(response, payload) {
@@ -161,9 +175,10 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   if (!apiKey) throw advisorError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
   const settings = await advisorSettings(client);
   if (!settings.enabled) throw advisorError('Email Router Advisor is disabled in Settings.', 503, 'EMAIL_ROUTER_ADVISOR_DISABLED');
-  const [message, directory] = await Promise.all([
+  const [message, directory, folders] = await Promise.all([
     fetchEmailRouterDetail({ client, mailbox, messageId }, dependencies),
     listEmailRouterDirectory({ client }),
+    listEmailRouterRoutingFolders(client, mailbox.id),
   ]);
   const candidates = directory.slice(0, 100).map((item) => ({
     id: item.id,
@@ -172,6 +187,11 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
     memberCount: Number(item.memberCount || 0),
   }));
   if (!candidates.length) throw advisorError('No active Email Router destinations are available.', 409, 'EMAIL_ROUTER_ADVISOR_DIRECTORY_EMPTY');
+  const features = buildEmailRouterLearningFeatures(message, dependencies.env || process.env);
+  const evidence = settings.learningEnabled
+    ? await loadEmailRouterLearningEvidence(client, mailbox.id, features)
+    : { patterns: [], outcomes: [] };
+  const folderChoices = folders.filter((folder) => !folder.system).map((folder) => ({ id: folder.id, path: folder.path }));
   const startedAt = Date.now();
   let response;
   try {
@@ -187,11 +207,17 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
         input: [
           {
             role: 'system',
-            content: [{ type: 'input_text', text: 'You are FCOS Email Router Advisor. Recommend at most three approved routing candidates using only supplied candidate IDs and assign each to To, Cc, or Bcc. Preserve the intended order within each recipient role. Use Bcc only when the message clearly requires hidden distribution. You are advisory only and cannot send, redirect, reply, forward, move, archive, or delete email. Do not quote or closely repeat the message. If confidence is 0.60 or lower, return no selections and one concise optional clarification question.' }],
+            content: [{ type: 'input_text', text: 'You are FCOS Email Router Advisor. Recommend Forward or Redirect, one reviewed post-action folder, and up to ten approved routing candidates using only supplied IDs. Assign recipients to To, Cc, or Bcc and preserve order within each role. Use Bcc only when hidden distribution is clearly required. Historical patterns contain only redacted routing outcomes; prefer a repeated high-similarity company pattern but flag ambiguity. You are advisory only and cannot send or move email. Do not quote or repeat the message. Confidence must reflect uncertainty independently for action, recipients, and folder.' }],
           },
           {
             role: 'user',
-            content: [{ type: 'input_text', text: JSON.stringify({ subject: String(message?.subject || '').slice(0, 500), messageText: cleanMessageText(message), candidates }) }],
+            content: [{ type: 'input_text', text: JSON.stringify({
+              subject: String(message?.subject || '').slice(0, 500),
+              messageText: cleanMessageText(message),
+              candidates,
+              folders: [{ id: 'keep_current', path: 'Leave in current folder' }, { id: 'archive', path: 'Archive' }, ...folderChoices],
+              learnedPatterns: evidence.patterns,
+            }) }],
           },
         ],
         text: {
@@ -199,7 +225,7 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
             type: 'json_schema',
             name: 'fcos_email_router_advisor',
             strict: true,
-            schema: emailRouterAdvisorRecommendationSchema(candidates.map((item) => item.id)),
+            schema: emailRouterAdvisorRecommendationSchema(candidates.map((item) => item.id), folderChoices.map((item) => item.id)),
           },
         },
       }),
@@ -219,8 +245,15 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   const usage = await recordUsage(client, profile, mailbox, messageId, payload, settings.modelId, Date.now() - startedAt, 'success');
   let parsed;
   try { parsed = JSON.parse(outputText(payload)); } catch { throw advisorError('Email Router Advisor returned an invalid recommendation.', 502, 'EMAIL_ROUTER_ADVISOR_RESPONSE_INVALID'); }
+  const recommendation = normaliseEmailRouterAdvisorRecommendation(parsed, candidates, folders, evidence);
+  const recommendationId = await recordEmailRouterAdvisorRecommendation(client, {
+    mailboxId: mailbox.id,
+    messageId,
+    actorUserId: profile.id,
+    recommendation,
+  });
   return {
-    recommendation: normaliseEmailRouterAdvisorRecommendation(parsed, candidates),
+    recommendation: { ...recommendation, recommendationId },
     modelId: settings.modelId,
     usage: {
       inputTokens: usage.inputTokens,

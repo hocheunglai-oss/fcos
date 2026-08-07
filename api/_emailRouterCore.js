@@ -225,13 +225,16 @@ export async function emailRouterGraphFetch(pathOrUrl, options = {}, dependencie
   return response;
 }
 
-function mailboxPath(mailbox, path) {
+export function emailRouterMailboxPath(mailbox, path) {
   return `/users/${encodeURIComponent(mailbox.emailAddress)}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function graphJson(response) {
+export function emailRouterGraphJson(response) {
   return response.status === 202 ? null : response.json().catch(() => null);
 }
+
+const mailboxPath = emailRouterMailboxPath;
+const graphJson = emailRouterGraphJson;
 
 export function normalizeEmailRouterContentId(value) {
   let normalized = String(value || '')
@@ -985,8 +988,13 @@ function normalizedRecipients(recipients) {
   const known = new Set();
   const output = [];
   for (const kind of ['to', 'cc', 'bcc']) {
-    for (const item of Array.isArray(recipients) ? recipients : []) {
-      if (item?.kind !== kind) continue;
+    const ordered = (Array.isArray(recipients) ? recipients : [])
+      .map((item, index) => ({ ...item, inputOrder: index }))
+      .filter((item) => item?.kind === kind)
+      .sort((left, right) => Number(left.position || Number.MAX_SAFE_INTEGER) - Number(right.position || Number.MAX_SAFE_INTEGER)
+        || Number(left.expansionPosition || 0) - Number(right.expansionPosition || 0)
+        || left.inputOrder - right.inputOrder);
+    for (const item of ordered) {
       const address = safeAddress(item.address);
       if (!known.has(address)) { known.add(address); output.push({ address, kind }); }
     }
@@ -1034,7 +1042,7 @@ export function buildEmailRouterRedirectMime({ raw, mailboxAddress, recipients }
 }
 
 async function createAction(client, values) {
-  const fields = 'id,state,action_type,message_id,provider_operation_id,request_fingerprint,idempotency_key,uncertain_at';
+  const fields = 'id,state,action_type,message_id,provider_operation_id,request_fingerprint,idempotency_key,uncertain_at,post_action_mode,post_action_folder_path_snapshot,post_action_state';
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions).insert(values).select(fields).single();
   if (!error) return { ...data, duplicate: false };
   if (error.code !== '23505') storageUnavailable(error);
@@ -1141,6 +1149,7 @@ export function normalizeEmailRouterDestinationSelections(input) {
   }
   const seen = new Set();
   const positions = { to: 0, cc: 0, bcc: 0 };
+  const usedPositions = { to: new Set(), cc: new Set(), bcc: new Set() };
   return supplied.map((selection, index) => {
     const destinationId = selection?.destinationId || (!selection?.groupId ? selection?.id : null);
     const groupId = selection?.groupId || null;
@@ -1152,8 +1161,12 @@ export function normalizeEmailRouterDestinationSelections(input) {
     const selectionKey = normalizedDestinationId ? `destination:${normalizedDestinationId}` : `group:${normalizedGroupId}`;
     if (seen.has(selectionKey)) throw routerError('A routing entry can appear only once across To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
     seen.add(selectionKey);
-    positions[kind] += 1;
-    return { destinationId: normalizedDestinationId, groupId: normalizedGroupId, kind, position: positions[kind], selectionIndex: index };
+    const requestedPosition = Number(selection?.position);
+    const position = Number.isInteger(requestedPosition) && requestedPosition > 0 ? requestedPosition : positions[kind] + 1;
+    if (usedPositions[kind].has(position)) throw routerError('Routing positions must be unique within To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_POSITION_INVALID');
+    usedPositions[kind].add(position);
+    positions[kind] = Math.max(positions[kind], position);
+    return { destinationId: normalizedDestinationId, groupId: normalizedGroupId, kind, position, selectionIndex: index };
   });
 }
 
@@ -1166,14 +1179,19 @@ export function normalizeEmailRouterManualRecipients(input) {
   if (supplied.length > MAX_ROUTING_RECIPIENTS) throw routerError('Too many manual recipients were entered.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
   const seen = new Set();
   const positions = { to: 0, cc: 0, bcc: 0 };
+  const usedPositions = { to: new Set(), cc: new Set(), bcc: new Set() };
   return supplied.map((recipient) => {
     const address = safeAddress(recipient?.address || recipient?.email);
     const kind = text(recipient?.kind || recipient?.recipientKind, 10).toLowerCase();
     if (!RECIPIENT_KINDS.has(kind)) throw routerError('A manual recipient type is invalid.', 400, 'EMAIL_ROUTER_RECIPIENT_KIND_INVALID');
     if (seen.has(address)) throw routerError('A manual email address can appear only once across To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_DUPLICATE');
     seen.add(address);
-    positions[kind] += 1;
-    return { address, kind, position: positions[kind] };
+    const requestedPosition = Number(recipient?.position);
+    const position = Number.isInteger(requestedPosition) && requestedPosition > 0 ? requestedPosition : positions[kind] + 1;
+    if (usedPositions[kind].has(position)) throw routerError('Manual recipient positions must be unique within To, Cc, and Bcc.', 400, 'EMAIL_ROUTER_RECIPIENT_POSITION_INVALID');
+    usedPositions[kind].add(position);
+    positions[kind] = Math.max(positions[kind], position);
+    return { address, kind, position };
   });
 }
 
@@ -1266,35 +1284,70 @@ async function expandRoutingSelections(client, selections) {
   for (const values of byGroup.values()) values.sort((left, right) => memberOrder.get(left) - memberOrder.get(right));
   const expanded = selections.flatMap((selection) => selection.destinationId
     ? [selection]
-    : (byGroup.get(selection.groupId) || []).map((destinationId) => ({ ...selection, destinationId, groupId: null })));
+    : (byGroup.get(selection.groupId) || []).map((destinationId, expansionPosition) => ({ ...selection, destinationId, groupId: null, expansionPosition })));
   if (expanded.length > MAX_ROUTING_RECIPIENTS) throw routerError('The selected destinations expand to too many recipients.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
   if (groupIds.some((groupId) => !(byGroup.get(groupId) || []).length)) throw routerError('A selected routing group has no available recipients.', 409, 'EMAIL_ROUTER_GROUP_EMPTY');
   return expanded;
 }
 
+async function approvedManualDestinationSelections(client, input) {
+  const manualRecipients = normalizeEmailRouterManualRecipients(input);
+  if (!manualRecipients.length) return { rows: [], complete: true };
+  const { data: destinations, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.destinations)
+    .select('id,destination_kind,user_profile_id,email_address')
+    .eq('active', true)
+    .eq('redirect_enabled', true);
+  if (error) storageUnavailable(error);
+  const profiles = await emailRouterProfilesById(client, (destinations || []).map((destination) => destination.user_profile_id));
+  const byAddress = new Map();
+  for (const destination of destinations || []) {
+    const profile = profiles.get(destination.user_profile_id);
+    const address = String(destination.destination_kind === 'fcos_profile'
+      ? profile?.active ? profile.email : ''
+      : destination.email_address || '').trim().toLowerCase();
+    if (!address) continue;
+    const ids = byAddress.get(address) || [];
+    ids.push(destination.id);
+    byAddress.set(address, ids);
+  }
+  const rows = [];
+  for (const recipient of manualRecipients) {
+    const matches = byAddress.get(recipient.address) || [];
+    if (matches.length !== 1) return { rows: [], complete: false };
+    rows.push({
+      destination_id: matches[0],
+      group_id: null,
+      recipient_kind: recipient.kind,
+      position: recipient.position,
+    });
+  }
+  return { rows, complete: true };
+}
+
 async function persistActionDestinations(client, actionId, input, routeSnapshot = null) {
-  const rows = routeSnapshot
-    ? {
-        data: routeSnapshot.selections.map((selection) => ({
-          destination_id: selection.destinationId || null,
-          group_id: selection.groupId || null,
-          recipient_kind: selection.kind,
-          position: selection.position,
-        })),
-        error: null,
-      }
-    : {
-        data: normalizeEmailRouterDestinationSelections(input).map((selection, index) => ({
-          destination_id: selection.destinationId || null,
-          group_id: selection.groupId || null,
-          recipient_kind: selection.kind,
-          position: selection.position || index + 1,
-        })),
-        error: null,
-      };
-  if (rows.error) storageUnavailable(rows.error);
-  if (!(rows.data || []).length) return;
-  const { error } = await routerTable(client, 'mail_action_destinations').insert((rows.data || []).map((row) => ({
+  const baseRows = (routeSnapshot?.selections || normalizeEmailRouterDestinationSelections(input)).map((selection) => ({
+    destination_id: selection.destinationId || null,
+    group_id: selection.groupId || null,
+    recipient_kind: selection.kind,
+    position: selection.position,
+  }));
+  const manual = routeSnapshot ? { rows: [], complete: true } : await approvedManualDestinationSelections(client, input);
+  const duplicateManualDestination = manual.rows.some((manualRow) => baseRows.some((baseRow) => baseRow.destination_id === manualRow.destination_id));
+  const recipientsComplete = manual.complete && !duplicateManualDestination;
+  const usedPositions = new Map();
+  const kindOrder = new Map([['to', 0], ['cc', 1], ['bcc', 2]]);
+  const rows = [...baseRows, ...(recipientsComplete ? manual.rows : [])]
+    .sort((left, right) => kindOrder.get(left.recipient_kind) - kindOrder.get(right.recipient_kind) || left.position - right.position)
+    .map((row) => {
+      const used = usedPositions.get(row.recipient_kind) || new Set();
+      let position = row.position;
+      while (used.has(position)) position += 1;
+      used.add(position);
+      usedPositions.set(row.recipient_kind, used);
+      return { ...row, position };
+    });
+  if (!rows.length) return { recipientsComplete };
+  const { error } = await routerTable(client, 'mail_action_destinations').insert(rows.map((row) => ({
     mail_action_id: actionId,
     destination_id: row.destination_id || null,
     group_id: row.group_id || null,
@@ -1302,6 +1355,7 @@ async function persistActionDestinations(client, actionId, input, routeSnapshot 
     position: row.position,
   })));
   if (error) storageUnavailable(error);
+  return { recipientsComplete };
 }
 
 export async function resolveEmailRouterActionRecipients(client, input, routeSnapshot = null) {
@@ -1311,7 +1365,7 @@ export async function resolveEmailRouterActionRecipients(client, input, routeSna
   const addresses = await destinationAddresses(client, destinationIds);
   const addressByDestination = new Map(destinationIds.map((destinationId, index) => [destinationId, addresses[index]]));
   const recipients = [
-    ...expanded.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind })),
+    ...expanded.map((selection) => ({ address: addressByDestination.get(selection.destinationId), kind: selection.kind, position: selection.position, expansionPosition: selection.expansionPosition })),
     ...normalizeEmailRouterManualRecipients(input),
   ];
   if (recipients.length > MAX_ROUTING_RECIPIENTS) throw routerError('The selected destinations expand to too many recipients.', 400, 'EMAIL_ROUTER_RECIPIENT_LIMIT');
@@ -1328,6 +1382,11 @@ function requestFingerprint({ mailboxId, messageId, actionType, input, routeSnap
     bodyHash: createHash('sha256').update(String(input.comment || input.body || ''), 'utf8').digest('hex'),
     destinationFolderId: input.destinationFolderId || null,
     destinationFolderKey: input.destinationFolderKey || null,
+    ...(['redirect', 'forward'].includes(actionType) ? {
+      postActionMode: input.postActionMode || null,
+      postActionFolderId: input.postActionFolderId || null,
+      postActionFolderKey: input.postActionFolderKey || null,
+    } : {}),
     destinationSelections,
     manualRecipientHashes,
     mailboxId,
@@ -1452,6 +1511,9 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   if (['redirect', 'forward'].includes(actionType) && !hasRecipientInput(input)) {
     throw routerError('At least one To, Cc, or Bcc recipient is required.', 400, 'EMAIL_ROUTER_RECIPIENT_REQUIRED');
   }
+  const postAction = ['redirect', 'forward'].includes(actionType)
+    ? await import('./_emailRouterFolders.js').then(({ resolveEmailRouterPostAction }) => resolveEmailRouterPostAction(client, mailbox, actionType, input))
+    : { mode: 'keep_current', state: 'not_required', folderId: null, providerFolderId: null, folderPath: null };
   let resolvedMoveDestinationId = null;
   if (actionType === 'move') {
     if (input.destinationFolderKey === 'market_report' && !input.destinationFolderId) {
@@ -1464,6 +1526,20 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     ? await resolveEmailRouterPresetSnapshot(client, profile.id, input, dependencies.env || process.env)
     : null;
   if (routeSnapshot) routeSnapshot.expandedSelections = await expandRoutingSelections(client, routeSnapshot.selections);
+  let advisorRecommendation = null;
+  if (input.advisorRecommendationId) {
+    const recommendationId = safeId(input.advisorRecommendationId, 'Advisor recommendation identifier');
+    const { data, error } = await routerTable(client, 'advisor_recommendations')
+      .select('id,message_id,actor_user_id,suggested_action,suggested_post_action_mode,suggested_folder_key,suggested_folder_id,selection_snapshot,expires_at')
+      .eq('id', recommendationId)
+      .eq('message_id', indexed.id)
+      .eq('actor_user_id', profile.id)
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle();
+    if (error) storageUnavailable(error);
+    if (!data) throw routerError('The Advisor recommendation has expired. Review the routing again.', 409, 'EMAIL_ROUTER_ADVISOR_RECOMMENDATION_STALE');
+    advisorRecommendation = data;
+  }
   const routeRecipientSnapshot = routeSnapshot ? (() => {
     const positions = { to: 0, cc: 0, bcc: 0 };
     return routeSnapshot.expandedSelections.map((selection) => {
@@ -1488,6 +1564,14 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
     route_recipient_snapshot: routeRecipientSnapshot,
     route_snapshot_issued_at: routeSnapshot?.issuedAt || null,
     route_snapshot_expires_at: routeSnapshot?.expiresAt || null,
+    advisor_recommendation_id: advisorRecommendation?.id || null,
+    post_action_mode: postAction.mode,
+    post_action_folder_id: postAction.folderId,
+    post_action_folder_provider_id_snapshot: postAction.providerFolderId,
+    post_action_folder_path_snapshot: postAction.folderPath,
+    post_action_state: postAction.state,
+    learning_state: ['redirect', 'forward'].includes(actionType) ? 'pending' : 'skipped',
+    learning_recipients_complete: ['redirect', 'forward'].includes(actionType) ? manualRecipients.length === 0 : null,
     action_type: actionType,
     state: movesMessage ? 'uncertain' : 'reserved',
     ...(movesMessage ? { uncertain_at: reservedAt } : {}),
@@ -1499,7 +1583,11 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   const reservedEvent = recordEvent(client, { eventType: 'mail_action.reserved', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }).catch(() => null);
   if (['redirect', 'forward'].includes(actionType)) {
     try {
-      await persistActionDestinations(client, action.id, input, routeSnapshot);
+      const learningDestinations = await persistActionDestinations(client, action.id, input, routeSnapshot);
+      const recipientsComplete = learningDestinations?.recipientsComplete === true;
+      if (recipientsComplete !== (manualRecipients.length === 0)) {
+        await updateAction(client, action.id, { learning_recipients_complete: recipientsComplete });
+      }
     } catch (error) {
       const failureCode = String(error.code || 'email_router_route_invalid').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
       await reservedEvent;
@@ -1508,6 +1596,31 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
         recordEvent(client, { eventType: 'mail_action.failed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id }),
       ]);
       throw error;
+    }
+    if (advisorRecommendation) {
+      const selectedSignature = JSON.stringify(normalizeEmailRouterDestinationSelections(input).map((selection) => ({
+        candidateId: selection.destinationId || selection.groupId,
+        candidateKind: selection.groupId ? 'group' : 'destination',
+        recipientKind: selection.kind,
+        position: selection.position,
+      })));
+      const suggestedSignature = JSON.stringify(advisorRecommendation.selection_snapshot || []);
+      const suggestedFolder = advisorRecommendation.suggested_post_action_mode === 'keep_current'
+        ? 'keep_current'
+        : advisorRecommendation.suggested_folder_id || advisorRecommendation.suggested_folder_key || 'archive';
+      const selectedFolder = postAction.folderId || (postAction.mode === 'move' ? 'archive' : 'keep_current');
+      const feedbackType = advisorRecommendation.suggested_action === actionType
+        && suggestedFolder === selectedFolder
+        && selectedSignature === suggestedSignature
+        ? 'applied'
+        : 'modified';
+      const { error: feedbackError } = await routerTable(client, 'advisor_feedback').insert({
+        recommendation_id: advisorRecommendation.id,
+        mail_action_id: action.id,
+        actor_user_id: profile.id,
+        feedback_type: feedbackType,
+      });
+      if (feedbackError) console.warn('[email-router] Advisor feedback could not be recorded.', { code: feedbackError.code || 'EMAIL_ROUTER_ADVISOR_FEEDBACK_FAILED' });
     }
   }
   if (actionType === 'archive' || actionType === 'delete' || actionType === 'move' || actionType === 'mark_read') {
@@ -1582,30 +1695,80 @@ async function sentDraftConfirmed(mailbox, draftId, dependencies) {
   return Boolean(response);
 }
 
-async function archiveConfirmedRedirectSource(mailbox, message, dependencies) {
-  const [sourceResponse, archiveResponse] = await Promise.all([
-    emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(message.provider_message_id)}?$select=id,parentFolderId`), {}, dependencies),
-    emailRouterGraphFetch(mailboxPath(mailbox, '/mailFolders/archive?$select=id'), {}, dependencies),
-  ]);
-  const [source, archive] = await Promise.all([graphJson(sourceResponse), graphJson(archiveResponse)]);
-  if (source?.parentFolderId === archive?.id) return;
-  await emailRouterGraphFetch(
-    mailboxPath(mailbox, `/messages/${encodeURIComponent(message.provider_message_id)}/move`),
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ destinationId: archive?.id || 'archive' }),
-    },
-    dependencies,
-  );
+async function resolvePostActionTarget(mailbox, action, dependencies) {
+  const providerFolderId = action.post_action_folder_provider_id_snapshot
+    || (action.action_type === 'redirect' ? 'archive' : null);
+  if (!providerFolderId) return null;
+  if (providerFolderId !== 'archive') return { providerFolderId, graphFolderId: providerFolderId };
+  const response = await emailRouterGraphFetch(mailboxPath(mailbox, '/mailFolders/archive?$select=id'), {}, dependencies);
+  const archive = await graphJson(response);
+  return { providerFolderId: 'archive', graphFolderId: safeId(archive?.id || 'archive', 'Archive folder identifier') };
 }
 
-async function archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies) {
+async function completeConfirmedSourceFiling({ client, mailbox, action, message }, dependencies) {
+  const mode = action.post_action_mode || (action.action_type === 'redirect' ? 'move' : 'keep_current');
+  if (mode === 'keep_current') {
+    await updateAction(client, action.id, {
+      post_action_state: 'not_required',
+      post_action_failure_code: null,
+      post_action_confirmed_at: new Date().toISOString(),
+    });
+    return true;
+  }
+  if (action.post_action_state === 'uncertain') return false;
+  const target = await resolvePostActionTarget(mailbox, action, dependencies);
+  if (!target) return false;
+  const attemptCount = Number(action.post_action_attempt_count || 0) + 1;
+  await updateAction(client, action.id, { post_action_state: 'uncertain', post_action_attempt_count: attemptCount });
   try {
-    await archiveConfirmedRedirectSource(mailbox, message, dependencies);
+    const sourceResponse = await emailRouterGraphFetch(
+      mailboxPath(mailbox, `/messages/${encodeURIComponent(message.provider_message_id)}?$select=id,parentFolderId`),
+      {},
+      dependencies,
+    );
+    const source = await graphJson(sourceResponse);
+    let moved = source;
+    if (source?.parentFolderId !== target.graphFolderId) {
+      const response = await emailRouterGraphFetch(
+        mailboxPath(mailbox, `/messages/${encodeURIComponent(message.provider_message_id)}/move`),
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ destinationId: target.providerFolderId }),
+        },
+        dependencies,
+      );
+      moved = await graphJson(response);
+    }
+    const movedMessageId = safeId(moved?.id || message.provider_message_id, 'moved message identifier');
+    const destinationFolderKey = target.providerFolderId === 'archive'
+      ? 'archive'
+      : `routing:${action.post_action_folder_id || 'approved'}`;
+    const { error: messageError } = await routerTable(client, EMAIL_ROUTER_STORAGE.messages)
+      .update({
+        provider_message_id: movedMessageId,
+        folder_key: destinationFolderKey,
+        state: target.providerFolderId === 'archive' ? 'archived' : 'routed',
+        handled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', message.id);
+    if (messageError) storageUnavailable(messageError);
+    await updateAction(client, action.id, {
+      post_action_state: 'confirmed',
+      post_action_failure_code: null,
+      post_action_confirmed_at: new Date().toISOString(),
+    });
+    await resolveEmailRouterAlert(client, { dedupeKey: `mail-action:${action.id}:filing` });
     return true;
   } catch (error) {
-    const failureCode = String(error.code || 'email_router_archive_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
+    const failureCode = String(error.code || 'email_router_source_filing_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
+    const status = Number(error.status || 0);
+    const definiteFailure = status >= 400 && status < 500 && ![408, 409, 429].includes(status);
+    await updateAction(client, action.id, {
+      post_action_state: definiteFailure ? 'failed' : 'uncertain',
+      post_action_failure_code: failureCode,
+    });
     await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
       .update({ state: 'submitted', failure_code: failureCode, reconcile_after: new Date(Date.now() + 60_000).toISOString() })
       .eq('mail_action_id', action.id);
@@ -1614,17 +1777,42 @@ async function archiveRedirectSourceOrAlert({ client, mailbox, action, message }
       messageId: message.id,
       mailActionId: action.id,
       code: failureCode,
-      severity: 'warning',
-      dedupeKey: `mail-action:${action.id}:archive`,
+      severity: definiteFailure ? 'warning' : 'critical',
+      dedupeKey: `mail-action:${action.id}:filing`,
     });
     return false;
   }
 }
 
+async function enqueueConfirmedActionLearning(client, action) {
+  if (!['redirect', 'forward'].includes(action.action_type)) return;
+  const { data: setting, error: settingError } = await routerTable(client, 'settings')
+    .select('value')
+    .eq('key', 'advisor.learning_enabled')
+    .maybeSingle();
+  if (settingError) {
+    await updateAction(client, action.id, { learning_state: 'failed' }).catch(() => null);
+    console.warn('[email-router] Advisor learning setting could not be checked.', { code: settingError.code || 'EMAIL_ROUTER_LEARNING_SETTINGS_UNAVAILABLE' });
+    return;
+  }
+  if (setting?.value?.enabled === false) {
+    await updateAction(client, action.id, { learning_state: 'skipped' }).catch(() => null);
+    return;
+  }
+  const { error } = await routerTable(client, 'advisor_learning_jobs').upsert({
+    mail_action_id: action.id,
+    state: 'pending',
+    next_attempt_at: new Date().toISOString(),
+    failure_code: null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'mail_action_id' });
+  if (error) console.warn('[email-router] Advisor learning job could not be queued.', { code: error.code || 'EMAIL_ROUTER_LEARNING_QUEUE_FAILED' });
+}
+
 async function confirmSubmittedAction({ client, mailbox, action, message, actorUserId }, dependencies) {
-  if (action.action_type === 'redirect') {
-    const archived = await archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies);
-    if (!archived) return false;
+  if (['redirect', 'forward'].includes(action.action_type)) {
+    const filed = await completeConfirmedSourceFiling({ client, mailbox, action, message }, dependencies);
+    if (!filed) return false;
   }
   await updateAction(client, action.id, { state: 'confirmed', confirmed_at: new Date().toISOString() });
   await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
@@ -1635,13 +1823,14 @@ async function confirmSubmittedAction({ client, mailbox, action, message, actorU
     .eq('mail_action_id', action.id)
     .in('state', ['open', 'acknowledged']);
   await recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId });
+  await enqueueConfirmedActionLearning(client, action);
   return true;
 }
 
 export async function processEmailRouterOutbox({ client, mailbox, limit = 10, actionId = null, confirmNewSubmissions = true }, dependencies = {}) {
   const maximum = Math.min(25, Math.max(1, Number(limit) || 10));
   const currentTime = new Date().toISOString();
-  const relation = 'mail_actions(id,action_type,state,provider_operation_id,requested_by,messages(id,provider_message_id,mailbox_id))';
+  const relation = 'mail_actions(id,action_type,state,provider_operation_id,requested_by,post_action_mode,post_action_folder_id,post_action_folder_provider_id_snapshot,post_action_folder_path_snapshot,post_action_state,post_action_attempt_count,post_action_failure_code,messages(id,provider_message_id,mailbox_id))';
   let deliveryEntries = [];
   let reconciliationEntries = [];
   if (actionId) {
@@ -1696,9 +1885,6 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10, ac
         await routerTable(client, EMAIL_ROUTER_STORAGE.outbox).update({ state: 'submitted', reconcile_after: new Date(Date.now() + 15_000).toISOString() }).eq('id', entry.id);
         await updateAction(client, entry.mail_action_id, { state: 'submitted', submitted_at: new Date().toISOString() });
         await recordEvent(client, { eventType: 'mail_action.submitted', entityType: 'mail_action', entityId: entry.mail_action_id, actorUserId: action.requested_by });
-        if (action.action_type === 'redirect') {
-          await archiveRedirectSourceOrAlert({ client, mailbox, action, message }, dependencies);
-        }
         submitted += 1;
         submittedNow = true;
       } catch (error) {
@@ -1719,7 +1905,7 @@ export async function processEmailRouterOutbox({ client, mailbox, limit = 10, ac
 export async function getEmailRouterActionStatus(client, actionId, { mailboxId = null } = {}) {
   const id = safeId(actionId, 'mail action identifier');
   const { data, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
-    .select('id,message_id,state,action_type,reserved_at,draft_created_at,submitted_at,confirmed_at,failed_at,uncertain_at,updated_at')
+    .select('id,message_id,state,action_type,reserved_at,draft_created_at,submitted_at,confirmed_at,failed_at,uncertain_at,updated_at,post_action_mode,post_action_folder_path_snapshot,post_action_state,post_action_attempt_count,post_action_failure_code,post_action_confirmed_at')
     .eq('id', id)
     .maybeSingle();
   if (error) storageUnavailable(error);
@@ -1742,12 +1928,48 @@ export async function getEmailRouterActionStatus(client, actionId, { mailboxId =
   const recentUncertain = data.state === 'uncertain'
     && Number.isFinite(uncertainSince)
     && Date.now() - uncertainSince < 2 * 60_000;
-  const tracking = ['reserved', 'draft_created', 'submitted'].includes(data.state)
+  const filingNeedsReview = data.state === 'submitted' && ['failed', 'uncertain'].includes(data.post_action_state);
+  const tracking = (!filingNeedsReview && ['reserved', 'draft_created', 'submitted'].includes(data.state))
     || (recentUncertain && ['reserved', 'draft_created', 'submitted', 'uncertain'].includes(outbox?.state));
   return actionResult(data, {
     tracking,
+    deliveryConfirmed: filingNeedsReview,
+    filingNeedsReview,
+    filingRetryAllowed: data.post_action_state === 'failed',
+    filingState: data.post_action_state,
+    filingDestination: data.post_action_folder_path_snapshot,
+    ...(filingNeedsReview ? {
+      detail: data.post_action_state === 'uncertain'
+        ? 'The outgoing message is confirmed, but FCOS cannot safely confirm whether the source message was filed. The email will not be resent.'
+        : `The outgoing message is confirmed, but the source message could not be moved${data.post_action_folder_path_snapshot ? ` to ${data.post_action_folder_path_snapshot}` : ''}. Retry will move only the source message.`,
+    } : {}),
     checkedAt: new Date().toISOString(),
   });
+}
+
+export async function retryEmailRouterSourceFiling({ client, mailbox, profile, actionId }, dependencies = {}) {
+  const id = safeId(actionId, 'mail action identifier');
+  const { data: action, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
+    .select('id,action_type,state,requested_by,post_action_mode,post_action_folder_id,post_action_folder_provider_id_snapshot,post_action_folder_path_snapshot,post_action_state,post_action_attempt_count,messages(id,provider_message_id,mailbox_id)')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) storageUnavailable(error);
+  if (!action) throw routerError('Mail action not found.', 404, 'EMAIL_ROUTER_ACTION_NOT_FOUND');
+  if (!['redirect', 'forward'].includes(action.action_type) || action.state !== 'submitted' || action.post_action_state !== 'failed') {
+    throw routerError('This source-message filing action cannot be retried automatically.', 409, 'EMAIL_ROUTER_FILING_RETRY_UNAVAILABLE');
+  }
+  const message = Array.isArray(action.messages) ? action.messages[0] : action.messages;
+  if (!message || message.mailbox_id !== mailbox.id) throw routerError('Mail action does not belong to the active mailbox.', 409, 'EMAIL_ROUTER_RETRY_MAILBOX_MISMATCH');
+  await updateAction(client, action.id, { post_action_state: 'pending', post_action_failure_code: null });
+  const filed = await completeConfirmedSourceFiling({ client, mailbox, action: { ...action, post_action_state: 'pending' }, message }, dependencies);
+  if (!filed) return getEmailRouterActionStatus(client, action.id, { mailboxId: mailbox.id });
+  await updateAction(client, action.id, { state: 'confirmed', confirmed_at: new Date().toISOString() });
+  await routerTable(client, EMAIL_ROUTER_STORAGE.outbox)
+    .update({ state: 'confirmed', completed_at: new Date().toISOString(), failure_code: null })
+    .eq('mail_action_id', action.id);
+  await recordEvent(client, { eventType: 'mail_action.confirmed', entityType: 'mail_action', entityId: action.id, actorUserId: profile.id });
+  await enqueueConfirmedActionLearning(client, action);
+  return getEmailRouterActionStatus(client, action.id, { mailboxId: mailbox.id });
 }
 
 export async function retryEmailRouterUncertainAction({ client, mailbox, profile, actionId, confirmedNotSent }, dependencies = {}) {
@@ -1756,7 +1978,7 @@ export async function retryEmailRouterUncertainAction({ client, mailbox, profile
   }
   const id = safeId(actionId, 'mail action identifier');
   const { data: action, error } = await routerTable(client, EMAIL_ROUTER_STORAGE.actions)
-    .select('id,state,action_type,provider_operation_id,requested_by,uncertain_at,messages(id,provider_message_id,mailbox_id)')
+    .select('id,state,action_type,provider_operation_id,requested_by,uncertain_at,post_action_mode,post_action_folder_id,post_action_folder_provider_id_snapshot,post_action_folder_path_snapshot,post_action_state,post_action_attempt_count,messages(id,provider_message_id,mailbox_id)')
     .eq('id', id)
     .maybeSingle();
   if (error) storageUnavailable(error);

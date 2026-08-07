@@ -13,22 +13,44 @@ test('Email Router Advisor uses the supported strict Structured Outputs subset',
   assert.equal('uniqueItems' in schema.properties.selections, false);
 });
 
-test('Email Router Advisor preselection requires confidence strictly above 60 percent', () => {
+test('Email Router Advisor preselection requires three matching outcomes and confidence strictly above 60 percent', () => {
   const candidates = [
     { id: 'destination-1', kind: 'destination', label: 'SC', memberCount: 0 },
     { id: 'group-1', kind: 'group', label: 'OPS', memberCount: 3 },
   ];
   const input = {
+    routingCategory: 'market_report',
+    suggestedAction: 'forward',
+    suggestedFolder: 'keep_current',
     selections: [
       { candidateId: 'destination-1', recipientKind: 'to' },
       { candidateId: 'group-1', recipientKind: 'cc' },
     ],
-    confidence: 0.6,
+    actionConfidence: 0.6,
+    recipientConfidence: 0.6,
+    folderConfidence: 0.6,
     rationale: 'Possible routing.',
     question: 'Who owns this request?',
   };
-  assert.deepEqual(normaliseEmailRouterAdvisorRecommendation(input, candidates).selections, []);
-  const confident = normaliseEmailRouterAdvisorRecommendation({ ...input, confidence: 0.61 }, candidates);
+  const outcome = {
+    routing_category: 'market_report',
+    action_type: 'forward',
+    folderChoice: 'keep_current',
+    recipientSignature: 'cc:1:g:group-1|to:1:d:destination-1',
+    similarity: 4,
+  };
+  const belowThreshold = normaliseEmailRouterAdvisorRecommendation(input, candidates, [], { outcomes: [outcome, outcome, outcome] });
+  assert.equal(belowThreshold.preselectAction, false);
+  assert.equal(belowThreshold.preselectRecipients, false);
+  assert.equal(belowThreshold.preselectFolder, false);
+  const onlyTwo = normaliseEmailRouterAdvisorRecommendation({ ...input, actionConfidence: 0.95, recipientConfidence: 0.95, folderConfidence: 0.95 }, candidates, [], { outcomes: [outcome, outcome] });
+  assert.equal(onlyTwo.preselectAction, false);
+  assert.equal(onlyTwo.preselectRecipients, false);
+  assert.equal(onlyTwo.preselectFolder, false);
+  const confident = normaliseEmailRouterAdvisorRecommendation({ ...input, actionConfidence: 0.61, recipientConfidence: 0.61, folderConfidence: 0.61 }, candidates, [], { outcomes: [outcome, outcome, outcome] });
+  assert.equal(confident.preselectAction, true);
+  assert.equal(confident.preselectRecipients, true);
+  assert.equal(confident.preselectFolder, true);
   assert.deepEqual(confident.selections.map(({ id, recipientKind }) => ({ id, recipientKind })), [
     { id: 'destination-1', recipientKind: 'to' },
     { id: 'group-1', recipientKind: 'cc' },
@@ -43,7 +65,7 @@ test('Email Router Advisor ignores forged, duplicated, and invalid recipient sel
       { candidateId: 'forged', recipientKind: 'cc' },
       { candidateId: 'destination-2', recipientKind: 'reply-to' },
     ],
-    confidence: 0.95,
+    recipientConfidence: 0.95,
   }, [
     { id: 'destination-1', kind: 'destination', label: 'SC', memberCount: 0 },
     { id: 'destination-2', kind: 'destination', label: 'VL', memberCount: 0 },

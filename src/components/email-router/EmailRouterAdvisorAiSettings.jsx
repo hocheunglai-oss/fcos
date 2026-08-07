@@ -65,7 +65,7 @@ export default function EmailRouterAdvisorAiSettings() {
   return (
     <AiModelSettingsCard
       title="Email Router Advisor"
-      description="Select the model used to recommend ordered To, Cc, and Bcc recipients. Recommendations never send or modify email without a user action."
+      description="Select the model used to recommend Forward or Redirect, ordered recipients, and post-action filing. Recommendations never send or move email without a user action."
       icon={Sparkles}
       modelLabel="Routing Advisor model"
       models={models}
@@ -83,7 +83,7 @@ export default function EmailRouterAdvisorAiSettings() {
       onSave={save}
       onRefresh={load}
       updatedAt={modelSetting?.updatedAt}
-      privacyNote="Only the opened message’s minimum live text and opaque destination choices are sent. Email content and recommendations are not stored in FCOS."
+      privacyNote="Only the opened message's minimum live text and opaque routing choices are sent. Confirmed learning stores protected fingerprints and directory references, never message or recipient content."
     />
   );
 }

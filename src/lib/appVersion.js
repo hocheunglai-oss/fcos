@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.140';
+export const APP_VERSION = '2.0.141';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.141',
+    date: '2026-08-07',
+    title: 'Forward-and-file Email Router workflow',
+    changes: [
+      'Unified Forward and Redirect in the fixed Route Message panel with ordered To, Cc, and Bcc recipients and no separate Forward confirmation window.',
+      'Added reviewed post-action filing to Archive or Administrator-approved Microsoft 365 folders, with source movement only after Sent Items confirmation and a move-only retry safeguard.',
+      'Added privacy-protected company routing learning that requires three similar confirmed outcomes and confidence above 60% before preselecting an action, recipients, or folder.',
+    ],
+  },
   {
     version: '2.0.140',
     date: '2026-08-07',
