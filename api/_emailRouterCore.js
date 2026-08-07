@@ -12,6 +12,8 @@ const ACTIONS = new Set(['redirect', 'reply', 'forward', 'archive', 'move', 'del
 const RECIPIENT_KINDS = new Set(['to', 'cc', 'bcc']);
 const MAX_ROUTING_RECIPIENTS = 100;
 const MAX_MIME_BYTES = 25 * 1024 * 1024;
+const REDIRECT_MARKER_HEADER = 'x-emailrouter-redirect';
+const REDIRECT_MARKER_VALUE = 'graph-forward-v2';
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
 const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS = 28_000;
@@ -996,10 +998,6 @@ function parsedMailbox(value) {
   return { address, name };
 }
 
-function encodedWord(value) {
-  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
-}
-
 function normalizedRecipients(recipients) {
   const known = new Set();
   const output = [];
@@ -1019,17 +1017,12 @@ function normalizedRecipients(recipients) {
   return output;
 }
 
-function removeRedirectUnsafeHeader(name) {
-  return ['from', 'sender', 'reply-to', 'to', 'cc', 'bcc', 'subject', 'message-id', 'return-path', 'received', 'authentication-results', 'dkim-signature', 'domainkey-signature', 'content-length'].includes(name)
-    || name.startsWith('resent-') || name.startsWith('arc-') || name.startsWith('x-ms-exchange-') || name.startsWith('x-forefront-antispam') || name === 'x-emailrouter-redirect';
-}
-
-export function buildEmailRouterRedirectMime({ raw, mailboxAddress, recipients }) {
+export function inspectEmailRouterRedirectSource(raw) {
   const input = Buffer.from(raw);
   if (input.byteLength > MAX_MIME_BYTES) throw routerError('The original message is too large for safe redirect.', 400, 'EMAIL_ROUTER_REDIRECT_TOO_LARGE');
   const boundary = headerBoundary(input);
   const fields = parseHeaders(input, boundary.end);
-  if (fields.some((field) => field.name === 'x-emailrouter-redirect')) {
+  if (fields.some((field) => field.name === REDIRECT_MARKER_HEADER)) {
     throw routerError('This message was previously redirected by FCOS. Redirect is blocked to prevent duplicate delivery.', 409, 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED');
   }
   const contentType = fields.filter((field) => field.name === 'content-type').map((field) => field.value).join(' ');
@@ -1042,19 +1035,50 @@ export function buildEmailRouterRedirectMime({ raw, mailboxAddress, recipients }
   if (subjectFields.length > 1) throw routerError('The original message has ambiguous subject headers.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const subject = text(subjectFields[0]?.value, 900);
   if (/[\0-\x1f\x7f]/.test(subject)) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  return { replyAddress: reply, senderAddress: sender.address, subject };
+}
+
+function graphRecipient(address) {
+  return { emailAddress: { address: safeAddress(address) } };
+}
+
+export function buildEmailRouterRedirectDraft({ raw, recipients }) {
+  const source = inspectEmailRouterRedirectSource(raw);
   const routes = normalizedRecipients(recipients);
-  const visible = (kind) => routes.filter((route) => route.kind === kind).map((route) => `<${route.address}>`).join(',\r\n ');
-  const mailbox = safeAddress(mailboxAddress);
-  const headers = [
-    `From: ${encodedWord(sender.name)} <${mailbox}>`,
-    `Reply-To: <${reply}>`,
-    ...(visible('to') ? [`To: ${visible('to')}`] : []),
-    ...(visible('cc') ? [`Cc: ${visible('cc')}`] : []),
-    `Subject: ${encodedWord(`[${subject}]`)}`,
-    'X-EmailRouter-Redirect: graph-mime-v1',
-    ...fields.filter((field) => !removeRedirectUnsafeHeader(field.name)).map((field) => field.raw),
-  ].join('\r\n');
-  return { raw: Buffer.concat([Buffer.from(`${headers}\r\n\r\n`, 'latin1'), input.subarray(boundary.start)]), envelopeRecipients: routes.map((route) => route.address) };
+  const recipientsOfKind = (kind) => routes.filter((route) => route.kind === kind).map((route) => graphRecipient(route.address));
+  return {
+    source,
+    routes,
+    message: {
+      subject: `[${source.subject}]`,
+      toRecipients: recipientsOfKind('to'),
+      ccRecipients: recipientsOfKind('cc'),
+      bccRecipients: recipientsOfKind('bcc'),
+      replyTo: [graphRecipient(source.replyAddress)],
+      internetMessageHeaders: [{ name: REDIRECT_MARKER_HEADER, value: REDIRECT_MARKER_VALUE }],
+    },
+  };
+}
+
+function graphRecipientAddresses(value) {
+  return (Array.isArray(value) ? value : []).map((recipient) => safeAddress(recipient?.emailAddress?.address));
+}
+
+function sameOrderedAddresses(actual, expected) {
+  return actual.length === expected.length && actual.every((address, index) => address === expected[index]);
+}
+
+export function verifyEmailRouterRedirectDraft(draft, expectedMessage) {
+  const expected = expectedMessage || {};
+  const markerPresent = (Array.isArray(draft?.internetMessageHeaders) ? draft.internetMessageHeaders : [])
+    .some((header) => String(header?.name || '').toLowerCase() === REDIRECT_MARKER_HEADER && header?.value === REDIRECT_MARKER_VALUE);
+  const recipientsMatch = ['toRecipients', 'ccRecipients', 'bccRecipients']
+    .every((field) => sameOrderedAddresses(graphRecipientAddresses(draft?.[field]), graphRecipientAddresses(expected[field])));
+  const replyMatches = sameOrderedAddresses(graphRecipientAddresses(draft?.replyTo), graphRecipientAddresses(expected.replyTo));
+  if (draft?.isDraft !== true || draft?.subject !== expected.subject || !markerPresent || !recipientsMatch || !replyMatches) {
+    throw routerError('Microsoft 365 changed the reviewed redirect recipients or reply path. The message was not sent.', 409, 'EMAIL_ROUTER_REDIRECT_DRAFT_UNSAFE');
+  }
+  return true;
 }
 
 async function createAction(client, values) {
@@ -1479,19 +1503,20 @@ async function createGraphDraft({ client, mailbox, actionType, sourceMessageId, 
       resolveEmailRouterActionRecipients(client, input, routeSnapshot),
     ]);
     const raw = new Uint8Array(await source.arrayBuffer());
-    const prepared = buildEmailRouterRedirectMime({ raw, mailboxAddress: mailbox.emailAddress, recipients });
-    const response = await emailRouterGraphFetch(mailboxPath(mailbox, '/messages'), { method: 'POST', headers: { 'content-type': 'text/plain' }, body: prepared.raw.toString('base64') }, dependencies);
+    const prepared = buildEmailRouterRedirectDraft({ raw, recipients });
+    const response = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(sourceMessageId)}/createForward`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: prepared.message }),
+    }, dependencies);
     const draft = await graphJson(response);
     const draftId = safeId(draft?.id, 'draft identifier');
-    const bccRecipients = recipients
-      .filter((recipient) => recipient.kind === 'bcc')
-      .map((recipient) => ({ emailAddress: { address: recipient.address } }));
-    if (bccRecipients.length) {
-      await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ bccRecipients }),
-      }, dependencies);
+    try {
+      const verification = await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}?$select=id,isDraft,subject,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders`), {}, dependencies);
+      verifyEmailRouterRedirectDraft(await graphJson(verification), prepared.message);
+    } catch (error) {
+      await emailRouterGraphFetch(mailboxPath(mailbox, `/messages/${encodeURIComponent(draftId)}`), { method: 'DELETE' }, dependencies).catch(() => null);
+      throw error;
     }
     return draftId;
   }

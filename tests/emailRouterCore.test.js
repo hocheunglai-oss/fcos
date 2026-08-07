@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
-  buildEmailRouterRedirectMime,
+  buildEmailRouterRedirectDraft,
   createEmailRouterAttachmentToken,
   createEmailRouterRouteSnapshotToken,
   currentEmailRouterMailbox,
@@ -26,6 +26,7 @@ import {
   sortEmailRouterPresetDestinations,
   syncEmailRouterDelta,
   validEmailRouterWebhookNotifications,
+  verifyEmailRouterRedirectDraft,
   verifyEmailRouterAttachmentToken,
   verifyEmailRouterRouteSnapshotToken,
 } from '../api/_emailRouterCore.js';
@@ -177,61 +178,80 @@ test('routing groups expand external contacts in directory order', async () => {
   ]);
 });
 
-test('redirect MIME keeps body bytes while removing unsafe transport headers and BCC visibility', () => {
-  const body = Buffer.from([0x61, 0x00, 0xff, 0x0d, 0x0a]);
-  const raw = Buffer.concat([Buffer.from([
+test('redirect draft keeps reviewed To and Cc visible, Bcc private, and replies with the original sender', () => {
+  const raw = Buffer.from([
     'Return-Path: <source@example.net>',
     'Received: by relay',
     'From: Source Desk <source@example.net>',
     'Reply-To: Replies <reply@example.net>',
     'To: router@example.net',
+    'Cc: original-copy@example.net',
     'Subject: Status update',
     'Message-ID: <source@example.net>',
-    'Content-Type: application/octet-stream',
+    'Content-Type: text/html',
     '',
-    '',
-  ].join('\r\n'), 'latin1'), body]);
-  const result = buildEmailRouterRedirectMime({
+    '<p>Body</p>',
+  ].join('\r\n'));
+  const result = buildEmailRouterRedirectDraft({
     raw,
-    mailboxAddress: 'router@example.net',
-    recipients: [{ address: 'to@example.net', kind: 'to' }, { address: 'hidden@example.net', kind: 'bcc' }],
+    recipients: [
+      { address: 'first@example.net', kind: 'to', position: 1 },
+      { address: 'second@example.net', kind: 'to', position: 2 },
+      { address: 'copy@example.net', kind: 'cc', position: 1 },
+      { address: 'hidden@example.net', kind: 'bcc', position: 1 },
+    ],
   });
-  const split = result.raw.indexOf(Buffer.from('\r\n\r\n'));
-  const headers = result.raw.subarray(0, split).toString('latin1');
-  assert.match(headers, /Reply-To: <reply@example.net>/);
-  assert.match(headers, /To: <to@example.net>/);
-  assert.doesNotMatch(headers, /hidden@example.net/);
-  assert.doesNotMatch(headers, /^(?:Return-Path|Received):/im);
-  assert.deepEqual(result.envelopeRecipients, ['to@example.net', 'hidden@example.net']);
-  assert.deepEqual(result.raw.subarray(split + 4), body);
+  assert.equal(result.message.subject, '[Status update]');
+  assert.deepEqual(result.message.replyTo, [{ emailAddress: { address: 'reply@example.net' } }]);
+  assert.deepEqual(result.message.toRecipients.map((recipient) => recipient.emailAddress.address), ['first@example.net', 'second@example.net']);
+  assert.deepEqual(result.message.ccRecipients.map((recipient) => recipient.emailAddress.address), ['copy@example.net']);
+  assert.deepEqual(result.message.bccRecipients.map((recipient) => recipient.emailAddress.address), ['hidden@example.net']);
+  assert.deepEqual(result.message.internetMessageHeaders, [{ name: 'x-emailrouter-redirect', value: 'graph-forward-v2' }]);
+  assert.doesNotMatch(JSON.stringify(result.message), /router@example\.net|original-copy@example\.net/);
 });
 
-test('redirect MIME preserves reviewed recipient positions within each recipient type', () => {
+test('redirect draft preserves reviewed recipient positions within each recipient type', () => {
   const raw = Buffer.from('From: Source <source@example.net>\r\nSubject: Ordered route\r\nContent-Type: text/plain\r\n\r\nBody');
-  const result = buildEmailRouterRedirectMime({
+  const result = buildEmailRouterRedirectDraft({
     raw,
-    mailboxAddress: 'router@example.net',
     recipients: [
       { address: 'second@example.net', kind: 'to', position: 2 },
       { address: 'first@example.net', kind: 'to', position: 1 },
     ],
-  }).raw.toString('utf8');
-  assert.ok(result.indexOf('<first@example.net>') < result.indexOf('<second@example.net>'));
+  });
+  assert.deepEqual(result.message.toRecipients.map((recipient) => recipient.emailAddress.address), ['first@example.net', 'second@example.net']);
 });
 
-test('redirect MIME strips original BCC and Resent headers without requiring Message-ID', () => {
+test('redirect draft ignores original BCC and Resent headers without requiring Message-ID', () => {
   const raw = Buffer.from('From: source@example.net\r\nBcc: private@example.net\r\nResent-From: relay@example.net\r\nResent-To: old@example.net\r\nSubject: Safe redirect\r\n\r\nbody');
-  const result = buildEmailRouterRedirectMime({ raw, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] });
-  const headers = result.raw.subarray(0, result.raw.indexOf(Buffer.from('\r\n\r\n'))).toString('latin1');
-  assert.doesNotMatch(headers, /^(?:Bcc|Resent-[^:]+|Message-ID):/im);
-  assert.match(headers, /^To: <to@example.net>$/im);
+  const result = buildEmailRouterRedirectDraft({ raw, recipients: [{ address: 'to@example.net', kind: 'to' }] });
+  assert.deepEqual(result.message.toRecipients, [{ emailAddress: { address: 'to@example.net' } }]);
+  assert.deepEqual(result.message.bccRecipients, []);
+  assert.doesNotMatch(JSON.stringify(result.message), /private@example\.net|relay@example\.net|old@example\.net/);
 });
 
-test('redirect MIME rejects protected and previously redirected messages with specific reasons', () => {
+test('redirect draft rejects protected and previously redirected messages with specific reasons', () => {
   const protectedMessage = Buffer.from('From: source@example.net\r\nContent-Type: multipart/signed\r\n\r\nbody');
-  assert.throws(() => buildEmailRouterRedirectMime({ raw: protectedMessage, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED' && /Protected/.test(error.message));
+  assert.throws(() => buildEmailRouterRedirectDraft({ raw: protectedMessage, recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED' && /Protected/.test(error.message));
   const redirected = Buffer.from('From: source@example.net\r\nX-EmailRouter-Redirect: graph-mime-v1\r\n\r\nbody');
-  assert.throws(() => buildEmailRouterRedirectMime({ raw: redirected, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED' && error.status === 409);
+  assert.throws(() => buildEmailRouterRedirectDraft({ raw: redirected, recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED' && error.status === 409);
+});
+
+test('redirect draft verification fails closed when Microsoft changes recipients or reply behavior', () => {
+  const expected = buildEmailRouterRedirectDraft({
+    raw: Buffer.from('From: source@example.net\r\nSubject: Verified route\r\n\r\nbody'),
+    recipients: [{ address: 'a@example.net', kind: 'to' }, { address: 'c@example.net', kind: 'cc' }],
+  }).message;
+  const verified = { ...expected, id: 'draft-1', isDraft: true };
+  assert.equal(verifyEmailRouterRedirectDraft(verified, expected), true);
+  assert.throws(
+    () => verifyEmailRouterRedirectDraft({ ...verified, ccRecipients: [{ emailAddress: { address: 'unexpected@example.net' } }] }, expected),
+    (error) => error.code === 'EMAIL_ROUTER_REDIRECT_DRAFT_UNSAFE' && error.status === 409,
+  );
+  assert.throws(
+    () => verifyEmailRouterRedirectDraft({ ...verified, replyTo: [{ emailAddress: { address: 'router@example.net' } }] }, expected),
+    (error) => error.code === 'EMAIL_ROUTER_REDIRECT_DRAFT_UNSAFE',
+  );
 });
 
 test('Market Report folder resolution supports nested folders and fails closed on duplicates', async () => {

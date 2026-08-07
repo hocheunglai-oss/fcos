@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.143';
+export const APP_VERSION = '2.0.144';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.144',
+    date: '2026-08-08',
+    title: 'Clear redirect recipients and reply behavior',
+    changes: [
+      'Restored the original message From, To, and Cc details inside every Email Router redirect.',
+      'Kept reviewed redirect To and Cc recipients visible to one another while preserving Bcc privacy and recipient order.',
+      'Directed Reply to the original sender and Reply All to the original sender plus the visible redirect recipients, with live Microsoft 365 draft verification before submission.',
+    ],
+  },
   {
     version: '2.0.143',
     date: '2026-08-07',

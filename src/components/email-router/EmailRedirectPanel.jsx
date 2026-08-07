@@ -204,6 +204,7 @@ export default function EmailRedirectPanel({
             bccVisible={bccVisible}
             onBccVisibleChange={setBccVisible}
           />
+          {actionMode === 'redirect' && <p className="text-xs text-muted-foreground">Recipients see the reviewed To and Cc order; Bcc stays hidden. The original From, To, and Cc remain visible with the original message. Reply goes to the original sender, while Reply All also includes the visible redirect recipients.</p>}
         </div>
         {actionMode === 'forward' && <div className="space-y-2"><Label htmlFor="email-router-forward-message">Forwarding message <span className="font-normal text-muted-foreground">(optional)</span></Label><Textarea id="email-router-forward-message" rows={5} value={body} onChange={(event) => setBody(event.target.value.slice(0, 20_000))} placeholder="Add an introductory message" /></div>}
         <div className="space-y-2">
