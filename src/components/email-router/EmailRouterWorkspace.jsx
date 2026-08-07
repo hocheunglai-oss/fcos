@@ -8,11 +8,11 @@ import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import { EMAIL_ROUTER_METHODOLOGY } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
-import { emailRouter, isLikelyUncertain, newOperationId, normaliseActionResult, normaliseDetailResponse, normaliseListResponse } from '@/lib/emailRouter';
+import { actionLabel, emailRouter, isLikelyUncertain, newOperationId, normaliseActionResult, normaliseDetailResponse, normaliseListResponse } from '@/lib/emailRouter';
 import { supabase } from '@/lib/supabaseClient';
 import EmailActionDialog from './EmailActionDialog';
 import EmailMessageList from './EmailMessageList';
-import EmailMessageSheet, { EmailMessageDetail } from './EmailMessageSheet';
+import EmailMessageSheet, { EmailMessageActions, EmailMessageDetail } from './EmailMessageSheet';
 import EmailRedirectPanel from './EmailRedirectPanel';
 import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
 import EmailRouterSettings from './EmailRouterSettings';
@@ -44,7 +44,7 @@ function ResultNotice({ result, compact = false }) {
   const Icon = result.status === 'confirmed' ? CheckCircle2 : result.status === 'uncertain' && !tracking ? ShieldCheck : pending ? Loader2 : accepted ? CheckCircle2 : XCircle;
   const tone = result.status === 'confirmed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : result.status === 'uncertain' && !tracking ? 'border-amber-200 bg-amber-50 text-amber-950' : pending || accepted ? 'border-blue-200 bg-blue-50 text-blue-950' : 'border-red-200 bg-red-50 text-red-900';
   const label = result.status === 'confirmed' ? 'Confirmed' : tracking ? (accepted ? 'Sending securely' : 'Confirming') : result.status === 'uncertain' ? 'Outcome uncertain' : accepted ? 'Queued securely' : result.status === 'submitted' ? 'Submitted' : 'Failed';
-  return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{result.action}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
+  return <div className={cn('flex min-h-12 items-start gap-3 border px-4 py-3 text-sm', tone)} role="status" aria-live="polite"><Icon className={cn('mt-0.5 h-4 w-4 shrink-0', pending && 'animate-spin')} /><div className="min-w-0"><span className="font-semibold">{label}</span><span className="mx-1">·</span>{actionLabel(result.action)}<p className="mt-0.5 break-words">{result.message}</p></div></div>;
 }
 
 export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsOpenChange = () => {} }) {
@@ -320,22 +320,25 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
 
   const openAction = async (action, undoResult = null) => {
     if (!detail || submitting) return;
-    if (action === 'archive') {
-      const archivedMessage = detail;
-      const archivedIndex = Math.max(0, messagesRef.current.findIndex((message) => message.id === archivedMessage.id));
-      setMessages((current) => current.filter((message) => message.id !== archivedMessage.id));
+    if (action === 'archive' || action === 'move_market_report') {
+      const movedMessage = detail;
+      const movedIndex = Math.max(0, messagesRef.current.findIndex((message) => message.id === movedMessage.id));
+      setMessages((current) => current.filter((message) => message.id !== movedMessage.id));
       setSelectedId(null);
       setDetail(null);
-      const result = await submitAction({ action: 'archive' }, archivedMessage, { refreshList: false });
+      const payload = action === 'archive'
+        ? { action: 'archive' }
+        : { action: 'move', destinationFolderKey: 'market_report' };
+      const result = await submitAction(payload, movedMessage, { refreshList: false });
       if (result?.status === 'failed') {
         setMessages((current) => {
-          if (current.some((message) => message.id === archivedMessage.id)) return current;
+          if (current.some((message) => message.id === movedMessage.id)) return current;
           const restored = [...current];
-          restored.splice(Math.min(archivedIndex, restored.length), 0, archivedMessage);
+          restored.splice(Math.min(movedIndex, restored.length), 0, movedMessage);
           return restored;
         });
-        setSelectedId(archivedMessage.id);
-        setDetail(archivedMessage);
+        setSelectedId(movedMessage.id);
+        setDetail(movedMessage);
       }
       return;
     }
@@ -429,13 +432,20 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
       compact
       className="mb-3"
     />
-    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-8rem)] xl:flex-row">
-      <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
-        <div className="border-b border-border px-4 py-3"><Tabs value={folder} onValueChange={setFolder}><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="inbox" className="gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger></TabsList></Tabs></div>
-        <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
-        <EmailMessageList messages={messages} selectedId={selectedId} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onPrevious={previous} onNext={next} />
+    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-8rem)]">
+      <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2">
+        <Tabs value={folder} onValueChange={setFolder} className="shrink-0"><TabsList><TabsTrigger value="inbox" className="gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger></TabsList></Tabs>
+        <span className="h-7 shrink-0 border-l border-border" aria-hidden="true" />
+        <span className="shrink-0 text-[11px] font-semibold uppercase text-blue-700">Actions</span>
+        <EmailMessageActions message={detail} actionResult={actionResult} actionPending={submitting} onAction={openAction} />
       </div>
-      {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
+      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+        <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
+          <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
+          <EmailMessageList messages={messages} selectedId={selectedId} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onPrevious={previous} onNext={next} />
+        </div>
+        {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} showActions={false} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
+      </div>
     </section>
     {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} directory={directory} presets={presets} directoryLoading={directoryLoading} submitting={submitting} onSubmit={submitAction} />

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, Download, Eye, File, Forward, Loader2, Mail, Paperclip, Reply, RotateCcw, Trash2, Undo2 } from 'lucide-react';
+import { Archive, Download, Eye, File, FolderInput, Forward, Loader2, Mail, Paperclip, Reply, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { formatAddresses, formatEmailDate, plainTextToHtml, sanitizeEmailHtml } from '@/lib/emailRouter';
+import { actionLabel, formatAddresses, formatEmailDate, plainTextToHtml, sanitizeEmailHtml } from '@/lib/emailRouter';
 
 function actionStatusLabel(status) {
   return status === 'confirmed' ? 'Confirmed' : status === 'uncertain' ? 'Uncertain' : status === 'draft_created' ? 'Draft created' : status === 'submitted' ? 'Submitted' : 'Failed';
@@ -66,7 +66,22 @@ export function replaceEmailRouterInlineSources(value, sources) {
   return document.body.innerHTML;
 }
 
-export function EmailMessageDetail({ message, loading, error, actionResult, actionPending = false, onAction, onFetchAttachment, onDownloadAttachment }) {
+export function EmailMessageActions({ message, actionResult, actionPending = false, onAction, className = '' }) {
+  const disabled = !message || actionPending;
+  const buttonClassName = 'h-8 shrink-0 gap-1.5 border-blue-200 bg-blue-50 px-2.5 text-blue-800 hover:border-blue-300 hover:bg-blue-100 hover:text-blue-900 disabled:border-border disabled:bg-muted/30 disabled:text-muted-foreground';
+  return <TooltipProvider delayDuration={250}>
+    <div className={`flex min-w-max items-center gap-1.5 ${className}`} aria-label="Message actions">
+      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('reply')} disabled={disabled}><Reply className="h-3.5 w-3.5" />Reply</Button></TooltipTrigger><TooltipContent>Reply to this message</TooltipContent></Tooltip>
+      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('forward')} disabled={disabled}><Forward className="h-3.5 w-3.5" />Forward</Button></TooltipTrigger><TooltipContent>Forward this message</TooltipContent></Tooltip>
+      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('archive')} disabled={disabled}><Archive className="h-3.5 w-3.5" />Archive</Button></TooltipTrigger><TooltipContent>Move immediately to Archive</TooltipContent></Tooltip>
+      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('delete')} disabled={disabled}><Trash2 className="h-3.5 w-3.5" />Trash</Button></TooltipTrigger><TooltipContent>Move this message to Deleted Items</TooltipContent></Tooltip>
+      <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('move_market_report')} disabled={disabled}><FolderInput className="h-3.5 w-3.5" />Market Report</Button></TooltipTrigger><TooltipContent>Move immediately to the Market Report folder</TooltipContent></Tooltip>
+      {actionResult?.messageId === message?.id && actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="outline" size="sm" className={buttonClassName} onClick={() => onAction('undo', actionResult)} disabled={actionPending}><Undo2 className="h-3.5 w-3.5" />Undo</Button></TooltipTrigger><TooltipContent>Undo the last move</TooltipContent></Tooltip>}
+    </div>
+  </TooltipProvider>;
+}
+
+export function EmailMessageDetail({ message, loading, error, actionResult, actionPending = false, onAction, onFetchAttachment, onDownloadAttachment, showActions = true }) {
   const [downloadingId, setDownloadingId] = useState(null);
   const [inlineSources, setInlineSources] = useState({});
   const [preview, setPreview] = useState(null);
@@ -126,6 +141,7 @@ export function EmailMessageDetail({ message, loading, error, actionResult, acti
 
   return <TooltipProvider delayDuration={250}>
     <div className="flex min-h-full flex-col">
+      {showActions && <div className="overflow-x-auto border-b border-border px-4 py-2"><EmailMessageActions message={message} actionResult={actionResult} actionPending={actionPending} onAction={onAction} /></div>}
       <header className="border-b border-border px-5 py-5 sm:px-6">
         <h2 className="break-words text-xl font-semibold leading-7">{message.subject}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{formatEmailDate(message.sentAt)}</p>
@@ -135,21 +151,13 @@ export function EmailMessageDetail({ message, loading, error, actionResult, acti
         <div className="mt-2 flex gap-3"><span className="w-12 shrink-0 text-muted-foreground">To</span><span className="min-w-0 break-words">{formatAddresses(message.to) || 'Not available'}</span></div>
         {message.cc.length > 0 && <div className="mt-2 flex gap-3"><span className="w-12 shrink-0 text-muted-foreground">Cc</span><span className="min-w-0 break-words">{formatAddresses(message.cc)}</span></div>}
       </div>
-      <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('reply')} disabled={actionPending} aria-label="Reply"><Reply /></Button></TooltipTrigger><TooltipContent>Reply</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('forward')} disabled={actionPending} aria-label="Forward"><Forward /></Button></TooltipTrigger><TooltipContent>Forward</TooltipContent></Tooltip>
-        <span className="mx-1 h-5 border-l border-border" />
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('archive')} disabled={actionPending} aria-label="Archive message"><Archive /></Button></TooltipTrigger><TooltipContent>Archive immediately</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('delete')} disabled={actionPending} aria-label="Delete message"><Trash2 /></Button></TooltipTrigger><TooltipContent>Delete</TooltipContent></Tooltip>
-        {actionResult?.messageId === message.id && actionResult?.undoToken && actionResult.status === 'confirmed' && <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => onAction('undo', actionResult)} disabled={actionPending} aria-label="Undo last action"><Undo2 /></Button></TooltipTrigger><TooltipContent>Undo last action</TooltipContent></Tooltip>}
-      </div>
       {error && <div className="mx-5 mt-4 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:mx-6">The full message could not be refreshed. Showing the available message information. {error}</div>}
       {message.detailWarnings?.map((warning) => <div key={warning} className="mx-5 mt-4 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:mx-6">{warning}</div>)}
       <div className="email-router-content-shell mx-5 my-6 overflow-x-auto bg-white sm:mx-6">
         <article className="email-router-content min-w-0 text-sm leading-6 text-foreground" dangerouslySetInnerHTML={{ __html: content }} />
       </div>
       {message.attachments.length > 0 && <section className="border-t border-border px-5 py-5 sm:px-6"><h3 className="flex items-center gap-2 text-sm font-semibold"><Paperclip className="h-4 w-4" />Attachments ({message.attachments.length})</h3><div className="mt-3 divide-y divide-border border-y border-border">{message.attachments.map((attachment, index) => { const id = attachment.id || attachment.attachmentId || `${attachmentName(attachment)}-${index}`; return <div key={id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-2"><File className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="truncate text-sm">{attachmentName(attachment)}</span>{attachment.size && <span className="shrink-0 text-xs text-muted-foreground">{attachment.size}</span>}</div><div className="flex shrink-0 items-center gap-1">{canPreviewAttachment(attachment) && <Button variant="ghost" size="icon" onClick={() => openPreview(attachment)} disabled={downloadingId === id} aria-label={`Preview ${attachmentName(attachment)}`} title={`Preview ${attachmentName(attachment)}`}><Eye /></Button>}<Button variant="ghost" size="icon" onClick={() => download(attachment)} disabled={downloadingId === id} aria-label={`Download ${attachmentName(attachment)}`} title={`Download ${attachmentName(attachment)}`}>{downloadingId === id ? <Loader2 className="animate-spin" /> : <Download />}</Button></div></div>; })}</div></section>}
-      <section className="border-t border-border px-5 py-5 sm:px-6"><h3 className="flex items-center gap-2 text-sm font-semibold"><RotateCcw className="h-4 w-4" />Action history</h3>{history.length ? <ol className="mt-3 space-y-3">{history.map((entry, index) => <li key={entry.id || entry.actionId || `${entry.action || 'action'}-${index}`} className="border-l-2 border-border pl-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{entry.label || entry.action || 'Mail action'}{entry.status && <span className="ml-2 text-xs font-normal text-muted-foreground">{actionStatusLabel(entry.status)}</span>}</p>{entry.status === 'uncertain' && entry.id && ['redirect', 'reply', 'forward'].includes(entry.action) && <Button size="sm" variant="outline" onClick={() => onAction('retry', { actionId: entry.id, action: entry.action, status: entry.status })}>Review retry</Button>}</div><p className="mt-0.5 text-xs text-muted-foreground">{formatEmailDate(entry.at || entry.createdAt || entry.timestamp)}{entry.actor ? ` by ${entry.actor}` : ''}</p>{entry.detail && <p className="mt-1 text-muted-foreground">{entry.detail}</p>}</li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No mail actions are recorded for this message.</p>}</section>
+      <section className="border-t border-border px-5 py-5 sm:px-6"><h3 className="flex items-center gap-2 text-sm font-semibold"><RotateCcw className="h-4 w-4" />Action history</h3>{history.length ? <ol className="mt-3 space-y-3">{history.map((entry, index) => <li key={entry.id || entry.actionId || `${entry.action || 'action'}-${index}`} className="border-l-2 border-border pl-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{entry.label || actionLabel(entry.action)}{entry.status && <span className="ml-2 text-xs font-normal text-muted-foreground">{actionStatusLabel(entry.status)}</span>}</p>{entry.status === 'uncertain' && entry.id && ['redirect', 'reply', 'forward'].includes(entry.action) && <Button size="sm" variant="outline" onClick={() => onAction('retry', { actionId: entry.id, action: entry.action, status: entry.status })}>Review retry</Button>}</div><p className="mt-0.5 text-xs text-muted-foreground">{formatEmailDate(entry.at || entry.createdAt || entry.timestamp)}{entry.actor ? ` by ${entry.actor}` : ''}</p>{entry.detail && <p className="mt-1 text-muted-foreground">{entry.detail}</p>}</li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No mail actions are recorded for this message.</p>}</section>
       <Dialog open={Boolean(preview)} onOpenChange={(open) => !open && closePreview()}><DialogContent className="h-[85vh] max-w-5xl overflow-hidden"><DialogHeader><DialogTitle className="truncate">{preview?.name || 'Attachment preview'}</DialogTitle><DialogDescription>Temporary preview from Microsoft 365. The file is not stored in FCOS.</DialogDescription></DialogHeader>{preview?.type === 'text' ? <pre className="h-full overflow-auto whitespace-pre-wrap border border-border bg-muted/20 p-4 text-xs">{preview.content}</pre> : preview?.type === 'image' ? <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/20"><img src={preview.url} alt={preview.name} className="max-h-full max-w-full object-contain" /></div> : preview?.url ? <iframe src={preview.url} title={preview.name} className="h-full w-full border border-border" /> : null}</DialogContent></Dialog>
     </div>
   </TooltipProvider>;

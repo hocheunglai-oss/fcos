@@ -19,6 +19,7 @@ import {
   resolveEmailRouterActionRecipients,
   resolveEmailRouterAlert,
   resolveEmailRouterInlineAttachmentAliases,
+  resolveEmailRouterMarketReportFolder,
   resolveEmailRouterPresetVersion,
   retryEmailRouterUncertainAction,
   startEmailRouterAction,
@@ -193,9 +194,38 @@ test('redirect MIME keeps body bytes while removing unsafe transport headers and
   assert.deepEqual(result.raw.subarray(split + 4), body);
 });
 
-test('redirect MIME rejects protected content and visible original BCC headers', () => {
-  const unsafe = Buffer.from('From: source@example.net\r\nMessage-ID: <x@example.net>\r\nBcc: private@example.net\r\n\r\nbody');
-  assert.throws(() => buildEmailRouterRedirectMime({ raw: unsafe, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+test('redirect MIME strips original BCC and Resent headers without requiring Message-ID', () => {
+  const raw = Buffer.from('From: source@example.net\r\nBcc: private@example.net\r\nResent-From: relay@example.net\r\nResent-To: old@example.net\r\nSubject: Safe redirect\r\n\r\nbody');
+  const result = buildEmailRouterRedirectMime({ raw, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] });
+  const headers = result.raw.subarray(0, result.raw.indexOf(Buffer.from('\r\n\r\n'))).toString('latin1');
+  assert.doesNotMatch(headers, /^(?:Bcc|Resent-[^:]+|Message-ID):/im);
+  assert.match(headers, /^To: <to@example.net>$/im);
+});
+
+test('redirect MIME rejects protected and previously redirected messages with specific reasons', () => {
+  const protectedMessage = Buffer.from('From: source@example.net\r\nContent-Type: multipart/signed\r\n\r\nbody');
+  assert.throws(() => buildEmailRouterRedirectMime({ raw: protectedMessage, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED' && /Protected/.test(error.message));
+  const redirected = Buffer.from('From: source@example.net\r\nX-EmailRouter-Redirect: graph-mime-v1\r\n\r\nbody');
+  assert.throws(() => buildEmailRouterRedirectMime({ raw: redirected, mailboxAddress: 'router@example.net', recipients: [{ address: 'to@example.net', kind: 'to' }] }), (error) => error.code === 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED' && error.status === 409);
+});
+
+test('Market Report folder resolution supports nested folders and fails closed on duplicates', async () => {
+  const mailbox = { id: 'market-folder-mailbox', emailAddress: 'router@example.net' };
+  const fetchImpl = async (url) => {
+    const requested = String(url);
+    const payload = requested.includes('/mailFolders/parent-folder/childFolders')
+      ? { value: [{ id: 'market-folder', displayName: 'Market Report', childFolderCount: 0 }] }
+      : { value: [{ id: 'parent-folder', displayName: 'Reports', childFolderCount: 1 }] };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  assert.equal(await resolveEmailRouterMarketReportFolder(mailbox, { accessToken: 'token', fetchImpl }), 'market-folder');
+
+  const duplicateMailbox = { id: 'duplicate-market-folder-mailbox', emailAddress: 'duplicate@example.net' };
+  const duplicateFetch = async () => new Response(JSON.stringify({ value: [
+    { id: 'market-a', displayName: 'Market Report', childFolderCount: 0 },
+    { id: 'market-b', displayName: 'market report', childFolderCount: 0 },
+  ] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(resolveEmailRouterMarketReportFolder(duplicateMailbox, { accessToken: 'token', fetchImpl: duplicateFetch }), (error) => error.code === 'EMAIL_ROUTER_MARKET_REPORT_FOLDER_AMBIGUOUS');
 });
 
 test('attachment links are short-lived, signed, and contain no file name', () => {
@@ -564,6 +594,7 @@ test('a repeated operation ID returns its existing state without another Graph r
     actionType: 'reply',
     bodyHash: createHash('sha256').update('', 'utf8').digest('hex'),
     destinationFolderId: null,
+    destinationFolderKey: null,
     destinationSelections: [],
     manualRecipientHashes: [],
     mailboxId,

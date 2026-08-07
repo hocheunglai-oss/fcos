@@ -1,6 +1,16 @@
-export const APP_VERSION = '2.0.139';
+export const APP_VERSION = '2.0.140';
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.140',
+    date: '2026-08-07',
+    title: 'Safer redirects and direct message actions',
+    changes: [
+      'Fixed valid Outlook messages being rejected during Redirect because of harmless original Bcc, Resent, or missing Message-ID headers.',
+      'Moved Reply, Forward, Archive, Trash, and Market Report controls into a distinct action toolbar above the selected message.',
+      'Added a one-click, server-validated move to the exact Microsoft 365 Market Report folder with duplicate-folder protection.',
+    ],
+  },
   {
     version: '2.0.139',
     date: '2026-08-07',

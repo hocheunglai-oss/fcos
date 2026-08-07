@@ -154,7 +154,7 @@ test('Email Router directory supports ordered users, external contacts, and grou
   assert.match(redirectPanel, /splitRecipientSelections/);
 });
 
-test('Email Router archive is immediate and foreground redirect work is scoped to one action', async () => {
+test('Email Router archive and Market Report moves are immediate while redirect work is scoped to one action', async () => {
   const [core, handlers, workspace, dialog, messageSheet] = await Promise.all([
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_emailRouterHandlers.js', import.meta.url), 'utf8'),
@@ -167,7 +167,9 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(core, /\.eq\('mail_action_id', targetActionId\)/);
   assert.match(core, /!submittedNow \|\| confirmNewSubmissions/);
   assert.match(handlers, /limit: 1, actionId: result\.id, confirmNewSubmissions: false/);
-  assert.match(workspace, /if \(action === 'archive'\)[\s\S]*setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(\{ action: 'archive' \}, archivedMessage, \{ refreshList: false \}\)/);
+  assert.match(workspace, /action === 'archive' \|\| action === 'move_market_report'/);
+  assert.match(workspace, /destinationFolderKey: 'market_report'/);
+  assert.match(workspace, /setMessages\(\(current\) => current\.filter[\s\S]*await submitAction\(payload, movedMessage, \{ refreshList: false \}\)/);
   assert.match(handlers, /continueEmailRouterWork\(submission, runtimeDependencies, 'Draft submission'\)/);
   assert.match(handlers, /emailRouterActionStatusHandler[\s\S]*confirmNewSubmissions: true/);
   assert.match(workspace, /emailRouter\.actionStatus\(\{ actionId \}, \{ force: true, cache: false, invalidateCache: false \}\)/);
@@ -180,7 +182,10 @@ test('Email Router archive is immediate and foreground redirect work is scoped t
   assert.match(workspace, /\}, \[selectedId\]\);/);
   assert.match(workspace, /attachment\.streamUrl/);
   assert.doesNotMatch(dialog, /archive:\s*\{/);
-  assert.match(messageSheet, /Archive immediately/);
+  assert.match(messageSheet, /Move immediately to Archive/);
+  assert.match(messageSheet, /Move immediately to the Market Report folder/);
+  assert.match(workspace, /Inbox[\s\S]*Sent[\s\S]*Archive[\s\S]*Actions[\s\S]*EmailMessageActions/);
+  assert.match(workspace, /showActions=\{false\}/);
 });
 
 test('Email Router action status is page-level and not duplicated in the message pane', async () => {
@@ -198,7 +203,7 @@ test('Email Router action status is page-level and not duplicated in the message
   assert.doesNotMatch(workspace, /<ResultNotice result=\{actionResult\} \/>\s*<section/);
   assert.match(workspace, /messageId: sourceMessage\.id/);
   assert.doesNotMatch(workspace, /if \(messageId !== selectedId\) setActionResult\(null\)/);
-  assert.match(messageSheet, /actionResult\?\.messageId === message\.id/);
+  assert.match(messageSheet, /actionResult\?\.messageId === message\?\.id/);
   assert.doesNotMatch(messageSheet, /actionResult && <div/);
   assert.match(pageHeader, /status && <div className="min-w-0">\{status\}<\/div>/);
 });

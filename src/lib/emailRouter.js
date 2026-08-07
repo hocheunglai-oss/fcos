@@ -6,6 +6,7 @@ const ACTION_LABELS = {
   reply: 'Reply',
   forward: 'Forward',
   archive: 'Archive',
+  move: 'Move to Market Report',
   delete: 'Delete',
   undo: 'Undo',
   retry: 'Retry uncertain send',
@@ -130,6 +131,7 @@ export function isLikelyUncertain(error) {
 export function normaliseActionResult(data = {}, fallbackAction) {
   const serverStatus = stringValue(firstValue(data, ['status', 'outcome', 'state'], '')).toLowerCase();
   const error = stringValue(firstValue(data, ['error', 'message'], ''));
+  const action = firstValue(data, ['action', 'actionType'], fallbackAction);
   const status = serverStatus === 'confirmed' || serverStatus === 'success' || serverStatus === 'completed'
     ? 'confirmed'
     : ['queued', 'prepared', 'reserved', 'draft_created'].includes(serverStatus)
@@ -143,10 +145,16 @@ export function normaliseActionResult(data = {}, fallbackAction) {
           : 'submitted';
   return {
     status,
-    action: firstValue(data, ['action', 'actionType'], fallbackAction),
+    action,
     tracking: data?.tracking === true,
     message: error || stringValue(firstValue(data, ['detail', 'description'], status === 'confirmed'
-      ? 'Microsoft 365 confirmed the message in Sent Items.'
+      ? action === 'archive'
+        ? 'Microsoft 365 moved the message to Archive.'
+        : action === 'delete'
+          ? 'Microsoft 365 moved the message to Deleted Items.'
+          : action === 'move'
+            ? 'Microsoft 365 moved the message to Market Report.'
+            : 'Microsoft 365 confirmed the message in Sent Items.'
       : status === 'draft_created'
         ? 'The draft is secured and FCOS is submitting it to Microsoft 365.'
         : status === 'submitted'

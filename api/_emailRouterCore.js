@@ -15,6 +15,9 @@ const MAX_MIME_BYTES = 25 * 1024 * 1024;
 const GRAPH_SELECT = 'id,parentFolderId,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
 const ROUTE_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS = 28_000;
+const MARKET_REPORT_FOLDER_NAME = 'Market Report';
+const MARKET_REPORT_FOLDER_CACHE_MS = 5 * 60 * 1000;
+const marketReportFolderCache = new Map();
 
 export const EMAIL_ROUTER_STORAGE = Object.freeze({
   mailboxes: 'mailbox_connections',
@@ -958,9 +961,11 @@ function parseHeaders(raw, end) {
   return fields;
 }
 
-function singleHeader(fields, name) {
+function singleHeader(fields, name, label) {
   const values = fields.filter((field) => field.name === name);
-  if (values.length !== 1) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  if (values.length !== 1) {
+    throw routerError(`The original message has an unavailable or ambiguous ${label}.`, 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  }
   return values[0];
 }
 
@@ -991,7 +996,7 @@ function normalizedRecipients(recipients) {
 }
 
 function removeRedirectUnsafeHeader(name) {
-  return ['from', 'sender', 'reply-to', 'to', 'cc', 'bcc', 'subject', 'return-path', 'received', 'authentication-results', 'dkim-signature', 'domainkey-signature', 'content-length'].includes(name)
+  return ['from', 'sender', 'reply-to', 'to', 'cc', 'bcc', 'subject', 'message-id', 'return-path', 'received', 'authentication-results', 'dkim-signature', 'domainkey-signature', 'content-length'].includes(name)
     || name.startsWith('resent-') || name.startsWith('arc-') || name.startsWith('x-ms-exchange-') || name.startsWith('x-forefront-antispam') || name === 'x-emailrouter-redirect';
 }
 
@@ -1000,16 +1005,17 @@ export function buildEmailRouterRedirectMime({ raw, mailboxAddress, recipients }
   if (input.byteLength > MAX_MIME_BYTES) throw routerError('The original message is too large for safe redirect.', 400, 'EMAIL_ROUTER_REDIRECT_TOO_LARGE');
   const boundary = headerBoundary(input);
   const fields = parseHeaders(input, boundary.end);
-  if (fields.some((field) => field.name === 'bcc' || field.name.startsWith('resent-') || field.name === 'x-emailrouter-redirect')) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  if (fields.some((field) => field.name === 'x-emailrouter-redirect')) {
+    throw routerError('This message was previously redirected by FCOS. Redirect is blocked to prevent duplicate delivery.', 409, 'EMAIL_ROUTER_REDIRECT_ALREADY_REDIRECTED');
+  }
   const contentType = fields.filter((field) => field.name === 'content-type').map((field) => field.value).join(' ');
   if (/multipart\/signed|application\/(?:x-)?pkcs7-mime|text\/calendar/i.test(contentType) || fields.some((field) => field.name === 'x-ms-exchange-organization-rightsprotectmessage')) throw routerError('Protected, signed, or meeting messages cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
-  const sender = parsedMailbox(singleHeader(fields, 'from').value);
-  singleHeader(fields, 'message-id');
+  const sender = parsedMailbox(singleHeader(fields, 'from', 'sender header').value);
   const replyTo = fields.filter((field) => field.name === 'reply-to');
-  if (replyTo.length > 1) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  if (replyTo.length > 1) throw routerError('The original message has ambiguous reply addresses.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const reply = replyTo.length ? parsedMailbox(replyTo[0].value).address : sender.address;
   const subjectFields = fields.filter((field) => field.name === 'subject');
-  if (subjectFields.length > 1) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
+  if (subjectFields.length > 1) throw routerError('The original message has ambiguous subject headers.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const subject = text(subjectFields[0]?.value, 900);
   if (/[\0-\x1f\x7f]/.test(subject)) throw routerError('The original message cannot be safely redirected.', 400, 'EMAIL_ROUTER_REDIRECT_UNSUPPORTED');
   const routes = normalizedRecipients(recipients);
@@ -1321,6 +1327,7 @@ function requestFingerprint({ mailboxId, messageId, actionType, input, routeSnap
     actionType,
     bodyHash: createHash('sha256').update(String(input.comment || input.body || ''), 'utf8').digest('hex'),
     destinationFolderId: input.destinationFolderId || null,
+    destinationFolderKey: input.destinationFolderKey || null,
     destinationSelections,
     manualRecipientHashes,
     mailboxId,
@@ -1328,6 +1335,54 @@ function requestFingerprint({ mailboxId, messageId, actionType, input, routeSnap
     presetId: input.presetId || null,
     ...(routeSnapshot ? { presetVersionId: routeSnapshot.versionId, routeDefinitionHash: routeSnapshot.definitionHash } : {}),
   })).digest('hex');
+}
+
+export async function resolveEmailRouterMarketReportFolder(mailbox, dependencies = {}) {
+  const cacheKey = String(mailbox?.id || mailbox?.emailAddress || '').toLowerCase();
+  const cached = marketReportFolderCache.get(cacheKey);
+  if (cached?.expiresAt > Date.now()) return cached.id;
+
+  const parameters = new URLSearchParams({
+    '$select': 'id,displayName,childFolderCount',
+    '$top': '100',
+    includeHiddenFolders: 'true',
+  });
+  const queue = [{ path: mailboxPath(mailbox, `/mailFolders?${parameters}`), depth: 0 }];
+  const matches = [];
+  let inspected = 0;
+
+  while (queue.length && inspected < 500) {
+    const current = queue.shift();
+    let nextPath = current.path;
+    for (let page = 0; nextPath && page < 10 && inspected < 500; page += 1) {
+      const response = await emailRouterGraphFetch(nextPath, {}, dependencies);
+      const payload = await graphJson(response) || {};
+      const folders = Array.isArray(payload.value) ? payload.value : [];
+      inspected += folders.length;
+      for (const folder of folders) {
+        if (String(folder?.displayName || '').trim().toLowerCase() === MARKET_REPORT_FOLDER_NAME.toLowerCase()) {
+          matches.push(safeId(folder.id, 'Market Report folder identifier'));
+        }
+        if (Number(folder?.childFolderCount || 0) > 0 && current.depth < 4) {
+          queue.push({
+            path: mailboxPath(mailbox, `/mailFolders/${encodeURIComponent(safeId(folder.id, 'folder identifier'))}/childFolders?${parameters}`),
+            depth: current.depth + 1,
+          });
+        }
+      }
+      nextPath = payload['@odata.nextLink'] || null;
+    }
+  }
+
+  const uniqueMatches = [...new Set(matches)];
+  if (!uniqueMatches.length) {
+    throw routerError('The Market Report folder is unavailable in the connected mailbox.', 409, 'EMAIL_ROUTER_MARKET_REPORT_FOLDER_MISSING');
+  }
+  if (uniqueMatches.length > 1) {
+    throw routerError('More than one Market Report folder exists. Rename the duplicate folders before using this action.', 409, 'EMAIL_ROUTER_MARKET_REPORT_FOLDER_AMBIGUOUS');
+  }
+  marketReportFolderCache.set(cacheKey, { id: uniqueMatches[0], expiresAt: Date.now() + MARKET_REPORT_FOLDER_CACHE_MS });
+  return uniqueMatches[0];
 }
 
 function actionResult(action, extra = {}) {
@@ -1397,6 +1452,14 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
   if (['redirect', 'forward'].includes(actionType) && !hasRecipientInput(input)) {
     throw routerError('At least one To, Cc, or Bcc recipient is required.', 400, 'EMAIL_ROUTER_RECIPIENT_REQUIRED');
   }
+  let resolvedMoveDestinationId = null;
+  if (actionType === 'move') {
+    if (input.destinationFolderKey === 'market_report' && !input.destinationFolderId) {
+      resolvedMoveDestinationId = await resolveEmailRouterMarketReportFolder(mailbox, dependencies);
+    } else if (input.destinationFolderKey || !input.destinationFolderId) {
+      throw routerError('The selected destination folder is unavailable.', 400, 'EMAIL_ROUTER_DESTINATION_FOLDER_INVALID');
+    } else resolvedMoveDestinationId = safeId(input.destinationFolderId, 'destination folder identifier');
+  }
   const routeSnapshot = input.presetId
     ? await resolveEmailRouterPresetSnapshot(client, profile.id, input, dependencies.env || process.env)
     : null;
@@ -1459,7 +1522,10 @@ export async function startEmailRouterAction({ client, profile, mailbox, actionT
       ]);
       return actionResult({ ...action, state: 'confirmed' });
     }
-    const destinationId = actionType === 'archive' ? 'archive' : actionType === 'delete' ? 'deleteditems' : safeId(input.destinationFolderId, 'destination folder identifier');
+    let destinationId;
+    if (actionType === 'archive') destinationId = 'archive';
+    else if (actionType === 'delete') destinationId = 'deleteditems';
+    else destinationId = resolvedMoveDestinationId;
     const uncertainAt = reservedAt;
     try {
       const [response] = await Promise.all([
