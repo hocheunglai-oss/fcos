@@ -108,6 +108,8 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   }
   assert.match(service, /allOrNone: true/);
   assert.match(service, /expectedLastModifiedDate/);
+  const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
+  assert.doesNotMatch(liveLoader, /CurrencyIsoCode/);
   assert.match(service, /requireExternalActionGate\('salesforce_write'\)/);
   assert.match(service, /Cancelled__c: true/);
   assert.doesNotMatch(service, /method:\s*'DELETE'/);
