@@ -187,7 +187,11 @@ public without sharing class ShipAgentInvoiceReadinessService {
     }
 
     private static Boolean hasChanged(SObject record, SObject oldRecord, List<String> fields) {
-        for (String fieldName : fields) if (String.valueOf(record.get(fieldName)) != String.valueOf(oldRecord.get(fieldName))) return true;
+        Map<String, Schema.SObjectField> availableFields = record.getSObjectType().getDescribe().fields.getMap();
+        for (String fieldName : fields) {
+            if (!availableFields.containsKey(fieldName)) continue;
+            if (String.valueOf(record.get(fieldName)) != String.valueOf(oldRecord.get(fieldName))) return true;
+        }
         return false;
     }
 
