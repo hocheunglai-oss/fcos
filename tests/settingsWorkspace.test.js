@@ -126,6 +126,7 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(sidebarDefaultMigration, /workspace_preference_events/);
   assert.match(server, /workspacePreferencesGet: \[\]/);
   assert.match(server, /calendarGateEnabled \? row : \{ \.\.\.row, status: 'disabled'/);
+  assert.match(server, /base\.warning && \(!reportedStatus \|\| reportedStatus === 'online'\) \? 'warning'/);
   assert.match(server, /systemHealth: \[\]/);
   assert.match(server, /loadBrokerCommissionSettings\(client\)/);
   const rateHandler = server.slice(server.indexOf('async function frankfurterUsdCnyRate'), server.indexOf('function earliestDate'));

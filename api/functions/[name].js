@@ -5905,9 +5905,12 @@ function healthRow(base, result = null) {
       error: null,
     };
   }
+  const reportedStatus = result.status || result.details?.healthStatus || null;
   return {
     ...base,
-    status: result.ok ? result.status || result.details?.healthStatus || (base.warning ? 'warning' : 'online') : result.status || 'unavailable',
+    status: result.ok
+      ? base.warning && (!reportedStatus || reportedStatus === 'online') ? 'warning' : reportedStatus || 'online'
+      : result.status || 'unavailable',
     checkedAt,
     latencyMs: result.latencyMs,
     error: result.error || null,

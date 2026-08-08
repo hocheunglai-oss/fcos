@@ -4,6 +4,14 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.149',
+    releasedAt: '2026-08-08',
+    title: 'Show connection cleanup warnings accurately',
+    changes: [
+      'Kept healthy provider connectivity online while showing non-blocking System Health warnings for redundant or legacy connection configuration that still needs cleanup.',
+    ],
+  },
+  {
     version: '2.0.148',
     releasedAt: '2026-08-08',
     title: 'Clear transitive dependency advisories',
