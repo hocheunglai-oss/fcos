@@ -3,9 +3,14 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 
 const migrationUrl = new URL('../supabase/migrations/20260807163729_ship_agent_final_charges.sql', import.meta.url);
+const triggerPrivilegesMigrationUrl = new URL('../supabase/migrations/20260808043932_ship_agent_trigger_function_privileges.sql', import.meta.url);
 
 async function migration() {
   return readFile(migrationUrl, 'utf8');
+}
+
+async function triggerPrivilegesMigration() {
+  return readFile(triggerPrivilegesMigrationUrl, 'utf8');
 }
 
 test('Ship-Agent charges migration keeps workflow data service-only and excludes mirrored financial records', async () => {
@@ -53,6 +58,20 @@ test('Ship-Agent workflow functions are security-invoker, revision-protected, im
   assert.match(sql, /Ship-Agent operations? identity is immutable/);
   assert.match(sql, /where role_row\.role = 'general_manager'/);
   assert.match(sql, /coalesce\(cardinality\(v_general_manager_ids\), 0\) <> 1/);
+});
+
+test('Ship-Agent trigger helpers revoke implicit browser execution', async () => {
+  const sql = await triggerPrivilegesMigration();
+  for (const helper of [
+    'ship_agent_charge_case_before_update',
+    'ship_agent_charge_confirmation_immutable',
+    'ship_agent_charge_event_protect',
+    'ship_agent_charge_operation_before_update',
+    'ship_agent_charge_notification_before_update',
+  ]) {
+    assert.match(sql, new RegExp(`revoke all on function public\\.${helper}\\(\\) from public, anon, authenticated`));
+    assert.match(sql, new RegExp(`grant execute on function public\\.${helper}\\(\\) to service_role`));
+  }
 });
 
 test('Ship-Agent operations and audit events have deterministic idempotency and redaction controls', async () => {

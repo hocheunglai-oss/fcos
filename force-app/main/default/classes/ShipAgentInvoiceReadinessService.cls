@@ -30,34 +30,39 @@ public without sharing class ShipAgentInvoiceReadinessService {
         if (stemId == null) return new Readiness(false, true, 'A STEM is required to verify ship-agent charges.', null);
         try {
             List<STEM__c> stems = [
-                SELECT Id, Delivery_Date__c, Ship_Agent_Charges_Confirmed__c
+                SELECT Id, Delivery_Date__c, Ship_Agent_Charges_Confirmed__c,
+                    (SELECT Original_Supplier__c, Original_Supplier__r.Imported_Particulars__c
+                     FROM STEM_Line_Items__r
+                     WHERE Cancelled__c = false AND Original_Supplier__c != null),
+                    (SELECT Supplier__c, Supplier__r.Imported_Particulars__c
+                     FROM STEM_Extra_Costs__r
+                     WHERE Cancelled__c = false AND Supplier__c != null)
                 FROM STEM__c WHERE Id = :stemId LIMIT 1
             ];
             if (stems.isEmpty()) return new Readiness(false, true, 'The STEM could not be found for ship-agent charge verification.', stemId);
 
+            STEM__c stem = stems[0];
             Set<Id> supplierIds = new Set<Id>();
-            for (STEM_Line_Item__c lineItem : [
-                SELECT Original_Supplier__c FROM STEM_Line_Item__c
-                WHERE STEM__c = :stemId AND Cancelled__c = false AND Original_Supplier__c != null
-            ]) supplierIds.add(lineItem.Original_Supplier__c);
-            for (STEM_Extra_Cost__c extraCost : [
-                SELECT Supplier__c FROM STEM_Extra_Cost__c
-                WHERE STEM__c = :stemId AND Cancelled__c = false AND Supplier__c != null
-            ]) supplierIds.add(extraCost.Supplier__c);
+            Map<Id, String> particularsBySupplierId = new Map<Id, String>();
+            for (STEM_Line_Item__c lineItem : stem.STEM_Line_Items__r) {
+                supplierIds.add(lineItem.Original_Supplier__c);
+                particularsBySupplierId.put(lineItem.Original_Supplier__c, lineItem.Original_Supplier__r.Imported_Particulars__c);
+            }
+            for (STEM_Extra_Cost__c extraCost : stem.STEM_Extra_Costs__r) {
+                supplierIds.add(extraCost.Supplier__c);
+                particularsBySupplierId.put(extraCost.Supplier__c, extraCost.Supplier__r.Imported_Particulars__c);
+            }
 
             Boolean hasShipAgent = false;
-            if (!supplierIds.isEmpty()) {
-                for (Account supplier : [SELECT Id, Imported_Particulars__c FROM Account WHERE Id IN :supplierIds]) {
-                    if (String.isNotBlank(supplier.Imported_Particulars__c)
-                        && supplier.Imported_Particulars__c.toLowerCase().contains('ship agent')) {
-                        hasShipAgent = true;
-                        break;
-                    }
+            for (Id supplierId : supplierIds) {
+                String particulars = particularsBySupplierId.get(supplierId);
+                if (String.isNotBlank(particulars) && particulars.toLowerCase().contains('ship agent')) {
+                    hasShipAgent = true;
+                    break;
                 }
             }
             if (!hasShipAgent) return new Readiness(true, false, null, stemId);
 
-            STEM__c stem = stems[0];
             if (stem.Delivery_Date__c == null) {
                 return new Readiness(false, true, 'Ship-agent charges can be confirmed only after the STEM delivery date is recorded.', stemId);
             }
