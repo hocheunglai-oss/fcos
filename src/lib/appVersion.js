@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.148',
+    releasedAt: '2026-08-08',
+    title: 'Clear transitive dependency advisories',
+    changes: [
+      'Updated DOMPurify, nanoid, and js-yaml within their existing compatible dependency ranges after the production install audit identified current advisories.',
+      'Retained the declared application dependency contract while restoring a zero-vulnerability npm audit result.',
+    ],
+  },
+  {
     version: '2.0.147',
     releasedAt: '2026-08-08',
     title: 'Faster startup and clearer connection health',
