@@ -3,28 +3,37 @@ import { appClient } from '@/api/appClient';
 import { emailRouter } from '@/lib/emailRouter';
 
 export const EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS = 30_000;
+const EMAIL_ROUTER_BACKGROUND_SYNC_LOCK = 'fcos:email-router-background-sync';
 
 export default function EmailRouterBackgroundSync({ enabled }) {
   const runningRef = useRef(false);
   const lastAttemptAtRef = useRef(0);
 
   const synchronize = useCallback(async () => {
-    if (!enabled || runningRef.current) return;
+    if (!enabled || runningRef.current || document.visibilityState !== 'visible') return;
     runningRef.current = true;
     lastAttemptAtRef.current = Date.now();
     try {
-      const response = await emailRouter.backgroundSync({}, { cache: false, force: true });
-      if (response.data?.error) {
-        window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
-        return;
-      }
-      // Another user or tab may have won the shared mailbox sync claim. Refresh
-      // every open Email Router list so that claimant-local change counts cannot
-      // leave other users looking at stale mail.
-      appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
-      window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: response.data }));
-      if (Number(response.data?.failures || 0) > 0) {
-        window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
+      const run = async () => {
+        const response = await emailRouter.backgroundSync({}, { cache: false, force: true });
+        if (response.data?.error) {
+          window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
+          return;
+        }
+        // Another user may have won the shared mailbox sync claim. Refresh every
+        // open Email Router list so claimant-local counts cannot leave it stale.
+        appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
+        window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: response.data }));
+        if (Number(response.data?.failures || 0) > 0) {
+          window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
+        }
+      };
+      if (navigator.locks?.request) {
+        await navigator.locks.request(EMAIL_ROUTER_BACKGROUND_SYNC_LOCK, { ifAvailable: true }, async (lock) => {
+          if (lock) await run();
+        });
+      } else {
+        await run();
       }
     } finally {
       runningRef.current = false;
@@ -36,7 +45,7 @@ export default function EmailRouterBackgroundSync({ enabled }) {
     synchronize();
     const interval = window.setInterval(synchronize, EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS);
     const catchUp = () => {
-      if (Date.now() - lastAttemptAtRef.current >= EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS) synchronize();
+      if (document.visibilityState === 'visible' && Date.now() - lastAttemptAtRef.current >= EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS) synchronize();
     };
     window.addEventListener('focus', catchUp);
     document.addEventListener('visibilitychange', catchUp);

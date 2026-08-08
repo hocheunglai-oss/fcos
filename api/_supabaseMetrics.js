@@ -51,6 +51,11 @@ function percentage(used, total) {
   return (used / total) * 100;
 }
 
+function capacityUsedPercent(total, available) {
+  if (!Number.isFinite(total) || !Number.isFinite(available) || total <= 0 || available < 0 || available > total) return null;
+  return percentage(total - available, total);
+}
+
 function sum(values) {
   return values.length ? values.reduce((total, value) => total + value, 0) : null;
 }
@@ -202,8 +207,8 @@ export function parseSupabasePrometheusMetrics(text) {
     pgbouncerUp: numberOrNull(pgbouncerUp),
     waitingConnections,
     maxWaitSeconds,
-    memoryUsedPercent: percentage(memoryTotal - memoryAvailable, memoryTotal),
-    diskUsedPercent: percentage(diskSize - diskAvailable, diskSize),
+    memoryUsedPercent: capacityUsedPercent(memoryTotal, memoryAvailable),
+    diskUsedPercent: capacityUsedPercent(diskSize, diskAvailable),
     databaseCacheHitPercent: percentage(cacheHits, (cacheHits ?? 0) + (cacheReads ?? 0)),
     deadlocksTotal,
   };

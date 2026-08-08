@@ -39,6 +39,8 @@ test('sidebar preference controls are launched only from My Settings', async () 
   assert.doesNotMatch(layout, /title="Customize navigation"|aria-label="Customize navigation"/);
   assert.doesNotMatch(layout, /fixed inset-y-0 left-0 z-\[39\] w-1/);
   assert.match(layout, /fcos:navigation-customize/);
+  assert.doesNotMatch(layout, /import \{ DragDropContext, Draggable, Droppable \} from '@hello-pangea\/dnd'/);
+  assert.match(layout, /await import\('@hello-pangea\/dnd'\)/);
   assert.doesNotMatch(settings, /Auto-hide at the left edge|Keep fixed space/);
   assert.match(settings, /<SelectItem value="fixed">Icon only<\/SelectItem>/);
   assert.match(settings, /<SelectItem value="auto_hide">Icon and caption<\/SelectItem>/);
@@ -123,6 +125,7 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(sidebarDefaultMigration, /revision = revision \+ 1/);
   assert.match(sidebarDefaultMigration, /workspace_preference_events/);
   assert.match(server, /workspacePreferencesGet: \[\]/);
+  assert.match(server, /calendarGateEnabled \? row : \{ \.\.\.row, status: 'disabled'/);
   assert.match(server, /systemHealth: \[\]/);
   assert.match(server, /loadBrokerCommissionSettings\(client\)/);
   const rateHandler = server.slice(server.indexOf('async function frankfurterUsdCnyRate'), server.indexOf('function earliestDate'));

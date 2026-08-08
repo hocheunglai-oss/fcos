@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   ClipboardCheck,
@@ -28,11 +28,10 @@ import {
   UserRoundCheck,
   X,
 } from 'lucide-react';
-import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
 import { appClient } from '@/api/appClient';
-import { APP_VERSION, APP_VERSION_HISTORY } from '@/lib/appVersion';
+import { APP_VERSION } from '@/lib/appVersionMeta';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -40,6 +39,20 @@ import WorkNotifications from '@/components/WorkNotifications';
 import EmailRouterBackgroundSync from '@/components/email-router/EmailRouterBackgroundSync';
 import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
+
+const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
+
+function StaticDragDropContext({ children }) {
+  return children;
+}
+
+function StaticDroppable({ children }) {
+  return children({ innerRef: undefined, droppableProps: {}, placeholder: null });
+}
+
+function StaticDraggable({ children }) {
+  return children({ innerRef: undefined, draggableProps: {}, dragHandleProps: {} }, { isDragging: false });
+}
 
 const navGroups = [
   {
@@ -151,14 +164,18 @@ export default function Layout() {
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
   const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
-  const [workspacePreferences, setWorkspacePreferences] = useState(null);
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [navigationPreferences, setNavigationPreferences] = useState(() => normalizedNavigationPreferences(DEFAULT_NAVIGATION_PREFERENCES));
   const [navigationDraft, setNavigationDraft] = useState(null);
   const [navigationEditing, setNavigationEditing] = useState(false);
   const [navigationSaving, setNavigationSaving] = useState(false);
   const [navigationError, setNavigationError] = useState('');
+  const [dragAndDrop, setDragAndDrop] = useState(null);
   const currentBuildIdRef = useRef(null);
+
+  const DragDropContext = dragAndDrop?.DragDropContext || StaticDragDropContext;
+  const Droppable = dragAndDrop?.Droppable || StaticDroppable;
+  const Draggable = dragAndDrop?.Draggable || StaticDraggable;
 
   const activeNavigationPreferences = navigationEditing && navigationDraft ? navigationDraft : navigationPreferences;
   const accessibleGroups = useMemo(() => navGroups
@@ -210,7 +227,6 @@ export default function Layout() {
     }
     const applyWorkspacePreferences = (preferences) => {
       if (!preferences) return;
-      setWorkspacePreferences(preferences);
       setSidebarFixed(preferences.sidebarMode === 'fixed');
       setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
       saveDocumentSettings({
@@ -221,7 +237,10 @@ export default function Layout() {
     };
     const load = async () => {
       const browserDocumentSettings = readDocumentSettings();
-      const workspaceResponse = await appClient.functions.invoke('workspacePreferencesGet');
+      const [workspaceResponse, response] = await Promise.all([
+        appClient.functions.invoke('workspacePreferencesGet'),
+        appClient.functions.invoke('navigationPreferencesGet'),
+      ]);
       if (!cancelled && workspaceResponse.data?.preferences) {
         let workspacePreferences = workspaceResponse.data.preferences;
         if (!workspacePreferences.initialized) {
@@ -237,7 +256,6 @@ export default function Layout() {
         }
         applyWorkspacePreferences(workspacePreferences);
       }
-      const response = await appClient.functions.invoke('navigationPreferencesGet');
       if (cancelled) return;
       if (response.data?.preferences) {
         const next = normalizedNavigationPreferences(response.data.preferences);
@@ -258,7 +276,6 @@ export default function Layout() {
       if (preferences.sidebarMode) setSidebarFixed(preferences.sidebarMode === 'fixed');
       if (preferences.tableDensity) setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
       if (preferences.revision != null) {
-        setWorkspacePreferences(preferences);
         setNavigationPreferences((current) => ({ ...current, revision: Number(preferences.revision) }));
       }
     };
@@ -270,7 +287,15 @@ export default function Layout() {
     };
   }, [navigationPreferences]);
 
-  const startNavigationEditing = () => {
+  const startNavigationEditing = async () => {
+    if (!dragAndDrop) {
+      try {
+        setDragAndDrop(await import('@hello-pangea/dnd'));
+      } catch {
+        setNavigationError('Navigation customization could not be loaded. Refresh FCOS and try again.');
+        return;
+      }
+    }
     setNavigationDraft(normalizedNavigationPreferences(navigationPreferences));
     setNavigationError('');
     setNavigationEditing(true);
@@ -322,7 +347,6 @@ export default function Layout() {
     } else {
       const next = normalizedNavigationPreferences(response.data.preferences);
       setNavigationPreferences(next);
-      setWorkspacePreferences((current) => current ? { ...current, revision: next.revision, updatedAt: next.updatedAt } : current);
       setNavigationDraft(null);
       setNavigationEditing(false);
       if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
@@ -339,7 +363,6 @@ export default function Layout() {
     } else {
       const next = normalizedNavigationPreferences(response.data.preferences || DEFAULT_NAVIGATION_PREFERENCES);
       setNavigationPreferences(next);
-      setWorkspacePreferences((current) => current ? { ...current, revision: next.revision, updatedAt: next.updatedAt } : current);
       setNavigationDraft(null);
       setNavigationEditing(false);
       if (user) localStorage.setItem(navigationCacheKey(user), JSON.stringify(next));
@@ -736,29 +759,9 @@ export default function Layout() {
               Current release {APP_VERSION}. This audit trail records released app changes.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[62vh] space-y-4 overflow-auto pr-1">
-            {APP_VERSION_HISTORY.map((entry) => (
-              <section key={entry.version} className="rounded-lg border border-border bg-card/70 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-foreground">Version {entry.version}</div>
-                    <div className="mt-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{entry.title}</div>
-                  </div>
-                  <div className="rounded-md border border-border bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground">
-                    {entry.releasedAt}
-                  </div>
-                </div>
-                <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-                  {entry.changes.map((change) => (
-                    <li key={change} className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                      <span>{change}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
+          <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading version history…</div>}>
+            <VersionAuditHistory />
+          </Suspense>
         </DialogContent>
       </Dialog>
     </div>

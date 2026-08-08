@@ -56,7 +56,8 @@ test('retained live paths include emergency controls at their server boundary', 
 test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
-  assert.match(source, /createClient\(url, serviceRoleKey/);
+  assert.match(source, /serverSupabaseConfig\(\)/);
+  assert.match(source, /createClient\(config\.url, config\.key/);
   assert.deepEqual(vercel.crons, [
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 0 * * 1-5' },
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 6 * * 1-5' },

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { salesforceAuthMode } from '../api/_salesforce.js';
+import { salesforceAuthMode, salesforceConfiguredAuthModes } from '../api/_salesforce.js';
 
 const AUTH_ENV_NAMES = [
   'SALESFORCE_ACCESS_TOKEN',
@@ -62,5 +62,23 @@ test('complete durable Salesforce configurations take precedence over access tok
     SALESFORCE_JWT_CLIENT_ID: 'connected-app-id',
     SALESFORCE_JWT_USERNAME: 'user@example.com',
     SALESFORCE_JWT_PRIVATE_KEY: 'private-key',
-  }, () => assert.equal(salesforceAuthMode(), 'jwt'));
+  }, () => {
+    assert.equal(salesforceAuthMode(), 'jwt');
+    assert.deepEqual(salesforceConfiguredAuthModes(), ['jwt', 'access_token']);
+  });
+});
+
+test('Salesforce health can identify every complete redundant authentication mode', () => {
+  withSalesforceEnv({
+    SALESFORCE_ACCESS_TOKEN: 'active-session-token',
+    SALESFORCE_CLIENT_ID: 'connected-app-id',
+    SALESFORCE_CLIENT_SECRET: 'connected-app-secret',
+    SALESFORCE_REFRESH_TOKEN: 'refresh-token',
+    SALESFORCE_JWT_CLIENT_ID: 'jwt-connected-app-id',
+    SALESFORCE_JWT_USERNAME: 'user@example.com',
+    SALESFORCE_JWT_PRIVATE_KEY: 'private-key',
+  }, () => {
+    assert.equal(salesforceAuthMode(), 'jwt');
+    assert.deepEqual(salesforceConfiguredAuthModes(), ['jwt', 'refresh_token', 'access_token']);
+  });
 });

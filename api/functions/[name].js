@@ -1,4 +1,4 @@
-import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
@@ -27,6 +27,7 @@ import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExte
 import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierAllocationFingerprint, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
+import { serverSupabaseConfig } from '../_supabaseConfig.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
 import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
 import {
@@ -577,16 +578,15 @@ function appError(message, status = 500, code = null, details = undefined, expos
 }
 
 function supabaseUrl() {
-  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  return serverSupabaseConfig().url;
 }
 
 let cachedSupabaseAdmin = null;
 
 function supabaseAdminClient() {
-  const url = supabaseUrl();
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceRoleKey) {
-    throw appError('Missing Supabase server configuration. Set SUPABASE_URL or VITE_SUPABASE_URL, plus SUPABASE_SERVICE_ROLE_KEY in Vercel.', 500);
+  const config = serverSupabaseConfig();
+  if (!config.configured) {
+    throw appError(`Missing Supabase server configuration: ${config.missingEnv.join(', ')}.`, 500);
   }
   if (!cachedSupabaseAdmin) {
     const trackedFetch = async (...args) => {
@@ -606,7 +606,7 @@ function supabaseAdminClient() {
         throw error;
       }
     };
-    cachedSupabaseAdmin = createClient(url, serviceRoleKey, {
+    cachedSupabaseAdmin = createClient(config.url, config.key, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -5922,6 +5922,8 @@ async function salesforceHealthRow({ force = false } = {}) {
   const usesRefreshToken = authMode === 'refresh_token';
   const usesAccessToken = authMode === 'access_token';
   const isMisconfigured = authMode === 'misconfigured';
+  const configuredAuthModes = salesforceConfiguredAuthModes();
+  const redundantAuthModes = configuredAuthModes.filter((mode) => mode !== authMode);
   const required = usesJwt ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY'] : usesRefreshToken ? ['SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'] : isMisconfigured ? ['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN'] : ['SALESFORCE_ACCESS_TOKEN'];
   const configured = authMode !== 'missing' && !isMisconfigured;
   const result = isMisconfigured
@@ -5969,17 +5971,19 @@ async function salesforceHealthRow({ force = false } = {}) {
       configuredEnv: configuredEnv(['SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN', 'SALESFORCE_INSTANCE_URL', 'SALESFORCE_LOGIN_URL', 'SALESFORCE_API_VERSION']),
       missingEnv: usesJwt || usesRefreshToken ? [] : missingEnv(required),
       tokenExpiry: usesJwt ? 'JWT bearer issues short-lived access tokens on demand. Long-term validity depends on the Connected App certificate and user access.' : usesRefreshToken ? 'Refresh token expiry is not exposed by Salesforce; access tokens are refreshed on demand.' : usesAccessToken ? 'Temporary access token expiry is not exposed to the app.' : null,
-      warning: isMisconfigured || (usesAccessToken && !usesRefreshToken),
-      notes: usesJwt ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.'] : isMisconfigured ? ['Salesforce OAuth variables exist but at least one required value is blank. The temporary access-token fallback is intentionally blocked until durable auth is fixed.'] : usesAccessToken && !usesRefreshToken ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.'] : ['Connected app refresh-token policy controls long-term validity.'],
+      warning: isMisconfigured || usesAccessToken || redundantAuthModes.length > 0,
+      notes: [
+        ...(usesJwt ? ['Preferred durable mode. Rotate the Connected App certificate before it expires.'] : isMisconfigured ? ['Salesforce OAuth variables exist but at least one required value is blank. The temporary access-token fallback is intentionally blocked until durable auth is fixed.'] : usesAccessToken ? ['Using SALESFORCE_ACCESS_TOKEN fallback. Replace with JWT bearer or refresh-token OAuth env vars for durable production use.'] : ['Connected app refresh-token policy controls long-term validity.']),
+        ...(redundantAuthModes.length > 0 ? [`Redundant Salesforce authentication modes are configured but inactive: ${redundantAuthModes.join(', ')}. Remove them after the active ${authMode} mode is verified and rollback is no longer required.`] : []),
+      ],
     },
     result,
   );
 }
 
 async function supabaseMetricsHealth({ force = false } = {}) {
-  const url = supabaseUrl();
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Supabase Metrics credentials are not configured.');
+  const config = serverSupabaseConfig();
+  if (!config.configured) throw new Error('Supabase Metrics credentials are not configured.');
   const cached = await getOrLoadRuntimeCache({
     namespace: 'supabase-prometheus-metrics',
     version: '1',
@@ -5995,9 +5999,9 @@ async function supabaseMetricsHealth({ force = false } = {}) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
       try {
-        const response = await fetch(`${url.replace(/\/+$/, '')}/customer/v1/privileged/metrics`, {
+        const response = await fetch(`${config.url.replace(/\/+$/, '')}/customer/v1/privileged/metrics`, {
           headers: {
-            authorization: `Basic ${Buffer.from(`service_role:${key}`).toString('base64')}`,
+            authorization: `Basic ${Buffer.from(`service_role:${config.key}`).toString('base64')}`,
           },
           signal: controller.signal,
         });
@@ -6015,10 +6019,8 @@ async function supabaseMetricsHealth({ force = false } = {}) {
 }
 
 async function supabaseHealthRow({ force = false } = {}) {
-  const required = ['SUPABASE_SERVICE_ROLE_KEY'];
-  const hasUrl = Boolean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
-  const configured = hasUrl && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const result = configured
+  const config = serverSupabaseConfig();
+  const result = config.configured
     ? await timedCheck(async () => {
         const client = supabaseAdminClient();
         const [authResult, profileResult, metricsResult] = await Promise.all([
@@ -6052,17 +6054,23 @@ async function supabaseHealthRow({ force = false } = {}) {
       purpose: 'User access control, collection workflow, email schedules, report archive audit, dispute workflow, cashflow settings, and universal audit trail.',
       scope: 'server',
       provider: 'Supabase',
-      endpoint: hasUrl ? maskValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, 18, 8) : null,
-      authType: 'Service role key',
-      configured,
+      endpoint: config.url ? maskValue(config.url, 18, 8) : null,
+      authType: config.keyType === 'secret' ? 'Secret key' : 'Legacy service role key',
+      configured: config.configured,
       configuredEnv: {
         SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
         VITE_SUPABASE_URL: Boolean(process.env.VITE_SUPABASE_URL),
+        SUPABASE_SECRET_KEY: Boolean(process.env.SUPABASE_SECRET_KEY),
         SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
       },
-      missingEnv: [...(hasUrl ? [] : ['SUPABASE_URL or VITE_SUPABASE_URL']), ...missingEnv(required)],
-      tokenExpiry: jwtExpiresAt(process.env.SUPABASE_SERVICE_ROLE_KEY) || 'No expiry claim exposed.',
-      notes: ['Service role key is never sent to the browser.'],
+      missingEnv: config.missingEnv,
+      tokenExpiry: config.keyType === 'legacy_service_role' ? jwtExpiresAt(config.key) || 'No expiry claim exposed.' : 'Managed server secret; no JWT expiry claim.',
+      warning: config.keyType === 'legacy_service_role' || config.urlEnv === 'VITE_SUPABASE_URL',
+      notes: [
+        'Elevated Supabase credentials are never sent to the browser.',
+        ...(config.keyType === 'legacy_service_role' ? ['Migrate to a scoped SUPABASE_SECRET_KEY before legacy service-role keys are deprecated.'] : []),
+        ...(config.urlEnv === 'VITE_SUPABASE_URL' ? ['Set SUPABASE_URL for server code instead of relying on a browser-prefixed fallback.'] : []),
+      ],
     },
     result,
   );
@@ -6445,19 +6453,20 @@ async function emailRouterHealthRow() {
 
 async function outlookCalendarHealthRow() {
   const required = ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'];
+  const calendarGateEnabled = isExternalActionEnabled('outlook_calendar');
   const configured = missingEnv(required).length === 0;
-  const result = configured
+  const result = configured && calendarGateEnabled
     ? await timedCheck(async () => {
         const health = await growthCalendarHealth();
         if (health.status !== 'Online') throw new Error(health.error || 'Microsoft Graph calendar authentication failed.');
         return {
           permission: 'Application Calendars.ReadWrite',
           mailboxScope: 'Exchange Online Application RBAC',
-          calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
+          calendarGateEnabled,
         };
       })
     : null;
-  return healthRow(
+  const row = healthRow(
     {
       id: 'outlook-growth-calendar',
       name: 'Outlook Coaching Calendar',
@@ -6469,15 +6478,18 @@ async function outlookCalendarHealthRow() {
       authType: 'OAuth client credentials with Exchange Application RBAC',
       configured,
       configuredEnv: configuredEnv(required),
-      missingEnv: missingEnv(required),
+      missingEnv: calendarGateEnabled ? missingEnv(required) : [],
       tokenExpiry: 'Short-lived Microsoft Graph tokens are refreshed server-side.',
       details: {
-        calendarGateEnabled: isExternalActionEnabled('outlook_calendar'),
+        calendarGateEnabled,
       },
-      notes: ['This check validates credentials only and never creates a calendar event.'],
+      notes: calendarGateEnabled
+        ? ['This check validates credentials only and never creates a calendar event.']
+        : ['Outlook coaching calendar synchronization is intentionally disabled by its UAT gate; credentials are not required until enablement is approved.'],
     },
     result,
   );
+  return calendarGateEnabled ? row : { ...row, status: 'disabled', latencyMs: null, error: null };
 }
 
 function cronHealthRow() {

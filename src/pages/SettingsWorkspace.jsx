@@ -21,7 +21,7 @@ import PageMethodology from '@/components/common/PageMethodology';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologies';
-import { APP_VERSION } from '@/lib/appVersion';
+import { APP_VERSION } from '@/lib/appVersionMeta';
 
 const SECTION_GROUPS = [
   {

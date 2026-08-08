@@ -1,9 +1,22 @@
-export const APP_VERSION = '2.0.146';
+import { APP_VERSION } from './appVersionMeta.js';
+
+export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.147',
+    releasedAt: '2026-08-08',
+    title: 'Faster startup and clearer connection health',
+    changes: [
+      'Loaded independent workspace and navigation preferences together to shorten signed-in startup without weakening revision checks.',
+      'Moved the full version audit history and navigation drag-and-drop editor out of the initial browser bundle, and restored release dates for the newest audit entries.',
+      'Unified server-side Supabase key resolution for current secret keys and legacy service-role keys, and surfaced redundant Salesforce authentication modes in System Health.',
+      'Stopped hidden or duplicate Chrome tabs from repeating Email Router synchronization, rejected impossible negative capacity metrics, and labeled the gated Outlook calendar as intentionally disabled.',
+    ],
+  },
+  {
     version: '2.0.146',
-    date: '2026-08-08',
+    releasedAt: '2026-08-08',
     title: 'Gate final invoices on ship-agent charges',
     changes: [
       'Added the Ship-Agent Charges Payment Collections queue with delivery timing, assigned Buyer Trader review, controlled Salesforce extra-cost changes, and documented General Manager overrides.',
@@ -13,7 +26,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.145',
-    date: '2026-08-08',
+    releasedAt: '2026-08-08',
     title: 'Restore original recipients in Redirect Reply All',
     changes: [
       'Restored the original sender and visible original To and Cc participants when a redirected-message recipient uses Reply All.',
@@ -23,7 +36,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.144',
-    date: '2026-08-08',
+    releasedAt: '2026-08-08',
     title: 'Clear redirect recipients and reply behavior',
     changes: [
       'Restored the original message From, To, and Cc details inside every Email Router redirect.',
@@ -33,7 +46,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.143',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Rich-text Special Terms editing',
     changes: [
       'Replaced the Special Terms wording textarea with a sanitized rich-text editor designed around numbered contractual clauses.',
@@ -43,7 +56,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.142',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Expanded Email Router mailboxes',
     changes: [
       'Added Market Report, Trash, and Junk mailbox views beside Inbox, Sent, and Archive, with Junk clearly highlighted in red.',
@@ -53,7 +66,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.141',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Forward-and-file Email Router workflow',
     changes: [
       'Unified Forward and Redirect in the fixed Route Message panel with ordered To, Cc, and Bcc recipients and no separate Forward confirmation window.',
@@ -63,7 +76,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.140',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Safer redirects and direct message actions',
     changes: [
       'Fixed valid Outlook messages being rejected during Redirect because of harmless original Bcc, Resent, or missing Message-ID headers.',
@@ -73,7 +86,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.139',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Live Microsoft 365 redirect confirmation',
     changes: [
       'Made Email Router follow each secured outgoing action through Microsoft 365 submission and Sent Items confirmation without requiring a page refresh.',
@@ -83,7 +96,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.138',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Simplified Email Router navigation and leave management',
     changes: [
       'Removed the Email Router page tabs and moved Routing Setup into a permission-controlled modal opened from the mailbox toolbar.',
@@ -93,7 +106,7 @@ export const APP_VERSION_HISTORY = [
   },
   {
     version: '2.0.137',
-    date: '2026-08-07',
+    releasedAt: '2026-08-07',
     title: 'Fixed Email Router action-status placement',
     changes: [
       'Moved transient Email Router action results into a persistent page-header status area between the mailbox identity and page actions.',

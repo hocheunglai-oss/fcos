@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APP_VERSION } from '../src/lib/appVersion.js';
+import { APP_VERSION } from '../src/lib/appVersionMeta.js';
 
 const outputUrl = new URL('../public/app-version.json', import.meta.url);
 const outputPath = fileURLToPath(outputUrl);

@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getVercelOidcToken } from '@vercel/oidc';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
+import { serverSupabaseConfig } from './_supabaseConfig.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -86,10 +87,9 @@ function bearerToken(req) {
 
 export function createEmailRouterServiceClient(env = process.env, dependencies = {}) {
   if (dependencies.client) return dependencies.client;
-  const url = text(env.SUPABASE_URL || env.VITE_SUPABASE_URL, 500);
-  const key = text(env.SUPABASE_SERVICE_ROLE_KEY, 2000);
-  if (!url || !key) throw routerError('Email Router server storage is not configured.', 503, 'EMAIL_ROUTER_STORAGE_NOT_CONFIGURED');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const config = serverSupabaseConfig(env);
+  if (!config.configured) throw routerError('Email Router server storage is not configured.', 503, 'EMAIL_ROUTER_STORAGE_NOT_CONFIGURED');
+  return createClient(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
 export async function requireEmailRouterUser(req, dependencies = {}) {

@@ -175,6 +175,14 @@ export function salesforceAuthMode() {
   return 'missing';
 }
 
+export function salesforceConfiguredAuthModes() {
+  return [
+    ...(hasJwtBearerConfig() ? ['jwt'] : []),
+    ...(hasRefreshTokenConfig() ? ['refresh_token'] : []),
+    ...(hasNonBlankEnv('SALESFORCE_ACCESS_TOKEN') ? ['access_token'] : []),
+  ];
+}
+
 export async function getAccessToken({ forceRefresh = false } = {}) {
   if (hasJwtBearerConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
