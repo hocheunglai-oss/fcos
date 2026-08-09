@@ -1,5 +1,8 @@
 export const APPROVED_CONNECTION_BROWSER_PROFILE = 'Otto';
-export const CONNECTION_CHECKLIST_STORAGE_KEY = 'fcos:connection-checklist:v1';
+export const CONNECTION_CHECKLIST_STORAGE_KEY = 'fcos:connection-checklist:v2';
+export const CONNECTION_PROFILE_NAME = 'fcos-production';
+export const CONNECTION_LOCAL_STATE_DIRECTORY = '.fcos-cli';
+export const CONNECTION_VERIFY_COMMAND = 'npm run connections:verify';
 
 export const CONNECTION_CHECKLIST_SEQUENCE = Object.freeze([
   {
@@ -34,7 +37,15 @@ export const CONNECTION_TARGETS = Object.freeze([
       { label: 'Repository', value: 'hocheunglai-oss/fcos' },
     ],
     availabilityCommand: 'gh --version',
-    identityCommand: 'gh auth status; git remote get-url origin',
+    identityCommand: 'npm run connections:verify -- github',
+    authCommand: 'npm run connections:auth -- github',
+    useCommand: 'npm run connections:cli -- github -- <gh arguments>',
+    authorizationMode: 'Repo-isolated authorization',
+    isolationMechanism: 'GH_CONFIG_DIR',
+    configPath: '.fcos-cli/github',
+    profileName: 'fcos-github',
+    fullyIsolated: true,
+    persistence: 'The OAuth session is kept in the OS credential store and selected through the repo-isolated GitHub CLI config.',
     nonBrowserRoute: 'If gh is authenticated to a different account, fail closed and use the approved GitHub connector/API or stop. Never change machine-wide credentials for FCOS.',
   },
   {
@@ -42,12 +53,23 @@ export const CONNECTION_TARGETS = Object.freeze([
     provider: 'Vercel',
     cli: 'vercel',
     identifiers: [
+      { label: 'Account', value: 'hocheunglai-6535' },
       { label: 'Team', value: 'hocheunglai-6535s-projects' },
+      { label: 'Team ID', value: 'team_MbKDazzCrou3eKTuausPv4X2' },
       { label: 'Project', value: 'fcos' },
+      { label: 'Project ID', value: 'prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs' },
       { label: 'Target', value: 'hocheunglai-6535s-projects/fcos' },
     ],
     availabilityCommand: 'vercel --version',
-    identityCommand: 'vercel whoami; vercel project inspect fcos --scope hocheunglai-6535s-projects',
+    identityCommand: 'npm run connections:verify -- vercel',
+    authCommand: 'npm run connections:auth -- vercel',
+    useCommand: 'npm run connections:cli -- vercel -- <vercel arguments>',
+    authorizationMode: 'Repo-isolated authorization',
+    isolationMechanism: '--global-config',
+    configPath: '.fcos-cli/vercel',
+    profileName: 'fcos-vercel',
+    fullyIsolated: true,
+    persistence: 'Vercel credentials stay under the ignored repo-local global-config directory; the repo link is checked against exact team and project IDs.',
     nonBrowserRoute: 'Use the Vercel API or approved connector when it can complete the operation without an interactive browser sign-in.',
   },
   {
@@ -58,8 +80,17 @@ export const CONNECTION_TARGETS = Object.freeze([
       { label: 'Project name', value: 'FCOS' },
       { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
     ],
-    availabilityCommand: 'supabase --version',
-    identityCommand: 'supabase projects list',
+    availabilityCommand: 'npx --no-install supabase --version',
+    identityCommand: 'npm run connections:verify -- supabase',
+    authCommand: 'npm run connections:auth -- supabase',
+    useCommand: 'npm run connections:cli -- supabase -- <supabase arguments>',
+    authorizationMode: 'Repo-isolated authorization',
+    isolationMechanism: 'Pinned CLI + SUPABASE_HOME + 0600 token file',
+    configPath: '.fcos-cli/supabase',
+    profileName: 'fcos-pjforfvchygdyqfcgpmw',
+    pinnedCliVersion: '2.113.0',
+    fullyIsolated: true,
+    persistence: 'The pinned project CLI reads a 0600 access-token file from its ignored local home, avoiding machine-global credentials and environment-token conflicts.',
     nonBrowserRoute: 'Use the approved Supabase connector/API when the CLI lacks the capability but the target identity is verified.',
   },
   {
@@ -69,9 +100,18 @@ export const CONNECTION_TARGETS = Object.freeze([
     identifiers: [
       { label: 'Environment', value: 'Production' },
       { label: 'Org ID', value: '00D2x000000Ei4oEAC' },
+      { label: 'Alias', value: 'source-salesforce' },
     ],
     availabilityCommand: 'sf --version',
-    identityCommand: 'sf org list --json',
+    identityCommand: 'npm run connections:verify -- salesforce',
+    authCommand: 'npm run connections:auth -- salesforce',
+    useCommand: 'npm run connections:cli -- salesforce -- <sf arguments>',
+    authorizationMode: 'Repo-pinned target with protected host authorization',
+    isolationMechanism: 'Project-local target-org + SF_TARGET_ORG',
+    configPath: '.sf',
+    profileName: 'source-salesforce',
+    fullyIsolated: false,
+    persistence: 'Salesforce CLI does not expose an alternate auth-home setting; its protected host session is retained, while FCOS pins and revalidates the exact org for every use.',
     nonBrowserRoute: 'Use Salesforce CLI or the approved API session only after the live organization ID matches exactly.',
   },
 ]);

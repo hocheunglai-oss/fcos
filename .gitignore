@@ -31,3 +31,9 @@ dist-ssr
 .vite
 .vercel
 .env*
+
+# Repo-isolated provider credentials, CLI state, and local target pins
+.fcos-cli/
+.sf/
+.sfdx/
+supabase/.temp/

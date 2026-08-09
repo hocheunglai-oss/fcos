@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
   CONNECTION_CHECKLIST_SEQUENCE,
+  CONNECTION_LOCAL_STATE_DIRECTORY,
+  CONNECTION_PROFILE_NAME,
   CONNECTION_TARGETS,
+  CONNECTION_VERIFY_COMMAND,
   connectionCheckState,
   sanitizeConnectionCheck,
   sanitizeConnectionChecks,
@@ -20,6 +23,9 @@ test('connection checklist records the approved non-secret FCOS targets and fixe
     'browser_fallback',
   ]);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
+  assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
+  assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
+  assert.equal(CONNECTION_VERIFY_COMMAND, 'npm run connections:verify');
 
   const targets = Object.fromEntries(CONNECTION_TARGETS.map((target) => [
     target.id,
@@ -30,8 +36,11 @@ test('connection checklist records the approved non-secret FCOS targets and fixe
     Repository: 'hocheunglai-oss/fcos',
   });
   assert.deepEqual(targets.vercel, {
+    Account: 'hocheunglai-6535',
     Team: 'hocheunglai-6535s-projects',
+    'Team ID': 'team_MbKDazzCrou3eKTuausPv4X2',
     Project: 'fcos',
+    'Project ID': 'prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs',
     Target: 'hocheunglai-6535s-projects/fcos',
   });
   assert.deepEqual(targets.supabase, {
@@ -41,7 +50,16 @@ test('connection checklist records the approved non-secret FCOS targets and fixe
   assert.deepEqual(targets.salesforce, {
     Environment: 'Production',
     'Org ID': '00D2x000000Ei4oEAC',
+    Alias: 'source-salesforce',
   });
+
+  assert.deepEqual(CONNECTION_TARGETS.map(({ id, fullyIsolated }) => [id, fullyIsolated]), [
+    ['github', true],
+    ['vercel', true],
+    ['supabase', true],
+    ['salesforce', false],
+  ]);
+  assert.ok(CONNECTION_TARGETS.every(({ configPath }) => configPath === '.sf' || configPath.startsWith('.fcos-cli/')));
 });
 
 test('connection checklist state machine blocks out-of-order CLI and browser actions', () => {

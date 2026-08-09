@@ -3,6 +3,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Circle,
+  HardDrive,
+  KeyRound,
   LockKeyhole,
   Monitor,
   RefreshCw,
@@ -16,7 +18,10 @@ import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
   CONNECTION_CHECKLIST_SEQUENCE,
   CONNECTION_CHECKLIST_STORAGE_KEY,
+  CONNECTION_LOCAL_STATE_DIRECTORY,
+  CONNECTION_PROFILE_NAME,
   CONNECTION_TARGETS,
+  CONNECTION_VERIFY_COMMAND,
   connectionCheckState,
   sanitizeConnectionChecks,
   updateConnectionCheck,
@@ -114,7 +119,7 @@ function ChecklistActions({ target, record, onAction }) {
           <StepMarker number={3} complete={record.cliOutcome === 'completed'} active={identityVerified && !record.cliOutcome} blocked={!identityVerified} />
           <div className="min-w-0">
             <div className="text-sm font-semibold">Use the verified CLI</div>
-            <p className="mt-1 text-xs text-muted-foreground">Do not mutate through an unmatched or unauthenticated session.</p>
+            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.useCommand}</code>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:pl-0">
@@ -134,6 +139,7 @@ function ChecklistActions({ target, record, onAction }) {
             <p className="mt-1 text-xs text-muted-foreground">
               Profile must be exactly <span className="font-semibold text-foreground">{APPROVED_CONNECTION_BROWSER_PROFILE}</span>. After authentication, return to step 2 and reverify the CLI identity.
             </p>
+            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.authCommand}</code>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:pl-0">
@@ -192,6 +198,25 @@ export default function ConnectionChecklist() {
         </div>
       </div>
 
+      <div className="mt-4 grid gap-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3 lg:grid-cols-2">
+        <div className="flex items-start gap-2.5">
+          <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+          <div>
+            <div className="text-xs font-semibold text-blue-950">Durable local profile · {CONNECTION_PROFILE_NAME}</div>
+            <p className="mt-1 text-[11px] leading-relaxed text-blue-900">
+              Provider credentials and machine state stay outside Git in <code>{CONNECTION_LOCAL_STATE_DIRECTORY}/</code>. The exact targets below are shared application policy; local credential material is never sent to System Health.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-blue-950">One fail-closed verification command</div>
+            <code className="mt-1 block break-all rounded border border-blue-200 bg-white/80 px-2 py-1 text-[11px] text-blue-950">{CONNECTION_VERIFY_COMMAND}</code>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         {CONNECTION_CHECKLIST_SEQUENCE.map((step, index) => {
           const Icon = STEP_ICONS[index] || Circle;
@@ -226,6 +251,9 @@ export default function ConnectionChecklist() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-sm font-semibold text-foreground">{target.provider}</h3>
                     <Badge variant="outline" className="font-mono text-[10px]">{target.cli}</Badge>
+                    <Badge variant="outline" className={target.fullyIsolated ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-violet-200 bg-violet-50 text-violet-700'}>
+                      {target.fullyIsolated ? 'Isolated authorization' : 'Isolated target pin'}
+                    </Badge>
                     <Badge variant="outline" className={stateMeta.className}>{stateMeta.label}</Badge>
                   </div>
                   <dl className="mt-2 flex flex-wrap gap-2">
@@ -238,6 +266,21 @@ export default function ConnectionChecklist() {
                   </dl>
                 </div>
                 <div className="shrink-0 text-xs text-muted-foreground">Updated {formatRecordedAt(record?.updatedAt)}</div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="rounded-md border border-border bg-card p-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><KeyRound className="h-3.5 w-3.5" />{target.authorizationMode}</div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{target.persistence}</p>
+                </div>
+                <div className="rounded-md border border-border bg-card p-2.5">
+                  <div className="text-[11px] font-semibold text-foreground">Isolation mechanism</div>
+                  <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.isolationMechanism}</code>
+                </div>
+                <div className="rounded-md border border-border bg-card p-2.5 sm:col-span-2 lg:col-span-1">
+                  <div className="text-[11px] font-semibold text-foreground">Local config · ignored by Git</div>
+                  <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.configPath}</code>
+                </div>
               </div>
 
               <ChecklistActions target={target} record={record} onAction={(action) => applyAction(target.id, action)} />

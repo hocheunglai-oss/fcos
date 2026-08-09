@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.151',
+    releasedAt: '2026-08-09',
+    title: 'Pin durable FCOS provider authorization',
+    changes: [
+      'Added a single fail-closed connection command that revalidates the exact GitHub, Vercel, Supabase, and Salesforce targets before delegated CLI use.',
+      'Isolated GitHub, Vercel, and Supabase authorization under ignored repo-local profiles, pinned the Supabase CLI version, and isolated the Salesforce target while retaining its protected host credential store.',
+      'Expanded System Health with the non-secret account, team, project, org, profile, isolation mechanism, and local config policy for every connection.',
+    ],
+  },
+  {
     version: '2.0.150',
     releasedAt: '2026-08-09',
     title: 'Enforce the CLI-first connection checklist',
