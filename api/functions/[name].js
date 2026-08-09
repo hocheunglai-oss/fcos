@@ -154,6 +154,19 @@ import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyR
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermForExport, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
+  activateSpecialTermMigration,
+  approveSpecialTermClause,
+  getSpecialTermDetail,
+  getSpecialTermMigrationInventory,
+  listSpecialTermClauseBank,
+  previewSpecialTermMigration,
+  retireSpecialTermClause,
+  rollbackSpecialTermMigration,
+  saveSpecialTermClauseDraft,
+  saveSpecialTermComposition,
+  saveSpecialTermMigrationReview,
+} from '../_specialTermClauses.js';
+import {
   emailRouterActionHandler as nativeEmailRouterAction,
   emailRouterActionStatusHandler as nativeEmailRouterActionStatus,
   emailRouterAdvisorHandler as nativeEmailRouterAdvisor,
@@ -316,6 +329,7 @@ const ADMIN_CAPABILITIES = [
   { id: 'hedge_close_approve', label: 'Approve Hedge Close and Reports', description: 'Close or reopen months and approve SFS reports.' },
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration, integrations, and Trading Assistant model.' },
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
+  { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
   { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
@@ -482,6 +496,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_close_approve: false,
     hedge_admin: false,
     special_terms_manage: true,
+    special_terms_clause_approve: false,
     broker_settings_manage: false,
   },
   finance: {
@@ -495,6 +510,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_close_approve: false,
     hedge_admin: false,
     special_terms_manage: false,
+    special_terms_clause_approve: false,
     broker_settings_manage: true,
   },
   operations: {
@@ -508,6 +524,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_close_approve: false,
     hedge_admin: false,
     special_terms_manage: true,
+    special_terms_clause_approve: false,
     broker_settings_manage: false,
   },
   interoffice: {
@@ -521,6 +538,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_close_approve: false,
     hedge_admin: false,
     special_terms_manage: false,
+    special_terms_clause_approve: false,
   },
   viewer: {
     disputes_approve: false,
@@ -533,6 +551,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_close_approve: false,
     hedge_admin: false,
     special_terms_manage: false,
+    special_terms_clause_approve: false,
   },
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
@@ -1276,6 +1295,17 @@ const HANDLER_MODULE_ACCESS = {
   specialTermsWorkspace: ['special_terms'],
   specialTermsPdfExport: ['special_terms'],
   specialTermsOptions: ['special_terms'],
+  specialTermDetail: ['special_terms'],
+  specialTermClauseBank: ['special_terms'],
+  specialTermMigrationInventory: ['special_terms'],
+  specialTermClauseDraftSave: ['special_terms'],
+  specialTermClauseApprove: ['special_terms'],
+  specialTermClauseRetire: ['special_terms'],
+  specialTermCompositionSave: ['special_terms'],
+  specialTermMigrationPreview: ['special_terms'],
+  specialTermMigrationSave: ['special_terms'],
+  specialTermMigrationActivate: ['special_terms'],
+  specialTermMigrationRollback: ['special_terms'],
   specialTermsSave: ['special_terms'],
   specialTermsDelete: ['special_terms'],
   specialTermRuleSave: ['special_terms'],
@@ -16711,7 +16741,12 @@ async function hedgeDeskMaintenanceCron(body = {}, req = null) {
 
 async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  return { ...(await listSpecialTerms({ force: body.force === true })), canManage: await userHasCapability(context.client, context.profile, 'special_terms_manage') };
+  const [workspace, canManage, canApproveClauses] = await Promise.all([
+    listSpecialTerms({ force: body.force === true }),
+    userHasCapability(context.client, context.profile, 'special_terms_manage'),
+    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
+  ]);
+  return { ...workspace, canManage, canApproveClauses: canApproveClauses && isAdministratorUserType(context.profile.user_type) };
 }
 
 async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
@@ -16739,6 +16774,79 @@ async function specialTermsPdfExport(body = {}, req, res, accessContext = null) 
 async function specialTermsOptions(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   return { options: await specialTermOptions(body) };
+}
+
+async function requireSpecialTermClauseApprover(context) {
+  await requireCapability(context.client, context.profile, 'special_terms_clause_approve', 'Special Term clause approval permission is required.');
+  const isAdministrator = context.profile.user_type === 'administrator';
+  const activeGeneralManager = context.profile.user_type === 'general_manager'
+    ? await loadActiveGeneralManager(context.client)
+    : null;
+  if (!isAdministrator && activeGeneralManager?.id !== context.profile.id) throw appError('Only the active General Manager or an Administrator may approve clause wording and migrations.', 403, 'SPECIAL_TERMS_CLAUSE_APPROVER_REQUIRED');
+}
+
+async function specialTermDetail(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return getSpecialTermDetail(body.termId, { force: body.force === true });
+}
+
+async function specialTermClauseBank(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return listSpecialTermClauseBank(body);
+}
+
+async function specialTermMigrationInventory(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return getSpecialTermMigrationInventory({ force: body.force === true });
+}
+
+async function specialTermClauseDraftSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return saveSpecialTermClauseDraft(context.client, context.profile, body);
+}
+
+async function specialTermClauseApprove(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return approveSpecialTermClause(context.client, context.profile, body);
+}
+
+async function specialTermClauseRetire(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return retireSpecialTermClause(context.client, context.profile, body);
+}
+
+async function specialTermCompositionSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  return saveSpecialTermComposition(context.client, context.profile, body);
+}
+
+async function specialTermMigrationPreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return previewSpecialTermMigration(body.termId);
+}
+
+async function specialTermMigrationSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return saveSpecialTermMigrationReview(context.client, context.profile, body);
+}
+
+async function specialTermMigrationActivate(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return activateSpecialTermMigration(context.client, context.profile, body);
+}
+
+async function specialTermMigrationRollback(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return rollbackSpecialTermMigration(context.client, context.profile, body);
 }
 
 async function specialTermsSave(body = {}, req = null, accessContext = null) {
@@ -16962,6 +17070,17 @@ const handlers = {
   hedgeDeskMaintenanceCron,
   specialTermsWorkspace,
   specialTermsOptions,
+  specialTermDetail,
+  specialTermClauseBank,
+  specialTermMigrationInventory,
+  specialTermClauseDraftSave,
+  specialTermClauseApprove,
+  specialTermClauseRetire,
+  specialTermCompositionSave,
+  specialTermMigrationPreview,
+  specialTermMigrationSave,
+  specialTermMigrationActivate,
+  specialTermMigrationRollback,
   specialTermsSave,
   specialTermsDelete,
   specialTermRuleSave,

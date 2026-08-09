@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Clause_Compiled_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Clause_Migration_Batch_Id__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Original_Terms_Text__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Last_Approved_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Replacement_Clause__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Retirement_Reason__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Approved_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Approval_Reason__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Approved_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Clause_Text__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Proposed_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Revision_Reason__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Version_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Assignment__c.Assignment_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Assignment__c.Clause_Use_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Assignment__c.Migration_Batch_Id__c</field><readable>true</readable></fieldPermissions>
+    <label>FCOS Special Terms Clause Integration</label>
+    <objectPermissions>
+        <allowCreate>false</allowCreate><allowDelete>false</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords><object>Special_Term__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>true</allowCreate><allowDelete>true</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords><object>Special_Term_Clause__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>true</allowCreate><allowDelete>true</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords><object>Special_Term_Clause_Version__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>true</allowCreate><allowDelete>true</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords><object>Special_Term_Clause_Assignment__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+</PermissionSet>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Clause__c</fullName>
+    <deleteConstraint>Restrict</deleteConstraint>
+    <label>Clause</label>
+    <referenceTo>Special_Term_Clause__c</referenceTo>
+    <relationshipLabel>Assignments</relationshipLabel>
+    <relationshipName>Assignments</relationshipName>
+    <required>true</required>
+    <type>Lookup</type>
+</CustomField>

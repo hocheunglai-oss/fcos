@@ -45,6 +45,7 @@ export const APP_CAPABILITIES = [
   { id: 'hedge_close_approve', label: 'Approve Hedge Close', description: 'Close or reopen months and approve SFS reports.' },
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
+  { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
   { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
 ];
 

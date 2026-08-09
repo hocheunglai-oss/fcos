@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { sanitizeRichText } from './_richText.js';
+import { clauseHash } from './_specialTermClauseModel.js';
 
 const OBJECTS = Object.freeze({
   term: 'Special_Term__c',
@@ -9,11 +10,30 @@ const OBJECTS = Object.freeze({
   account: 'Account',
   port: 'Port__c',
   product: 'Product2',
+  clause: 'Special_Term_Clause__c',
+  clauseVersion: 'Special_Term_Clause_Version__c',
+  clauseAssignment: 'Special_Term_Clause_Assignment__c',
 });
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
-const OPERATION_TYPES = new Set(['term_create', 'term_update', 'term_delete', 'rule_create', 'rule_update', 'rule_delete']);
+const OPERATION_OBJECTS = Object.freeze({
+  term_create: OBJECTS.term,
+  term_update: OBJECTS.term,
+  term_delete: OBJECTS.term,
+  rule_create: OBJECTS.rule,
+  rule_update: OBJECTS.rule,
+  rule_delete: OBJECTS.rule,
+  composition_save: OBJECTS.clauseAssignment,
+  clause_draft_create: OBJECTS.clause,
+  clause_draft_revise: OBJECTS.clauseVersion,
+  clause_approve: OBJECTS.clauseVersion,
+  clause_retire: OBJECTS.clause,
+  migration_review_save: OBJECTS.clauseAssignment,
+  migration_activate: OBJECTS.term,
+  migration_rollback: OBJECTS.term,
+});
+const OPERATION_TYPES = new Set(Object.keys(OPERATION_OBJECTS));
 
-function specialTermsError(message, status = 400, code = null, details = undefined) {
+export function specialTermsError(message, status = 400, code = null, details = undefined) {
   const error = new Error(message);
   error.status = status;
   error.code = code;
@@ -21,28 +41,19 @@ function specialTermsError(message, status = 400, code = null, details = undefin
   return error;
 }
 
-function text(value, max = 10000) {
+export function text(value, max = 10000) {
   return String(value ?? '').trim().slice(0, max);
-}
-
-function termsText(value) {
-  const source = String(value ?? '').trim();
-  if (!source) return null;
-  if (source.length > 130768) throw specialTermsError('Terms Text exceeds the Salesforce field limit.', 400, 'SPECIAL_TERMS_TEXT_TOO_LONG');
-  const containsRichText = /<\/?(?:p|br|strong|b|em|i|u|s|ul|ol|li|h3|h4|blockquote|a|span)\b/i.test(source);
-  const normalized = containsRichText ? sanitizeRichText(source, 130768) : text(source, 130768);
-  return normalized || null;
 }
 
 function isSalesforceRecordId(value) {
   return SALESFORCE_ID.test(text(value, 18));
 }
 
-function soql(value) {
+export function soql(value) {
   return text(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-function salesforceId(value, label = 'Salesforce record') {
+export function salesforceId(value, label = 'Salesforce record') {
   const id = text(value, 18);
   if (!SALESFORCE_ID.test(id)) throw specialTermsError(`${label} is invalid.`, 400, 'SPECIAL_TERMS_INVALID_ID');
   return id;
@@ -65,7 +76,7 @@ function requiredField(fields, objectName, fieldName, { type, referenceTo, creat
 async function describeObject(objectName, force = false) {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-special-terms-describe',
-    version: '1',
+    version: '2',
     accessScope: 'schema',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { objectName: objectName.toLowerCase() },
@@ -95,12 +106,15 @@ async function describeObject(objectName, force = false) {
 }
 
 export async function resolveSpecialTermsSchema({ force = false, write = false } = {}) {
-  const [termDescribe, ruleDescribe, accountDescribe, portDescribe, productDescribe] = await Promise.all([
+  const [termDescribe, ruleDescribe, accountDescribe, portDescribe, productDescribe, clauseDescribe, clauseVersionDescribe, clauseAssignmentDescribe] = await Promise.all([
     describeObject(OBJECTS.term, force),
     describeObject(OBJECTS.rule, force),
     describeObject(OBJECTS.account, force),
     describeObject(OBJECTS.port, force),
     describeObject(OBJECTS.product, force),
+    describeObject(OBJECTS.clause, force),
+    describeObject(OBJECTS.clauseVersion, force),
+    describeObject(OBJECTS.clauseAssignment, force),
   ]);
   const fields = {
     term: fieldMap(termDescribe),
@@ -108,11 +122,15 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
     account: fieldMap(accountDescribe),
     port: fieldMap(portDescribe),
     product: fieldMap(productDescribe),
+    clause: fieldMap(clauseDescribe),
+    clauseVersion: fieldMap(clauseVersionDescribe),
+    clauseAssignment: fieldMap(clauseAssignmentDescribe),
   };
   requiredField(fields.term, OBJECTS.term, 'Name', { type: 'string', ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.term, OBJECTS.term, 'Terms_Text__c', { type: 'textarea', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Add_to_Confirmation__c', 'Add_to_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'boolean', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Special_Remark_in_Confirmation__c', 'Special_Remark_in_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'textarea', ...(write ? { createable: true, updateable: true } : {}) });
+  for (const name of ['Clause_Structure_Status__c', 'Clause_Compiled_Hash__c', 'Original_Terms_Text__c', 'Clause_Migration_Batch_Id__c']) requiredField(fields.term, OBJECTS.term, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Account__c', { referenceTo: OBJECTS.account, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Port__c', { referenceTo: OBJECTS.port, ...(write ? { createable: true, updateable: true } : {}) });
@@ -123,16 +141,24 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
   for (const [map, objectName, names] of [[fields.account, OBJECTS.account, ['Name', 'Company_Code__c']], [fields.port, OBJECTS.port, ['Name', 'Country__c', 'Offshore__c']], [fields.product, OBJECTS.product, ['Name', 'IsActive']]]) {
     for (const name of names) requiredField(map, objectName, name);
   }
+  for (const name of ['Name', 'Short_Name_Key__c', 'Canonical_Text_Key__c', 'Category__c', 'Status__c', 'Latest_Approved_Version_Number__c', 'Last_Approved_At__c', 'Replacement_Clause__c', 'Retirement_Reason__c']) requiredField(fields.clause, OBJECTS.clause, name, { ...(write ? { createable: name !== 'LastModifiedDate', updateable: true } : {}) });
+  for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, updateable: true } : {}) });
+  requiredField(fields.clauseVersion, OBJECTS.clauseVersion, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true, updateable: true } : {}) });
+  for (const name of ['Sequence__c', 'State__c', 'Assignment_Key__c', 'Clause_Use_Key__c', 'Migration_Batch_Id__c']) requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, name, { ...(write ? { createable: true, updateable: true } : {}) });
+  requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true, updateable: true } : {}) });
+  requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true, updateable: true } : {}) });
+  requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Clause_Version__c', { referenceTo: OBJECTS.clauseVersion, ...(write ? { createable: true, updateable: true } : {}) });
   const audiences = fields.rule.get('Supplier_Buyer__c').picklistValues || [];
   if (!['Buyer', 'Supplier'].every((value) => audiences.some((option) => option.value === value))) throw specialTermsError('Special_Term_Rule__c.Supplier_Buyer__c must provide Buyer and Supplier.', 503, 'SPECIAL_TERMS_SCHEMA_INVALID');
-  if (write && (!termDescribe.createable || !termDescribe.updateable || !termDescribe.deletable || !ruleDescribe.createable || !ruleDescribe.updateable || !ruleDescribe.deletable)) {
-    throw specialTermsError('The FCOS Salesforce user requires create, update, and delete access to Special Terms and Special Term Rules.', 503, 'SPECIAL_TERMS_SCHEMA_INVALID');
+  if (write && (!termDescribe.createable || !termDescribe.updateable || !termDescribe.deletable || !ruleDescribe.createable || !ruleDescribe.updateable || !ruleDescribe.deletable || !clauseDescribe.createable || !clauseDescribe.updateable || !clauseVersionDescribe.createable || !clauseVersionDescribe.updateable || !clauseAssignmentDescribe.createable || !clauseAssignmentDescribe.updateable)) {
+    throw specialTermsError('The FCOS Salesforce user requires write access to Special Terms, rules, clauses, versions, and assignments.', 503, 'SPECIAL_TERMS_SCHEMA_INVALID');
   }
   return {
     fields,
-    describes: { termDescribe, ruleDescribe },
+    describes: { termDescribe, ruleDescribe, clauseDescribe, clauseVersionDescribe, clauseAssignmentDescribe },
     countryOptions: fields.rule.get('Country__c').picklistValues || [],
     audienceOptions: audiences,
+    clauseCategoryOptions: fields.clause.get('Category__c').picklistValues || [],
   };
 }
 
@@ -145,6 +171,13 @@ function mapTerm(row) {
     addToNomination: row.Add_to_Nomination__c === true,
     confirmationRemark: row.Special_Remark_in_Confirmation__c || '',
     nominationRemark: row.Special_Remark_in_Nomination__c || '',
+    clauseStructureStatus: row.Clause_Structure_Status__c || 'Legacy',
+    clauseCompiledHash: row.Clause_Compiled_Hash__c || null,
+    originalTermsText: row.Original_Terms_Text__c || '',
+    clauseMigrationBatchId: row.Clause_Migration_Batch_Id__c || null,
+    activeClauseCount: Number(row.activeClauseCount || 0),
+    proposedClauseCount: Number(row.proposedClauseCount || 0),
+    upgradeCount: Number(row.upgradeCount || 0),
     lastModifiedAt: row.LastModifiedDate || null,
   };
 }
@@ -208,15 +241,29 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
       const termWhere = isScoped
         ? (termIds.length ? ` WHERE Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
         : '';
-      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
-      if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
-      return { terms: termResult.records.map(mapTerm), rules: ruleResult.records.map(mapRule), fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
+      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
+      const loadedTermIds = termResult.records.map((term) => term.Id).filter(isSalesforceRecordId);
+      const assignmentResult = loadedTermIds.length
+        ? await sfQuery(`SELECT Special_Term__c,State__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
+        : { records: [], totalSize: 0 };
+      if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length || assignmentResult.totalSize > assignmentResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
+      const summaries = new Map();
+      for (const assignment of assignmentResult.records) {
+        const summary = summaries.get(assignment.Special_Term__c) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0 };
+        if (assignment.State__c === 'Active') {
+          summary.activeClauseCount += 1;
+          if (Number(assignment.Clause__r?.Latest_Approved_Version_Number__c || 0) > Number(assignment.Clause_Version__r?.Revision_Number__c || 0)) summary.upgradeCount += 1;
+        } else if (assignment.State__c === 'Proposed') summary.proposedClauseCount += 1;
+        summaries.set(assignment.Special_Term__c, summary);
+      }
+      return { terms: termResult.records.map((term) => mapTerm({ ...term, ...(summaries.get(term.Id) || {}) })), rules: ruleResult.records.map(mapRule), fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
     },
   });
   return {
     ...cached.value,
     countryOptions: schema.countryOptions,
     audienceOptions: schema.audienceOptions,
+    clauseCategoryOptions: schema.clauseCategoryOptions,
     cacheStatus: cached.cacheStatus || cached.status || null,
   };
 }
@@ -254,66 +301,82 @@ export async function specialTermOptions({ kind, query = '' } = {}) {
   throw specialTermsError('Unknown Special Terms option type.');
 }
 
-function stableJson(value) {
+export function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
 
-async function reserveOperation(client, profile, body, operationType, payload) {
+export async function reserveOperation(client, profile, body, operationType, payload) {
   if (!OPERATION_TYPES.has(operationType)) throw specialTermsError('Unknown Special Terms operation.');
   const operationId = text(body.operationId, 100);
   if (!operationId) throw specialTermsError('An operation ID is required.');
   const requestHash = createHash('sha256').update(stableJson({ operationType, payload })).digest('hex');
   const existing = await client.from('special_terms_operations').select('*').eq('operation_id', operationId).maybeSingle();
   if (existing.error) throw specialTermsError(`Special Terms operation could not be checked: ${existing.error.message}`, 502);
+  const resolveExisting = (row) => {
+    if (row.request_hash !== requestHash) throw specialTermsError('This operation ID was already used for different data.', 409);
+    if (row.operation_status === 'succeeded') return { replay: row.result_snapshot };
+    if (['pending', 'uncertain'].includes(row.operation_status)) throw specialTermsError('This operation is already processing or requires review.', 409);
+    return null;
+  };
   if (existing.data) {
-    if (existing.data.request_hash !== requestHash) throw specialTermsError('This operation ID was already used for different data.', 409);
-    if (existing.data.operation_status === 'succeeded') return { replay: existing.data.result_snapshot };
-    if (['pending', 'uncertain'].includes(existing.data.operation_status)) throw specialTermsError('This operation is already processing or requires review.', 409);
+    const resolved = resolveExisting(existing.data);
+    if (resolved) return resolved;
   }
-  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: operationType.startsWith('term_') ? OBJECTS.term : OBJECTS.rule, salesforce_record_id: payload.id || null, audit_reason: text(body.auditReason, 500) || null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
+  const auditReason = body.auditReason || body.approvalReason || body.revisionReason || body.retirementReason;
+  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: OPERATION_OBJECTS[operationType], salesforce_record_id: payload.id || null, audit_reason: text(auditReason, 500) || null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
   const result = existing.data ? await client.from('special_terms_operations').update(row).eq('id', existing.data.id).select('*').single() : await client.from('special_terms_operations').insert(row).select('*').single();
+  if (result.error?.code === '23505') {
+    const raced = await client.from('special_terms_operations').select('*').eq('operation_id', operationId).maybeSingle();
+    if (raced.error || !raced.data) throw specialTermsError(`Special Terms operation could not be reserved: ${raced.error?.message || result.error.message}`, 502);
+    const resolved = resolveExisting(raced.data);
+    if (resolved) return resolved;
+  }
   if (result.error) throw specialTermsError(`Special Terms operation could not be reserved: ${result.error.message}`, 502);
   return { operation: result.data };
 }
 
-async function finishOperation(client, operation, result) {
+export async function finishOperation(client, operation, result) {
   const completedAt = new Date().toISOString();
   await client.from('special_terms_operations').update({ operation_status: 'succeeded', result_snapshot: result, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
-  await expireRuntimeCacheTags(['salesforce:special-terms', 'salesforce:schema']);
+  await expireRuntimeCacheTags(['salesforce:special-terms', 'salesforce:special-terms:clauses', 'salesforce:schema']);
   return result;
 }
 
-async function failOperation(client, operation, error) {
+export async function failOperation(client, operation, error) {
   const uncertain = /timeout|network|fetch failed/i.test(String(error?.message || ''));
   const completedAt = new Date().toISOString();
   await client.from('special_terms_operations').update({ operation_status: uncertain ? 'uncertain' : 'failed', error_code: text(error?.code || 'SPECIAL_TERMS_WRITE_FAILED', 100), error_message: text(error?.message || 'Salesforce write failed.', 500), updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
   throw error;
 }
 
-async function currentRecord(objectName, id, fields) {
+export async function currentRecord(objectName, id, fields) {
   const result = await sfQuery(`SELECT ${fields.join(',')} FROM ${objectName} WHERE Id = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 });
   if (!result.records[0]) throw specialTermsError('The Salesforce record no longer exists.', 409, 'SPECIAL_TERMS_STALE');
   return result.records[0];
 }
 
-function assertCurrent(record, expectedLastModifiedAt) {
+export function assertCurrent(record, expectedLastModifiedAt) {
   if (!expectedLastModifiedAt || record.LastModifiedDate !== expectedLastModifiedAt) throw specialTermsError('This Salesforce record changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_STALE', { currentLastModifiedAt: record.LastModifiedDate });
 }
 
-function termPayload(body) {
+export function termMetadataPayload(body, { create = false } = {}) {
   const name = text(body.name, 80);
-  const normalizedTermsText = termsText(body.termsText);
   if (name.length < 2) throw specialTermsError('Special Term name must contain at least two characters.');
-  return {
+  const payload = {
     Name: name,
-    Terms_Text__c: normalizedTermsText,
     Add_to_Confirmation__c: body.addToConfirmation === true,
     Add_to_Nomination__c: body.addToNomination === true,
     Special_Remark_in_Confirmation__c: sanitizeRichText(body.confirmationRemark),
     Special_Remark_in_Nomination__c: sanitizeRichText(body.nominationRemark),
   };
+  if (create) {
+    payload.Terms_Text__c = null;
+    payload.Clause_Structure_Status__c = 'Active';
+    payload.Clause_Compiled_Hash__c = clauseHash('');
+  }
+  return payload;
 }
 
 function rulePayload(body, schema) {
@@ -346,7 +409,7 @@ async function validateRuleLookups(payload) {
 export async function saveSpecialTerm(client, profile, body = {}) {
   await resolveSpecialTermsSchema({ force: true, write: true });
   const id = body.id ? salesforceId(body.id, 'Special Term') : null;
-  const payload = termPayload(body);
+  const payload = termMetadataPayload(body, { create: !id });
   const operationType = id ? 'term_update' : 'term_create';
   const reservation = await reserveOperation(client, profile, body, operationType, { id, payload, expectedLastModifiedAt: body.expectedLastModifiedAt || null });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };

@@ -10,6 +10,10 @@ import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
+import ClauseBankPanel from '@/components/special-terms/ClauseBankPanel';
+import ClauseComposer from '@/components/special-terms/ClauseComposer';
+import MigrationReviewPanel from '@/components/special-terms/MigrationReviewPanel';
+import MigrationInventoryPanel from '@/components/special-terms/MigrationInventoryPanel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,13 +25,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
-import { richTextToCopyText, richTextToPlain, specialTermEditorValue, specialTermFilenameKey } from '@/lib/specialTermsText';
+import { richTextToCopyText, richTextToPlain, specialTermFilenameKey } from '@/lib/specialTermsText';
 import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
 
-const EMPTY_TERM = { id: null, name: '', termsText: '', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
+const EMPTY_TERM = { id: null, name: '', termsText: '', clauseStructureStatus: 'Active', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
 const QUILL_MODULES = { toolbar: [[{ header: [false, 3, 4] }], ['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['link'], ['clean']] };
-const TERMS_QUILL_MODULES = { toolbar: [['bold', 'italic', 'underline'], [{ list: 'ordered' }], [{ indent: '-1' }, { indent: '+1' }], ['clean']] };
 const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 
 function operationId() {
@@ -156,6 +159,8 @@ export default function SpecialTerms() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [termForm, setTermForm] = useState(null);
+  const [termDetail, setTermDetail] = useState(null);
+  const [termLoading, setTermLoading] = useState(false);
   const [ruleForm, setRuleForm] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteReason, setDeleteReason] = useState('');
@@ -314,9 +319,37 @@ export default function SpecialTerms() {
   const termValidationIssues = useMemo(() => termForm ? specialTermIssues(termForm) : [], [termForm]);
   const ruleValidationIssues = useMemo(() => ruleForm ? specialTermRuleIssues(ruleForm) : [], [ruleForm]);
 
-  const openTerm = (term = null) => {
+  const openTerm = async (term = null) => {
     setSaveAttempted(false);
-    setTermForm(term ? { ...EMPTY_TERM, ...term, expectedLastModifiedAt: term.lastModifiedAt } : { ...EMPTY_TERM });
+    setError('');
+    if (!term) {
+      const form = { ...EMPTY_TERM };
+      setTermForm(form);
+      setTermDetail({ term: form, activeAssignments: [], proposedAssignments: [] });
+      return;
+    }
+    setTermLoading(true);
+    const response = await appClient.functions.invoke('specialTermDetail', { termId: term.id }, { cache: false });
+    if (response.data?.error) setError(response.data.error);
+    else {
+      const detail = response.data;
+      setTermDetail(detail);
+      setTermForm({ ...EMPTY_TERM, ...detail.term, expectedLastModifiedAt: detail.term.lastModifiedAt });
+    }
+    setTermLoading(false);
+  };
+
+  const refreshOpenTerm = async (termId, successMessage = '') => {
+    const response = await appClient.functions.invoke('specialTermDetail', { termId, force: true }, { cache: false });
+    if (response.data?.error) {
+      setError(response.data.error);
+      return;
+    }
+    const detail = response.data;
+    setTermDetail(detail);
+    setTermForm((current) => ({ ...EMPTY_TERM, ...detail.term, expectedLastModifiedAt: detail.term.lastModifiedAt, name: current?.name || detail.term.name }));
+    if (successMessage) setMessage(successMessage);
+    await load(true);
   };
   const openRule = (rule = null) => {
     setSaveAttempted(false);
@@ -336,11 +369,20 @@ export default function SpecialTerms() {
     if (termValidationIssues.length) return;
     setBusy(true);
     setError('');
-    const response = await appClient.functions.invoke('specialTermsSave', { ...termForm, operationId: operationId() }, { cache: false });
+    const structured = termForm.id && termForm.clauseStructureStatus === 'Active';
+    const functionName = structured ? 'specialTermCompositionSave' : 'specialTermsSave';
+    const payload = structured ? {
+      ...termForm,
+      termId: termForm.id,
+      versionIds: (termDetail?.activeAssignments || []).map((assignment) => assignment.clauseVersionId),
+      operationId: operationId(),
+    } : { ...termForm, operationId: operationId() };
+    const response = await appClient.functions.invoke(functionName, payload, { cache: false });
     if (response.data?.error) setError(response.data.error);
     else {
       setTermForm(null);
-      setMessage(termForm.id ? 'Special Term updated in Salesforce.' : 'Special Term created in Salesforce.');
+      setTermDetail(null);
+      setMessage(termForm.id ? structured ? 'Numbered Special Term composition updated in Salesforce.' : 'Special Term metadata updated in Salesforce.' : 'Special Term created in Salesforce. Reopen it to add approved clauses.');
       await load(true);
     }
     setBusy(false);
@@ -397,7 +439,7 @@ export default function SpecialTerms() {
           <div className="flex flex-wrap gap-2">
             <PageMethodology {...SPECIAL_TERMS_METHODOLOGY} />
             <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
-            {workspace?.canManage && <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button>}
+            {workspace?.canManage && ['terms', 'rules'].includes(activeTab) ? <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button> : null}
           </div>
         )}
       />
@@ -409,11 +451,13 @@ export default function SpecialTerms() {
         views={[
           { id: 'terms', label: 'Terms', count: workspace?.terms?.length || 0 },
           { id: 'rules', label: 'Rules', count: workspace?.rules?.length || 0 },
+          { id: 'clauses', label: 'Clause Bank' },
+          ...(workspace?.canApproveClauses ? [{ id: 'migration', label: 'Migration Inventory' }] : []),
         ]}
         value={activeTab}
         onValueChange={setActiveTab}
         status={loading ? <DataStatus meta={responseMeta} state="refreshing" label="Salesforce" /> : <DataStatus meta={responseMeta} label="Salesforce" />}
-        trailing={<div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div>}
+        trailing={['terms', 'rules'].includes(activeTab) ? <div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div> : null}
       />
 
       {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && activeTab === 'terms' && selectedTerms.length > 0 && (
@@ -450,7 +494,7 @@ export default function SpecialTerms() {
                   />
                 </TableHead>}
                 <TableHead>Special Term</TableHead>
-                <TableHead>Terms Text</TableHead>
+                <TableHead>Numbered Clauses</TableHead>
                 <TableHead>Confirmation</TableHead>
                 <TableHead>Nomination</TableHead>
                 <TableHead>Rules</TableHead>
@@ -479,7 +523,10 @@ export default function SpecialTerms() {
                       {term.name}<ExternalLink className="h-3 w-3" />
                     </a>
                   </TableCell>
-                  <TableCell className="max-w-md"><p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'Not set'}</p></TableCell>
+                  <TableCell className="max-w-md">
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5"><Badge variant={term.clauseStructureStatus === 'Active' ? 'default' : 'outline'}>{term.clauseStructureStatus}</Badge><span className="text-xs text-muted-foreground">{term.activeClauseCount || 0} active · {term.proposedClauseCount || 0} proposed</span>{term.upgradeCount ? <Badge className="bg-amber-600">{term.upgradeCount} upgrade{term.upgradeCount === 1 ? '' : 's'}</Badge> : null}</div>
+                    <p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'No clauses'}</p>
+                  </TableCell>
                   <TableCell>
                     <Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge>
                     <div className="mt-1 flex max-w-56 items-center gap-1">
@@ -541,24 +588,25 @@ export default function SpecialTerms() {
         </div>
       )}
 
-      <Dialog open={Boolean(termForm)} onOpenChange={(open) => !open && !busy && setTermForm(null)}>
+      {!loading && workspace && activeTab === 'clauses' ? (
+        <ClauseBankPanel
+          canManage={workspace.canManage}
+          canApprove={workspace.canApproveClauses}
+          categoryOptions={workspace.clauseCategoryOptions || []}
+          onChanged={() => load(true)}
+        />
+      ) : null}
+
+      {!loading && workspace && activeTab === 'migration' && workspace.canApproveClauses ? <MigrationInventoryPanel /> : null}
+
+      <Dialog open={Boolean(termForm)} onOpenChange={(open) => { if (!open && !busy) { setTermForm(null); setTermDetail(null); } }}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text and document remarks support sanitized rich formatting.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text is compiled from ordered approved clauses; Confirmation and Nomination remarks remain independent rich text.</DialogDescription></DialogHeader>
           {termForm && (
             <div className="space-y-5">
               <div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div>
-              <div className="space-y-1.5">
-                <Label>Terms Text</Label>
-                <div className="[&_.ql-container]:min-h-64 [&_.ql-editor]:min-h-64 [&_.ql-editor_ol]:pl-7 [&_.ql-editor_li]:mb-2">
-                  <ReactQuill
-                    theme="snow"
-                    modules={TERMS_QUILL_MODULES}
-                    value={specialTermEditorValue(termForm.termsText)}
-                    onChange={(termsText) => setTermForm((current) => ({ ...current, termsText }))}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">Use the numbered-list control for contractual clauses. Existing wording is not changed until this form is saved.</p>
-              </div>
+              {termForm.clauseStructureStatus === 'Active' ? <div className="space-y-2"><div><Label>Numbered clauses</Label><p className="text-xs text-muted-foreground">Use each plus button to insert an approved bank clause. Row numbers are derived automatically.</p></div>{termForm.id ? <ClauseComposer assignments={termDetail?.activeAssignments || []} onChange={(activeAssignments) => setTermDetail((current) => ({ ...current, activeAssignments }))} disabled={!workspace?.canManage} /> : <Alert><AlertDescription>Save the Special Term first, then reopen it to add approved clauses.</AlertDescription></Alert>}</div> : <div className="space-y-2"><Label>Current live Terms Text</Label><pre className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-4 text-sm leading-relaxed">{richTextToCopyText(termForm.termsText) || 'No Terms Text'}</pre><p className="text-xs text-muted-foreground">Legacy wording is read-only in FCOS and remains live until the reviewed numbered structure is activated.</p></div>}
+              {termForm.id ? <MigrationReviewPanel detail={termDetail} categoryOptions={workspace?.clauseCategoryOptions || []} canApprove={workspace?.canApproveClauses} onError={setError} onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)} /> : null}
               <div className="grid gap-4 md:grid-cols-2">
                 <section className="space-y-3 rounded-lg border border-border p-3">
                   <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label>
@@ -606,7 +654,7 @@ export default function SpecialTerms() {
               <WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} />
             </div>
           )}
-          <DialogFooter><Button variant="outline" onClick={() => setTermForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => { setTermForm(null); setTermDetail(null); }} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy || termLoading}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

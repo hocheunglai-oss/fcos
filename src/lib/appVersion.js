@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.154',
+    releasedAt: '2026-08-10',
+    title: 'Reuse approved numbered Special Term clauses',
+    changes: [
+      'Replaced free-form Terms Text editing with a numbered clause composer backed by versioned Salesforce clause identities, immutable approved wording, and selective per-row upgrades.',
+      'Added Draft, approval, retirement, and review-gated legacy migration workflows with active General Manager or Administrator control and preserved original wording.',
+      'Kept Terms_Text__c as the sequential plain-text Salesforce projection while adding stale-write protection, all-or-none assignment changes, targeted caching, and redacted service-only operation history.',
+    ],
+  },
+  {
     version: '2.0.153',
     releasedAt: '2026-08-10',
     title: 'Pin Git pushes to the FCOS identity',

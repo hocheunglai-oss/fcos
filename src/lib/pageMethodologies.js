@@ -450,7 +450,15 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Term wording',
-      body: 'Terms Text contains the contractual wording and is edited through a sanitized rich-text surface with numbered-list support. Existing plain-text wording remains unchanged until a user deliberately saves the term. Confirmation and Nomination controls determine whether the PDF is attached, while their rich-text remarks supply document-specific wording.',
+      body: 'Terms Text is a plain-text Salesforce projection compiled from ordered approved clause versions as 1., 2., 3., and so on. Users add clauses through the clause-bank plus controls, reorder or remove rows, and selectively accept approved upgrades. Confirmation and Nomination remarks remain independent rich text.',
+    },
+    {
+      title: 'Clause governance',
+      body: 'Manage Special Terms users may compose terms and propose Draft clauses or revisions. Only an active General Manager or Administrator may approve or retire wording. Approved versions are immutable; a new approval never changes an existing Special Term until its exact row is upgraded and saved.',
+    },
+    {
+      title: 'Legacy migration',
+      body: 'Legacy Terms Text stays live while clause boundaries and exact-equivalence candidates are reviewed in Salesforce. Activation requires every proposed row to use an approved version and atomically writes the assignments, sequential compilation, and verification hash. The original text is retained for an audited rollback.',
     },
     {
       title: 'Rule matching',
@@ -462,7 +470,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Controlled changes',
-      body: 'Users need Manage Special Terms capability to write. FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, and records idempotent operation history. Removing a term requires its exact name and an audit reason, then removes the term and all linked rules atomically.',
+      body: 'FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, uses all-or-none writes, invalidates targeted caches, and records idempotent redacted operation history. Salesforce rejects any direct edit that would make active Terms Text differ from its live approved assignments.',
     },
     {
       title: 'Generated documents',

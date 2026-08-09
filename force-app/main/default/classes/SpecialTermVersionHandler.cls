@@ -1,0 +1,69 @@
+public class SpecialTermVersionHandler {
+    private static Boolean changed(Object leftValue, Object rightValue) {
+        return leftValue != rightValue && (leftValue == null || !leftValue.equals(rightValue));
+    }
+
+    public static void beforeInsert(List<Special_Term_Clause_Version__c> versions) {
+        for (Special_Term_Clause_Version__c version : versions) {
+            if (version.Status__c != 'Draft') version.addError('Clause versions must be created as Draft.');
+            String normalizedText = SpecialTermClauseCompiler.normalizeClauseText(version.Clause_Text__c);
+            if (String.isBlank(normalizedText)) version.addError('Clause text is required.');
+            if (version.Revision_Number__c == null || version.Revision_Number__c < 1) version.addError('Revision number must be positive.');
+            if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
+            if (version.Approved_At__c != null || !String.isBlank(version.Approved_By_Email__c) || !String.isBlank(version.Approval_Reason__c)) version.addError('Draft versions cannot contain approval metadata.');
+            version.Clause_Text__c = normalizedText;
+            version.Content_Hash__c = SpecialTermClauseCompiler.sha256(normalizedText);
+            if (version.Clause__c != null && version.Revision_Number__c != null) {
+                version.Version_Key__c = String.valueOf(version.Clause__c) + ':' + String.valueOf(version.Revision_Number__c.intValue());
+            }
+        }
+    }
+
+    public static void beforeUpdate(List<Special_Term_Clause_Version__c> versions, Map<Id, Special_Term_Clause_Version__c> oldMap) {
+        for (Special_Term_Clause_Version__c version : versions) {
+            Special_Term_Clause_Version__c oldVersion = oldMap.get(version.Id);
+            if (changed(version.Clause__c, oldVersion.Clause__c) || changed(version.Revision_Number__c, oldVersion.Revision_Number__c)) {
+                version.addError('Clause and revision number are immutable.');
+                continue;
+            }
+            if (oldVersion.Status__c == 'Superseded') {
+                version.addError('Superseded clause versions are immutable.');
+                continue;
+            }
+            if (oldVersion.Status__c == 'Approved') {
+                Boolean legalTransition = version.Status__c == 'Superseded'
+                    && !changed(version.Clause_Text__c, oldVersion.Clause_Text__c)
+                    && !changed(version.Content_Hash__c, oldVersion.Content_Hash__c)
+                    && !changed(version.Revision_Reason__c, oldVersion.Revision_Reason__c)
+                    && !changed(version.Proposed_By_Email__c, oldVersion.Proposed_By_Email__c)
+                    && !changed(version.Approved_By_Email__c, oldVersion.Approved_By_Email__c)
+                    && !changed(version.Approved_At__c, oldVersion.Approved_At__c)
+                    && !changed(version.Approval_Reason__c, oldVersion.Approval_Reason__c);
+                if (!legalTransition) version.addError('Approved clause versions are immutable and may only be superseded.');
+                continue;
+            }
+            String normalizedText = SpecialTermClauseCompiler.normalizeClauseText(version.Clause_Text__c);
+            if (String.isBlank(normalizedText)) version.addError('Clause text is required.');
+            if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
+            if (version.Status__c == 'Approved') {
+                if (changed(normalizedText, SpecialTermClauseCompiler.normalizeClauseText(oldVersion.Clause_Text__c))) {
+                    version.addError('Save the final Draft wording before approving it.');
+                }
+                if (String.isBlank(version.Approved_By_Email__c) || version.Approved_At__c == null || String.isBlank(version.Approval_Reason__c)) {
+                    version.addError('Approval identity, time, and reason are required.');
+                }
+            } else if (version.Status__c != 'Draft') {
+                version.addError('Draft versions may only remain Draft or become Approved.');
+            }
+            version.Clause_Text__c = normalizedText;
+            version.Content_Hash__c = SpecialTermClauseCompiler.sha256(normalizedText);
+            version.Version_Key__c = String.valueOf(version.Clause__c) + ':' + String.valueOf(version.Revision_Number__c.intValue());
+        }
+    }
+
+    public static void beforeDelete(List<Special_Term_Clause_Version__c> versions) {
+        for (Special_Term_Clause_Version__c version : versions) {
+            if (version.Status__c != 'Draft') version.addError('Approved and superseded clause versions cannot be deleted.');
+        }
+    }
+}

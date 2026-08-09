@@ -138,7 +138,8 @@ alter table emailrouter.events
   check (entity_type in (
     'mailbox', 'message', 'destination', 'group', 'preset', 'preset_version',
     'preset_override', 'routing_leave', 'setting', 'mail_action', 'subscription',
-    'alert', 'ai_usage', 'routing_directory'
+    'alert', 'ai_usage', 'routing_directory', 'routing_folder',
+    'learning_outcome', 'advisor_feedback'
   ));
 
 do $$

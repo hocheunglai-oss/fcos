@@ -15,9 +15,11 @@ test('Special Terms is a default-visible Trading page with controlled management
   assert.match(workspaces, /buyers_administrator:[\s\S]*title: 'Account Managers'[\s\S]*markets:[\s\S]*title: 'Markets'[\s\S]*special_terms:[\s\S]*title: 'Special Terms'[\s\S]*hedge_desk:/);
   assert.match(app, /path="\/special-terms"[\s\S]*moduleId="special_terms"/);
   assert.match(auth, /id: 'special_terms_manage'/);
+  assert.match(auth, /id: 'special_terms_clause_approve'/);
   assert.match(functions, /specialTermsSave:[\s\S]*\['special_terms'\]/);
   assert.match(functions, /specialTermsPdfExport: \['special_terms'\]/);
   assert.match(functions, /requireCapability\(context\.client, context\.profile, 'special_terms_manage'/);
+  assert.match(functions, /activeGeneralManager\?\.id !== context\.profile\.id/);
 });
 
 test('Special Terms validates the authoritative Salesforce schema and rule lookups', () => {
@@ -25,6 +27,9 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
 
   assert.match(service, /term: 'Special_Term__c'/);
   assert.match(service, /rule: 'Special_Term_Rule__c'/);
+  assert.match(service, /clause: 'Special_Term_Clause__c'/);
+  assert.match(service, /clauseVersion: 'Special_Term_Clause_Version__c'/);
+  assert.match(service, /clauseAssignment: 'Special_Term_Clause_Assignment__c'/);
   assert.match(service, /'Special_Term__c', \{ referenceTo: OBJECTS\.term/);
   assert.match(service, /'Account__c', \{ referenceTo: OBJECTS\.account/);
   assert.match(service, /'Port__c', \{ referenceTo: OBJECTS\.port/);
@@ -35,7 +40,8 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /secondary: row\.Company_Code__c \|\| 'No CL Key'/);
   assert.match(service, /getSpecialTermForExport/);
   assert.match(service, /WHERE Id = '\$\{soql\(id\)\}' LIMIT 1/);
-  assert.match(service, /Terms Text exceeds the Salesforce field limit/);
+  assert.match(service, /Clause_Structure_Status__c/);
+  assert.match(service, /Original_Terms_Text__c/);
 });
 
 test('Salesforce owns priority while FCOS protects mutations and deletion', () => {
@@ -56,12 +62,17 @@ test('Salesforce owns priority while FCOS protects mutations and deletion', () =
 
 test('Special Terms data is service-only and included in the Universal Audit Trail', () => {
   const migration = read('supabase/migrations/20260802110000_salesforce_special_terms.sql');
+  const clauseMigration = read('supabase/migrations/20260809173753_special_term_clause_bank.sql');
   const functions = read('api/functions/[name].js');
   const page = read('src/pages/SpecialTerms.jsx');
+  const clauseService = read('api/_specialTermClauses.js');
 
   assert.match(migration, /alter table public\.special_terms_operations enable row level security/);
   assert.match(migration, /revoke all on table public\.special_terms_operations from anon, authenticated/);
   assert.match(migration, /grant all on table public\.special_terms_operations to service_role/);
+  assert.match(clauseMigration, /special_terms_clause_approve/);
+  assert.match(clauseMigration, /Special_Term_Clause_Assignment__c/);
+  assert.match(clauseMigration, /revoke all on table public\.special_terms_operations from anon, authenticated/);
   assert.match(functions, /source: 'Special Terms'/);
   assert.match(page, /Salesforce calculates priority after saving/);
   assert.match(page, /Search Account name or CL Key/);
@@ -74,9 +85,18 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Copy Confirmation special remark/);
   assert.match(page, /Copy Nomination special remark/);
   assert.match(page, /richTextToCopyText/);
-  assert.match(page, /TERMS_QUILL_MODULES/);
-  assert.match(page, /value=\{specialTermEditorValue\(termForm\.termsText\)\}/);
-  assert.match(page, /Use the numbered-list control for contractual clauses/);
+  assert.match(page, /<ClauseComposer assignments=/);
+  assert.match(page, /<ClauseBankPanel/);
+  assert.match(page, /<MigrationReviewPanel/);
+  assert.match(page, /<MigrationInventoryPanel/);
+  assert.doesNotMatch(page, /specialTermEditorValue\(termForm\.termsText\)/);
+  assert.match(clauseService, /compileNumberedClauses/);
+  assert.match(clauseService, /allOrNone: true/);
+  assert.match(clauseService, /composite\/graph/);
+  assert.match(clauseService, /upgradeAvailable/);
+  assert.match(clauseService, /selectedClauseVersionId/);
+  assert.match(clauseService, /hasMaterialDifference/);
+  assert.doesNotMatch(clauseMigration, /Clause_Text__c|Terms_Text__c/);
   assert.doesNotMatch(page, /view: activeTab,[\s\S]*search: search\.trim\(\)/);
   assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);
