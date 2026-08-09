@@ -1,182 +1,205 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   Circle,
+  Clock3,
   HardDrive,
   KeyRound,
+  Loader2,
   LockKeyhole,
   Monitor,
   RefreshCw,
   ShieldCheck,
   Terminal,
   UserCheck,
+  XCircle,
 } from 'lucide-react';
+import { appClient } from '@/api/appClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
+  CONNECTION_ATTESTATION_POLICY,
   CONNECTION_CHECKLIST_SEQUENCE,
-  CONNECTION_CHECKLIST_STORAGE_KEY,
+  CONNECTION_DOCTOR_COMMAND,
   CONNECTION_LOCAL_STATE_DIRECTORY,
+  CONNECTION_POLICY_VERSION,
   CONNECTION_PROFILE_NAME,
   CONNECTION_TARGETS,
-  CONNECTION_VERIFY_COMMAND,
-  connectionCheckState,
-  sanitizeConnectionChecks,
-  updateConnectionCheck,
+  connectionAttestationState,
+  sanitizeConnectionAttestation,
 } from '@/lib/connectionChecklist';
 
 const STEP_ICONS = [Terminal, UserCheck, ShieldCheck, Monitor];
+const REFRESH_INTERVAL_MS = 60_000;
 
-const STATE_META = {
-  pending: { label: 'Next step', className: 'border-sky-200 bg-sky-50 text-sky-700' },
-  stopped: { label: 'Fail closed', className: 'border-red-200 bg-red-50 text-red-700' },
-  authentication_blocked: { label: 'Otto unlocked', className: 'border-amber-200 bg-amber-50 text-amber-800' },
-  return_to_cli: { label: 'Return to CLI', className: 'border-violet-200 bg-violet-50 text-violet-700' },
-  complete: { label: 'CLI complete', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+const STATUS_META = {
+  verified: { label: 'Verified', className: 'border-emerald-200 bg-emerald-50 text-emerald-700', Icon: CheckCircle2 },
+  warning: { label: 'Attention', className: 'border-amber-200 bg-amber-50 text-amber-800', Icon: AlertTriangle },
+  failed: { label: 'Failed closed', className: 'border-red-200 bg-red-50 text-red-700', Icon: XCircle },
+  expired: { label: 'Expired', className: 'border-red-200 bg-red-50 text-red-700', Icon: Clock3 },
+  unavailable: { label: 'Not published', className: 'border-slate-200 bg-slate-50 text-slate-700', Icon: Circle },
 };
 
-function readChecks() {
-  if (typeof window === 'undefined') return sanitizeConnectionChecks({});
-  try {
-    return sanitizeConnectionChecks(JSON.parse(window.localStorage.getItem(CONNECTION_CHECKLIST_STORAGE_KEY) || '{}'));
-  } catch {
-    return sanitizeConnectionChecks({});
-  }
-}
+const WARNING_LABELS = {
+  cli_version_warning: 'CLI version should be reviewed',
+  cli_version_incompatible: 'CLI version is outside policy',
+  credential_rotation_due: 'Credential rotation is due',
+  credential_expiring: 'Credential expires soon',
+  credential_expired: 'Credential expired',
+  credential_expiry_unknown: 'Credential expiry is unavailable',
+  permission_probe_failed: 'Permission probe failed',
+  target_pin_missing: 'Target pin is missing or invalid',
+  salesforce_auth_not_isolated: 'Salesforce host authorization is protected but not repo-local',
+};
 
-function formatRecordedAt(value) {
-  if (!value) return 'Not recorded';
+function formatDate(value) {
+  if (!value) return 'Not available';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Not recorded';
+  if (Number.isNaN(date.getTime())) return 'Not available';
   return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
     month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
     timeZone: 'Asia/Hong_Kong',
   }).format(date);
 }
 
-function StepMarker({ number, complete, active, blocked, stopped }) {
-  const className = complete
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : stopped
-      ? 'border-red-200 bg-red-50 text-red-700'
-      : active
-        ? 'border-sky-200 bg-sky-50 text-sky-700'
-        : blocked
-          ? 'border-slate-200 bg-slate-50 text-slate-400'
-          : 'border-border bg-background text-muted-foreground';
-  return (
-    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold ${className}`}>
-      {complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : number}
-    </span>
-  );
+function ageLabel(seconds) {
+  if (!Number.isFinite(seconds)) return 'not available';
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
 }
 
-function ChecklistActions({ target, record, onAction }) {
-  const state = connectionCheckState(record);
-  const cliAvailable = record.cliAvailability === 'available';
-  const identityVerified = record.identityStatus === 'verified';
-  const browserBlocked = !state.browserAllowed || state.status !== 'authentication_blocked';
+function policyVersionLabel(policy) {
+  if (policy.exact) return `exactly ${policy.exact}`;
+  if (policy.minimum && policy.maximumExclusive) return `${policy.minimum} to <${policy.maximumExclusive}`;
+  return policy.minimum ? `≥${policy.minimum}` : 'policy controlled';
+}
 
+function providerVerified(report) {
+  return report?.identityVerified
+    && report.identityStatus === 'verified'
+    && report.targetPin === 'verified'
+    && report.permissionStatus === 'verified'
+    && report.cliVersionStatus !== 'incompatible';
+}
+
+function ProviderCard({ target, report }) {
+  const verified = providerVerified(report);
+  const state = !report ? 'unavailable' : verified ? (report.warningCodes.length ? 'warning' : 'verified') : 'failed';
+  const meta = STATUS_META[state];
+  const StateIcon = meta.Icon;
   return (
-    <ol className="mt-4 divide-y divide-border rounded-lg border border-border bg-background/70">
-      <li className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <StepMarker number={1} complete={cliAvailable} active={!record.cliAvailability} stopped={record.cliAvailability === 'unavailable'} />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">Verify CLI availability</div>
-            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.availabilityCommand}</code>
+    <article className="rounded-lg border border-border bg-muted/20 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground">{target.provider}</h3>
+            <Badge variant="outline" className="font-mono text-[10px]">{target.cli}</Badge>
+            <Badge variant="outline" className={target.fullyIsolated ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-violet-200 bg-violet-50 text-violet-700'}>
+              {target.fullyIsolated ? 'Isolated authorization' : 'Isolated target pin'}
+            </Badge>
+            <Badge variant="outline" className={`gap-1 ${meta.className}`}><StateIcon className="h-3 w-3" />{meta.label}</Badge>
           </div>
+          <dl className="mt-2 flex flex-wrap gap-2">
+            {target.identifiers.map((identifier) => (
+              <div key={identifier.label} className="rounded-md border border-border bg-card px-2 py-1 text-[11px]">
+                <dt className="inline font-semibold text-muted-foreground">{identifier.label}: </dt>
+                <dd className="inline break-all font-mono text-foreground">{identifier.value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:pl-0">
-          <Button type="button" size="sm" variant={record.cliAvailability === 'available' ? 'secondary' : 'outline'} onClick={() => onAction('cli_available')}>Available</Button>
-          <Button type="button" size="sm" variant={record.cliAvailability === 'unavailable' ? 'destructive' : 'outline'} onClick={() => onAction('cli_unavailable')}>Unavailable</Button>
-        </div>
-      </li>
+        <div className="shrink-0 text-xs text-muted-foreground">Checked {formatDate(report?.lastVerifiedAt)}</div>
+      </div>
 
-      <li className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <StepMarker number={2} complete={identityVerified} active={cliAvailable && !record.identityStatus} blocked={!cliAvailable} stopped={record.identityStatus === 'mismatch'} />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">Verify account, team, and project</div>
-            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.identityCommand}</code>
-          </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-md border border-border bg-card p-2.5">
+          <div className="text-[11px] font-semibold text-foreground">CLI version</div>
+          <div className="mt-1 font-mono text-xs">{report?.cliVersion || 'Unavailable'}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">Policy: {policyVersionLabel(target.cliVersion)}</div>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:max-w-[430px] sm:justify-end sm:pl-0">
-          <Button type="button" size="sm" variant={record.identityStatus === 'verified' ? 'secondary' : 'outline'} disabled={!cliAvailable} onClick={() => onAction('identity_verified')}>Exact match</Button>
-          <Button type="button" size="sm" variant={record.identityStatus === 'mismatch' ? 'destructive' : 'outline'} disabled={!cliAvailable} onClick={() => onAction('identity_mismatch')}>Mismatch · stop</Button>
-          <Button type="button" size="sm" variant={record.identityStatus === 'authentication_blocked' ? 'secondary' : 'outline'} disabled={!cliAvailable} onClick={() => onAction('identity_authentication_blocked')}>Authentication blocked</Button>
+        <div className="rounded-md border border-border bg-card p-2.5">
+          <div className="text-[11px] font-semibold text-foreground">Identity and target</div>
+          <div className="mt-1 text-xs capitalize">{report?.identityStatus?.replaceAll('_', ' ') || 'Unavailable'} · pin {report?.targetPin || 'unavailable'}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">Probe {report?.latencyMs != null ? `${report.latencyMs} ms` : 'not available'}</div>
         </div>
-      </li>
+        <div className="rounded-md border border-border bg-card p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><KeyRound className="h-3.5 w-3.5" />Credential lifecycle</div>
+          <div className="mt-1 text-xs capitalize">{report?.credentialLifecycle?.replaceAll('_', ' ') || 'Unknown'}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">{report?.credentialAgeDays != null ? `${report.credentialAgeDays} days since authorization record` : 'Authorization age unavailable'}</div>
+        </div>
+        <div className="rounded-md border border-border bg-card p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><HardDrive className="h-3.5 w-3.5" />Credential storage</div>
+          <div className="mt-1 text-xs capitalize">{target.credentialStorage.replaceAll('_', ' ')}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">Rotation warning after {target.rotationWarningDays} days</div>
+        </div>
+      </div>
 
-      <li className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <StepMarker number={3} complete={record.cliOutcome === 'completed'} active={identityVerified && !record.cliOutcome} blocked={!identityVerified} />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">Use the verified CLI</div>
-            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.useCommand}</code>
-          </div>
+      <div className="mt-3 rounded-md border border-border bg-card p-2.5">
+        <div className="text-[11px] font-semibold text-foreground">Required permission probes</div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {target.requiredPermissions.map((permission) => {
+            const passed = report?.permissions.includes(permission);
+            return (
+              <Badge key={permission} variant="outline" className={passed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>
+                {passed ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <XCircle className="mr-1 h-3 w-3" />}{permission}
+              </Badge>
+            );
+          })}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:pl-0">
-          <Button type="button" size="sm" variant={record.cliOutcome === 'completed' ? 'secondary' : 'outline'} disabled={!identityVerified} onClick={() => onAction('cli_completed')}>CLI completed</Button>
-          <Button type="button" size="sm" variant={record.cliOutcome === 'authentication_blocked' ? 'secondary' : 'outline'} disabled={!identityVerified} onClick={() => onAction('cli_authentication_blocked')}>Authentication blocked</Button>
-        </div>
-      </li>
+      </div>
 
-      <li className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <StepMarker number={4} complete={record.browserAuthenticationRecorded} active={!browserBlocked} blocked={browserBlocked} />
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
-              Chrome authentication fallback
-              {browserBlocked && <LockKeyhole className="h-3.5 w-3.5 text-muted-foreground" aria-label="Locked" />}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Profile must be exactly <span className="font-semibold text-foreground">{APPROVED_CONNECTION_BROWSER_PROFILE}</span>. After authentication, return to step 2 and reverify the CLI identity.
-            </p>
-            <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.authCommand}</code>
-          </div>
+      {report?.warningCodes.length ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {report.warningCodes.map((code) => WARNING_LABELS[code] || code).join(' · ')}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 pl-8 sm:pl-0">
-          {record.browserAuthenticationRecorded ? (
-            <Button type="button" size="sm" variant="outline" onClick={() => onAction('return_to_cli')}>Return to CLI verification</Button>
-          ) : (
-            <Button type="button" size="sm" variant="outline" disabled={browserBlocked} onClick={() => onAction('browser_authentication_completed')}>Record Otto authentication</Button>
-          )}
-        </div>
-      </li>
-    </ol>
+      ) : null}
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Persistence:</span> {target.persistence}</div>
+        <div className="text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Fail-closed route:</span> {target.nonBrowserRoute}</div>
+      </div>
+    </article>
   );
 }
 
 export default function ConnectionChecklist() {
-  const [checks, setChecks] = useState(readChecks);
+  const [attestation, setAttestation] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const completed = CONNECTION_TARGETS.filter(({ id }) => connectionCheckState(checks[id]).status === 'complete').length;
 
-  const persist = (next) => {
-    const safe = sanitizeConnectionChecks(next);
-    setChecks(safe);
-    try {
-      window.localStorage.setItem(CONNECTION_CHECKLIST_STORAGE_KEY, JSON.stringify(safe));
-    } catch {
-      setError('The checklist changed for this session but could not be saved in this browser.');
-    }
-  };
-
-  const applyAction = (targetId, action) => {
+  const loadAttestation = useCallback(async ({ force = false } = {}) => {
+    setLoading(true);
     setError('');
-    try {
-      persist({ ...checks, [targetId]: updateConnectionCheck(checks[targetId], action) });
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : 'The checklist step is not available yet.');
+    const response = await appClient.functions.invoke('systemHealth', {}, { cache: false, force });
+    if (response.data?.error) {
+      setError(response.data.error);
+      setAttestation(null);
+    } else {
+      const safe = sanitizeConnectionAttestation(response.data?.connectionAttestation);
+      const revision = Number(response.data?.connectionAttestation?.revision);
+      setAttestation(safe ? { ...safe, revision: Number.isInteger(revision) && revision > 0 ? revision : null } : null);
     }
-  };
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadAttestation();
+    const intervalId = window.setInterval(() => loadAttestation(), REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [loadAttestation]);
+
+  const state = connectionAttestationState(attestation);
+  const meta = STATUS_META[state.status] || STATUS_META.unavailable;
+  const StateIcon = meta.Icon;
 
   return (
     <section className="rounded-lg border border-border bg-card p-4">
@@ -186,34 +209,30 @@ export default function ConnectionChecklist() {
           <div>
             <h2 className="text-sm font-semibold text-foreground">Connection Checklist</h2>
             <p className="mt-1 max-w-4xl text-xs leading-relaxed text-muted-foreground">
-              A CLI-first runbook for FCOS infrastructure. Records stay in this browser and contain only fixed non-secret target identifiers, controlled status values, the approved profile name, and timestamps. CLI output, usernames beyond the approved identifiers, tokens, and secrets cannot be entered or stored here.
+              Live, machine-signed verification of CLI versions, exact provider targets, required permissions, and credential lifecycle. The attestation is service-only and contains no tokens, CLI output, secrets, or mirrored provider records.
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">{completed}/{CONNECTION_TARGETS.length} CLI complete</Badge>
-          <Button type="button" size="sm" variant="ghost" className="gap-1.5" onClick={() => persist({})}>
-            <RefreshCw className="h-3.5 w-3.5" /> Reset all
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Badge variant="outline" className={`gap-1 ${meta.className}`}><StateIcon className="h-3 w-3" />{state.verifiedCount}/{CONNECTION_TARGETS.length} {meta.label}</Badge>
+          <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => loadAttestation({ force: true })} disabled={loading}>
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
           </Button>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3 lg:grid-cols-2">
+      <div className="mt-4 grid gap-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3 lg:grid-cols-3">
         <div className="flex items-start gap-2.5">
           <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-          <div>
-            <div className="text-xs font-semibold text-blue-950">Durable local profile · {CONNECTION_PROFILE_NAME}</div>
-            <p className="mt-1 text-[11px] leading-relaxed text-blue-900">
-              Provider credentials and machine state stay outside Git in <code>{CONNECTION_LOCAL_STATE_DIRECTORY}/</code>. The exact targets below are shared application policy; local credential material is never sent to System Health.
-            </p>
-          </div>
+          <div><div className="text-xs font-semibold text-blue-950">Policy {CONNECTION_POLICY_VERSION} · {CONNECTION_PROFILE_NAME}</div><p className="mt-1 text-[11px] text-blue-900">Ignored machine state stays in <code>{CONNECTION_LOCAL_STATE_DIRECTORY}/</code>.</p></div>
         </div>
         <div className="flex items-start gap-2.5">
-          <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-blue-950">One fail-closed verification command</div>
-            <code className="mt-1 block break-all rounded border border-blue-200 bg-white/80 px-2 py-1 text-[11px] text-blue-950">{CONNECTION_VERIFY_COMMAND}</code>
-          </div>
+          <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+          <div><div className="text-xs font-semibold text-blue-950">Signed attestation</div><p className="mt-1 text-[11px] text-blue-900">Key <code>{CONNECTION_ATTESTATION_POLICY.keyId}</code> · revision {attestation?.revision || '—'}</p></div>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+          <div><div className="text-xs font-semibold text-blue-950">Last verified {ageLabel(state.ageSeconds)}</div><p className="mt-1 text-[11px] text-blue-900">{formatDate(attestation?.verifiedAt)} · {attestation?.durationMs != null ? `${attestation.durationMs} ms total` : 'duration unavailable'}</p></div>
         </div>
       </div>
 
@@ -229,69 +248,20 @@ export default function ConnectionChecklist() {
         })}
       </div>
 
-      <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-        <span className="font-semibold">Fallback rule:</span> prefer an approved connector or API when it can complete the operation. Chrome is for an interactive authentication gap only, and its profile must be exactly <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span>.
+      <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+        <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span><span className="font-semibold">Fallback rule:</span> use Chrome only when CLI and approved API/connector authentication cannot complete, and only profile <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span>. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
       </div>
 
-      {error && (
-        <div role="alert" className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+      {error && <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {!loading && !attestation && !error ? (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+          No signed verification has been published. Run <code className="font-semibold">{CONNECTION_DOCTOR_COMMAND}</code> on the approved FCOS workstation.
         </div>
-      )}
+      ) : null}
 
       <div className="mt-5 space-y-4">
-        {CONNECTION_TARGETS.map((target) => {
-          const record = checks[target.id];
-          const state = connectionCheckState(record);
-          const stateMeta = STATE_META[state.status] || STATE_META.pending;
-          return (
-            <article key={target.id} className="rounded-lg border border-border bg-muted/20 p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-semibold text-foreground">{target.provider}</h3>
-                    <Badge variant="outline" className="font-mono text-[10px]">{target.cli}</Badge>
-                    <Badge variant="outline" className={target.fullyIsolated ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-violet-200 bg-violet-50 text-violet-700'}>
-                      {target.fullyIsolated ? 'Isolated authorization' : 'Isolated target pin'}
-                    </Badge>
-                    <Badge variant="outline" className={stateMeta.className}>{stateMeta.label}</Badge>
-                  </div>
-                  <dl className="mt-2 flex flex-wrap gap-2">
-                    {target.identifiers.map((identifier) => (
-                      <div key={identifier.label} className="rounded-md border border-border bg-card px-2 py-1 text-[11px]">
-                        <dt className="inline font-semibold text-muted-foreground">{identifier.label}: </dt>
-                        <dd className="inline break-all font-mono text-foreground">{identifier.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-                <div className="shrink-0 text-xs text-muted-foreground">Updated {formatRecordedAt(record?.updatedAt)}</div>
-              </div>
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <div className="rounded-md border border-border bg-card p-2.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><KeyRound className="h-3.5 w-3.5" />{target.authorizationMode}</div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{target.persistence}</p>
-                </div>
-                <div className="rounded-md border border-border bg-card p-2.5">
-                  <div className="text-[11px] font-semibold text-foreground">Isolation mechanism</div>
-                  <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.isolationMechanism}</code>
-                </div>
-                <div className="rounded-md border border-border bg-card p-2.5 sm:col-span-2 lg:col-span-1">
-                  <div className="text-[11px] font-semibold text-foreground">Local config · ignored by Git</div>
-                  <code className="mt-1 block break-all text-[11px] text-muted-foreground">{target.configPath}</code>
-                </div>
-              </div>
-
-              <ChecklistActions target={target} record={record} onAction={(action) => applyAction(target.id, action)} />
-
-              <div className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
-                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>{target.nonBrowserRoute}</span>
-              </div>
-            </article>
-          );
-        })}
+        {CONNECTION_TARGETS.map((target) => <ProviderCard key={target.id} target={target} report={attestation?.providers?.[target.id] || null} />)}
       </div>
     </section>
   );

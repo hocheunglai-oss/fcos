@@ -46,6 +46,7 @@ function sourceTone(source) {
   if (source === 'Growth & Coaching') return 'border-teal-200 bg-teal-50 text-teal-800';
   if (source === 'Internal Daily Report') return 'border-blue-200 bg-blue-50 text-blue-700';
   if (source === 'FCOS Updates') return 'border-cyan-200 bg-cyan-50 text-cyan-800';
+  if (source === 'System Connections') return 'border-indigo-200 bg-indigo-50 text-indigo-800';
   return 'border-violet-200 bg-violet-50 text-violet-700';
 }
 
@@ -99,7 +100,7 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
         icon={ShieldCheck}
         eyebrow="Administrator audit"
         title="Universal Audit Trail"
-        description="Review redacted app-level audit events from administration, collaboration, Growth & Coaching, FCOS updates, collections, reports, disputes, internal report runs, and late-payment interest requests."
+        description="Review redacted app-level audit events from administration, collaboration, system connections, Growth & Coaching, FCOS updates, collections, reports, disputes, internal report runs, and late-payment interest requests."
         meta={`${rows.length.toLocaleString()} events shown · Hong Kong time`}
         actions={(
           <>

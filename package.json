@@ -22,8 +22,10 @@
     "verify:graph-only": "node scripts/verify-production-source.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "connections:verify": "node scripts/fcos-connections.mjs verify",
+    "connections:doctor": "node scripts/fcos-connections.mjs doctor",
     "connections:bootstrap": "node scripts/fcos-connections.mjs bootstrap",
     "connections:auth": "node scripts/fcos-connections.mjs auth",
+    "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
     "preview": "vite preview"
   },

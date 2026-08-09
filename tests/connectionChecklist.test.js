@@ -1,21 +1,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { FCOS_CONNECTION_POLICY, validateFcosConnectionPolicy } from '../config/fcosConnections.js';
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
+  CONNECTION_ATTESTATION_POLICY,
   CONNECTION_CHECKLIST_SEQUENCE,
   CONNECTION_LOCAL_STATE_DIRECTORY,
+  CONNECTION_POLICY_VERSION,
   CONNECTION_PROFILE_NAME,
   CONNECTION_TARGETS,
   CONNECTION_VERIFY_COMMAND,
-  connectionCheckState,
-  sanitizeConnectionCheck,
-  sanitizeConnectionChecks,
-  updateConnectionCheck,
+  canonicalConnectionAttestation,
+  connectionAttestationState,
+  sanitizeConnectionAttestation,
 } from '../src/lib/connectionChecklist.js';
 
-const WHEN = new Date('2026-08-09T08:00:00.000Z');
+const VERIFIED_AT = '2026-08-09T08:00:00.000Z';
+const EXPIRES_AT = '2026-08-10T08:00:00.000Z';
 
-test('connection checklist records the approved non-secret FCOS targets and fixed order', () => {
+function providerReport(provider, overrides = {}) {
+  return {
+    provider,
+    cliAvailable: true,
+    cliVersion: provider === 'vercel' ? '54.20.1' : provider === 'supabase' ? '2.113.0' : provider === 'salesforce' ? '2.145.6' : '2.96.0',
+    cliVersionStatus: 'approved',
+    identityStatus: 'verified',
+    identityVerified: true,
+    targetPin: 'verified',
+    permissionStatus: 'verified',
+    permissions: [...CONNECTION_TARGETS.find(({ id }) => id === provider).requiredPermissions],
+    latencyMs: 42,
+    authorizedAt: VERIFIED_AT,
+    expiresAt: null,
+    credentialAgeDays: 0,
+    credentialLifecycle: 'current',
+    lastVerifiedAt: VERIFIED_AT,
+    warningCodes: [],
+    ...overrides,
+  };
+}
+
+function attestation(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    policyVersion: CONNECTION_POLICY_VERSION,
+    profile: CONNECTION_PROFILE_NAME,
+    keyId: CONNECTION_ATTESTATION_POLICY.keyId,
+    verifiedAt: VERIFIED_AT,
+    expiresAt: EXPIRES_AT,
+    durationMs: 100,
+    providers: Object.fromEntries(CONNECTION_TARGETS.map(({ id }) => [id, providerReport(id)])),
+    ...overrides,
+  };
+}
+
+test('one schema-validated policy owns the approved targets and CLI-first order', () => {
+  assert.equal(validateFcosConnectionPolicy(FCOS_CONNECTION_POLICY), true);
   assert.deepEqual(CONNECTION_CHECKLIST_SEQUENCE.map(({ id }) => id), [
     'cli_availability',
     'target_identity',
@@ -31,138 +71,54 @@ test('connection checklist records the approved non-secret FCOS targets and fixe
     target.id,
     Object.fromEntries(target.identifiers.map(({ label, value }) => [label, value])),
   ]));
-  assert.deepEqual(targets.github, {
-    'Required account': 'hocheunglai-oss',
-    Repository: 'hocheunglai-oss/fcos',
-  });
-  assert.deepEqual(targets.vercel, {
-    Account: 'hocheunglai-6535',
-    Team: 'hocheunglai-6535s-projects',
-    'Team ID': 'team_MbKDazzCrou3eKTuausPv4X2',
-    Project: 'fcos',
-    'Project ID': 'prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs',
-    Target: 'hocheunglai-6535s-projects/fcos',
-  });
-  assert.deepEqual(targets.supabase, {
-    'Project name': 'FCOS',
-    'Project ref': 'pjforfvchygdyqfcgpmw',
-  });
-  assert.deepEqual(targets.salesforce, {
-    Environment: 'Production',
-    'Org ID': '00D2x000000Ei4oEAC',
-    Alias: 'source-salesforce',
-  });
-
-  assert.deepEqual(CONNECTION_TARGETS.map(({ id, fullyIsolated }) => [id, fullyIsolated]), [
-    ['github', true],
-    ['vercel', true],
-    ['supabase', true],
-    ['salesforce', false],
+  assert.equal(targets.github.Repository, 'hocheunglai-oss/fcos');
+  assert.equal(targets.vercel['Team ID'], 'team_MbKDazzCrou3eKTuausPv4X2');
+  assert.equal(targets.vercel['Project ID'], 'prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs');
+  assert.equal(targets.supabase['Project ref'], 'pjforfvchygdyqfcgpmw');
+  assert.equal(targets.salesforce['Org ID'], '00D2x000000Ei4oEAC');
+  assert.deepEqual(CONNECTION_TARGETS.map(({ id, credentialStorage }) => [id, credentialStorage]), [
+    ['github', 'provider_secure_store'],
+    ['vercel', 'macos_keychain'],
+    ['supabase', 'macos_keychain'],
+    ['salesforce', 'protected_host_store'],
   ]);
-  assert.ok(CONNECTION_TARGETS.every(({ configPath }) => configPath === '.sf' || configPath.startsWith('.fcos-cli/')));
 });
 
-test('connection checklist state machine blocks out-of-order CLI and browser actions', () => {
-  assert.throws(
-    () => updateConnectionCheck({}, 'identity_verified', WHEN),
-    /Verify CLI availability/,
-  );
-  assert.throws(
-    () => updateConnectionCheck({}, 'cli_completed', WHEN),
-    /Verify the approved account/,
-  );
-  assert.throws(
-    () => updateConnectionCheck({}, 'browser_authentication_completed', WHEN),
-    /only after the CLI cannot complete authentication/,
-  );
-
-  const unavailable = updateConnectionCheck({}, 'cli_unavailable', WHEN);
-  assert.deepEqual(connectionCheckState(unavailable), {
-    step: 'cli_availability',
-    status: 'stopped',
-    browserAllowed: false,
-  });
-
-  const available = updateConnectionCheck({}, 'cli_available', WHEN);
-  const mismatch = updateConnectionCheck(available, 'identity_mismatch', WHEN);
-  assert.deepEqual(connectionCheckState(mismatch), {
-    step: 'target_identity',
-    status: 'stopped',
-    browserAllowed: false,
-  });
+test('attestation sanitization retains only fixed non-secret fields', () => {
+  const value = attestation();
+  value.providers.supabase.accessToken = 'do-not-store';
+  value.providers.github.cliOutput = 'do-not-store';
+  value.providers.vercel.permissions.push('unapproved.permission');
+  value.notes = 'do-not-store';
+  const safe = sanitizeConnectionAttestation(value);
+  const serialized = JSON.stringify(safe);
+  assert.ok(safe);
+  assert.doesNotMatch(serialized, /do-not-store|accessToken|cliOutput|notes|unapproved\.permission/);
+  assert.deepEqual(safe.providers.github.permissions, CONNECTION_TARGETS[0].requiredPermissions);
+  assert.equal(safe.providers.supabase.credentialStorage, 'macos_keychain');
 });
 
-test('Otto fallback unlocks only for CLI authentication and returns to identity verification', () => {
-  let record = updateConnectionCheck({}, 'cli_available', WHEN);
-  record = updateConnectionCheck(record, 'identity_verified', WHEN);
-  record = updateConnectionCheck(record, 'cli_authentication_blocked', WHEN);
-  assert.deepEqual(connectionCheckState(record), {
-    step: 'browser_fallback',
-    status: 'authentication_blocked',
-    browserAllowed: true,
+test('live attestation state handles freshness, warnings, failures, and expiry', () => {
+  assert.deepEqual(connectionAttestationState(attestation(), new Date('2026-08-09T08:10:00.000Z')), {
+    status: 'verified',
+    ageSeconds: 600,
+    verifiedCount: 4,
+    warningCount: 0,
   });
 
-  record = updateConnectionCheck(record, 'browser_authentication_completed', WHEN);
-  assert.equal(record.browserProfile, 'Otto');
-  assert.equal(record.browserAuthenticationRecorded, true);
-  assert.deepEqual(connectionCheckState(record), {
-    step: 'target_identity',
-    status: 'return_to_cli',
-    browserAllowed: true,
-  });
+  const warned = attestation();
+  warned.providers.vercel = providerReport('vercel', { warningCodes: ['credential_rotation_due'] });
+  assert.equal(connectionAttestationState(warned, new Date('2026-08-09T08:10:00.000Z')).status, 'warning');
 
-  record = updateConnectionCheck(record, 'return_to_cli', WHEN);
-  assert.equal(record.cliAvailability, 'available');
-  assert.equal(record.identityStatus, null);
-  assert.equal(record.browserProfile, null);
-  assert.deepEqual(connectionCheckState(record), {
-    step: 'target_identity',
-    status: 'pending',
-    browserAllowed: false,
-  });
+  const failed = attestation();
+  failed.providers.supabase = providerReport('supabase', { identityVerified: false, identityStatus: 'authentication_blocked' });
+  assert.equal(connectionAttestationState(failed, new Date('2026-08-09T08:10:00.000Z')).status, 'failed');
+  assert.equal(connectionAttestationState(attestation(), new Date('2026-08-10T09:00:00.000Z')).status, 'expired');
 });
 
-test('completed CLI path never unlocks Chrome', () => {
-  let record = updateConnectionCheck({}, 'cli_available', WHEN);
-  record = updateConnectionCheck(record, 'identity_verified', WHEN);
-  record = updateConnectionCheck(record, 'cli_completed', WHEN);
-  assert.deepEqual(connectionCheckState(record), {
-    step: 'complete',
-    status: 'complete',
-    browserAllowed: false,
-  });
-  assert.throws(
-    () => updateConnectionCheck(record, 'browser_authentication_completed', WHEN),
-    /only after the CLI cannot complete authentication/,
-  );
-});
-
-test('checklist persistence strips arbitrary text, credential fields, and unapproved profiles', () => {
-  const sanitized = sanitizeConnectionCheck({
-    cliAvailability: 'available',
-    identityStatus: 'authentication_blocked',
-    cliOutcome: 'completed',
-    browserProfile: 'Personal',
-    browserAuthenticationRecorded: true,
-    updatedAt: '2026-08-09T08:00:00.000Z',
-    accessToken: 'do-not-store',
-    cliOutput: 'do-not-store',
-    notes: 'do-not-store',
-  });
-
-  assert.deepEqual(sanitized, {
-    cliAvailability: 'available',
-    identityStatus: 'authentication_blocked',
-    cliOutcome: null,
-    browserProfile: null,
-    browserAuthenticationRecorded: false,
-    updatedAt: '2026-08-09T08:00:00.000Z',
-  });
-
-  const records = sanitizeConnectionChecks({
-    github: sanitized,
-    unknownProvider: { accessToken: 'do-not-store' },
-  });
-  assert.deepEqual(Object.keys(records), ['github', 'vercel', 'supabase', 'salesforce']);
-  assert.doesNotMatch(JSON.stringify(records), /do-not-store|accessToken|cliOutput|notes/);
+test('canonical attestation output is stable after sanitization', () => {
+  const first = canonicalConnectionAttestation(attestation());
+  const second = canonicalConnectionAttestation(JSON.parse(first));
+  assert.equal(first, second);
+  assert.throws(() => canonicalConnectionAttestation({ accessToken: 'secret' }), /invalid/);
 });

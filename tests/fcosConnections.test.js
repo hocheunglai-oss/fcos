@@ -4,6 +4,7 @@ import {
   canonicalGitRemote,
   providerRuntime,
   validateProviderArgs,
+  versionPolicyStatus,
 } from '../scripts/fcos-connections.mjs';
 
 test('connection runner resolves GitHub remotes without accepting other hosts', () => {
@@ -12,19 +13,32 @@ test('connection runner resolves GitHub remotes without accepting other hosts', 
   assert.equal(canonicalGitRemote('https://example.com/hocheunglai-oss/fcos.git'), '');
 });
 
-test('connection runtimes select only repo-local provider configuration', () => {
-  const github = providerRuntime('github');
-  const vercel = providerRuntime('vercel');
-  const supabase = providerRuntime('supabase');
-  const salesforce = providerRuntime('salesforce');
+test('connection runtimes select pinned executables and repo-local provider configuration', () => {
+  const github = providerRuntime('github', { requireCredential: false });
+  const vercel = providerRuntime('vercel', { requireCredential: false });
+  const supabase = providerRuntime('supabase', { requireCredential: false });
+  const salesforce = providerRuntime('salesforce', { requireCredential: false });
 
   assert.match(github.env.GH_CONFIG_DIR, /\/FCOS\/\.fcos-cli\/github$/);
   assert.equal(github.env.GH_REPO, 'github.com/hocheunglai-oss/fcos');
+  assert.equal(vercel.command, 'vercel');
   assert.deepEqual(vercel.injectedArgs.slice(0, 2), ['--global-config', `${github.env.GH_CONFIG_DIR.replace(/\/github$/, '')}/vercel`]);
   assert.match(supabase.command, /\/FCOS\/node_modules\/\.bin\/supabase$/);
   assert.match(supabase.env.SUPABASE_HOME, /\/FCOS\/\.fcos-cli\/supabase$/);
   assert.deepEqual(supabase.injectedArgs.slice(0, 2), ['--workdir', github.env.GH_CONFIG_DIR.replace(/\/\.fcos-cli\/github$/, '')]);
   assert.equal(salesforce.env.SF_TARGET_ORG, 'source-salesforce');
+  assert.equal(vercel.env.VERCEL_TOKEN, undefined);
+  assert.equal(supabase.env.SUPABASE_ACCESS_TOKEN, undefined);
+});
+
+test('CLI version policy is exact where reproducibility matters and bounded elsewhere', () => {
+  assert.equal(versionPolicyStatus('vercel', '54.20.1'), 'approved');
+  assert.equal(versionPolicyStatus('vercel', '54.20.2'), 'incompatible');
+  assert.equal(versionPolicyStatus('supabase', '2.113.0'), 'approved');
+  assert.equal(versionPolicyStatus('supabase', '2.114.0'), 'incompatible');
+  assert.equal(versionPolicyStatus('github', '2.96.0'), 'approved');
+  assert.equal(versionPolicyStatus('github', '3.0.0'), 'incompatible');
+  assert.equal(versionPolicyStatus('salesforce', '2.145.5'), 'incompatible');
 });
 
 test('verified runner blocks secret output and target overrides', () => {

@@ -138,22 +138,25 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(modules, /id: 'broker_settings_manage'/);
 });
 
-test('System Health includes a lazy, secret-safe CLI-first Connection Checklist', async () => {
-  const [settings, checklist, policy, methodology] = await Promise.all([
+test('System Health includes a lazy, signed, secret-safe CLI-first Connection Checklist', async () => {
+  const [settings, checklist, policy, sharedPolicy, methodology] = await Promise.all([
     read('../src/pages/Settings.jsx'),
     read('../src/components/settings/ConnectionChecklist.jsx'),
     read('../src/lib/connectionChecklist.js'),
+    read('../config/fcosConnections.js'),
     read('../src/lib/pageMethodologies.js'),
   ]);
 
   assert.match(settings, /lazy\(\(\) => import\('@\/components\/settings\/ConnectionChecklist'\)\)/);
   assert.match(settings, /<TabsTrigger value="connections">Connection Checklist<\/TabsTrigger>/);
-  assert.match(checklist, /CLI output, usernames beyond the approved identifiers, tokens, and secrets cannot be entered or stored here/);
+  assert.match(checklist, /Live, machine-signed verification/);
+  assert.match(checklist, /appClient\.functions\.invoke\('systemHealth'/);
   assert.doesNotMatch(checklist, /<Input|<Textarea/);
-  assert.match(policy, /APPROVED_CONNECTION_BROWSER_PROFILE = 'Otto'/);
-  assert.match(policy, /case 'browser_authentication_completed'/);
-  assert.match(policy, /Chrome is allowed only after the CLI cannot complete authentication/);
-  assert.match(methodology, /The Connection Checklist requires CLI availability first/);
+  assert.doesNotMatch(checklist, /localStorage|browser_authentication_completed/);
+  assert.match(policy, /APPROVED_CONNECTION_BROWSER_PROFILE = FCOS_CONNECTION_POLICY\.browserProfile/);
+  assert.match(sharedPolicy, /browserProfile: 'Otto'/);
+  assert.match(sharedPolicy, /publicKeySpkiBase64/);
+  assert.match(methodology, /The Connection Checklist requires an approved CLI and version first/);
 });
 
 test('Settings uses unified AI cards, compact access tables, and atomic email route saving', async () => {

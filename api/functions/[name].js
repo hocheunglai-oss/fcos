@@ -28,6 +28,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
+import { connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
 import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
 import {
@@ -2212,7 +2213,9 @@ async function adminFcosUpdateDeliveryRetry(body, req) {
 }
 
 function auditTableUnavailable(error) {
-  return error?.code === '42P01' || /does not exist/i.test(error?.message || '');
+  return error?.code === '42P01'
+    || error?.code === 'PGRST205'
+    || /does not exist|could not find the table/i.test(error?.message || '');
 }
 
 async function safeAuditRows(promise, mapper) {
@@ -2248,7 +2251,7 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows] = await Promise.all([
+  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows, connectionRows] = await Promise.all([
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2512,9 +2515,39 @@ async function universalAuditTrail(body, req) {
         resolution: row.metadata?.resolution || null,
       },
     })),
+    safeAuditRows(client.from('connection_attestations').select('id,profile,revision,schema_version,policy_version,key_id,verified_at,expires_at,duration_ms,providers,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => {
+      const attestation = connectionAttestationFromRow(row);
+      const state = connectionAttestationState(attestation, row.created_at);
+      return {
+        id: `connection-attestation:${row.id}`,
+        source: 'System Connections',
+        module: 'System Health',
+        action: 'Connection Attestation Published',
+        createdAt: row.created_at,
+        actor: 'FCOS workstation',
+        target: row.profile,
+        summary: compactAuditSummary([`${state.verifiedCount}/4 providers verified`, state.warningCount ? `${state.warningCount} warnings` : 'No warnings', `Policy ${row.policy_version}`]),
+        metadata: {
+          revision: row.revision,
+          policyVersion: row.policy_version,
+          keyId: row.key_id,
+          durationMs: row.duration_ms,
+          verifiedCount: state.verifiedCount,
+          warningCount: state.warningCount,
+          providerStates: Object.fromEntries(Object.entries(attestation?.providers || {}).map(([provider, report]) => [provider, {
+            identityStatus: report.identityStatus,
+            targetPin: report.targetPin,
+            permissionStatus: report.permissionStatus,
+            cliVersionStatus: report.cliVersionStatus,
+            credentialLifecycle: report.credentialLifecycle,
+            warningCodes: report.warningCodes,
+          }])),
+        },
+      };
+    }),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows].filter((row) => row.createdAt);
+  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows, ...connectionRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -6599,10 +6632,81 @@ async function cachedHealthCheck(namespace, ttlSeconds, force, loader, payload =
   return cached.value;
 }
 
+function connectionAttestationFromRow(row) {
+  const attestation = sanitizeConnectionAttestation({
+    schemaVersion: row?.schema_version,
+    policyVersion: row?.policy_version,
+    profile: row?.profile,
+    keyId: row?.key_id,
+    verifiedAt: row?.verified_at,
+    expiresAt: row?.expires_at,
+    durationMs: row?.duration_ms,
+    providers: row?.providers,
+  });
+  return attestation ? { ...attestation, revision: Number(row.revision) } : null;
+}
+
+async function connectionAttestationHealthRow() {
+  const base = {
+    id: 'connection-attestation',
+    name: 'CLI Connection Attestation',
+    category: 'Shared Platform',
+    purpose: 'Publishes signed, non-secret CLI identity, target, version, permission, and credential-lifecycle checks.',
+    scope: 'server',
+    provider: 'FCOS Connection Policy',
+    endpoint: '/api/connection-attestation',
+    authType: 'Ed25519 machine signature',
+    configured: true,
+  };
+  const startedAt = Date.now();
+  try {
+    const { data, error } = await supabaseAdminClient()
+      .from('connection_attestations')
+      .select('profile,revision,schema_version,policy_version,key_id,verified_at,expires_at,duration_ms,providers')
+      .eq('profile', 'fcos-production')
+      .order('verified_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    const attestation = connectionAttestationFromRow(data);
+    const state = connectionAttestationState(attestation);
+    const status = state.status === 'verified'
+      ? 'online'
+      : state.status === 'warning'
+        ? 'warning'
+        : state.status === 'unavailable'
+          ? 'unavailable'
+          : 'critical';
+    return {
+      attestation,
+      row: healthRow(base, {
+        ok: status !== 'unavailable',
+        status,
+        latencyMs: Date.now() - startedAt,
+        error: status === 'unavailable' ? 'No signed connection attestation is available.' : null,
+        details: { state },
+      }),
+    };
+  } catch (error) {
+    const failure = safeHealthFailure(error);
+    return {
+      attestation: null,
+      row: healthRow(base, {
+        ok: false,
+        status: 'unavailable',
+        latencyMs: Date.now() - startedAt,
+        error: failure.message,
+        errorCode: failure.code,
+      }),
+    };
+  }
+}
+
 async function systemHealth(body = {}, req = null, accessContext) {
   const profile = accessContext?.profile;
   const force = requestForcesRefresh(body, req);
-  const rows = await Promise.all([
+  const [providerRows, connectionAttestation] = await Promise.all([
+    Promise.all([
     salesforceHealthRow({ force }),
     supabaseHealthRow({ force }),
     profile
@@ -6629,7 +6733,10 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('hedge-desk', 60, force, hedgeDeskHealthRow),
     cachedHealthCheck('email-router', 60, force, emailRouterHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
+    ]),
+    connectionAttestationHealthRow(),
   ]);
+  const rows = [...providerRows, connectionAttestation.row];
   rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
   const summary = rows.reduce(
     (acc, row) => {
@@ -6656,6 +6763,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
       diskCriticalPct: 85,
     },
     providerLinks,
+    connectionAttestation: connectionAttestation.attestation,
     kpis: {
       salesforce: {
         ...(rowById.salesforce?.details?.dailyApi || {}),

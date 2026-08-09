@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.152',
+    releasedAt: '2026-08-10',
+    title: 'Publish signed connection health',
+    changes: [
+      'Replaced manual browser checklist records with live Ed25519-signed, service-only connection attestations backed by one schema-validated target policy.',
+      'Moved Vercel and Supabase credentials to dedicated macOS Keychain items, pinned critical CLI versions, and added parallel identity, target, permission, and credential-lifecycle probes.',
+      'Added attestation freshness to System Health and redacted publication events to the Universal Audit Trail without storing provider secrets or CLI output.',
+    ],
+  },
+  {
     version: '2.0.151',
     releasedAt: '2026-08-09',
     title: 'Pin durable FCOS provider authorization',
