@@ -24,6 +24,7 @@ test('Special Terms is a default-visible Trading page with controlled management
 
 test('Special Terms validates the authoritative Salesforce schema and rule lookups', () => {
   const service = read('api/_specialTerms.js');
+  const salesforce = read('api/_salesforce.js');
 
   assert.match(service, /term: 'Special_Term__c'/);
   assert.match(service, /rule: 'Special_Term_Rule__c'/);
@@ -42,6 +43,7 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /WHERE Id = '\$\{soql\(id\)\}' LIMIT 1/);
   assert.match(service, /Clause_Structure_Status__c/);
   assert.match(service, /Original_Terms_Text__c/);
+  assert.match(salesforce, /DEFAULT_API_VERSION = 'v67\.0'/);
 });
 
 test('Salesforce owns priority while FCOS protects mutations and deletion', () => {

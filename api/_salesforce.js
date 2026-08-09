@@ -11,7 +11,7 @@ import {
 import { expireRuntimeCacheTags } from './_runtimeCache.js';
 
 const DEFAULT_INSTANCE_URL = 'https://fratellicosulich.my.salesforce.com';
-const DEFAULT_API_VERSION = 'v59.0';
+const DEFAULT_API_VERSION = 'v67.0';
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;

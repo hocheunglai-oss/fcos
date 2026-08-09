@@ -6015,7 +6015,7 @@ async function salesforceHealthRow({ force = false } = {}) {
           const dailyApi = salesforceLimitFromBody(limits);
           const healthStatus = dailyApi == null ? 'monitoring_unavailable' : dailyApi.usedPct >= 85 ? 'critical' : dailyApi.usedPct >= 70 ? 'warning' : 'online';
           return {
-            apiVersion: process.env.SALESFORCE_API_VERSION || 'v59.0',
+            apiVersion: process.env.SALESFORCE_API_VERSION || 'v67.0',
             instanceUrl: getInstanceUrl(),
             limitsChecked: Boolean(limits),
             dailyApi,
