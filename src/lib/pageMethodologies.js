@@ -594,6 +594,8 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       { title: 'Visible to every active user', body: 'All active FCOS users may inspect current service status, operational KPIs, provider links, and connection details. This visibility does not grant configuration or provider-dashboard write access.' },
       { title: 'Status meaning', body: 'Health states combine direct probes and provider telemetry. Monitoring unavailable is distinct from Online; missing or failed telemetry is never presented as healthy.' },
+      { title: 'Connection order', body: 'The Connection Checklist requires CLI availability first, then an exact non-secret account, team, project, repository, or organization match, then CLI use. A provider connector or API remains preferred when capable; the Otto Chrome profile is unlocked only to resolve an explicit CLI authentication failure, after which identity must be reverified in the CLI.' },
+      { title: 'Secret-safe records', body: 'Checklist records remain in the current browser and accept only controlled states, timestamps, the approved browser profile name, and fixed non-secret FCOS target identifiers. They never accept CLI output, tokens, keys, passwords, or credential material.' },
       { title: 'Non-sending checks', body: 'Email health verifies configuration and Microsoft token exchange without sending a message. Mailbox-scoped send authorization is conclusively confirmed only by an actual controlled delivery.' },
     ],
   },

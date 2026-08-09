@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.150',
+    releasedAt: '2026-08-09',
+    title: 'Enforce the CLI-first connection checklist',
+    changes: [
+      'Added a Connection Checklist view under System Health for the approved GitHub, Vercel, Supabase, and Salesforce targets.',
+      'Enforced CLI availability, exact non-secret target verification, and CLI use before allowing the Otto Chrome profile solely for a recorded CLI authentication failure.',
+      'Kept checklist persistence browser-local and schema-limited so CLI output, tokens, secrets, and arbitrary credential text cannot be recorded.',
+    ],
+  },
+  {
     version: '2.0.149',
     releasedAt: '2026-08-08',
     title: 'Show connection cleanup warnings accurately',

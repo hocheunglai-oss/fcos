@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowDown,
@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
@@ -38,6 +38,8 @@ import { useAuth } from '@/lib/AuthContext';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
+
+const ConnectionChecklist = lazy(() => import('@/components/settings/ConnectionChecklist'));
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
@@ -332,7 +334,7 @@ function KpiGroup({ title, children }) {
   );
 }
 
-function SystemHealthPanel() {
+function HealthOverviewPanel() {
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState(null);
   const [error, setError] = useState('');
@@ -540,6 +542,28 @@ function SystemHealthPanel() {
         </>
       )}
     </SettingsPanel>
+  );
+}
+
+function SystemHealthPanel() {
+  const [activeView, setActiveView] = useState('overview');
+  return (
+    <Tabs value={activeView} onValueChange={setActiveView} className="space-y-4">
+      <div className="overflow-x-auto pb-1">
+        <TabsList aria-label="System Health views" className="w-max">
+          <TabsTrigger value="overview">Health Overview</TabsTrigger>
+          <TabsTrigger value="connections">Connection Checklist</TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="overview" className="mt-0">
+        <HealthOverviewPanel />
+      </TabsContent>
+      <TabsContent value="connections" className="mt-0">
+        <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the CLI-first connection runbook." />}>
+          <ConnectionChecklist />
+        </Suspense>
+      </TabsContent>
+    </Tabs>
   );
 }
 
