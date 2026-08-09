@@ -375,6 +375,55 @@ function readGitRemote() {
   return result.status === 0 ? String(result.stdout || '').trim() : '';
 }
 
+function shellSingleQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+export function githubCredentialHelperValue() {
+  const configDirectory = path.join(REPO_ROOT, target('github').configPath);
+  return `!f() { env GH_CONFIG_DIR=${shellSingleQuote(configDirectory)} gh auth git-credential "$@"; }; f`;
+}
+
+function localGitConfigValues(key) {
+  const result = spawnSync('git', ['config', '--local', '--get-all', key], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) return [];
+  return String(result.stdout || '').split('\n').map((value) => value.trimEnd()).filter((value, index, values) => value || index < values.length - 1);
+}
+
+function githubCredentialHelperConfigured() {
+  const helpers = localGitConfigValues('credential.https://github.com.helper');
+  const usernames = localGitConfigValues('credential.https://github.com.username');
+  const hookPaths = localGitConfigValues('core.hooksPath');
+  const expectedAccounts = localGitConfigValues('fcos.expectedGithubAccount');
+  return helpers.length === 2
+    && helpers[0] === ''
+    && helpers[1] === githubCredentialHelperValue()
+    && usernames.length === 1
+    && usernames[0] === identifier('github', 'Required account')
+    && hookPaths.length === 1
+    && hookPaths[0] === '.githooks'
+    && expectedAccounts.length === 1
+    && expectedAccounts[0] === identifier('github', 'Required account')
+    && existsSync(path.join(REPO_ROOT, '.githooks', 'pre-push'));
+}
+
+function configureGithubCredentialHelper() {
+  const key = 'credential.https://github.com.helper';
+  spawnSync('git', ['config', '--local', '--unset-all', key], { cwd: REPO_ROOT, stdio: 'ignore' });
+  const commands = [
+    ['config', '--local', '--add', key, ''],
+    ['config', '--local', '--add', key, githubCredentialHelperValue()],
+    ['config', '--local', '--replace-all', 'credential.https://github.com.username', identifier('github', 'Required account')],
+    ['config', '--local', '--replace-all', 'core.hooksPath', '.githooks'],
+    ['config', '--local', '--replace-all', 'fcos.expectedGithubAccount', identifier('github', 'Required account')],
+  ];
+  return commands.every((args) => spawnSync('git', args, { cwd: REPO_ROOT, stdio: 'ignore' }).status === 0)
+    && githubCredentialHelperConfigured();
+}
+
 async function verifyGitHub(version, metadata, startedAt) {
   const report = baseReport('github', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
@@ -392,6 +441,7 @@ async function verifyGitHub(version, metadata, startedAt) {
   const authEntry = safeJson(auth.stdout)?.hosts?.['github.com']?.[0];
   const scopes = String(authEntry?.scopes || '').split(',').map((value) => value.trim());
   const exactRemote = canonicalGitRemote(readGitRemote()) === identifier('github', 'Repository').toLowerCase();
+  const exactCredentialHelper = githubCredentialHelperConfigured();
   const exactIdentity = account.stdout.trim() === identifier('github', 'Required account')
     && repo?.full_name?.toLowerCase() === identifier('github', 'Repository').toLowerCase()
     && authEntry?.login === identifier('github', 'Required account')
@@ -401,11 +451,12 @@ async function verifyGitHub(version, metadata, startedAt) {
   if (repo?.permissions?.pull === true) permissions.push('repository.read');
   if (repo?.permissions?.push === true) permissions.push('repository.push');
   if (repo?.permissions?.push === true && scopes.includes('workflow')) permissions.push('workflow.update');
+  if (exactCredentialHelper) permissions.push('git.push.authentication');
   return finalizeReport({
     ...report,
     identityStatus: exactIdentity && exactRemote ? 'verified' : 'mismatch',
     identityVerified: exactIdentity && exactRemote,
-    targetPin: exactRemote ? 'verified' : 'mismatch',
+    targetPin: exactRemote && exactCredentialHelper ? 'verified' : exactRemote ? 'missing' : 'mismatch',
     permissionStatus: permissions.length === target('github').requiredPermissions.length ? 'verified' : 'missing',
     permissions,
   }, startedAt);
@@ -676,6 +727,19 @@ async function pinSupabase() {
   return result.ok && (await verifyProvider('supabase')).targetPin === 'verified';
 }
 
+async function pinGitHub() {
+  const current = await verifyProvider('github');
+  if (current.targetPin === 'verified') return true;
+  if (current.identityStatus !== 'verified' || current.targetPin === 'mismatch') return false;
+  if (!configureGithubCredentialHelper()) return false;
+  const remoteProbe = spawnSync('git', ['ls-remote', '--exit-code', 'origin', 'HEAD'], {
+    cwd: REPO_ROOT,
+    stdio: 'ignore',
+    timeout: COMMAND_TIMEOUT_MS,
+  });
+  return remoteProbe.status === 0 && (await verifyProvider('github')).targetPin === 'verified';
+}
+
 async function pinVercel() {
   const current = await verifyProvider('vercel');
   if (current.targetPin === 'verified') return true;
@@ -700,6 +764,7 @@ async function bootstrapCommand(args) {
     return exitCodeFor(initial);
   }
   for (const providerId of providers) {
+    if (providerId === 'github' && !(await pinGitHub())) throw new Error('GitHub repository credential helper could not be pinned and verified.');
     if (providerId === 'vercel' && !(await pinVercel())) throw new Error('Vercel team and project link could not be pinned and verified.');
     if (providerId === 'supabase' && !(await pinSupabase())) throw new Error('Supabase target link could not be pinned and verified.');
     if (providerId === 'salesforce' && !(await pinSalesforce())) throw new Error('Salesforce target-org could not be pinned and verified.');

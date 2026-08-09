@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   canonicalGitRemote,
+  githubCredentialHelperValue,
   providerRuntime,
   validateProviderArgs,
   versionPolicyStatus,
@@ -29,6 +31,8 @@ test('connection runtimes select pinned executables and repo-local provider conf
   assert.equal(salesforce.env.SF_TARGET_ORG, 'source-salesforce');
   assert.equal(vercel.env.VERCEL_TOKEN, undefined);
   assert.equal(supabase.env.SUPABASE_ACCESS_TOKEN, undefined);
+  assert.match(githubCredentialHelperValue(), /GH_CONFIG_DIR='.*\/FCOS\/\.fcos-cli\/github'/);
+  assert.match(githubCredentialHelperValue(), /gh auth git-credential/);
 });
 
 test('CLI version policy is exact where reproducibility matters and bounded elsewhere', () => {
@@ -50,4 +54,11 @@ test('verified runner blocks secret output and target overrides', () => {
   assert.throws(() => validateProviderArgs('salesforce', ['org', 'display']), /expose access tokens/);
   assert.throws(() => validateProviderArgs('salesforce', ['data', 'query', '-o', 'other-org']), /unapproved org/);
   assert.throws(() => validateProviderArgs('supabase', ['login', '--token', 'secret']), /Secret-bearing CLI flags/);
+});
+
+test('tracked pre-push guard uses the isolated FCOS GitHub identity', async () => {
+  const hook = await readFile(new URL('../.githooks/pre-push', import.meta.url), 'utf8');
+  assert.match(hook, /GH_CONFIG_DIR="\$repo_root\/\.fcos-cli\/github" gh api user/);
+  assert.match(hook, /hocheunglai-oss\/fcos/);
+  assert.doesNotMatch(hook, /gh auth switch|gh auth login/);
 });

@@ -50,7 +50,7 @@ const connectionPolicy = {
         { label: 'Repository', value: 'hocheunglai-oss/fcos' },
       ],
       cliVersion: { minimum: '2.96.0', maximumExclusive: '3.0.0' },
-      requiredPermissions: ['repository.read', 'repository.push', 'workflow.update'],
+      requiredPermissions: ['repository.read', 'repository.push', 'workflow.update', 'git.push.authentication'],
       availabilityCommand: 'gh --version',
       identityCommand: 'npm run connections:verify -- github',
       authCommand: 'npm run connections:auth -- github',
@@ -63,7 +63,7 @@ const connectionPolicy = {
       credentialStorage: 'provider_secure_store',
       rotationWarningDays: 180,
       expiryWarningDays: 30,
-      persistence: 'GitHub OAuth is selected only through the ignored repo-local GH_CONFIG_DIR and the provider-supported secure credential store.',
+      persistence: 'GitHub OAuth and plain Git HTTPS pushes both resolve through the ignored repo-local GH_CONFIG_DIR. A repository-local credential helper resets inherited helpers without changing machine-wide Git configuration.',
       nonBrowserRoute: 'Fail closed on any other GitHub identity. Use the approved GitHub connector/API only when it can preserve the same repository boundary.',
     },
     {

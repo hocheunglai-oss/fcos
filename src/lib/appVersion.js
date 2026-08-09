@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.153',
+    releasedAt: '2026-08-10',
+    title: 'Pin Git pushes to the FCOS identity',
+    changes: [
+      'Bound plain Git HTTPS pushes to the repository-isolated hocheunglai-oss GitHub authorization without changing the Mac\'s global credential helper.',
+      'Added a tracked pre-push identity guard and made credential-helper or hook drift fail the GitHub target pin in System Health.',
+    ],
+  },
+  {
     version: '2.0.152',
     releasedAt: '2026-08-10',
     title: 'Publish signed connection health',
