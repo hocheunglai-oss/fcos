@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
-import { sanitizeRichText } from './_richText.js';
 import { clauseHash } from './_specialTermClauseModel.js';
 
 const OBJECTS = Object.freeze({
@@ -130,7 +129,11 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
   requiredField(fields.term, OBJECTS.term, 'Terms_Text__c', { type: 'textarea', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Add_to_Confirmation__c', 'Add_to_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'boolean', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Special_Remark_in_Confirmation__c', 'Special_Remark_in_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'textarea', ...(write ? { createable: true, updateable: true } : {}) });
-  for (const name of ['Clause_Structure_Status__c', 'Clause_Compiled_Hash__c', 'Original_Terms_Text__c', 'Clause_Migration_Batch_Id__c']) requiredField(fields.term, OBJECTS.term, name, { ...(write ? { createable: true, updateable: true } : {}) });
+  for (const name of [
+    'Clause_Structure_Status__c', 'Clause_Compiled_Hash__c', 'Original_Terms_Text__c', 'Clause_Migration_Batch_Id__c',
+    'Confirmation_Clause_Status__c', 'Confirmation_Clause_Style__c', 'Confirmation_Compiled_Hash__c', 'Original_Confirmation_Remark__c', 'Confirmation_Migration_Batch_Id__c',
+    'Nomination_Clause_Status__c', 'Nomination_Clause_Style__c', 'Nomination_Compiled_Hash__c', 'Original_Nomination_Remark__c', 'Nomination_Migration_Batch_Id__c',
+  ]) requiredField(fields.term, OBJECTS.term, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Account__c', { referenceTo: OBJECTS.account, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.rule, OBJECTS.rule, 'Port__c', { referenceTo: OBJECTS.port, ...(write ? { createable: true, updateable: true } : {}) });
@@ -144,7 +147,7 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
   for (const name of ['Name', 'Short_Name_Key__c', 'Canonical_Text_Key__c', 'Category__c', 'Status__c', 'Latest_Approved_Version_Number__c', 'Last_Approved_At__c', 'Replacement_Clause__c', 'Retirement_Reason__c']) requiredField(fields.clause, OBJECTS.clause, name, { ...(write ? { createable: name !== 'LastModifiedDate', updateable: true } : {}) });
   for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseVersion, OBJECTS.clauseVersion, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true, updateable: true } : {}) });
-  for (const name of ['Sequence__c', 'State__c', 'Assignment_Key__c', 'Clause_Use_Key__c', 'Migration_Batch_Id__c']) requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, name, { ...(write ? { createable: true, updateable: true } : {}) });
+  for (const name of ['Projection__c', 'Sequence__c', 'State__c', 'Assignment_Key__c', 'Clause_Use_Key__c', 'Migration_Batch_Id__c']) requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Clause_Version__c', { referenceTo: OBJECTS.clauseVersion, ...(write ? { createable: true, updateable: true } : {}) });
@@ -175,9 +178,25 @@ function mapTerm(row) {
     clauseCompiledHash: row.Clause_Compiled_Hash__c || null,
     originalTermsText: row.Original_Terms_Text__c || '',
     clauseMigrationBatchId: row.Clause_Migration_Batch_Id__c || null,
+    confirmationClauseStatus: row.Confirmation_Clause_Status__c || 'Legacy',
+    confirmationClauseStyle: row.Confirmation_Clause_Style__c || 'Hyphen',
+    confirmationCompiledHash: row.Confirmation_Compiled_Hash__c || null,
+    originalConfirmationRemark: row.Original_Confirmation_Remark__c || '',
+    confirmationMigrationBatchId: row.Confirmation_Migration_Batch_Id__c || null,
+    nominationClauseStatus: row.Nomination_Clause_Status__c || 'Legacy',
+    nominationClauseStyle: row.Nomination_Clause_Style__c || 'Hyphen',
+    nominationCompiledHash: row.Nomination_Compiled_Hash__c || null,
+    originalNominationRemark: row.Original_Nomination_Remark__c || '',
+    nominationMigrationBatchId: row.Nomination_Migration_Batch_Id__c || null,
     activeClauseCount: Number(row.activeClauseCount || 0),
     proposedClauseCount: Number(row.proposedClauseCount || 0),
     upgradeCount: Number(row.upgradeCount || 0),
+    confirmationActiveClauseCount: Number(row.confirmationActiveClauseCount || 0),
+    confirmationProposedClauseCount: Number(row.confirmationProposedClauseCount || 0),
+    confirmationUpgradeCount: Number(row.confirmationUpgradeCount || 0),
+    nominationActiveClauseCount: Number(row.nominationActiveClauseCount || 0),
+    nominationProposedClauseCount: Number(row.nominationProposedClauseCount || 0),
+    nominationUpgradeCount: Number(row.nominationUpgradeCount || 0),
     lastModifiedAt: row.LastModifiedDate || null,
   };
 }
@@ -241,19 +260,23 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
       const termWhere = isScoped
         ? (termIds.length ? ` WHERE Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
         : '';
-      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
+      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
       const loadedTermIds = termResult.records.map((term) => term.Id).filter(isSalesforceRecordId);
       const assignmentResult = loadedTermIds.length
-        ? await sfQuery(`SELECT Special_Term__c,State__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
+        ? await sfQuery(`SELECT Special_Term__c,Projection__c,State__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
         : { records: [], totalSize: 0 };
       if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length || assignmentResult.totalSize > assignmentResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
       const summaries = new Map();
       for (const assignment of assignmentResult.records) {
-        const summary = summaries.get(assignment.Special_Term__c) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0 };
+        const summary = summaries.get(assignment.Special_Term__c) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0, confirmationActiveClauseCount: 0, confirmationProposedClauseCount: 0, confirmationUpgradeCount: 0, nominationActiveClauseCount: 0, nominationProposedClauseCount: 0, nominationUpgradeCount: 0 };
+        const prefix = assignment.Projection__c === 'Confirmation Remark' ? 'confirmation' : assignment.Projection__c === 'Nomination Remark' ? 'nomination' : '';
+        const activeKey = prefix ? `${prefix}ActiveClauseCount` : 'activeClauseCount';
+        const proposedKey = prefix ? `${prefix}ProposedClauseCount` : 'proposedClauseCount';
+        const upgradeKey = prefix ? `${prefix}UpgradeCount` : 'upgradeCount';
         if (assignment.State__c === 'Active') {
-          summary.activeClauseCount += 1;
-          if (Number(assignment.Clause__r?.Latest_Approved_Version_Number__c || 0) > Number(assignment.Clause_Version__r?.Revision_Number__c || 0)) summary.upgradeCount += 1;
-        } else if (assignment.State__c === 'Proposed') summary.proposedClauseCount += 1;
+          summary[activeKey] += 1;
+          if (Number(assignment.Clause__r?.Latest_Approved_Version_Number__c || 0) > Number(assignment.Clause_Version__r?.Revision_Number__c || 0)) summary[upgradeKey] += 1;
+        } else if (assignment.State__c === 'Proposed') summary[proposedKey] += 1;
         summaries.set(assignment.Special_Term__c, summary);
       }
       return { terms: termResult.records.map((term) => mapTerm({ ...term, ...(summaries.get(term.Id) || {}) })), rules: ruleResult.records.map(mapRule), fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
@@ -368,13 +391,15 @@ export function termMetadataPayload(body, { create = false } = {}) {
     Name: name,
     Add_to_Confirmation__c: body.addToConfirmation === true,
     Add_to_Nomination__c: body.addToNomination === true,
-    Special_Remark_in_Confirmation__c: sanitizeRichText(body.confirmationRemark),
-    Special_Remark_in_Nomination__c: sanitizeRichText(body.nominationRemark),
   };
   if (create) {
     payload.Terms_Text__c = null;
     payload.Clause_Structure_Status__c = 'Active';
     payload.Clause_Compiled_Hash__c = clauseHash('');
+    payload.Confirmation_Clause_Status__c = 'Legacy';
+    payload.Confirmation_Clause_Style__c = 'Hyphen';
+    payload.Nomination_Clause_Status__c = 'Legacy';
+    payload.Nomination_Clause_Style__c = 'Hyphen';
   }
   return payload;
 }

@@ -20,7 +20,7 @@ function AddClauseButton({ onClick, disabled, compact = false }) {
   );
 }
 
-function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false }) {
+function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, style = 'Numbered' }) {
   const [picker, setPicker] = useState(null);
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState([]);
@@ -119,7 +119,7 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false }
         <div key={`${row.clauseId}:${row.clauseVersionId}:${index}`}>
           <AddClauseButton compact onClick={() => setPicker({ index })} disabled={disabled} />
           <section className="grid gap-3 rounded-lg border border-border bg-card p-3 sm:grid-cols-[2.5rem_1fr_auto]">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-label={`Clause ${index + 1}`}>{index + 1}</div>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-label={`Clause ${index + 1}`}>{style === 'Hyphen' ? '–' : index + 1}</div>
             <div className="min-w-0 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <strong className="text-sm">{row.shortName}</strong>
@@ -148,7 +148,7 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false }
           {pickerError ? <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{pickerError}</p> : null}
           {!loading ? <div className="space-y-2">{options.map((clause) => (
             <button key={clause.id} type="button" onClick={() => insert(clause)} className="block w-full rounded-lg border border-border p-3 text-left transition hover:border-primary/50 hover:bg-muted/40">
-              <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant="secondary">v{clause.latestApprovedVersion.revisionNumber}</Badge><span className="text-xs text-muted-foreground">Used in {clause.usageCount} term(s)</span></div>
+              <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant="secondary">v{clause.latestApprovedVersion.revisionNumber}</Badge><span className="text-xs text-muted-foreground">Used in {clause.usageCount} assignment(s)</span></div>
               <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">{clause.latestApprovedVersion.clauseText}</p>
             </button>
           ))}{!options.length && !pickerError ? <p className="py-10 text-center text-sm text-muted-foreground">No unused approved clauses match this search. Create a Draft in the Clause Bank when new wording is needed.</p> : null}</div> : null}

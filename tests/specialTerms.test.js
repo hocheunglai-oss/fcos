@@ -43,6 +43,9 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /WHERE Id = '\$\{soql\(id\)\}' LIMIT 1/);
   assert.match(service, /Clause_Structure_Status__c/);
   assert.match(service, /Original_Terms_Text__c/);
+  assert.match(service, /Confirmation_Clause_Status__c/);
+  assert.match(service, /Nomination_Clause_Status__c/);
+  assert.match(service, /Projection__c/);
   assert.match(salesforce, /DEFAULT_API_VERSION = 'v67\.0'/);
 });
 
@@ -57,7 +60,7 @@ test('Salesforce owns priority while FCOS protects mutations and deletion', () =
   assert.match(service, /referenceId: 'newRule'/);
   assert.match(service, /composite\/sobjects\?ids=/);
   assert.match(service, /confirmationName/);
-  assert.match(service, /sanitizeRichText/);
+  assert.doesNotMatch(service, /sanitizeRichText/);
   assert.match(service, /special_terms_operations/);
   assert.match(service, /operation_status === 'succeeded'/);
 });
@@ -87,12 +90,16 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Copy Confirmation special remark/);
   assert.match(page, /Copy Nomination special remark/);
   assert.match(page, /richTextToCopyText/);
-  assert.match(page, /<ClauseComposer assignments=/);
+  assert.match(page, /<ClauseProjectionSection/);
   assert.match(page, /<ClauseBankPanel/);
-  assert.match(page, /<MigrationReviewPanel/);
+  const projectionSection = read('src/components/special-terms/ClauseProjectionSection.jsx');
+  assert.match(projectionSection, /<ClauseComposer/);
+  assert.match(projectionSection, /<MigrationReviewPanel/);
   assert.match(page, /<MigrationInventoryPanel/);
   assert.doesNotMatch(page, /specialTermEditorValue\(termForm\.termsText\)/);
-  assert.match(clauseService, /compileNumberedClauses/);
+  assert.match(clauseService, /compileClauseList/);
+  assert.match(clauseService, /Confirmation Remark/);
+  assert.match(clauseService, /Nomination Remark/);
   assert.match(clauseService, /allOrNone: true/);
   assert.match(clauseService, /composite\/graph/);
   assert.match(clauseService, /upgradeAvailable/);

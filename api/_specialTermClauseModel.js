@@ -3,6 +3,7 @@ import { Parser } from 'htmlparser2';
 
 const OUTER_NUMBER = /^\s*(?:clause\s+)?(?:\(?\d+(?:\.\d+)*\)?[.):]?)[\s\t-]+/i;
 const TOP_LEVEL_NUMBER = /^\s*(?:clause\s+)?(?:\(?\d+(?:\.\d+)*\)?[.):]?)[\s\t-]+(.+)$/i;
+const TOP_LEVEL_HYPHEN = /^\s*[-\u2013\u2014\u2022]\s+(.+)$/;
 const MANUAL_REVIEW_TERMS = new Set([
   'China Special Terms',
   'Russia Special Terms (Customs Declaration Form)',
@@ -22,6 +23,14 @@ export const CLAUSE_CATEGORIES = Object.freeze([
   'Contract Priority',
   'Other',
 ]);
+
+export const CLAUSE_PROJECTIONS = Object.freeze({
+  termsText: Object.freeze({ value: 'Terms Text', label: 'Terms Text', style: 'Numbered' }),
+  confirmationRemark: Object.freeze({ value: 'Confirmation Remark', label: 'Confirmation special remark', style: 'Hyphen' }),
+  nominationRemark: Object.freeze({ value: 'Nomination Remark', label: 'Nomination special remark', style: 'Hyphen' }),
+});
+
+export const CLAUSE_LIST_STYLES = Object.freeze(['Numbered', 'Hyphen']);
 
 export function normalizeClauseText(value) {
   return String(value ?? '')
@@ -61,13 +70,24 @@ export function hasTopLevelNumber(value) {
   return OUTER_NUMBER.test(normalizeClauseText(value));
 }
 
+export function hasTopLevelListMarker(value) {
+  const normalized = normalizeClauseText(value);
+  return OUTER_NUMBER.test(normalized) || TOP_LEVEL_HYPHEN.test(normalized);
+}
+
 export function compileNumberedClauses(clauses) {
+  return compileClauseList(clauses, 'Numbered');
+}
+
+export function compileClauseList(clauses, style = 'Numbered') {
+  if (!CLAUSE_LIST_STYLES.includes(style)) throw new Error('Clause list style must be Numbered or Hyphen.');
+  const separator = style === 'Numbered' ? '\n\n' : '\n';
   return (clauses || []).map((clause, index) => {
     const text = normalizeClauseText(clause?.text ?? clause?.clauseText ?? clause);
     if (!text) throw new Error(`Clause ${index + 1} is blank.`);
-    if (hasTopLevelNumber(text)) throw new Error(`Clause ${index + 1} already contains a top-level number.`);
-    return `${index + 1}. ${text}`;
-  }).join('\n\n');
+    if (hasTopLevelListMarker(text)) throw new Error(`Clause ${index + 1} already contains a top-level list marker.`);
+    return style === 'Numbered' ? `${index + 1}. ${text}` : `- ${text}`;
+  }).join(separator);
 }
 
 function htmlToText(value) {
@@ -99,21 +119,31 @@ function htmlToText(value) {
   return output;
 }
 
-export function parseLegacyClauses(value, { termName = '' } = {}) {
+export function parseLegacyClauses(value, { termName = '', markerStyle = 'Numbered' } = {}) {
+  if (![...CLAUSE_LIST_STYLES, 'Auto'].includes(markerStyle)) throw new Error('Legacy marker style must be Numbered, Hyphen, or Auto.');
   const source = normalizeClauseText(htmlToText(value)).replace(/\u00a0/g, ' ');
-  if (!source) return { clauses: [], manualReviewRequired: false, reason: null };
+  if (!source) return { clauses: [], markerCount: 0, inferredStyle: markerStyle === 'Auto' ? 'Hyphen' : markerStyle, manualReviewRequired: false, reason: null };
   const lines = source.split('\n').map((line) => line.trim()).filter(Boolean);
   const clauses = [];
   let current = '';
   let markers = 0;
+  let numberedMarkers = 0;
+  let hyphenMarkers = 0;
   for (const line of lines) {
     const numbered = line.match(TOP_LEVEL_NUMBER);
-    if (numbered) {
+    const hyphen = line.match(TOP_LEVEL_HYPHEN);
+    const marker = (markerStyle === 'Numbered' && numbered)
+      || (markerStyle === 'Hyphen' && hyphen)
+      || (markerStyle === 'Auto' && (numbered || hyphen));
+    if (marker) {
       markers += 1;
-      if (markers === 1 && current) current = `${current}\n${numbered[1]}`;
+      if (numbered) numberedMarkers += 1;
+      else hyphenMarkers += 1;
+      const body = (numbered || hyphen)[1];
+      if (markers === 1 && current) current = `${current}\n${body}`;
       else {
         if (current) clauses.push(normalizeClauseText(current));
-        current = numbered[1];
+        current = body;
       }
     } else if (current) {
       current += `\n${line}`;
@@ -122,14 +152,18 @@ export function parseLegacyClauses(value, { termName = '' } = {}) {
     }
   }
   if (current) clauses.push(normalizeClauseText(current));
-  const manualReviewRequired = MANUAL_REVIEW_TERMS.has(termName) || markers === 0;
+  const mixedMarkers = numberedMarkers > 0 && hyphenMarkers > 0;
+  const manualReviewRequired = MANUAL_REVIEW_TERMS.has(termName) || markers === 0 || mixedMarkers;
+  const inferredStyle = numberedMarkers > hyphenMarkers ? 'Numbered' : 'Hyphen';
   return {
     clauses: clauses.filter(Boolean),
     markerCount: markers,
+    inferredStyle,
     manualReviewRequired,
     reason: MANUAL_REVIEW_TERMS.has(termName)
       ? 'The live corpus contains headings or non-standard numbering that requires a reviewer to confirm clause boundaries.'
-      : markers === 0 ? 'No reliable top-level numbering was detected.' : null,
+      : markers === 0 ? 'No reliable top-level bullet marker was detected.'
+        : mixedMarkers ? 'Numbered and hyphen markers are mixed; a reviewer must confirm clause boundaries and the output style.' : null,
   };
 }
 
@@ -209,4 +243,4 @@ export function clauseSimilarity(left, right) {
   return intersection / (a.size + b.size - intersection);
 }
 
-export const specialTermClauseModelInternals = Object.freeze({ MANUAL_REVIEW_TERMS, OUTER_NUMBER });
+export const specialTermClauseModelInternals = Object.freeze({ MANUAL_REVIEW_TERMS, OUTER_NUMBER, TOP_LEVEL_HYPHEN });

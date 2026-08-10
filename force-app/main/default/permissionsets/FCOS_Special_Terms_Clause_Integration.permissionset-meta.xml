@@ -3,6 +3,12 @@
     <fieldPermissions><editable>true</editable><field>Special_Term__c.Clause_Compiled_Hash__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term__c.Clause_Migration_Batch_Id__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term__c.Original_Terms_Text__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Confirmation_Compiled_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Confirmation_Migration_Batch_Id__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Nomination_Compiled_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Nomination_Migration_Batch_Id__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Original_Confirmation_Remark__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term__c.Original_Nomination_Remark__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Last_Approved_At__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Replacement_Clause__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause__c.Retirement_Reason__c</field><readable>true</readable></fieldPermissions>

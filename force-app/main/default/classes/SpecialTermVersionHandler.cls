@@ -8,6 +8,7 @@ public class SpecialTermVersionHandler {
             if (version.Status__c != 'Draft') version.addError('Clause versions must be created as Draft.');
             String normalizedText = SpecialTermClauseCompiler.normalizeClauseText(version.Clause_Text__c);
             if (String.isBlank(normalizedText)) version.addError('Clause text is required.');
+            if (SpecialTermClauseCompiler.hasTopLevelListMarker(normalizedText)) version.addError('Clause text cannot contain its own top-level number or hyphen marker.');
             if (version.Revision_Number__c == null || version.Revision_Number__c < 1) version.addError('Revision number must be positive.');
             if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
             if (version.Approved_At__c != null || !String.isBlank(version.Approved_By_Email__c) || !String.isBlank(version.Approval_Reason__c)) version.addError('Draft versions cannot contain approval metadata.');
@@ -44,6 +45,7 @@ public class SpecialTermVersionHandler {
             }
             String normalizedText = SpecialTermClauseCompiler.normalizeClauseText(version.Clause_Text__c);
             if (String.isBlank(normalizedText)) version.addError('Clause text is required.');
+            if (SpecialTermClauseCompiler.hasTopLevelListMarker(normalizedText)) version.addError('Clause text cannot contain its own top-level number or hyphen marker.');
             if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
             if (version.Status__c == 'Approved') {
                 if (changed(normalizedText, SpecialTermClauseCompiler.normalizeClauseText(oldVersion.Clause_Text__c))) {

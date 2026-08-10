@@ -16828,7 +16828,7 @@ async function specialTermCompositionSave(body = {}, req = null, accessContext =
 async function specialTermMigrationPreview(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireSpecialTermClauseApprover(context);
-  return previewSpecialTermMigration(body.termId);
+  return previewSpecialTermMigration(body.termId, { projection: body.projection || 'termsText' });
 }
 
 async function specialTermMigrationSave(body = {}, req = null, accessContext = null) {

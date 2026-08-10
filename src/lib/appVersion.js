@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.155',
+    releasedAt: '2026-08-10',
+    title: 'Reuse clauses in Special Term remarks',
+    changes: [
+      'Extended the Salesforce Clause Bank to independent Terms Text, Confirmation remark, and Nomination remark projections without duplicating approved wording.',
+      'Replaced free-form remark editing with clause-by-clause plus controls and reviewed Numbered or Hyphen compilation, while preserving each original remark for audited rollback.',
+      'Expanded live-corpus migration review, stale-write enforcement, idempotent all-or-none writes, and Salesforce direct-edit guards across all three projections.',
+    ],
+  },
+  {
     version: '2.0.154',
     releasedAt: '2026-08-10',
     title: 'Reuse approved numbered Special Term clauses',

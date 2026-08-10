@@ -80,6 +80,81 @@ private class SpecialTermClauseCompilerTest {
         System.assertEquals('1. No warranty is provided.\n- Local specifications apply.', recompiled.Terms_Text__c);
     }
 
+    @isTest static void compilesAndProtectsIndependentRemarkStyles() {
+        Special_Term__c term = new Special_Term__c(
+            Name = 'Remark projection term',
+            Clause_Structure_Status__c = 'Legacy',
+            Confirmation_Clause_Status__c = 'Legacy',
+            Confirmation_Clause_Style__c = 'Hyphen',
+            Nomination_Clause_Status__c = 'Legacy',
+            Nomination_Clause_Style__c = 'Numbered'
+        );
+        Database.insert(term, AccessLevel.SYSTEM_MODE);
+        Special_Term_Clause__c first = clause('First Remark Clause', 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+        Special_Term_Clause__c second = clause('Second Remark Clause', '1111111111111111111111111111111111111111111111111111111111111111');
+        Special_Term_Clause_Version__c firstVersion = approve(first, 1, 'First approved remark.');
+        Special_Term_Clause_Version__c secondVersion = approve(second, 1, 'Second approved remark.');
+        Database.insert(new List<Special_Term_Clause_Assignment__c>{
+            new Special_Term_Clause_Assignment__c(Special_Term__c = term.Id, Projection__c = 'Confirmation Remark', Clause__c = first.Id, Clause_Version__c = firstVersion.Id, Sequence__c = 1, State__c = 'Active'),
+            new Special_Term_Clause_Assignment__c(Special_Term__c = term.Id, Projection__c = 'Confirmation Remark', Clause__c = second.Id, Clause_Version__c = secondVersion.Id, Sequence__c = 2, State__c = 'Active'),
+            new Special_Term_Clause_Assignment__c(Special_Term__c = term.Id, Projection__c = 'Nomination Remark', Clause__c = second.Id, Clause_Version__c = secondVersion.Id, Sequence__c = 1, State__c = 'Active')
+        }, AccessLevel.SYSTEM_MODE);
+
+        String confirmation = '- First approved remark.\n- Second approved remark.';
+        String nomination = '1. Second approved remark.';
+        term.Special_Remark_in_Confirmation__c = confirmation;
+        term.Confirmation_Compiled_Hash__c = SpecialTermClauseCompiler.sha256(confirmation);
+        term.Confirmation_Clause_Status__c = 'Active';
+        term.Special_Remark_in_Nomination__c = nomination;
+        term.Nomination_Compiled_Hash__c = SpecialTermClauseCompiler.sha256(nomination);
+        term.Nomination_Clause_Status__c = 'Active';
+        Database.update(term, AccessLevel.SYSTEM_MODE);
+
+        Special_Term__c saved = [
+            SELECT Special_Remark_in_Confirmation__c, Confirmation_Compiled_Hash__c,
+                Confirmation_Clause_Status__c, Confirmation_Clause_Style__c,
+                Special_Remark_in_Nomination__c, Nomination_Compiled_Hash__c,
+                Nomination_Clause_Status__c, Nomination_Clause_Style__c
+            FROM Special_Term__c WHERE Id = :term.Id
+        ];
+        System.assertEquals(confirmation, saved.Special_Remark_in_Confirmation__c);
+        System.assertEquals(nomination, saved.Special_Remark_in_Nomination__c);
+
+        saved.Special_Remark_in_Confirmation__c = '- Direct edit.';
+        try {
+            Database.update(saved, AccessLevel.SYSTEM_MODE);
+            System.assert(false, 'Direct Confirmation remark wording edit should fail.');
+        } catch (DmlException error) {
+            System.assert(error.getMessage().contains('Confirmation special remark'));
+        }
+
+        saved = [
+            SELECT Special_Remark_in_Confirmation__c, Confirmation_Compiled_Hash__c,
+                Confirmation_Clause_Status__c, Confirmation_Clause_Style__c
+            FROM Special_Term__c WHERE Id = :term.Id
+        ];
+        saved.Confirmation_Clause_Style__c = 'Numbered';
+        try {
+            Database.update(saved, AccessLevel.SYSTEM_MODE);
+            System.assert(false, 'Active remark style changes should fail.');
+        } catch (DmlException error) {
+            System.assert(error.getMessage().contains('style cannot be changed'));
+        }
+
+        saved = [
+            SELECT Special_Remark_in_Confirmation__c, Confirmation_Compiled_Hash__c,
+                Confirmation_Clause_Status__c, Confirmation_Clause_Style__c
+            FROM Special_Term__c WHERE Id = :term.Id
+        ];
+        saved.Confirmation_Clause_Status__c = 'In Review';
+        try {
+            Database.update(saved, AccessLevel.SYSTEM_MODE);
+            System.assert(false, 'Active remark status changes should fail outside rollback.');
+        } catch (DmlException error) {
+            System.assert(error.getMessage().contains('only leave Active'));
+        }
+    }
+
     @isTest static void protectsApprovedVersionsAndRejectsDraftActiveAssignments() {
         Special_Term_Clause__c clauseRow = clause('Immutable Clause', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc');
         Special_Term_Clause_Version__c approved = approve(clauseRow, 1, 'Approved wording.');
@@ -112,6 +187,9 @@ private class SpecialTermClauseCompilerTest {
 
     @isTest static void normalizesAndRejectsInvalidSequences() {
         System.assertEquals('One\n\nTwo', SpecialTermClauseCompiler.normalizeClauseText('  One\r\n\r\n\r\nTwo  '));
+        System.assertEquals(true, SpecialTermClauseCompiler.hasTopLevelListMarker('1. Numbered wording.'));
+        System.assertEquals(true, SpecialTermClauseCompiler.hasTopLevelListMarker('- Hyphen wording.'));
+        System.assertEquals(false, SpecialTermClauseCompiler.hasTopLevelListMarker('Markerless wording.\n- Internal point.'));
         System.assertEquals(SpecialTermClauseCompiler.sha256(''), SpecialTermClauseCompiler.sha256(null));
         System.assertEquals('', SpecialTermClauseCompiler.compile(new Set<Id>()).keySet().isEmpty() ? '' : 'unexpected');
 

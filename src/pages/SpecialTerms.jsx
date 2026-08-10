@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import ReactQuill from 'react-quill-new';
-import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
@@ -11,8 +9,7 @@ import DataStatus from '@/components/common/DataStatus';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import ClauseBankPanel from '@/components/special-terms/ClauseBankPanel';
-import ClauseComposer from '@/components/special-terms/ClauseComposer';
-import MigrationReviewPanel from '@/components/special-terms/MigrationReviewPanel';
+import ClauseProjectionSection from '@/components/special-terms/ClauseProjectionSection';
 import MigrationInventoryPanel from '@/components/special-terms/MigrationInventoryPanel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -28,9 +25,8 @@ import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
 import { richTextToCopyText, richTextToPlain, specialTermFilenameKey } from '@/lib/specialTermsText';
 import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
 
-const EMPTY_TERM = { id: null, name: '', termsText: '', clauseStructureStatus: 'Active', addToConfirmation: true, addToNomination: false, confirmationRemark: '', nominationRemark: '', expectedLastModifiedAt: null };
+const EMPTY_TERM = { id: null, name: '', termsText: '', clauseStructureStatus: 'Active', addToConfirmation: true, addToNomination: false, confirmationRemark: '', confirmationClauseStatus: 'Legacy', confirmationClauseStyle: 'Hyphen', nominationRemark: '', nominationClauseStatus: 'Legacy', nominationClauseStyle: 'Hyphen', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
-const QUILL_MODULES = { toolbar: [[{ header: [false, 3, 4] }], ['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['link'], ['clean']] };
 const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 
 function operationId() {
@@ -351,6 +347,22 @@ export default function SpecialTerms() {
     if (successMessage) setMessage(successMessage);
     await load(true);
   };
+
+  const updateProjectionAssignments = useCallback((projection, activeAssignments) => {
+    setTermDetail((current) => {
+      if (!current?.projections?.[projection]) return current;
+      const next = {
+        ...current,
+        projections: {
+          ...current.projections,
+          [projection]: { ...current.projections[projection], activeAssignments },
+        },
+      };
+      if (projection === 'termsText') next.activeAssignments = activeAssignments;
+      return next;
+    });
+  }, []);
+
   const openRule = (rule = null) => {
     setSaveAttempted(false);
     setRuleForm(rule ? {
@@ -369,12 +381,15 @@ export default function SpecialTerms() {
     if (termValidationIssues.length) return;
     setBusy(true);
     setError('');
-    const structured = termForm.id && termForm.clauseStructureStatus === 'Active';
+    const compositions = Object.values(termDetail?.projections || {})
+      .filter((projection) => projection.status === 'Active')
+      .map((projection) => ({ projection: projection.key, style: projection.style, versionIds: projection.activeAssignments.map((assignment) => assignment.clauseVersionId) }));
+    const structured = Boolean(termForm.id && compositions.length);
     const functionName = structured ? 'specialTermCompositionSave' : 'specialTermsSave';
     const payload = structured ? {
       ...termForm,
       termId: termForm.id,
-      versionIds: (termDetail?.activeAssignments || []).map((assignment) => assignment.clauseVersionId),
+      compositions,
       operationId: operationId(),
     } : { ...termForm, operationId: operationId() };
     const response = await appClient.functions.invoke(functionName, payload, { cache: false });
@@ -382,7 +397,7 @@ export default function SpecialTerms() {
     else {
       setTermForm(null);
       setTermDetail(null);
-      setMessage(termForm.id ? structured ? 'Numbered Special Term composition updated in Salesforce.' : 'Special Term metadata updated in Salesforce.' : 'Special Term created in Salesforce. Reopen it to add approved clauses.');
+      setMessage(termForm.id ? structured ? 'Special Term clause projections updated in Salesforce.' : 'Special Term metadata updated in Salesforce.' : 'Special Term created in Salesforce. Reopen it to review and add approved clauses.');
       await load(true);
     }
     setBusy(false);
@@ -528,7 +543,8 @@ export default function SpecialTerms() {
                     <p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'No clauses'}</p>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge>
+                    <div className="flex flex-wrap gap-1"><Badge variant={term.addToConfirmation ? 'default' : 'outline'}>{term.addToConfirmation ? 'Attach PDF' : 'Not attached'}</Badge><Badge variant={term.confirmationClauseStatus === 'Active' ? 'default' : 'outline'}>{term.confirmationClauseStatus}</Badge><Badge variant="secondary">{term.confirmationClauseStyle}</Badge></div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{term.confirmationActiveClauseCount || 0} active · {term.confirmationProposedClauseCount || 0} proposed</p>
                     <div className="mt-1 flex max-w-56 items-center gap-1">
                       <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{confirmationText || 'No remark'}</p>
                       <Button
@@ -545,7 +561,8 @@ export default function SpecialTerms() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={term.addToNomination ? 'default' : 'outline'}>{term.addToNomination ? 'Attach PDF' : 'Not attached'}</Badge>
+                    <div className="flex flex-wrap gap-1"><Badge variant={term.addToNomination ? 'default' : 'outline'}>{term.addToNomination ? 'Attach PDF' : 'Not attached'}</Badge><Badge variant={term.nominationClauseStatus === 'Active' ? 'default' : 'outline'}>{term.nominationClauseStatus}</Badge><Badge variant="secondary">{term.nominationClauseStyle}</Badge></div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{term.nominationActiveClauseCount || 0} active · {term.nominationProposedClauseCount || 0} proposed</p>
                     <div className="mt-1 flex max-w-56 items-center gap-1">
                       <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{nominationText || 'No remark'}</p>
                       <Button
@@ -601,56 +618,31 @@ export default function SpecialTerms() {
 
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => { if (!open && !busy) { setTermForm(null); setTermDetail(null); } }}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text is compiled from ordered approved clauses; Confirmation and Nomination remarks remain independent rich text.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text, Confirmation remarks, and Nomination remarks are independent ordered projections of the shared approved Clause Bank.</DialogDescription></DialogHeader>
           {termForm && (
             <div className="space-y-5">
               <div className="space-y-1.5"><Label>Name</Label><Input value={termForm.name} maxLength={80} onChange={(event) => setTermForm((current) => ({ ...current, name: event.target.value }))} /></div>
-              {termForm.clauseStructureStatus === 'Active' ? <div className="space-y-2"><div><Label>Numbered clauses</Label><p className="text-xs text-muted-foreground">Use each plus button to insert an approved bank clause. Row numbers are derived automatically.</p></div>{termForm.id ? <ClauseComposer assignments={termDetail?.activeAssignments || []} onChange={(activeAssignments) => setTermDetail((current) => ({ ...current, activeAssignments }))} disabled={!workspace?.canManage} /> : <Alert><AlertDescription>Save the Special Term first, then reopen it to add approved clauses.</AlertDescription></Alert>}</div> : <div className="space-y-2"><Label>Current live Terms Text</Label><pre className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-4 text-sm leading-relaxed">{richTextToCopyText(termForm.termsText) || 'No Terms Text'}</pre><p className="text-xs text-muted-foreground">Legacy wording is read-only in FCOS and remains live until the reviewed numbered structure is activated.</p></div>}
-              {termForm.id ? <MigrationReviewPanel detail={termDetail} categoryOptions={workspace?.clauseCategoryOptions || []} canApprove={workspace?.canApproveClauses} onError={setError} onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)} /> : null}
-              <div className="grid gap-4 md:grid-cols-2">
-                <section className="space-y-3 rounded-lg border border-border p-3">
-                  <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach PDF to Confirmation</label>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label>Confirmation special remark</Label>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        disabled={!richTextToCopyText(termForm.confirmationRemark)}
-                        onClick={() => copyRemark(termForm.confirmationRemark, 'form:confirmation', 'Confirmation')}
-                        title="Copy Confirmation special remark"
-                        aria-label="Copy Confirmation special remark"
-                      >
-                        {copiedRemarks['form:confirmation'] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
-                      </Button>
-                    </div>
-                    <div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.confirmationRemark} onChange={(confirmationRemark) => setTermForm((current) => ({ ...current, confirmationRemark }))} /></div>
-                  </div>
-                </section>
-                <section className="space-y-3 rounded-lg border border-border p-3">
-                  <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach PDF to Nomination</label>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label>Nomination special remark</Label>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        disabled={!richTextToCopyText(termForm.nominationRemark)}
-                        onClick={() => copyRemark(termForm.nominationRemark, 'form:nomination', 'Nomination')}
-                        title="Copy Nomination special remark"
-                        aria-label="Copy Nomination special remark"
-                      >
-                        {copiedRemarks['form:nomination'] ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
-                      </Button>
-                    </div>
-                    <div className="[&_.ql-container]:min-h-36 [&_.ql-editor]:min-h-36"><ReactQuill theme="snow" modules={QUILL_MODULES} value={termForm.nominationRemark} onChange={(nominationRemark) => setTermForm((current) => ({ ...current, nominationRemark }))} /></div>
-                  </div>
-                </section>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 rounded-lg border border-border p-3 text-sm font-medium"><Checkbox checked={termForm.addToConfirmation} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToConfirmation: checked === true }))} />Attach Special Term PDF to Confirmation</label>
+                <label className="flex items-center gap-2 rounded-lg border border-border p-3 text-sm font-medium"><Checkbox checked={termForm.addToNomination} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, addToNomination: checked === true }))} />Attach Special Term PDF to Nomination</label>
               </div>
+              {termForm.id ? (
+                <div className="space-y-4">
+                  {['termsText', 'confirmationRemark', 'nominationRemark'].map((projection) => (
+                    <ClauseProjectionSection
+                      key={projection}
+                      detail={termDetail}
+                      projection={projection}
+                      canManage={workspace?.canManage}
+                      canApprove={workspace?.canApproveClauses}
+                      categoryOptions={workspace?.clauseCategoryOptions || []}
+                      onAssignmentsChange={updateProjectionAssignments}
+                      onError={setError}
+                      onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)}
+                    />
+                  ))}
+                </div>
+              ) : <Alert><AlertDescription>Save the Special Term first, then reopen it to review legacy wording and add approved clauses to each projection.</AlertDescription></Alert>}
               <WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} />
             </div>
           )}

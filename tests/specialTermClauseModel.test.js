@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   canonicalClauseKey,
   clauseSimilarity,
+  compileClauseList,
   compileNumberedClauses,
   hasMaterialDifference,
   normalizeClauseEquivalence,
@@ -21,8 +22,15 @@ test('clause equivalence ignores only outer numbering, case, and harmless spacin
 
 test('numbered compilation derives sequential numbers and rejects embedded top-level numbers', () => {
   assert.equal(compileNumberedClauses(['First clause.', 'Second clause.\n- Supporting point.']), '1. First clause.\n\n2. Second clause.\n- Supporting point.');
-  assert.throws(() => compileNumberedClauses(['1. Already numbered.']), /top-level number/);
+  assert.throws(() => compileNumberedClauses(['1. Already numbered.']), /top-level list marker/);
+  assert.throws(() => compileNumberedClauses(['- Already bulleted.']), /top-level list marker/);
   assert.throws(() => compileNumberedClauses(['']), /blank/);
+});
+
+test('remark compilation derives numbered or hyphen markers without changing clause wording', () => {
+  assert.equal(compileClauseList(['First remark.', 'Second remark.'], 'Hyphen'), '- First remark.\n- Second remark.');
+  assert.equal(compileClauseList(['First remark.', 'Second remark.'], 'Numbered'), '1. First remark.\n\n2. Second remark.');
+  assert.throws(() => compileClauseList(['First remark.'], 'Bullet'), /Numbered or Hyphen/);
 });
 
 test('legacy parser preserves clause wording and flags the three known manual-review records', () => {
@@ -34,6 +42,21 @@ test('legacy parser preserves clause wording and flags the three known manual-re
   assert.equal(withHeading.markerCount, withHeading.clauses.length);
   assert.equal(parseLegacyClauses('<p>1. FIRST</p><p>2. SECOND</p>', { termName: 'China Special Terms' }).manualReviewRequired, true);
   assert.equal(parseLegacyClauses('Unnumbered wording only.', { termName: 'Yudean Special Terms' }).manualReviewRequired, true);
+});
+
+test('legacy remark parser recognizes hyphen, numbered, and mixed bullet shapes', () => {
+  const hyphen = parseLegacyClauses('- FIRST REMARK.\n- SECOND REMARK.', { markerStyle: 'Auto' });
+  assert.deepEqual(hyphen.clauses, ['FIRST REMARK.', 'SECOND REMARK.']);
+  assert.equal(hyphen.inferredStyle, 'Hyphen');
+  assert.equal(hyphen.manualReviewRequired, false);
+
+  const numbered = parseLegacyClauses('1. FIRST REMARK.\n2. SECOND REMARK.', { markerStyle: 'Auto' });
+  assert.equal(numbered.inferredStyle, 'Numbered');
+  assert.equal(numbered.manualReviewRequired, false);
+
+  const mixed = parseLegacyClauses('- FIRST REMARK.\n2. SECOND REMARK.', { markerStyle: 'Auto' });
+  assert.equal(mixed.manualReviewRequired, true);
+  assert.match(mixed.reason, /mixed/);
 });
 
 test('material differences keep amounts, deadlines, suppliers, and standards separate', () => {
