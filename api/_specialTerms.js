@@ -104,7 +104,7 @@ async function describeObject(objectName, force = false) {
   return cached.value;
 }
 
-export async function resolveSpecialTermsSchema({ force = false, write = false } = {}) {
+async function loadSpecialTermsSchema({ force = false, write = false } = {}) {
   const [termDescribe, ruleDescribe, accountDescribe, portDescribe, productDescribe, clauseDescribe, clauseVersionDescribe, clauseAssignmentDescribe] = await Promise.all([
     describeObject(OBJECTS.term, force),
     describeObject(OBJECTS.rule, force),
@@ -163,6 +163,16 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
     audienceOptions: audiences,
     clauseCategoryOptions: fields.clause.get('Category__c').picklistValues || [],
   };
+}
+
+export async function resolveSpecialTermsSchema({ force = false, write = false } = {}) {
+  if (force) return loadSpecialTermsSchema({ force: true, write });
+  try {
+    return await loadSpecialTermsSchema({ write });
+  } catch (error) {
+    if (error?.code !== 'SPECIAL_TERMS_SCHEMA_INVALID') throw error;
+    return loadSpecialTermsSchema({ force: true, write });
+  }
 }
 
 function mapTerm(row) {

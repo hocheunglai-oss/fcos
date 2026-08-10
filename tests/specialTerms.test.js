@@ -46,6 +46,8 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /Confirmation_Clause_Status__c/);
   assert.match(service, /Nomination_Clause_Status__c/);
   assert.match(service, /Projection__c/);
+  assert.match(service, /if \(error\?\.code !== 'SPECIAL_TERMS_SCHEMA_INVALID'\) throw error;/);
+  assert.match(service, /return loadSpecialTermsSchema\(\{ force: true, write \}\);/);
   assert.match(salesforce, /DEFAULT_API_VERSION = 'v67\.0'/);
 });
 

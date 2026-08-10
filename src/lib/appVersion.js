@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.156',
+    releasedAt: '2026-08-10',
+    title: 'Refresh changed Salesforce schemas automatically',
+    changes: [
+      'Retries Special Terms schema validation once against live Salesforce when a cached description predates a metadata deployment.',
+      'Keeps genuine schema or access mismatches fail-closed after the forced revalidation.',
+    ],
+  },
+  {
     version: '2.0.155',
     releasedAt: '2026-08-10',
     title: 'Reuse clauses in Special Term remarks',
