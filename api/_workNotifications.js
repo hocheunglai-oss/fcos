@@ -1,3 +1,5 @@
+import { validSystemErrorSignature } from './_systemErrorNotifications.js';
+
 function cleanIds(values, limit = 100) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, limit);
 }
@@ -76,6 +78,10 @@ function systemErrorNotification(row, state = {}) {
     'buyerInvoicePaymentReminderSend',
     'disputeWorkflowList',
     'workNotificationsList',
+    'specialTermsWorkspace',
+    'hedgeDeskSalesforceMapping',
+    'emailRouterMaintenanceCron',
+    'salesforceQuery',
   ]);
   return {
     id: `system_error:${row.id}`,
@@ -89,7 +95,7 @@ function systemErrorNotification(row, state = {}) {
     occurrenceCount,
     diagnosticRef: row.last_request_id || null,
     incidentSignature: row.dedupe_key || null,
-    verificationAvailable: verificationHandlers.has(row.handler) && /^[a-f0-9]{64}$/i.test(String(row.dedupe_key || '')),
+    verificationAvailable: verificationHandlers.has(row.handler) && validSystemErrorSignature(row.dedupe_key),
     outcome: 'Completion not confirmed',
     retryAvailable: Boolean(row.link),
     actionLabel: row.link ? 'Review affected workspace before retrying' : 'Review error details',

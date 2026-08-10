@@ -4,8 +4,10 @@ import { readFile } from 'node:fs/promises';
 import {
   reportSystemError,
   shouldNotifySystemError,
+  shouldRecordSystemErrorEnvironment,
   systemErrorDedupeKey,
   systemErrorPublicDescriptor,
+  validSystemErrorSignature,
 } from '../api/_systemErrorNotifications.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260804113709_system_error_notifications.sql', import.meta.url);
@@ -31,6 +33,10 @@ test('only unexpected server failures create global error notifications', () => 
   assert.equal(shouldNotifySystemError(409), false);
   assert.equal(shouldNotifySystemError(500), true);
   assert.equal(shouldNotifySystemError(503), true);
+  assert.equal(shouldRecordSystemErrorEnvironment({ VERCEL_ENV: 'production' }), true);
+  assert.equal(shouldRecordSystemErrorEnvironment({ VERCEL_ENV: 'preview' }), false);
+  assert.equal(shouldRecordSystemErrorEnvironment({ VERCEL_ENV: 'development' }), false);
+  assert.equal(shouldRecordSystemErrorEnvironment({ FCOS_ALLOW_NONPRODUCTION_SYSTEM_ERROR_NOTIFICATIONS: '1' }), true);
 });
 
 test('system errors are redacted, friendly, and keyed by a stable incident signature', async () => {
@@ -55,12 +61,32 @@ test('system errors are redacted, friendly, and keyed by a stable incident signa
     status: 500,
     requestId: 'request-123',
     occurredAt,
+    environment: { VERCEL_ENV: 'production' },
   });
   assert.deepEqual(result, { recorded: true, eventId: 'event-id' });
   assert.equal(calls[0].name, 'record_system_error_event');
   const serialized = JSON.stringify(calls[0].payload);
   assert.doesNotMatch(serialized, /vincent@example\.com|0012x00000LGhzUAAT|sk_secret-value|client is not defined/i);
   assert.match(calls[0].payload.p_title, /Outstanding buyer invoices report failed/);
+});
+
+test('development failures cannot create production notification rows', async () => {
+  let called = false;
+  const result = await reportSystemError({ rpc: async () => { called = true; } }, {
+    handler: 'specialTermsWorkspace',
+    error: new Error('development failure'),
+    status: 503,
+    environment: { VERCEL_ENV: 'development' },
+  });
+  assert.deepEqual(result, { recorded: false, skipped: true, reason: 'non-production' });
+  assert.equal(called, false);
+});
+
+test('system incident signatures include controlled bootstrap records', () => {
+  assert.equal(validSystemErrorSignature('a'.repeat(64)), true);
+  assert.equal(validSystemErrorSignature('bootstrap:outstanding-buyer-invoices:last-error'), true);
+  assert.equal(validSystemErrorSignature('bootstrap:../../unsafe'), false);
+  assert.equal(validSystemErrorSignature('not-an-incident'), false);
 });
 
 test('unknown handlers receive a safe generic notification', () => {
@@ -86,6 +112,8 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(notifications, /system_error_notification_states/);
   assert.match(notifications, /incidentSignature: row\.dedupe_key/);
   assert.match(notifications, /verificationAvailable/);
+  assert.match(notifications, /specialTermsWorkspace/);
+  assert.match(notifications, /emailRouterMaintenanceCron/);
   assert.match(notifications, /source: 'system_error'/);
   assert.match(notifications, /diagnosticRef: row\.last_request_id/);
   assert.match(notifications, /outcome: 'Completion not confirmed'/);
@@ -102,6 +130,10 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(systemErrors, /resolveSystemErrorIncident/);
   assert.match(systemErrors, /\.eq\('dedupe_key', dedupeKey\)/);
   assert.match(handler, /async function systemErrorVerify/);
+  assert.match(handler, /case 'specialTermsWorkspace'/);
+  assert.match(handler, /case 'hedgeDeskSalesforceMapping'/);
+  assert.match(handler, /case 'emailRouterMaintenanceCron'/);
+  assert.match(handler, /case 'salesforceQuery'/);
   assert.match(handler, /resolveSystemErrorIncident\(context\.client, incidentSignature\)/);
   assert.doesNotMatch(handler, /resolveSystemErrorsForHandler/);
 });

@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.157',
+    releasedAt: '2026-08-10',
+    title: 'Verify and clear recovered FCOS incidents',
+    changes: [
+      'Added live recovery checks for Special Terms, Hedge Salesforce mapping, Email Router maintenance, legacy Salesforce queries, and controlled bootstrap incidents.',
+      'Prevented development and preview failures from creating global production notification records unless an explicit isolated override is enabled.',
+      'Kept incident audit events intact while allowing verified recoveries to move every active user notification to Handled.',
+    ],
+  },
+  {
     version: '2.0.156',
     releasedAt: '2026-08-10',
     title: 'Refresh changed Salesforce schemas automatically',

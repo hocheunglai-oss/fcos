@@ -76,7 +76,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
-import { reportSystemError, resolveSystemErrorIncident, shouldNotifySystemError } from '../_systemErrorNotifications.js';
+import { reportSystemError, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   getShipAgentChargeDetail,
@@ -934,7 +934,7 @@ async function verifyFinancialReportIncident(client, purposeKey) {
 async function systemErrorVerify(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const incidentSignature = String(body.incidentSignature || body.incident_signature || '').trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(incidentSignature)) throw appError('A valid system incident is required.', 400);
+  if (!validSystemErrorSignature(incidentSignature)) throw appError('A valid system incident is required.', 400);
   const { data: incident, error } = await context.client
     .from('system_error_events')
     .select('id,dedupe_key,handler')
@@ -967,6 +967,30 @@ async function systemErrorVerify(body = {}, req = null, accessContext = null) {
       if (stateError) throw stateError;
       break;
     }
+    case 'specialTermsWorkspace':
+      await listSpecialTerms({ force: true });
+      break;
+    case 'hedgeDeskSalesforceMapping':
+      await getHedgeSalesforceMapping(context.client);
+      break;
+    case 'emailRouterMaintenanceCron': {
+      const serviceClient = createEmailRouterServiceClient();
+      const mailbox = await currentEmailRouterMailbox(serviceClient);
+      const { data: subscriptions, error: subscriptionsError } = await serviceClient
+        .schema('emailrouter')
+        .from('mailbox_subscriptions')
+        .select('id')
+        .eq('mailbox_id', mailbox.id)
+        .eq('state', 'active')
+        .gt('expires_at', new Date().toISOString())
+        .limit(1);
+      if (subscriptionsError) throw subscriptionsError;
+      if (!subscriptions?.length) throw appError('Email Router has no active future-dated mailbox subscription.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
+      break;
+    }
+    case 'salesforceQuery':
+      if (handlers.salesforceQuery) throw appError('The legacy Salesforce query endpoint is still registered.', 503, 'LEGACY_SALESFORCE_QUERY_ACTIVE');
+      break;
     default:
       throw appError('This incident requires review in its affected workspace and cannot be verified automatically.', 400);
   }

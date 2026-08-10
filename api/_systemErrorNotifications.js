@@ -36,6 +36,26 @@ const HANDLER_CONTEXT = {
     message: 'The notification centre could not be refreshed. The error has been recorded for follow-up.',
     link: '/',
   },
+  specialTermsWorkspace: {
+    title: 'Special Terms refresh failed',
+    message: 'The Special Terms workspace could not be refreshed from Salesforce. The error has been recorded for follow-up.',
+    link: '/special-terms',
+  },
+  hedgeDeskSalesforceMapping: {
+    title: 'Hedge Desk Salesforce mapping failed',
+    message: 'The Hedge Desk Salesforce mapping could not be refreshed. The error has been recorded for follow-up.',
+    link: '/hedge-desk',
+  },
+  emailRouterMaintenanceCron: {
+    title: 'Email Router maintenance failed',
+    message: 'Scheduled Email Router maintenance did not complete. The error has been recorded for follow-up.',
+    link: '/email-router',
+  },
+  salesforceQuery: {
+    title: 'Legacy Salesforce query failed',
+    message: 'A legacy Salesforce query endpoint failed. FCOS can verify that this retired endpoint is no longer available.',
+    link: '/',
+  },
 };
 
 function cleanHandler(value) {
@@ -68,6 +88,16 @@ export function shouldNotifySystemError(status) {
   return Number.isInteger(value) && value >= 500 && value <= 599;
 }
 
+export function shouldRecordSystemErrorEnvironment(environment = process.env) {
+  if (String(environment?.VERCEL_ENV || '').trim().toLowerCase() === 'production') return true;
+  return String(environment?.FCOS_ALLOW_NONPRODUCTION_SYSTEM_ERROR_NOTIFICATIONS || '').trim() === '1';
+}
+
+export function validSystemErrorSignature(value) {
+  const signature = String(value || '').trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(signature) || /^bootstrap:[a-z0-9:._-]{1,100}$/.test(signature);
+}
+
 export function systemErrorPublicDescriptor(handler) {
   const key = cleanHandler(handler);
   if (HANDLER_CONTEXT[key]) return { handler: key, ...HANDLER_CONTEXT[key] };
@@ -86,8 +116,9 @@ export function systemErrorDedupeKey({ handler, error, status }) {
     .digest('hex');
 }
 
-export async function reportSystemError(client, { handler, error, status = 500, requestId = null, occurredAt = new Date() } = {}) {
+export async function reportSystemError(client, { handler, error, status = 500, requestId = null, occurredAt = new Date(), environment = process.env } = {}) {
   if (!client || !shouldNotifySystemError(status)) return { recorded: false, skipped: true };
+  if (!shouldRecordSystemErrorEnvironment(environment)) return { recorded: false, skipped: true, reason: 'non-production' };
   const descriptor = systemErrorPublicDescriptor(handler);
   const safeRequestId = String(requestId || '').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 128) || null;
   const dedupeKey = systemErrorDedupeKey({ handler: descriptor.handler, error, status, occurredAt });
@@ -114,7 +145,7 @@ export async function reportSystemError(client, { handler, error, status = 500, 
 
 export async function resolveSystemErrorIncident(client, signature, resolvedAt = new Date()) {
   const dedupeKey = String(signature || '').trim().toLowerCase();
-  if (!client || !/^[a-f0-9]{64}$/.test(dedupeKey)) return { resolved: 0, skipped: true };
+  if (!client || !validSystemErrorSignature(dedupeKey)) return { resolved: 0, skipped: true };
   const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
     client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
     client.from('user_profiles').select('id').eq('active', true),
