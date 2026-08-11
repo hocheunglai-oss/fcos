@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
   reportSystemError,
+  resolveRecoveredSystemErrorHandler,
   shouldNotifySystemError,
   shouldRecordSystemErrorEnvironment,
   systemErrorDedupeKey,
@@ -96,6 +97,61 @@ test('unknown handlers receive a safe generic notification', () => {
   assert.equal(descriptor.link, '/');
 });
 
+test('a recovered handler resolves only incidents seen before the successful run began', async () => {
+  const observed = {};
+  const client = {
+    from(table) {
+      if (table === 'system_error_events') {
+        return {
+          select() { return this; },
+          eq(column, value) { observed.handler = { column, value }; return this; },
+          lte(column, value) {
+            observed.cutoff = { column, value };
+            return this;
+          },
+          async gte(column, value) {
+            observed.earliest = { column, value };
+            return { data: [{ id: 'event-1' }], error: null };
+          },
+        };
+      }
+      if (table === 'user_profiles') {
+        return {
+          select() { return this; },
+          async eq() { return { data: [{ id: 'profile-1' }], error: null }; },
+        };
+      }
+      if (table === 'system_error_notification_states') {
+        return {
+          select() { return this; },
+          in(column, value) {
+            observed.stateFilters ||= [];
+            observed.stateFilters.push({ column, value });
+            if (observed.stateFilters.length === 2) return Promise.resolve({ data: [], error: null });
+            return this;
+          },
+          async upsert(rows, options) {
+            observed.rows = rows;
+            observed.options = options;
+            return { error: null };
+          },
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+  const startedAt = new Date('2026-08-11T11:00:00.000Z');
+  const seenSince = new Date('2026-08-11T10:45:00.000Z');
+  const resolvedAt = new Date('2026-08-11T11:00:05.000Z');
+  const result = await resolveRecoveredSystemErrorHandler(client, 'emailRouterMaintenanceCron', { resolvedThrough: startedAt, seenSince, resolvedAt });
+  assert.deepEqual(result, { resolved: 1 });
+  assert.deepEqual(observed.handler, { column: 'handler', value: 'emailRouterMaintenanceCron' });
+  assert.deepEqual(observed.cutoff, { column: 'last_seen_at', value: startedAt.toISOString() });
+  assert.deepEqual(observed.earliest, { column: 'last_seen_at', value: seenSince.toISOString() });
+  assert.equal(observed.rows[0].handled_at, resolvedAt.toISOString());
+  assert.deepEqual(observed.options, { onConflict: 'event_id,user_id' });
+});
+
 test('system error storage is service-only and integrated into unified notifications', async () => {
   const [migration, notifications, notificationUi] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
@@ -126,16 +182,18 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(notificationUi, /systemErrorVerify/);
   const handler = await readFile(handlerUrl, 'utf8');
   const systemErrors = await readFile(new URL('../api/_systemErrorNotifications.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(handler, /resolveSystemErrorsForHandler/);
+  assert.match(handler, /resolveRecoveredSystemErrorHandler/);
   assert.match(systemErrors, /resolveSystemErrorIncident/);
   assert.match(systemErrors, /\.eq\('dedupe_key', dedupeKey\)/);
   assert.match(handler, /async function systemErrorVerify/);
   assert.match(handler, /case 'specialTermsWorkspace'/);
   assert.match(handler, /case 'hedgeDeskSalesforceMapping'/);
   assert.match(handler, /case 'emailRouterMaintenanceCron'/);
+  assert.match(handler, /EMAIL_ROUTER_SYNCHRONIZATION_STALE/);
+  assert.match(handler, /expectedFolders = \['inbox', 'sentitems', 'archive'\]/);
   assert.match(handler, /case 'salesforceQuery'/);
   assert.match(handler, /resolveSystemErrorIncident\(context\.client, incidentSignature\)/);
-  assert.doesNotMatch(handler, /resolveSystemErrorsForHandler/);
+  assert.match(handler, /resolveRecoveredSystemErrorHandler\(client, 'emailRouterMaintenanceCron', \{/);
 });
 
 test('all Graph report and reminder handlers pass an explicit database client', async () => {

@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.158',
+    releasedAt: '2026-08-11',
+    title: 'Clear recovered Email Router maintenance alerts',
+    changes: [
+      'Automatically handles older Email Router maintenance incidents only after a later complete scheduled run succeeds.',
+      'Protects concurrent failures by resolving only incidents that predate the successful maintenance run.',
+      'Strengthens manual recovery verification to require fresh synchronization and active subscriptions for Inbox, Sent Items, and Archive.',
+    ],
+  },
+  {
     version: '2.0.157',
     releasedAt: '2026-08-10',
     title: 'Verify and clear recovered FCOS incidents',

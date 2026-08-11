@@ -143,32 +143,78 @@ export async function reportSystemError(client, { handler, error, status = 500, 
   return { recorded: true, eventId: data || null };
 }
 
-export async function resolveSystemErrorIncident(client, signature, resolvedAt = new Date()) {
-  const dedupeKey = String(signature || '').trim().toLowerCase();
-  if (!client || !validSystemErrorSignature(dedupeKey)) return { resolved: 0, skipped: true };
-  const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
-    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
-    client.from('user_profiles').select('id').eq('active', true),
-  ]);
+async function resolveSystemErrorEvents(client, eventQuery, resolvedAt) {
+  const { data: events, error: eventError } = await eventQuery;
   if (eventError) {
     if (eventError.code === '42P01') return { resolved: 0, skipped: true };
     throw eventError;
   }
+  if (!events?.length) return { resolved: 0 };
+  const { data: profiles, error: profileError } = await client.from('user_profiles').select('id').eq('active', true);
   if (profileError) throw profileError;
-  if (!events?.length || !profiles?.length) return { resolved: 0 };
+  if (!profiles?.length) return { resolved: 0 };
+
+  const eventIds = events.map((event) => event.id);
+  const profileIds = profiles.map((profile) => profile.id);
+  const { data: states, error: statesError } = await client
+    .from('system_error_notification_states')
+    .select('event_id,user_id,handled_at')
+    .in('event_id', eventIds)
+    .in('user_id', profileIds);
+  if (statesError && statesError.code !== '42P01') throw statesError;
+  const handled = new Set((states || [])
+    .filter((state) => state.handled_at)
+    .map((state) => `${state.event_id}:${state.user_id}`));
 
   const timestamp = resolvedAt.toISOString();
-  const rows = events.flatMap((event) => profiles.map((profile) => ({
-    event_id: event.id,
-    user_id: profile.id,
-    read_at: timestamp,
-    handled_at: timestamp,
-    snoozed_until: null,
-    updated_at: timestamp,
-  })));
+  const rows = events.flatMap((event) => profiles
+    .filter((profile) => !handled.has(`${event.id}:${profile.id}`))
+    .map((profile) => ({
+      event_id: event.id,
+      user_id: profile.id,
+      read_at: timestamp,
+      handled_at: timestamp,
+      snoozed_until: null,
+      updated_at: timestamp,
+    })));
+  if (!rows.length) return { resolved: 0 };
   const { error: stateError } = await client
     .from('system_error_notification_states')
     .upsert(rows, { onConflict: 'event_id,user_id' });
   if (stateError) throw stateError;
   return { resolved: rows.length };
+}
+
+export async function resolveSystemErrorIncident(client, signature, resolvedAt = new Date()) {
+  const dedupeKey = String(signature || '').trim().toLowerCase();
+  if (!client || !validSystemErrorSignature(dedupeKey)) return { resolved: 0, skipped: true };
+  return resolveSystemErrorEvents(
+    client,
+    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
+    resolvedAt,
+  );
+}
+
+export async function resolveRecoveredSystemErrorHandler(client, handler, {
+  resolvedThrough = new Date(),
+  seenSince = null,
+  resolvedAt = new Date(),
+} = {}) {
+  const handlerKey = cleanHandler(handler);
+  if (!client || handlerKey === 'unknown') return { resolved: 0, skipped: true };
+  const cutoff = resolvedThrough instanceof Date ? resolvedThrough : new Date(resolvedThrough);
+  if (Number.isNaN(cutoff.getTime())) return { resolved: 0, skipped: true };
+  const earliest = seenSince == null ? null : (seenSince instanceof Date ? seenSince : new Date(seenSince));
+  if (earliest && Number.isNaN(earliest.getTime())) return { resolved: 0, skipped: true };
+  let eventQuery = client
+    .from('system_error_events')
+    .select('id')
+    .eq('handler', handlerKey)
+    .lte('last_seen_at', cutoff.toISOString());
+  if (earliest) eventQuery = eventQuery.gte('last_seen_at', earliest.toISOString());
+  return resolveSystemErrorEvents(
+    client,
+    eventQuery,
+    resolvedAt,
+  );
 }

@@ -76,7 +76,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
-import { reportSystemError, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
+import { reportSystemError, resolveRecoveredSystemErrorHandler, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   getShipAgentChargeDetail,
@@ -976,16 +976,36 @@ async function systemErrorVerify(body = {}, req = null, accessContext = null) {
     case 'emailRouterMaintenanceCron': {
       const serviceClient = createEmailRouterServiceClient();
       const mailbox = await currentEmailRouterMailbox(serviceClient);
-      const { data: subscriptions, error: subscriptionsError } = await serviceClient
-        .schema('emailrouter')
-        .from('mailbox_subscriptions')
-        .select('id')
-        .eq('mailbox_id', mailbox.id)
-        .eq('state', 'active')
-        .gt('expires_at', new Date().toISOString())
-        .limit(1);
+      const expectedFolders = ['inbox', 'sentitems', 'archive'];
+      const freshnessCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+      const [{ data: subscriptions, error: subscriptionsError }, { data: deltaStates, error: deltaStateError }] = await Promise.all([
+        serviceClient
+          .schema('emailrouter')
+          .from('mailbox_subscriptions')
+          .select('resource_key')
+          .eq('mailbox_id', mailbox.id)
+          .eq('state', 'active')
+          .gt('expires_at', new Date().toISOString())
+          .in('resource_key', expectedFolders),
+        serviceClient
+          .schema('emailrouter')
+          .from('mailbox_delta_state')
+          .select('folder_key')
+          .eq('mailbox_id', mailbox.id)
+          .eq('sync_state', 'ready')
+          .gte('last_synced_at', freshnessCutoff)
+          .in('folder_key', expectedFolders),
+      ]);
       if (subscriptionsError) throw subscriptionsError;
-      if (!subscriptions?.length) throw appError('Email Router has no active future-dated mailbox subscription.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
+      if (deltaStateError) throw deltaStateError;
+      const activeFolders = new Set((subscriptions || []).map((row) => row.resource_key));
+      const synchronizedFolders = new Set((deltaStates || []).map((row) => row.folder_key));
+      if (expectedFolders.some((folder) => !activeFolders.has(folder))) {
+        throw appError('Email Router does not have an active future-dated subscription for every managed folder.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
+      }
+      if (expectedFolders.some((folder) => !synchronizedFolders.has(folder))) {
+        throw appError('Email Router has not synchronized every managed folder recently.', 503, 'EMAIL_ROUTER_SYNCHRONIZATION_STALE');
+      }
       break;
     }
     case 'salesforceQuery':
@@ -16983,6 +17003,7 @@ async function emailRouterSubscription(body = {}, req = null, accessContext = nu
 
 async function emailRouterMaintenanceCron(_body = {}, req = null) {
   requireCronAuthorization(req);
+  const maintenanceStartedAt = new Date();
   const client = createEmailRouterServiceClient();
   const directorySync = await client.rpc('sync_emailrouter_fcos_destinations', { p_actor: null });
   const mailbox = await currentEmailRouterMailbox(client);
@@ -16999,6 +17020,16 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   } catch (error) {
     await recordEmailRouterAlert(client, { mailboxId: mailbox.id, code: error.code || 'email_router_subscription_failed', severity: 'critical', dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
     throw error;
+  }
+  if (!directorySync.error && learning?.status !== 'warning') {
+    await resolveRecoveredSystemErrorHandler(client, 'emailRouterMaintenanceCron', {
+      resolvedThrough: maintenanceStartedAt,
+      seenSince: new Date(maintenanceStartedAt.getTime() - 15 * 60_000),
+    }).catch((error) => {
+      console.warn('[email-router] Recovered maintenance notification could not be resolved.', {
+        code: error?.code || 'EMAIL_ROUTER_NOTIFICATION_RECOVERY_FAILED',
+      });
+    });
   }
   return {
     ok: true,
