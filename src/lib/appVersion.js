@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.159',
+    releasedAt: '2026-08-12',
+    title: 'Refresh Email Router across FCOS tabs',
+    changes: [
+      'Broadcasts each completed 30-second mailbox check to every open FCOS tab so the visible Email Router list refreshes even when another tab owns the browser lock.',
+      'Keeps server-side mailbox claims and adds a safe no-BroadcastChannel fallback without sharing mailbox or message content between tabs.',
+      'Removes the requested routing explanations and compacts redirect, recipient, preset, filing, send, and advisor controls to reduce scrolling.',
+    ],
+  },
+  {
     version: '2.0.158',
     releasedAt: '2026-08-11',
     title: 'Clear recovered Email Router maintenance alerts',

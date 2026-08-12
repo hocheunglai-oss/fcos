@@ -16,6 +16,10 @@ test('Email Router background cadence is thirty seconds on every FCOS page', asy
   assert.match(background, /EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS = 30_000/);
   assert.match(background, /window\.setInterval\(synchronize, EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS\)/);
   assert.match(background, /document\.visibilityState !== 'visible'/);
+  assert.match(background, /new window\.BroadcastChannel\(EMAIL_ROUTER_BACKGROUND_SYNC_CHANNEL\)/);
+  assert.match(background, /channelRef\.current\?\.postMessage\(\{ type: EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL \}\)/);
+  assert.match(background, /event\.data\?\.type === EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL/);
+  assert.match(background, /navigator\.locks\?\.request && channelRef\.current/);
   assert.match(background, /navigator\.locks\.request\(EMAIL_ROUTER_BACKGROUND_SYNC_LOCK, \{ ifAvailable: true \}/);
   assert.match(background, /invalidateCache\(\{ names: \['emailRouterList', 'emailRouterDetail'\] \}\)/);
   assert.doesNotMatch(background, /if \(Number\(response\.data\?\.changed \|\| 0\) > 0\)/);

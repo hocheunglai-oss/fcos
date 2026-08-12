@@ -71,6 +71,9 @@ test('Forward-and-File storage is service-only, content-free, and revision prote
   assert.doesNotMatch(sql, /body_html|raw_mime|recipient_email|attachment_bytes/i);
   assert.match(core, /sentDraftConfirmed[\s\S]*completeConfirmedSourceFiling/);
   assert.match(routePanel, /Forward and Redirect|Send Forward|postActionMode/);
+  assert.doesNotMatch(routePanel, /Review the action, recipients|Recipients see the reviewed|FCOS files the source only after/);
+  assert.match(routePanel, /<EmailPresetPicker[^>]*compact/);
+  assert.match(routePanel, /<EmailRecipientPicker[\s\S]*compact/);
   assert.match(settings, /Post-action folders|Company routing learning|Forget pattern/);
 });
 

@@ -4,10 +4,35 @@ import { emailRouter } from '@/lib/emailRouter';
 
 export const EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS = 30_000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_LOCK = 'fcos:email-router-background-sync';
+const EMAIL_ROUTER_BACKGROUND_SYNC_CHANNEL = 'fcos:email-router-background-sync-events';
+const EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL = 'mailbox-synchronized';
+
+function notifyEmailRouterWorkspace(detail = {}) {
+  appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
+  window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail }));
+}
 
 export default function EmailRouterBackgroundSync({ enabled }) {
   const runningRef = useRef(false);
   const lastAttemptAtRef = useRef(0);
+  const channelRef = useRef(null);
+
+  useEffect(() => {
+    if (!enabled || typeof window.BroadcastChannel !== 'function') return undefined;
+    const channel = new window.BroadcastChannel(EMAIL_ROUTER_BACKGROUND_SYNC_CHANNEL);
+    const receiveSync = (event) => {
+      if (event.data?.type === EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL) {
+        notifyEmailRouterWorkspace({ status: 'synchronized_in_another_tab' });
+      }
+    };
+    channelRef.current = channel;
+    channel.addEventListener('message', receiveSync);
+    return () => {
+      channel.removeEventListener('message', receiveSync);
+      channel.close();
+      if (channelRef.current === channel) channelRef.current = null;
+    };
+  }, [enabled]);
 
   const synchronize = useCallback(async () => {
     if (!enabled || runningRef.current || document.visibilityState !== 'visible') return;
@@ -20,15 +45,13 @@ export default function EmailRouterBackgroundSync({ enabled }) {
           window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
           return;
         }
-        // Another user may have won the shared mailbox sync claim. Refresh every
-        // open Email Router list so claimant-local counts cannot leave it stale.
-        appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
-        window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: response.data }));
+        notifyEmailRouterWorkspace(response.data);
+        channelRef.current?.postMessage({ type: EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL });
         if (Number(response.data?.failures || 0) > 0) {
           window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
         }
       };
-      if (navigator.locks?.request) {
+      if (navigator.locks?.request && channelRef.current) {
         await navigator.locks.request(EMAIL_ROUTER_BACKGROUND_SYNC_LOCK, { ifAvailable: true }, async (lock) => {
           if (lock) await run();
         });
