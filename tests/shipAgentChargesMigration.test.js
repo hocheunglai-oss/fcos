@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const migrationUrl = new URL('../supabase/migrations/20260807163729_ship_agent_final_charges.sql', import.meta.url);
 const triggerPrivilegesMigrationUrl = new URL('../supabase/migrations/20260808043932_ship_agent_trigger_function_privileges.sql', import.meta.url);
+const syncEventKeyMigrationUrl = new URL('../supabase/migrations/20260812091123_fix_ship_agent_sync_event_key.sql', import.meta.url);
 
 async function migration() {
   return readFile(migrationUrl, 'utf8');
@@ -11,6 +12,10 @@ async function migration() {
 
 async function triggerPrivilegesMigration() {
   return readFile(triggerPrivilegesMigrationUrl, 'utf8');
+}
+
+async function syncEventKeyMigration() {
+  return readFile(syncEventKeyMigrationUrl, 'utf8');
 }
 
 test('Ship-Agent charges migration keeps workflow data service-only and excludes mirrored financial records', async () => {
@@ -72,6 +77,16 @@ test('Ship-Agent trigger helpers revoke implicit browser execution', async () =>
     assert.match(sql, new RegExp(`revoke all on function public\\.${helper}\\(\\) from public, anon, authenticated`));
     assert.match(sql, new RegExp(`grant execute on function public\\.${helper}\\(\\) to service_role`));
   }
+});
+
+test('Ship-Agent sync event keys extract the fingerprint before text concatenation', async () => {
+  const sql = await syncEventKeyMigration();
+  assert.match(sql, /create or replace function public\.sync_ship_agent_charge_case\(/);
+  assert.match(sql, /'sync:' \|\| v_stem_id \|\| ':' \|\| \(p_case->>'sourceFingerprint'\)/);
+  assert.doesNotMatch(sql, /'sync:' \|\| v_stem_id \|\| ':' \|\| p_case->>'sourceFingerprint'/);
+  assert.match(sql, /security invoker/);
+  assert.match(sql, /revoke all on function public\.sync_ship_agent_charge_case\(jsonb, jsonb\) from public, anon, authenticated/);
+  assert.match(sql, /grant execute on function public\.sync_ship_agent_charge_case\(jsonb, jsonb\) to service_role/);
 });
 
 test('Ship-Agent operations and audit events have deterministic idempotency and redaction controls', async () => {

@@ -31,6 +31,14 @@ test('Ship-Agent detection and assignment normalization are case-insensitive and
   assert.equal(shipAgentChargeInternals.normalizedName('José  De-Silva'), 'jose de silva');
 });
 
+test('Ship-Agent queues include only STEM records created from 1 January 2026', async () => {
+  assert.equal(shipAgentChargeInternals.SHIP_AGENT_STEM_CREATED_FROM, '2026-01-01T00:00:00Z');
+  const service = await repositoryFile('api/_shipAgentCharges.js');
+  const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
+  assert.equal((liveLoader.match(/STEM__r\.CreatedDate >= \$\{SHIP_AGENT_STEM_CREATED_FROM\}/g) || []).length, 2);
+  assert.match(liveLoader, /FROM STEM__c WHERE Id IN \([^\n]+\) AND CreatedDate >= \$\{SHIP_AGENT_STEM_CREATED_FROM\}/);
+});
+
 test('next Hong Kong business day skips weekends and supplied public holidays', () => {
   assert.equal(shipAgentChargeInternals.nextHongKongBusinessDay('2026-08-07', new Set()), '2026-08-10');
   assert.equal(shipAgentChargeInternals.nextHongKongBusinessDay('2026-09-30', new Set(['2026-10-01'])), '2026-10-02');

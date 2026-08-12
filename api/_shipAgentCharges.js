@@ -4,6 +4,7 @@ import { getApiVersion, sfCompositeQueries, sfQuery, sfRequest } from './_salesf
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const SHIP_AGENT_MARKER = 'ship agent';
+const SHIP_AGENT_STEM_CREATED_FROM = '2026-01-01T00:00:00Z';
 const VIEW_ONLY_USER_TYPES = new Set(['finance', 'administrator', 'general_manager']);
 const CASE_SELECT = [
   'id', 'stem_id', 'stem_name', 'workflow_status', 'confirmation_status',
@@ -280,8 +281,8 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const requested = stemIds ? [...new Set(stemIds.filter((id) => SALESFORCE_ID.test(String(id || ''))))] : null;
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
   const [allLineItems, allExtraCosts] = await Promise.all([
-    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Cost_Per_Unit__c, Price_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Original_Supplier__c != null${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Cost_Per_Unit__c, Price_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Original_Supplier__c != null AND STEM__r.CreatedDate >= ${SHIP_AGENT_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${SHIP_AGENT_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierIds = [...new Set([
     ...allLineItems.map((row) => row.Original_Supplier__c),
@@ -298,7 +299,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Delivery_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Ship_Agent_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)})${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, CreatedDate, Delivery_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Ship_Agent_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${SHIP_AGENT_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, invoices] = await Promise.all([
@@ -409,6 +410,7 @@ function serializeCase(live, stored, profile, gm, dueDate) {
   return {
     id: stored?.id || null, stemId: live.stem.Id,
     stemName: live.stem.KeyStem__c || live.stem.Name || live.stem.Id,
+    createdDate: live.stem.CreatedDate || null,
     deliveryDate: live.stem.Delivery_Date__c || null, dueDate, status,
     salesforceStemLastModifiedAt: live.stem.LastModifiedDate || null,
     revision: Number(stored?.revision || 0), fingerprint: live.fingerprint,
@@ -1023,4 +1025,5 @@ export const shipAgentChargeInternals = {
   normalizedName,
   nextHongKongBusinessDay,
   sha256,
+  SHIP_AGENT_STEM_CREATED_FROM,
 };

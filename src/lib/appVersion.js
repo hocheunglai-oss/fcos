@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.160',
+    releasedAt: '2026-08-12',
+    title: 'Scope and restore Ship-Agent reconciliation',
+    changes: [
+      'Limits Ship-Agent Charges detection, reconciliation, and consequential actions to STEM records created on or after 1 January 2026.',
+      'Filters related Salesforce line-item and extra-cost queries at source to avoid scanning irrelevant historical records.',
+      'Repairs the Ship-Agent case synchronization function that caused automatic Payment Collections reconciliation to report unavailable.',
+    ],
+  },
+  {
     version: '2.0.159',
     releasedAt: '2026-08-12',
     title: 'Refresh Email Router across FCOS tabs',
