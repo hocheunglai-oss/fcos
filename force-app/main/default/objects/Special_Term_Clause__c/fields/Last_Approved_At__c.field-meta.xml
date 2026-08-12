@@ -3,5 +3,7 @@
     <fullName>Last_Approved_At__c</fullName>
     <label>Last Approved At</label>
     <required>false</required>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
     <type>DateTime</type>
 </CustomField>

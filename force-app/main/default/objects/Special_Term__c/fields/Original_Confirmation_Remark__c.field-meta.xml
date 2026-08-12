@@ -1,2 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Original_Confirmation_Remark__c</fullName><label>Original Confirmation Remark</label><length>32768</length><required>false</required><type>LongTextArea</type><visibleLines>10</visibleLines></CustomField>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Original_Confirmation_Remark__c</fullName>
+    <label>Original Confirmation Remark</label>
+    <length>32768</length>
+    <trackTrending>false</trackTrending>
+    <type>LongTextArea</type>
+    <visibleLines>10</visibleLines>
+</CustomField>

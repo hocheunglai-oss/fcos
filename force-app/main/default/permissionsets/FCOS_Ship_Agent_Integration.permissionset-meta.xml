@@ -5,5 +5,6 @@
         <field>STEM__c.Ship_Agent_Charges_Confirmed__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <hasActivationRequired>false</hasActivationRequired>
     <label>FCOS Ship-Agent Integration</label>
 </PermissionSet>

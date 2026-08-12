@@ -3,13 +3,23 @@
     <fullName>State__c</fullName>
     <label>State</label>
     <required>true</required>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
     <type>Picklist</type>
     <valueSet>
         <restricted>true</restricted>
         <valueSetDefinition>
             <sorted>false</sorted>
-            <value><fullName>Proposed</fullName><default>true</default><label>Proposed</label></value>
-            <value><fullName>Active</fullName><default>false</default><label>Active</label></value>
+            <value>
+                <fullName>Proposed</fullName>
+                <default>true</default>
+                <label>Proposed</label>
+            </value>
+            <value>
+                <fullName>Active</fullName>
+                <default>false</default>
+                <label>Active</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

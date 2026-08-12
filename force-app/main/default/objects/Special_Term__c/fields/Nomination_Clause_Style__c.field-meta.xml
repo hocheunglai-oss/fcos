@@ -3,9 +3,22 @@
     <fullName>Nomination_Clause_Style__c</fullName>
     <label>Nomination Clause Style</label>
     <required>true</required>
+    <trackTrending>false</trackTrending>
     <type>Picklist</type>
-    <valueSet><restricted>true</restricted><valueSetDefinition><sorted>false</sorted>
-        <value><fullName>Hyphen</fullName><default>true</default><label>Hyphen</label></value>
-        <value><fullName>Numbered</fullName><default>false</default><label>Numbered</label></value>
-    </valueSetDefinition></valueSet>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value>
+                <fullName>Hyphen</fullName>
+                <default>true</default>
+                <label>Hyphen</label>
+            </value>
+            <value>
+                <fullName>Numbered</fullName>
+                <default>false</default>
+                <label>Numbered</label>
+            </value>
+        </valueSetDefinition>
+    </valueSet>
 </CustomField>

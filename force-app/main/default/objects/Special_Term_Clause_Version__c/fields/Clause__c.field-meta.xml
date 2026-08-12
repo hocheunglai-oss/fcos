@@ -5,7 +5,10 @@
     <referenceTo>Special_Term_Clause__c</referenceTo>
     <relationshipLabel>Versions</relationshipLabel>
     <relationshipName>Versions</relationshipName>
+    <relationshipOrder>0</relationshipOrder>
     <reparentableMasterDetail>false</reparentableMasterDetail>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
     <type>MasterDetail</type>
     <writeRequiresMasterRead>false</writeRequiresMasterRead>
 </CustomField>

@@ -7,5 +7,7 @@
     <relationshipLabel>Assignments</relationshipLabel>
     <relationshipName>Assignments</relationshipName>
     <required>true</required>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
     <type>Lookup</type>
 </CustomField>

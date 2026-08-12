@@ -3,5 +3,6 @@
     <fullName>Ship_Agent_Charges_Confirmed__c</fullName>
     <defaultValue>false</defaultValue>
     <label>Ship-Agent Charges Confirmed</label>
+    <trackTrending>false</trackTrending>
     <type>Checkbox</type>
 </CustomField>

@@ -3,15 +3,32 @@
     <fullName>Clause_Structure_Status__c</fullName>
     <label>Clause Structure Status</label>
     <required>true</required>
+    <trackTrending>false</trackTrending>
     <type>Picklist</type>
     <valueSet>
         <restricted>true</restricted>
         <valueSetDefinition>
             <sorted>false</sorted>
-            <value><fullName>Legacy</fullName><default>true</default><label>Legacy</label></value>
-            <value><fullName>In Review</fullName><default>false</default><label>In Review</label></value>
-            <value><fullName>Active</fullName><default>false</default><label>Active</label></value>
-            <value><fullName>Out of Sync</fullName><default>false</default><label>Out of Sync</label></value>
+            <value>
+                <fullName>Legacy</fullName>
+                <default>true</default>
+                <label>Legacy</label>
+            </value>
+            <value>
+                <fullName>In Review</fullName>
+                <default>false</default>
+                <label>In Review</label>
+            </value>
+            <value>
+                <fullName>Active</fullName>
+                <default>false</default>
+                <label>Active</label>
+            </value>
+            <value>
+                <fullName>Out of Sync</fullName>
+                <default>false</default>
+                <label>Out of Sync</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

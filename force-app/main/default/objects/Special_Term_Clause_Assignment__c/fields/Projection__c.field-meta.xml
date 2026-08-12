@@ -3,14 +3,28 @@
     <fullName>Projection__c</fullName>
     <label>Projection</label>
     <required>true</required>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
     <type>Picklist</type>
     <valueSet>
         <restricted>true</restricted>
         <valueSetDefinition>
             <sorted>false</sorted>
-            <value><fullName>Terms Text</fullName><default>true</default><label>Terms Text</label></value>
-            <value><fullName>Confirmation Remark</fullName><default>false</default><label>Confirmation Remark</label></value>
-            <value><fullName>Nomination Remark</fullName><default>false</default><label>Nomination Remark</label></value>
+            <value>
+                <fullName>Terms Text</fullName>
+                <default>true</default>
+                <label>Terms Text</label>
+            </value>
+            <value>
+                <fullName>Confirmation Remark</fullName>
+                <default>false</default>
+                <label>Confirmation Remark</label>
+            </value>
+            <value>
+                <fullName>Nomination Remark</fullName>
+                <default>false</default>
+                <label>Nomination Remark</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

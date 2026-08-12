@@ -3,7 +3,7 @@
     <fullName>Original_Terms_Text__c</fullName>
     <label>Original Terms Text</label>
     <length>130768</length>
-    <required>false</required>
+    <trackTrending>false</trackTrending>
     <type>LongTextArea</type>
     <visibleLines>10</visibleLines>
 </CustomField>
