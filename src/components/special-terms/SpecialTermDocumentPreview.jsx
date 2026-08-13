@@ -15,36 +15,52 @@ const previewPointSize = (points) => `clamp(${Math.max(3, points * 0.4)}px, ${((
 
 function PreviewPageBody({ pageText, nextPageText, numbered }) {
   const lines = String(pageText || '').split('\n');
+  const paragraphs = [];
   let continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
-  const isParagraphEnd = (index) => {
-    const next = lines[index + 1];
-    if (next == null) {
-      const nextPageFirstLine = String(nextPageText || '').split('\n').find((line) => line.trim());
-      return !nextPageFirstLine
-        || /^\s*\d+\.\s+/.test(nextPageFirstLine)
-        || /^\s*[-\u2022\u2013\u2014]\s+/.test(nextPageFirstLine);
-    }
-    return !next.trim()
-      || /^\s*\d+\.\s+/.test(next)
-      || /^\s*[-\u2022\u2013\u2014]\s+/.test(next);
+  let current = null;
+  let pendingSpace = false;
+  const finishParagraph = () => {
+    if (current) paragraphs.push({ ...current, text: current.lines.join(' ') });
+    current = null;
   };
-  const bodyAlignment = (index) => (isParagraphEnd(index) ? TYPE.lastLineAlignment : TYPE.bodyAlignment);
-  return lines.map((line, index) => {
+  lines.forEach((line) => {
     const numberedLine = line.match(/^\s*(\d+\.)\s+(.+)$/);
     const bulletLine = line.match(/^\s*[-\u2022\u2013\u2014]\s+(.+)$/);
-    if (!line) {
+    if (!line.trim()) {
+      finishParagraph();
+      pendingSpace = true;
       continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
-      return <div key={`blank-${index}`} className="h-[0.7em]" aria-hidden="true" />;
+      return;
     }
     if (numberedLine) {
+      finishParagraph();
       continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm;
-      return <div key={`number-${index}`} className="flex w-full"><span className="shrink-0 text-right tabular-nums" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, PAGE.widthMm) }}>{numberedLine[1]}</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerGapMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{numberedLine[2]}</span></div>;
-    }
-    if (bulletLine && numbered) {
+      current = { marker: numberedLine[1], markerRightMm: SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, markerGapMm: SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerGapMm, indentMm: 0, lines: [numberedLine[2]], spaceBefore: pendingSpace };
+      pendingSpace = false;
+    } else if (bulletLine && numbered) {
+      finishParagraph();
       continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm;
-      return <div key={`bullet-${index}`} className="flex w-full"><span className="shrink-0 text-right" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>-</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{bulletLine[1]}</span></div>;
+      current = { marker: '-', markerRightMm: SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, markerGapMm: SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, indentMm: 0, lines: [bulletLine[1]], spaceBefore: pendingSpace };
+      pendingSpace = false;
+    } else if (current) {
+      current.lines.push(line.trim());
+    } else {
+      current = { marker: null, markerRightMm: 0, markerGapMm: 0, indentMm: continuationIndentMm, lines: [line.trim()], spaceBefore: pendingSpace };
+      pendingSpace = false;
     }
-    return <div key={`line-${index}`} className="w-full" style={{ paddingLeft: pagePercent(continuationIndentMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{line}</div>;
+  });
+  finishParagraph();
+  const nextPageFirstLine = String(nextPageText || '').split('\n').find((line) => line.trim());
+  const continuesOnNextPage = Boolean(nextPageFirstLine)
+    && !/^\s*\d+\.\s+/.test(nextPageFirstLine)
+    && !/^\s*[-\u2022\u2013\u2014]\s+/.test(nextPageFirstLine);
+  return paragraphs.map((paragraph, index) => {
+    const textAlignLast = index === paragraphs.length - 1 && continuesOnNextPage ? TYPE.bodyAlignment : TYPE.lastLineAlignment;
+    const textStyle = { textAlign: TYPE.bodyAlignment, textAlignLast };
+    if (paragraph.marker) {
+      return <div key={`${paragraph.marker}-${index}`} className={`flex w-full ${paragraph.spaceBefore ? 'mt-[0.7em]' : ''}`}><span className="shrink-0 text-right tabular-nums" style={{ width: pagePercent(paragraph.markerRightMm, PAGE.widthMm) }}>{paragraph.marker}</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(paragraph.markerGapMm, PAGE.widthMm), ...textStyle }}>{paragraph.text}</span></div>;
+    }
+    return <div key={`paragraph-${index}`} className={`w-full ${paragraph.spaceBefore ? 'mt-[0.7em]' : ''}`} style={{ paddingLeft: pagePercent(paragraph.indentMm, PAGE.widthMm), ...textStyle }}>{paragraph.text}</div>;
   });
 }
 
