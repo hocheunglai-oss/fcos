@@ -1125,7 +1125,7 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
             additionalProperties: false,
             required: ['id', 'shortName', 'category', 'proposedText', 'rationale'],
             properties: {
-              id: { type: 'string' },
+              id: { type: 'string', enum: inputGroups.map((group) => group.id) },
               shortName: { type: 'string' },
               category: { type: 'string', enum: CLAUSE_CATEGORIES },
               proposedText: { type: 'string' },
@@ -1138,7 +1138,7 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
     const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
       method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model, store: false, max_output_tokens: 12_000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
-        { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Preserve every amount, deadline, party, port, product, standard, and jurisdiction. Do not merge clauses. Return JSON only: {"drafts":[{"id":"...","shortName":"3-7 action-oriented words","category":"one supplied category","proposedText":"professional shall/may wording","rationale":"brief"}]}. Each response is a DRAFT requiring human approval.' }] },
+        { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Copy every input id exactly. Preserve every amount, deadline, party, port, product, standard, jurisdiction, number format, and named entity character-for-character. Do not merge clauses. Do not add a top-level number or hyphen. If a professional rewrite would change a protected qualifier, return the source wording unchanged and improve only the short name, category, and rationale. Return only the required structured output. Each response is a DRAFT requiring human approval.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ categories: CLAUSE_CATEGORIES, groups: inputGroups }) }] },
       ], text: { format: { type: 'json_schema', name: 'special_term_clause_drafts', strict: true, schema: outputSchema } } }),
       signal: AbortSignal.timeout(60_000),

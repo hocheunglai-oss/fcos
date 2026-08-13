@@ -91,6 +91,9 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(service, /strict: true/);
   assert.match(service, /minItems: inputGroups\.length/);
   assert.match(service, /maxItems: inputGroups\.length/);
+  assert.match(service, /enum: inputGroups\.map\(\(group\) => group\.id\)/);
+  assert.match(service, /Copy every input id exactly/);
+  assert.match(service, /Do not add a top-level number or hyphen/);
   assert.match(service, /signal: AbortSignal\.timeout/);
   assert.match(service, /groups\.length > 20/);
   assert.match(service, /hasMaterialDifference\(sourceById\.get\(draft\.id\), draft\.proposedText\)/);
