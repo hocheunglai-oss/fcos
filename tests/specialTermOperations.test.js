@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assertCurrent, reserveOperation } from '../api/_specialTerms.js';
 import { specialTermClauseServiceInternals } from '../api/_specialTermClauses.js';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = path.resolve(import.meta.dirname, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 function operationClient() {
   const rows = new Map();
@@ -60,4 +65,36 @@ test('short names and composite graph failures are validated centrally', () => {
   assert.throws(() => specialTermClauseServiceInternals.cleanShortName('One Two Three Four Five Six Seven Eight'), /3 to 7/);
   assert.throws(() => specialTermClauseServiceInternals.assertCompositeGraph({ graphs: [{ isSuccessful: false, graphResponse: { compositeResponse: [{ httpStatusCode: 400, body: [{ message: 'Rejected atomically' }] }] } }] }, 'Fallback'), /Rejected atomically/);
   assert.equal(specialTermClauseServiceInternals.failureFromComposite({ compositeResponse: [{ httpStatusCode: 200, body: [{ id: null, success: false, errors: [{ message: 'Nested row rejected' }] }] }] })?.body?.[0]?.message, 'Nested row rejected');
+});
+
+test('whole-term revision API uses durable Salesforce revisions and never partially activates projections', () => {
+  const service = read('api/_specialTermClauses.js');
+  assert.match(service, /Special_Term_Revision__c/);
+  assert.match(service, /Special_Term_Revision_Clause__c/);
+  assert.match(service, /Special_Term_Revision_Rule__c/);
+  assert.match(service, /Snapshot_Type__c: 'Baseline'/);
+  assert.match(service, /Snapshot_Type__c: 'Proposed'/);
+  const apexService = read('force-app/main/default/classes/SpecialTermRevisionService.cls');
+  assert.match(apexService, /Snapshot_Type__c == 'Proposed'/);
+  assert.match(apexService, /SpecialTermRuleRevisionHandler\.allowRevisionUpdate = true/);
+  assert.match(service, /specialTermWholeRevision/);
+  assert.match(service, /callRevisionApex\(.*'activate'/s);
+  assert.match(service, /callRevisionApex\(.*'rollback'/s);
+  assert.match(service, /A Special Term revision must include Terms Text, Confirmation remark, and Nomination remark/);
+  assert.match(service, /store: false/);
+  assert.match(service, /model: 'gpt-5\.6-terra'/);
+  assert.match(service, /groups\.length > 20/);
+  assert.match(service, /hasMaterialDifference\(sourceById\.get\(draft\.id\), draft\.proposedText\)/);
+});
+
+test('operations use service-only atomic RPCs and do not retain reviewer prose', () => {
+  const service = read('api/_specialTerms.js');
+  const migration = read('supabase/migrations/20260813150034_special_term_revision_operations.sql');
+  assert.match(service, /reserve_special_terms_operation/);
+  assert.match(service, /complete_special_terms_operation/);
+  assert.match(service, /audit_reason: null/);
+  assert.match(migration, /security invoker/);
+  assert.match(migration, /revoke all on table public\.special_terms_notification_states from anon, authenticated/);
+  assert.match(migration, /revoke all on function public\.reserve_special_terms_operation/);
+  assert.match(migration, /special_terms_notification_states/);
 });

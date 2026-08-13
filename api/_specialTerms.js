@@ -29,6 +29,11 @@ const OPERATION_OBJECTS = Object.freeze({
   migration_review_save: OBJECTS.clauseAssignment,
   migration_activate: OBJECTS.term,
   migration_rollback: OBJECTS.term,
+  revision_save: OBJECTS.clauseAssignment,
+  revision_approve: OBJECTS.term,
+  revision_rollback: OBJECTS.term,
+  migration_batch_review: OBJECTS.clauseAssignment,
+  clause_ai_draft: OBJECTS.clause,
 });
 const OPERATION_TYPES = new Set(Object.keys(OPERATION_OBJECTS));
 
@@ -130,6 +135,7 @@ async function loadSpecialTermsSchema({ force = false, write = false } = {}) {
   for (const name of ['Add_to_Confirmation__c', 'Add_to_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'boolean', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Special_Remark_in_Confirmation__c', 'Special_Remark_in_Nomination__c']) requiredField(fields.term, OBJECTS.term, name, { type: 'textarea', ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of [
+    'Approval_Status__c', 'Current_Revision__c',
     'Clause_Structure_Status__c', 'Clause_Compiled_Hash__c', 'Original_Terms_Text__c', 'Clause_Migration_Batch_Id__c',
     'Confirmation_Clause_Status__c', 'Confirmation_Clause_Style__c', 'Confirmation_Compiled_Hash__c', 'Original_Confirmation_Remark__c', 'Confirmation_Migration_Batch_Id__c',
     'Nomination_Clause_Status__c', 'Nomination_Clause_Style__c', 'Nomination_Compiled_Hash__c', 'Original_Nomination_Remark__c', 'Nomination_Migration_Batch_Id__c',
@@ -144,8 +150,8 @@ async function loadSpecialTermsSchema({ force = false, write = false } = {}) {
   for (const [map, objectName, names] of [[fields.account, OBJECTS.account, ['Name', 'Company_Code__c']], [fields.port, OBJECTS.port, ['Name', 'Country__c', 'Offshore__c']], [fields.product, OBJECTS.product, ['Name', 'IsActive']]]) {
     for (const name of names) requiredField(map, objectName, name);
   }
-  for (const name of ['Name', 'Short_Name_Key__c', 'Canonical_Text_Key__c', 'Category__c', 'Status__c', 'Latest_Approved_Version_Number__c', 'Last_Approved_At__c', 'Replacement_Clause__c', 'Retirement_Reason__c']) requiredField(fields.clause, OBJECTS.clause, name, { ...(write ? { createable: name !== 'LastModifiedDate', updateable: true } : {}) });
-  for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, updateable: true } : {}) });
+  for (const name of ['Name', 'Short_Name_Key__c', 'Canonical_Text_Key__c', 'Category__c', 'Status__c', 'Origin__c', 'Legacy_Original_Text__c', 'Latest_Approved_Version_Number__c', 'Last_Approved_At__c', 'Replacement_Clause__c', 'Retirement_Reason__c']) requiredField(fields.clause, OBJECTS.clause, name, { ...(write ? { createable: name !== 'LastModifiedDate', updateable: true } : {}) });
+  for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c', 'Draft_Source__c', 'AI_Model__c', 'AI_Response_Id__c', 'Legacy_Source_Key__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseVersion, OBJECTS.clauseVersion, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true, updateable: true } : {}) });
   for (const name of ['Projection__c', 'Sequence__c', 'State__c', 'Assignment_Key__c', 'Clause_Use_Key__c', 'Migration_Batch_Id__c']) requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true, updateable: true } : {}) });
@@ -176,6 +182,10 @@ export async function resolveSpecialTermsSchema({ force = false, write = false }
 }
 
 function mapTerm(row) {
+  const projectionStatuses = [row.Clause_Structure_Status__c || 'Legacy', row.Confirmation_Clause_Status__c || 'Legacy', row.Nomination_Clause_Status__c || 'Legacy'];
+  const revisionIds = [row.Clause_Migration_Batch_Id__c, row.Confirmation_Migration_Batch_Id__c, row.Nomination_Migration_Batch_Id__c].filter(Boolean);
+  const revisionStatus = row.Approval_Status__c || (projectionStatuses.every((status) => status === 'Active') ? 'Approved'
+    : projectionStatuses.some((status) => status === 'In Review') ? 'Draft' : 'Legacy');
   return {
     id: row.Id,
     name: row.Name || '',
@@ -198,6 +208,15 @@ function mapTerm(row) {
     nominationCompiledHash: row.Nomination_Compiled_Hash__c || null,
     originalNominationRemark: row.Original_Nomination_Remark__c || '',
     nominationMigrationBatchId: row.Nomination_Migration_Batch_Id__c || null,
+    revisionId: row.Current_Revision__c || (revisionIds.length === 3 && new Set(revisionIds).size === 1 ? revisionIds[0] : null),
+    currentRevision: row.Current_Revision__c || (revisionStatus === 'Approved' ? revisionIds.find(Boolean) || null : null),
+    revisionStatus,
+    revisionSummary: { status: revisionStatus, projectionStatuses },
+    legacyProvenance: {
+      termsText: row.Original_Terms_Text__c != null,
+      confirmationRemark: row.Original_Confirmation_Remark__c != null,
+      nominationRemark: row.Original_Nomination_Remark__c != null,
+    },
     activeClauseCount: Number(row.activeClauseCount || 0),
     proposedClauseCount: Number(row.proposedClauseCount || 0),
     upgradeCount: Number(row.upgradeCount || 0),
@@ -270,7 +289,7 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
       const termWhere = isScoped
         ? (termIds.length ? ` WHERE Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
         : '';
-      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
+      const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
       const loadedTermIds = termResult.records.map((term) => term.Id).filter(isSalesforceRecordId);
       const assignmentResult = loadedTermIds.length
         ? await sfQuery(`SELECT Special_Term__c,Projection__c,State__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
@@ -345,6 +364,27 @@ export async function reserveOperation(client, profile, body, operationType, pay
   const operationId = text(body.operationId, 100);
   if (!operationId) throw specialTermsError('An operation ID is required.');
   const requestHash = createHash('sha256').update(stableJson({ operationType, payload })).digest('hex');
+  // The production migration exposes this as one security-invoker transaction. Keep
+  // the narrow table fallback for local/test clients that predate the migration.
+  if (typeof client.rpc === 'function') {
+    const rpc = await client.rpc('reserve_special_terms_operation', {
+      p_operation_id: operationId,
+      p_operation_type: operationType,
+      p_request_hash: requestHash,
+      p_salesforce_object: OPERATION_OBJECTS[operationType],
+      p_salesforce_record_id: payload.id || null,
+      p_actor_user_id: profile.id,
+      p_actor_email: profile.email || null,
+    });
+    if (!rpc.error) {
+      const row = rpc.data;
+      if (row?.replay === true) return { replay: row.result_snapshot || {} };
+      if (row?.operation) return { operation: row.operation };
+      if (row?.id) return { operation: row };
+      throw specialTermsError('Special Terms operation could not be reserved.', 502, 'SPECIAL_TERMS_OPERATION_RESERVATION_FAILED');
+    }
+    if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError(`Special Terms operation could not be reserved: ${rpc.error.message}`, 502);
+  }
   const existing = await client.from('special_terms_operations').select('*').eq('operation_id', operationId).maybeSingle();
   if (existing.error) throw specialTermsError(`Special Terms operation could not be checked: ${existing.error.message}`, 502);
   const resolveExisting = (row) => {
@@ -357,8 +397,9 @@ export async function reserveOperation(client, profile, body, operationType, pay
     const resolved = resolveExisting(existing.data);
     if (resolved) return resolved;
   }
-  const auditReason = body.auditReason || body.approvalReason || body.revisionReason || body.retirementReason;
-  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: OPERATION_OBJECTS[operationType], salesforce_record_id: payload.id || null, audit_reason: text(auditReason, 500) || null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
+  // Contractual text and reviewer rationale remain in Salesforce. Supabase retains
+  // operation identity/status only, never a recoverable contractual narrative.
+  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: OPERATION_OBJECTS[operationType], salesforce_record_id: payload.id || null, audit_reason: null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
   const result = existing.data ? await client.from('special_terms_operations').update(row).eq('id', existing.data.id).select('*').single() : await client.from('special_terms_operations').insert(row).select('*').single();
   if (result.error?.code === '23505') {
     const raced = await client.from('special_terms_operations').select('*').eq('operation_id', operationId).maybeSingle();
@@ -370,9 +411,23 @@ export async function reserveOperation(client, profile, body, operationType, pay
   return { operation: result.data };
 }
 
-export async function finishOperation(client, operation, result) {
+export async function finishOperation(client, operation, result, persistedResult = result) {
   const completedAt = new Date().toISOString();
-  await client.from('special_terms_operations').update({ operation_status: 'succeeded', result_snapshot: result, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
+  if (typeof client.rpc === 'function') {
+    const rpc = await client.rpc('complete_special_terms_operation', {
+      p_operation_id: operation.operation_id,
+      p_operation_status: 'succeeded',
+      p_result_snapshot: persistedResult,
+      p_error_code: null,
+      p_error_message: null,
+    });
+    if (!rpc.error) {
+      await expireRuntimeCacheTags(['salesforce:special-terms', 'salesforce:special-terms:clauses', 'salesforce:schema']);
+      return result;
+    }
+    if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError(`Special Terms operation could not be completed: ${rpc.error.message}`, 502);
+  }
+  await client.from('special_terms_operations').update({ operation_status: 'succeeded', result_snapshot: persistedResult, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
   await expireRuntimeCacheTags(['salesforce:special-terms', 'salesforce:special-terms:clauses', 'salesforce:schema']);
   return result;
 }
@@ -380,7 +435,22 @@ export async function finishOperation(client, operation, result) {
 export async function failOperation(client, operation, error) {
   const uncertain = /timeout|network|fetch failed/i.test(String(error?.message || ''));
   const completedAt = new Date().toISOString();
-  await client.from('special_terms_operations').update({ operation_status: uncertain ? 'uncertain' : 'failed', error_code: text(error?.code || 'SPECIAL_TERMS_WRITE_FAILED', 100), error_message: text(error?.message || 'Salesforce write failed.', 500), updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
+  const safeCode = text(error?.code || 'SPECIAL_TERMS_WRITE_FAILED', 100);
+  // Salesforce may include field values in error messages. The service-only
+  // ledger intentionally retains a stable, non-contractual diagnostic only.
+  const safeMessage = uncertain ? 'Salesforce completion could not be confirmed.' : 'Salesforce rejected the Special Terms operation.';
+  if (typeof client.rpc === 'function') {
+    const rpc = await client.rpc('complete_special_terms_operation', {
+      p_operation_id: operation.operation_id,
+      p_operation_status: uncertain ? 'uncertain' : 'failed',
+      p_result_snapshot: {},
+      p_error_code: safeCode,
+      p_error_message: safeMessage,
+    });
+    if (!rpc.error) throw error;
+    if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError(`Special Terms operation could not be completed: ${rpc.error.message}`, 502);
+  }
+  await client.from('special_terms_operations').update({ operation_status: uncertain ? 'uncertain' : 'failed', error_code: safeCode, error_message: safeMessage, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
   throw error;
 }
 
@@ -404,8 +474,9 @@ export function termMetadataPayload(body, { create = false } = {}) {
   };
   if (create) {
     payload.Terms_Text__c = null;
-    payload.Clause_Structure_Status__c = 'Active';
-    payload.Clause_Compiled_Hash__c = clauseHash('');
+    payload.Approval_Status__c = 'Draft';
+    payload.Clause_Structure_Status__c = 'Legacy';
+    payload.Clause_Compiled_Hash__c = null;
     payload.Confirmation_Clause_Status__c = 'Legacy';
     payload.Confirmation_Clause_Style__c = 'Hyphen';
     payload.Nomination_Clause_Status__c = 'Legacy';
@@ -414,7 +485,7 @@ export function termMetadataPayload(body, { create = false } = {}) {
   return payload;
 }
 
-function rulePayload(body, schema) {
+export function rulePayload(body, schema) {
   const audience = text(body.audience, 20);
   if (!schema.audienceOptions.some((option) => option.value === audience)) throw specialTermsError('Select Buyer or Supplier for the rule audience.');
   const payload = {
@@ -430,7 +501,7 @@ function rulePayload(body, schema) {
   return payload;
 }
 
-async function validateRuleLookups(payload) {
+export async function validateRuleLookups(payload) {
   const [, accountResult, , productResult] = await Promise.all([
     currentRecord(OBJECTS.term, payload.Special_Term__c, ['Id']),
     payload.Account__c ? sfQuery(`SELECT Id FROM Account WHERE Id = '${soql(payload.Account__c)}' AND Inactive_Suspended__c = false LIMIT 1`, { clean: true, limit: 1 }) : null,
@@ -470,8 +541,11 @@ export async function deleteSpecialTerm(client, profile, body = {}) {
   const reservation = await reserveOperation(client, profile, body, 'term_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
   try {
-    const current = await currentRecord(OBJECTS.term, id, ['Id', 'Name', 'LastModifiedDate']);
+    const current = await currentRecord(OBJECTS.term, id, ['Id', 'Name', 'Approval_Status__c', 'Current_Revision__c', 'LastModifiedDate']);
     assertCurrent(current, body.expectedLastModifiedAt);
+    if (current.Approval_Status__c === 'Approved' || current.Current_Revision__c) {
+      throw specialTermsError('Approved or revision-controlled Special Terms must be retired through the governed lifecycle and cannot be deleted.', 409, 'SPECIAL_TERMS_RETIRE_REQUIRED');
+    }
     if (text(body.confirmationName, 80) !== current.Name) throw specialTermsError(`Type ${current.Name} to confirm deletion.`);
     const linked = await sfQuery(`SELECT Id FROM ${OBJECTS.rule} WHERE Special_Term__c = '${soql(id)}' ORDER BY Id LIMIT 4800`, { clean: true, limit: 4800 });
     if (linked.totalSize > linked.records.length) throw specialTermsError('This term has too many linked rules for one atomic deletion.', 409);
@@ -505,7 +579,13 @@ export async function saveSpecialTermRule(client, profile, body = {}) {
   try {
     let recordId = id;
     if (id) {
-      assertCurrent(await currentRecord(OBJECTS.rule, id, ['Id', 'LastModifiedDate']), body.expectedLastModifiedAt);
+      const currentRule = await currentRecord(OBJECTS.rule, id, ['Id', 'Special_Term__c', 'Special_Term__r.Approval_Status__c', 'LastModifiedDate']);
+      assertCurrent(currentRule, body.expectedLastModifiedAt);
+      if (currentRule.Special_Term__r?.Approval_Status__c === 'Approved') throw specialTermsError('Rules for an approved Special Term must be changed through a whole-term revision.', 409, 'SPECIAL_TERMS_REVISION_REQUIRED');
+      if (payload.Special_Term__c !== currentRule.Special_Term__c) {
+        const selectedTerm = await currentRecord(OBJECTS.term, payload.Special_Term__c, ['Id', 'Approval_Status__c']);
+        if (selectedTerm.Approval_Status__c === 'Approved') throw specialTermsError('Rules for an approved Special Term must be changed through a whole-term revision.', 409, 'SPECIAL_TERMS_REVISION_REQUIRED');
+      }
       // Salesforce computes Priority__c only on insert. Replace the rule atomically so
       // Salesforce remains the sole owner of that calculation after an FCOS edit.
       const result = await sfRequest('/composite', {
@@ -523,6 +603,8 @@ export async function saveSpecialTermRule(client, profile, body = {}) {
       if (failure) throw specialTermsError(failure.body?.[0]?.message || 'Salesforce rejected the Special Term rule edit.', failure.httpStatusCode || 502);
       recordId = salesforceId(responses.find((response) => response.referenceId === 'newRule')?.body?.id, 'Updated Special Term Rule');
     } else {
+      const selectedTerm = await currentRecord(OBJECTS.term, payload.Special_Term__c, ['Id', 'Approval_Status__c']);
+      if (selectedTerm.Approval_Status__c === 'Approved') throw specialTermsError('Rules for an approved Special Term must be changed through a whole-term revision.', 409, 'SPECIAL_TERMS_REVISION_REQUIRED');
       const created = await sfRequest(`/sobjects/${OBJECTS.rule}`, { method: 'POST', body: payload });
       recordId = salesforceId(created?.id, 'Created Special Term Rule');
     }
@@ -539,7 +621,9 @@ export async function deleteSpecialTermRule(client, profile, body = {}) {
   const reservation = await reserveOperation(client, profile, body, 'rule_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
   try {
-    assertCurrent(await currentRecord(OBJECTS.rule, id, ['Id', 'LastModifiedDate']), body.expectedLastModifiedAt);
+    const currentRule = await currentRecord(OBJECTS.rule, id, ['Id', 'Special_Term__r.Approval_Status__c', 'LastModifiedDate']);
+    assertCurrent(currentRule, body.expectedLastModifiedAt);
+    if (currentRule.Special_Term__r?.Approval_Status__c === 'Approved') throw specialTermsError('Rules for an approved Special Term must be changed through a whole-term revision.', 409, 'SPECIAL_TERMS_REVISION_REQUIRED');
     await sfRequest(`/sobjects/${OBJECTS.rule}/${id}`, { method: 'DELETE' });
     return finishOperation(client, reservation.operation, { success: true, id });
   } catch (error) {

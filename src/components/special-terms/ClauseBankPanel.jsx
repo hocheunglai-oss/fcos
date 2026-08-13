@@ -14,6 +14,7 @@ import { Textarea } from '@/components/ui/textarea';
 const EMPTY_DRAFT = Object.freeze({ clauseId: null, versionId: null, shortName: '', category: 'Other', clauseText: '', revisionReason: '', expectedLastModifiedAt: null, expectedClauseLastModifiedAt: null });
 
 function matchesView(clause, status) {
+  if (status === 'Legacy') return clause.origin === 'Legacy' || clause.origin === 'legacy' || clause.status === 'Legacy';
   if (status === 'Draft') return Boolean(clause.draftVersion);
   return clause.status === status;
 }
@@ -49,7 +50,7 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
 
   const filtered = useMemo(() => {
     const search = query.trim().toLowerCase();
-    return clauses.filter((clause) => matchesView(clause, status) && (!search || [clause.shortName, clause.category, clause.latestApprovedVersion?.clauseText, clause.draftVersion?.clauseText].some((value) => String(value || '').toLowerCase().includes(search))));
+    return clauses.filter((clause) => matchesView(clause, status) && (!search || [clause.shortName, clause.category, clause.legacyOriginalText, clause.latestApprovedVersion?.clauseText, clause.draftVersion?.clauseText].some((value) => String(value || '').toLowerCase().includes(search))));
   }, [clauses, query, status]);
 
   const mutate = async (functionName, payload, successMessage) => {
@@ -80,7 +81,7 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
       {message ? <Alert><ShieldCheck className="h-4 w-4" /><AlertDescription>{message}</AlertDescription></Alert> : null}
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-wrap gap-2">{[{ value: 'Active', label: 'Approved' }, { value: 'Draft', label: 'Draft' }, { value: 'Retired', label: 'Retired' }].map((view) => <Button key={view.value} type="button" size="sm" variant={status === view.value ? 'default' : 'outline'} onClick={() => setStatus(view.value)}>{view.label}<Badge variant="secondary" className="ml-2">{clauses.filter((clause) => matchesView(clause, view.value)).length}</Badge></Button>)}</div>
+          <div className="flex flex-wrap gap-2">{[{ value: 'Active', label: 'Approved' }, { value: 'Draft', label: 'Draft' }, { value: 'Legacy', label: 'Legacy' }, { value: 'Retired', label: 'Retired' }].map((view) => <Button key={view.value} type="button" size="sm" variant={status === view.value ? 'default' : 'outline'} onClick={() => setStatus(view.value)}>{view.label}<Badge variant="secondary" className="ml-2">{clauses.filter((clause) => matchesView(clause, view.value)).length}</Badge></Button>)}</div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search clause bank" className="pl-9 sm:w-72" /></div>
           <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
@@ -89,11 +90,11 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
       </div>
 
       <div className="grid gap-3 xl:grid-cols-2">{filtered.map((clause) => {
-        const displayVersion = status === 'Draft' ? clause.draftVersion : clause.latestApprovedVersion;
+        const displayVersion = status === 'Draft' ? clause.draftVersion : clause.latestApprovedVersion || clause.legacyVersion;
         return (
           <section key={clause.id} className="space-y-3 rounded-lg border border-border bg-card p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><div className="flex flex-wrap items-center gap-2"><strong>{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant={clause.status === 'Retired' ? 'destructive' : 'secondary'}>{clause.status === 'Active' ? 'Approved' : clause.status}</Badge>{displayVersion ? <Badge variant="secondary">v{displayVersion.revisionNumber}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Used in {clause.usageCount} active Special Term(s)</p></div>
+              <div><div className="flex flex-wrap items-center gap-2"><strong>{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant={clause.status === 'Retired' ? 'destructive' : 'secondary'}>{clause.status === 'Active' ? 'Approved' : clause.status}</Badge>{clause.origin ? <Badge variant="outline">{clause.origin}</Badge> : null}{displayVersion ? <Badge variant="secondary">v{displayVersion.revisionNumber}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Used in {clause.usageCount} Special Term assignment(s){clause.provenance?.termName ? ` · preserved from ${clause.provenance.termName}` : ''}</p></div>
               <div className="flex flex-wrap gap-1">
                 {canManage && clause.status === 'Active' && !clause.draftVersion ? <Button size="sm" variant="outline" onClick={() => openRevision(clause)}><Pencil className="mr-1 h-3.5 w-3.5" />Propose revision</Button> : null}
                 {canManage && clause.status !== 'Retired' && clause.draftVersion ? <Button size="sm" variant="outline" onClick={() => openDraft(clause)}><Pencil className="mr-1 h-3.5 w-3.5" />Edit Draft</Button> : null}
@@ -102,6 +103,7 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
               </div>
             </div>
             <p className="whitespace-pre-wrap text-sm leading-relaxed">{displayVersion?.clauseText || 'No approved wording yet.'}</p>
+            {clause.origin === 'Legacy' && clause.legacyOriginalText && displayVersion?.clauseText !== clause.legacyOriginalText ? <div className="grid gap-3 rounded-md border border-amber-200 bg-amber-50/40 p-3 md:grid-cols-2"><section><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Preserved legacy wording</p><p className="mt-2 whitespace-pre-wrap text-xs">{clause.legacyOriginalText}</p></section><section><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Proposed wording</p><p className="mt-2 whitespace-pre-wrap text-xs">{displayVersion?.clauseText}</p></section></div> : null}
             {clause.draftVersion && clause.latestApprovedVersion ? <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">Draft v{clause.draftVersion.revisionNumber} is awaiting approval. Existing terms remain on approved v{clause.latestApprovedVersion.revisionNumber}.</div> : null}
           </section>
         );

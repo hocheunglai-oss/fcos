@@ -165,6 +165,12 @@ import {
   saveSpecialTermClauseDraft,
   saveSpecialTermComposition,
   saveSpecialTermMigrationReview,
+  saveSpecialTermRevision,
+  approveSpecialTermRevision,
+  rollbackSpecialTermRevision,
+  listSpecialTermMigrationBatches,
+  listSpecialTermApprovalQueue,
+  draftSpecialTermClausesWithAi,
 } from '../_specialTermClauses.js';
 import {
   emailRouterActionHandler as nativeEmailRouterAction,
@@ -1350,6 +1356,12 @@ const HANDLER_MODULE_ACCESS = {
   specialTermMigrationSave: ['special_terms'],
   specialTermMigrationActivate: ['special_terms'],
   specialTermMigrationRollback: ['special_terms'],
+  specialTermRevisionSave: ['special_terms'],
+  specialTermRevisionApprove: ['special_terms'],
+  specialTermRevisionRollback: ['special_terms'],
+  specialTermMigrationBatchList: ['special_terms'],
+  specialTermApprovalQueue: ['special_terms'],
+  specialTermClauseAiDraft: ['special_terms'],
   specialTermsSave: ['special_terms'],
   specialTermsDelete: ['special_terms'],
   specialTermRuleSave: ['special_terms'],
@@ -6091,6 +6103,47 @@ async function salesforceHealthRow({ force = false } = {}) {
   );
 }
 
+async function specialTermsMigrationHealthRow({ force = false } = {}) {
+  const result = await timedCheck(async () => {
+    const inventory = await getSpecialTermMigrationInventory({ force });
+    const summary = inventory?.summary || {};
+    const termCount = Number(summary.termCount || 0);
+    const approvedOrStructured = Number(summary.approvedOrRetiredTermCount ?? summary.structuredTermCount ?? 0);
+    const manualReview = Number(summary.manualReviewTermCount || 0);
+    const pendingApproval = Number(summary.pendingApprovalTermCount || 0);
+    const legacyTerms = Math.max(0, Number(summary.legacyTermCount ?? termCount - approvedOrStructured));
+    return {
+      termCount,
+      approvedOrStructured,
+      legacyTerms,
+      pendingApproval,
+      manualReview,
+      duplicateGroups: Number(summary.duplicateGroupCount || 0),
+      duplicateCandidateOccurrences: Number(summary.duplicateCandidateOccurrenceCount || 0),
+      aiDraftingConfigured: Boolean(process.env.OPENAI_API_KEY),
+      healthStatus: legacyTerms || pendingApproval || manualReview ? 'warning' : 'online',
+    };
+  });
+  return healthRow({
+    id: 'special-terms-migration',
+    name: 'Special-Term Clause Migration',
+    category: 'Salesforce',
+    purpose: 'Tracks whole-term migration, clause approval, manual segmentation, and protected AI drafting readiness without copying contractual text outside Salesforce.',
+    scope: 'server',
+    provider: 'FCOS and Salesforce',
+    endpoint: '/special-terms?tab=migration',
+    authType: 'FCOS session with live Salesforce revalidation',
+    configured: true,
+    configuredEnv: { OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY) },
+    missingEnv: process.env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    tokenExpiry: 'Salesforce OAuth and the protected OpenAI server credential are checked independently.',
+    notes: [
+      'Clause text and revision lineage remain authoritative in Salesforce.',
+      'A warning means migration or approval work remains; it does not change the current live contractual wording.',
+    ],
+  }, result);
+}
+
 async function supabaseMetricsHealth({ force = false } = {}) {
   const config = serverSupabaseConfig();
   if (!config.configured) throw new Error('Supabase Metrics credentials are not configured.');
@@ -6782,6 +6835,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
   const [providerRows, connectionAttestation] = await Promise.all([
     Promise.all([
     salesforceHealthRow({ force }),
+    cachedHealthCheck('special-terms-migration', 60, force, () => specialTermsMigrationHealthRow({ force })),
     supabaseHealthRow({ force }),
     profile
       ? cachedHealthCheck('backbone', 60, force, () => backboneBridgeHealthRow(accessContext), { profileId: profile.id })
@@ -16785,12 +16839,13 @@ async function hedgeDeskMaintenanceCron(body = {}, req = null) {
 
 async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  const [workspace, canManage, canApproveClauses] = await Promise.all([
+  const [workspace, canApproveClauses] = await Promise.all([
     listSpecialTerms({ force: body.force === true }),
-    userHasCapability(context.client, context.profile, 'special_terms_manage'),
     userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
   ]);
-  return { ...workspace, canManage, canApproveClauses: canApproveClauses && isAdministratorUserType(context.profile.user_type) };
+  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
+  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
+  return { ...workspace, canManage: true, canDraft: true, canApproveClauses: canApproveRevisions, canApproveRevisions };
 }
 
 async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
@@ -16847,7 +16902,6 @@ async function specialTermMigrationInventory(body = {}, req = null, accessContex
 
 async function specialTermClauseDraftSave(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
   return saveSpecialTermClauseDraft(context.client, context.profile, body);
 }
 
@@ -16864,38 +16918,65 @@ async function specialTermClauseRetire(body = {}, req = null, accessContext = nu
 }
 
 async function specialTermCompositionSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
-  return saveSpecialTermComposition(context.client, context.profile, body);
+  accessContext || (await requireActiveUser(req));
+  throw appError('Direct projection composition is retired. Save a complete Special Term revision instead.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
 }
 
 async function specialTermMigrationPreview(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
+  accessContext || (await requireActiveUser(req));
   return previewSpecialTermMigration(body.termId, { projection: body.projection || 'termsText' });
 }
 
 async function specialTermMigrationSave(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
   return saveSpecialTermMigrationReview(context.client, context.profile, body);
 }
 
 async function specialTermMigrationActivate(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return activateSpecialTermMigration(context.client, context.profile, body);
+  accessContext || (await requireActiveUser(req));
+  throw appError('Projection-level activation is retired. Approve and activate the complete Special Term revision.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
 }
 
 async function specialTermMigrationRollback(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  throw appError('Projection-level rollback is retired. Roll back the complete Special Term revision.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
+}
+
+async function specialTermRevisionSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return saveSpecialTermRevision(context.client, context.profile, body);
+}
+
+async function specialTermRevisionApprove(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireSpecialTermClauseApprover(context);
-  return rollbackSpecialTermMigration(context.client, context.profile, body);
+  return approveSpecialTermRevision(context.client, context.profile, body);
+}
+
+async function specialTermRevisionRollback(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return rollbackSpecialTermRevision(context.client, context.profile, body);
+}
+
+async function specialTermMigrationBatchList(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return listSpecialTermMigrationBatches({ force: body.force === true });
+}
+
+async function specialTermApprovalQueue(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return listSpecialTermApprovalQueue({ force: body.force === true, limit: body.limit });
+}
+
+async function specialTermClauseAiDraft(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return draftSpecialTermClausesWithAi(context.client, context.profile, body);
 }
 
 async function specialTermsSave(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms drafting permission is required.');
   return saveSpecialTerm(context.client, context.profile, body);
 }
 
@@ -16907,7 +16988,7 @@ async function specialTermsDelete(body = {}, req = null, accessContext = null) {
 
 async function specialTermRuleSave(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
+  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms drafting permission is required.');
   return saveSpecialTermRule(context.client, context.profile, body);
 }
 
@@ -17136,6 +17217,12 @@ const handlers = {
   specialTermMigrationSave,
   specialTermMigrationActivate,
   specialTermMigrationRollback,
+  specialTermRevisionSave,
+  specialTermRevisionApprove,
+  specialTermRevisionRollback,
+  specialTermMigrationBatchList,
+  specialTermApprovalQueue,
+  specialTermClauseAiDraft,
   specialTermsSave,
   specialTermsDelete,
   specialTermRuleSave,

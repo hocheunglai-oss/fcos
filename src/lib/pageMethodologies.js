@@ -454,11 +454,11 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Clause governance',
-      body: 'Manage Special Terms users may compose terms and propose Draft clauses or revisions. Only an active General Manager or Administrator may approve or retire wording. Approved versions are immutable; a new approval never changes an existing Special Term until its exact row is upgraded and saved.',
+      body: 'Every active FCOS user may propose a Special Term, Draft clause, revision, or matching-rule change. Only the active General Manager or an Administrator may approve, activate, retire, or roll back contractual wording. Approved versions are immutable; a new approval never silently changes an existing active term.',
     },
     {
       title: 'Legacy migration',
-      body: 'Each legacy projection stays live while clause boundaries and exact-equivalence candidates are reviewed in Salesforce. Existing numbered and hyphen remarks are parsed without changing their wording; unmarked or mixed records are flagged for manual segmentation. Activation requires every proposed row to use an approved version and atomically writes only that projection, its style, assignments, compilation, and verification hash. The original text is retained for an audited per-projection rollback.',
+      body: 'Each legacy projection stays live while clause boundaries and exact-equivalence candidates are reviewed in Salesforce. Existing numbered and hyphen remarks are parsed without changing their wording; unmarked or mixed records are flagged for manual segmentation. FCOS prepares controlled batches of up to 20 related terms, preserving original text and mapping lineage. Activation requires every proposed clause version and rule in one whole-term revision to be approved, then atomically writes all three projections, styles, assignments, rules, compilations, and verification hashes. Rollback restores the preserved whole-term state.',
     },
     {
       title: 'Rule matching',
@@ -470,7 +470,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Controlled changes',
-      body: 'FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, uses all-or-none writes, invalidates targeted caches, and records idempotent redacted operation history. Salesforce independently rejects any direct edit that would make an active Terms Text, Confirmation remark, or Nomination remark differ from its live approved assignments.',
+      body: 'FCOS revalidates Salesforce immediately, rejects stale edits, routes mutations through the Salesforce-write safety gate, uses all-or-none writes, invalidates targeted caches, and records idempotent redacted operation history. Salesforce independently rejects any direct edit that would make an active projection differ from its approved whole-term revision.',
     },
     {
       title: 'Generated documents',
@@ -602,7 +602,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       { title: 'Visible to every active user', body: 'All active FCOS users may inspect current service status, operational KPIs, provider links, and connection details. This visibility does not grant configuration or provider-dashboard write access.' },
       { title: 'Status meaning', body: 'Health states combine direct probes and provider telemetry. Monitoring unavailable is distinct from Online; missing or failed telemetry is never presented as healthy.' },
-      { title: 'Connection order', body: 'The Connection Checklist requires an approved CLI and version first, then exact non-secret account, team, project, repository, or organization identity plus live permission probes, then target-locked CLI use. A provider connector or API remains preferred when capable; the Otto Chrome profile is allowed only to resolve an explicit authentication failure, after which the CLI must be reverified.' },
+      { title: 'Connection order', body: 'The Connection Checklist requires an approved CLI and version first, then exact non-secret account, team, project, repository, or organization identity plus live permission probes, then target-locked CLI use. Salesforce changes require matching Production, Devee, and QAT org IDs and identical metadata deployment to all three. A provider connector or API remains preferred when capable; the Otto Chrome profile is allowed only to resolve an explicit authentication failure, after which the CLI must be reverified.' },
       { title: 'Durable isolation', body: 'GitHub uses its provider-supported secure store under an ignored repo-local config root. Vercel and Supabase use pinned project CLIs, dedicated non-synchronizing macOS Keychain items, and repo-local target pins. Salesforce does not expose an alternate authorization home, so FCOS retains its protected host session while isolating the target-org pin and revalidating the production organization live.' },
       { title: 'Signed secret-safe records', body: 'The workstation runs provider checks in parallel, sanitizes their output through the shared connection policy, signs the result with a dedicated Ed25519 key, and publishes it to a service-only immutable Supabase table. System Health and the Universal Audit Trail expose only fixed status fields, safe identifiers, versions, permission names, latency, lifecycle warnings, timestamps, and revisions; tokens, CLI output, passwords, and credential material are excluded.' },
       { title: 'Non-sending checks', body: 'Email health verifies configuration and Microsoft token exchange without sending a message. Mailbox-scoped send authorization is conclusively confirmed only by an actual controlled delivery.' },

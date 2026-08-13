@@ -1,5 +1,6 @@
 public class SpecialTermAssignmentHandler {
     private static Boolean synchronizingProjection = false;
+    public static Boolean suppressRecompile = false;
 
     public static void validate(List<Special_Term_Clause_Assignment__c> assignments, Map<Id, Special_Term_Clause_Assignment__c> oldMap) {
         Set<Id> versionIds = new Set<Id>();
@@ -49,7 +50,7 @@ public class SpecialTermAssignmentHandler {
     }
 
     public static void recompile(Set<Id> specialTermIds) {
-        if (specialTermIds.isEmpty() || synchronizingProjection) return;
+        if (specialTermIds.isEmpty() || synchronizingProjection || suppressRecompile) return;
         List<Special_Term__c> terms = [
             SELECT Id, Clause_Structure_Status__c, Confirmation_Clause_Status__c, Nomination_Clause_Status__c
             FROM Special_Term__c

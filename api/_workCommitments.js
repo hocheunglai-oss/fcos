@@ -624,8 +624,9 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   }
 
   for (const notification of notificationsResult.notifications || []) {
-    if (!['email_router', 'system_error'].includes(notification.source)) continue;
+    if (!['email_router', 'system_error', 'special_terms'].includes(notification.source)) continue;
     if (notification.source === 'email_router' && !capabilities.emailRouter) continue;
+    if (notification.source === 'special_terms' && !capabilities.specialTerms) continue;
     commitments.push(
       normalizeCommitment(
         {
@@ -634,11 +635,15 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           kind: notification.type || 'operational_notification',
           title: notification.title,
           subtitle: notification.message || 'Review the recorded operational issue.',
-          status: notification.source === 'system_error' ? 'Needs review' : 'Warning',
+          status: notification.source === 'special_terms'
+            ? 'Approval required'
+            : notification.source === 'system_error'
+              ? 'Needs review'
+              : 'Warning',
           dueAt: notification.createdAt,
           urgency: 'needs_action',
           link: notification.link || '/',
-          actionLabel: 'Review issue',
+          actionLabel: notification.source === 'special_terms' ? 'Review Special Term' : 'Review issue',
         },
         today,
       ),

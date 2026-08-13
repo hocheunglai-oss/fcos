@@ -16,6 +16,8 @@ import {
 test('clause equivalence ignores only outer numbering, case, and harmless spacing', () => {
   assert.equal(normalizeClauseEquivalence(' 1.  BUYER shall pay.  '), "buyer shall pay.");
   assert.equal(canonicalClauseKey('1. BUYER shall pay.'), canonicalClauseKey('buyer shall pay.'));
+  assert.notEqual(canonicalClauseKey('Buyer’s obligation.'), canonicalClauseKey("Buyer's obligation."));
+  assert.notEqual(canonicalClauseKey('ＦＵＬＬ WIDTH TEXT.'), canonicalClauseKey('FULL WIDTH TEXT.'));
   assert.notEqual(canonicalClauseKey('Claim within 7 days.'), canonicalClauseKey('Claim within 21 days.'));
   assert.equal(shortNameKey('  Invoice   Due Without BDR '), 'invoice due without bdr');
 });

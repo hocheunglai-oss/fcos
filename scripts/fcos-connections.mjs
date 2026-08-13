@@ -34,6 +34,14 @@ function identifier(providerId, label) {
   return target(providerId).identifiers.find((entry) => entry.label === label)?.value || '';
 }
 
+function salesforceEnvironments() {
+  return target('salesforce').environments || [{ key: 'production', label: 'Production', alias: target('salesforce').profileName, orgId: identifier('salesforce', 'Production Org ID') || identifier('salesforce', 'Org ID'), isSandbox: false }];
+}
+
+function approvedSalesforceTargets() {
+  return new Set(salesforceEnvironments().flatMap((environment) => [environment.alias, environment.orgId]));
+}
+
 function executablePath(command) {
   return command.includes('/') ? path.resolve(REPO_ROOT, command) : command;
 }
@@ -558,26 +566,30 @@ function readSalesforcePin() {
 async function verifySalesforce(version, metadata, startedAt) {
   const report = baseReport('salesforce', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const [display, organization] = await Promise.all([
-    runCaptured('salesforce', ['org', 'display', '--target-org', target('salesforce').profileName, '--json']),
-    runCaptured('salesforce', [
-      'data', 'query',
-      '--target-org', target('salesforce').profileName,
-      '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1',
-      '--json',
-    ]),
-  ]);
-  if (!display.ok || !organization.ok) {
-    return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(display, organization) }, startedAt);
+  const checks = await Promise.all(salesforceEnvironments().map(async (environment) => {
+    const [display, organization] = await Promise.all([
+      runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json']),
+      runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']),
+    ]);
+    const parsed = safeJson(display.stdout);
+    const record = safeJson(organization.stdout)?.result?.records?.[0];
+    return {
+      environment,
+      display,
+      organization,
+      verified: display.ok && organization.ok
+        && parsed?.result?.id === environment.orgId
+        && parsed?.result?.connectedStatus === 'Connected'
+        && record?.Id === environment.orgId
+        && record?.IsSandbox === environment.isSandbox,
+    };
+  }));
+  if (checks.some((check) => !check.display.ok || !check.organization.ok)) {
+    return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(...checks.flatMap((check) => [check.display, check.organization])) }, startedAt);
   }
-  const parsed = safeJson(display.stdout);
-  const record = safeJson(organization.stdout)?.result?.records?.[0];
-  const exactIdentity = parsed?.result?.id === identifier('salesforce', 'Org ID')
-    && parsed?.result?.connectedStatus === 'Connected'
-    && record?.Id === identifier('salesforce', 'Org ID')
-    && record?.IsSandbox === false;
+  const exactIdentity = checks.every((check) => check.verified);
   const exactPin = readSalesforcePin() === target('salesforce').profileName;
-  const permissions = exactIdentity ? [...target('salesforce').requiredPermissions] : [];
+  const permissions = checks.flatMap((check) => check.verified ? [`${check.environment.key}.organization.read`, `${check.environment.key}.data.query`] : []);
   return finalizeReport({
     ...report,
     identityStatus: exactIdentity ? 'verified' : 'mismatch',
@@ -809,7 +821,7 @@ export function validateProviderArgs(providerId, args) {
     for (let index = 0; index < args.length; index += 1) {
       if (args[index] === '--target-org' || args[index] === '-o') {
         const supplied = args[index + 1];
-        if (![target('salesforce').profileName, identifier('salesforce', 'Org ID')].includes(supplied)) {
+        if (!approvedSalesforceTargets().has(supplied)) {
           throw new Error('The Salesforce command targets an unapproved org.');
         }
       }
@@ -822,17 +834,48 @@ async function runCommand(args) {
   const providerId = args[0];
   if (!PROVIDER_IDS.has(providerId)) throw new Error('Choose github, vercel, supabase, or salesforce before --.');
   const separator = args.indexOf('--');
-  const cliArgs = (separator >= 0 ? args.slice(separator + 1) : args.slice(1)).filter(Boolean);
-  validateProviderArgs(providerId, cliArgs);
-  const report = await verifyProvider(providerId);
-  writeSafeStatus([report]);
-  if (!providerOperational(report)) {
+  const rawCliArgs = (separator >= 0 ? args.slice(separator + 1) : args.slice(1)).filter(Boolean);
+  const bootstrapFlag = '--bootstrap-missing-salesforce-targets';
+  const bootstrapSalesforce = providerId === 'salesforce' && rawCliArgs.includes(bootstrapFlag);
+  const effectiveCliArgs = rawCliArgs.filter((arg) => arg !== bootstrapFlag);
+  if (bootstrapSalesforce) {
+    const approvedBootstrapCommand = [
+      'org', 'open',
+      '--target-org', 'source-salesforce',
+      '--browser', 'chrome',
+      '--path', 'lightning/setup/DataManagementCreateTestInstance/home',
+    ];
+    if (effectiveCliArgs.length !== approvedBootstrapCommand.length
+      || effectiveCliArgs.some((arg, index) => arg !== approvedBootstrapCommand[index])) {
+      throw new Error('Salesforce bootstrap is limited to the exact Production Sandbox Setup page.');
+    }
+  } else if (rawCliArgs.includes(bootstrapFlag)) {
+    throw new Error('Salesforce bootstrap can only be used with the Salesforce provider.');
+  }
+  validateProviderArgs(providerId, effectiveCliArgs);
+  const report = bootstrapSalesforce
+    ? null
+    : await verifyProvider(providerId);
+  if (report) writeSafeStatus([report]);
+  if (report && !providerOperational(report)) {
     console.error(`${providerId}: ${report.identityStatus}. CLI command blocked before execution.`);
     return exitCodeFor([report]);
   }
+  if (!report && providerId === 'salesforce') {
+    const production = salesforceEnvironments().find((environment) => environment.key === 'production');
+    const productionCheck = await Promise.all([
+      runCaptured('salesforce', ['org', 'display', '--target-org', production.alias, '--json']),
+      runCaptured('salesforce', ['data', 'query', '--target-org', production.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']),
+    ]);
+    const display = safeJson(productionCheck[0].stdout)?.result;
+    const organization = safeJson(productionCheck[1].stdout)?.result?.records?.[0];
+    if (!productionCheck.every((check) => check.ok) || display?.id !== production.orgId || organization?.Id !== production.orgId || organization?.IsSandbox !== false) {
+      throw new Error('Production Salesforce identity must be verified before authorizing missing sandbox targets.');
+    }
+  }
   const runtime = providerRuntime(providerId);
   return new Promise((resolve) => {
-    const child = spawn(runtime.command, [...cliArgs, ...runtime.injectedArgs], {
+    const child = spawn(runtime.command, [...effectiveCliArgs, ...runtime.injectedArgs], {
       cwd: REPO_ROOT,
       env: runtime.env,
       stdio: 'inherit',

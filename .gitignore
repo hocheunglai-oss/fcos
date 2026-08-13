@@ -37,3 +37,5 @@ dist-ssr
 .sf/
 .sfdx/
 supabase/.temp/
+playwright-report/
+test-results/

@@ -1,5 +1,6 @@
 public class SpecialTermTriggerHandler {
     public static Boolean allowCompiledProjectionUpdate = false;
+    public static Boolean allowRevisionLifecycleUpdate = false;
 
     public static void updateSpecialRemarks(List<Special_Term__c> specialTerms) {
         for (Special_Term__c specialTerm : specialTerms) {
@@ -66,6 +67,7 @@ public class SpecialTermTriggerHandler {
     }
 
     public static void validateStructuredTerms(List<Special_Term__c> specialTerms, Map<Id, Special_Term__c> oldMap) {
+        if (!allowRevisionLifecycleUpdate) validateRevisionLifecycle(specialTerms, oldMap);
         if (allowCompiledProjectionUpdate) return;
         Set<Id> activeTermIds = new Set<Id>();
         for (Special_Term__c term : specialTerms) {
@@ -114,6 +116,37 @@ public class SpecialTermTriggerHandler {
             if (term.Nomination_Clause_Status__c == 'Active'
                 && !validProjection(term.Special_Remark_in_Nomination__c, term.Nomination_Compiled_Hash__c, expected.get(SpecialTermClauseCompiler.NOMINATION_REMARK))) {
                 term.addError('The Nomination special remark is compiled from approved FCOS clause assignments and cannot be edited directly.');
+            }
+        }
+    }
+
+    private static void validateRevisionLifecycle(List<Special_Term__c> specialTerms, Map<Id, Special_Term__c> oldMap) {
+        Set<Id> revisionIds = new Set<Id>();
+        for (Special_Term__c term : specialTerms) if (term.Current_Revision__c != null) revisionIds.add(term.Current_Revision__c);
+        Map<Id, Special_Term_Revision__c> revisions = revisionIds.isEmpty() ? new Map<Id, Special_Term_Revision__c>() : new Map<Id, Special_Term_Revision__c>([
+            SELECT Id, Special_Term__c, Status__c FROM Special_Term_Revision__c WHERE Id IN :revisionIds
+        ]);
+        for (Special_Term__c term : specialTerms) {
+            Special_Term__c oldTerm = oldMap == null ? null : oldMap.get(term.Id);
+            if (oldTerm != null && (term.Approval_Status__c != oldTerm.Approval_Status__c || term.Current_Revision__c != oldTerm.Current_Revision__c)) {
+                Special_Term_Revision__c proposed = revisions.get(term.Current_Revision__c);
+                Boolean legalLegacyInitialization = oldTerm.Approval_Status__c == null
+                    && term.Approval_Status__c == 'Legacy'
+                    && oldTerm.Current_Revision__c == null
+                    && term.Current_Revision__c == null;
+                Boolean legalDraftLink = term.Approval_Status__c == 'Draft'
+                    && proposed != null
+                    && proposed.Special_Term__c == term.Id
+                    && proposed.Status__c == 'In Review'
+                    && oldTerm.Approval_Status__c != 'Approved';
+                if (!legalLegacyInitialization && !legalDraftLink) {
+                    term.addError('Special Term approval lifecycle and current revision can only change through the controlled FCOS revision action.');
+                    continue;
+                }
+            }
+            if (term.Approval_Status__c == 'Approved') {
+                Special_Term_Revision__c revision = revisions.get(term.Current_Revision__c);
+                if (revision == null || revision.Special_Term__c != term.Id || revision.Status__c != 'Active') term.addError('Approved Special Terms must reference their active controlled revision.');
             }
         }
     }

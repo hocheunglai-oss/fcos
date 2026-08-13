@@ -13,8 +13,14 @@ function ClauseProjectionSection({
   onAssignmentsChange,
   onChanged,
   onError,
+  wholeTermRevision = false,
 }) {
-  const projectionDetail = detail?.projections?.[projection];
+  const sourceProjection = detail?.projections?.[projection];
+  const projectionDetail = sourceProjection ? {
+    ...sourceProjection,
+    activeAssignments: sourceProjection.assignments || sourceProjection.draftAssignments || sourceProjection.rows || sourceProjection.activeAssignments || [],
+    proposedAssignments: sourceProjection.proposedAssignments || [],
+  } : null;
   if (!projectionDetail) return null;
   const isTermsText = projection === 'termsText';
 
@@ -51,14 +57,14 @@ function ClauseProjectionSection({
         </div>
       )}
 
-      <MigrationReviewPanel
+      {!wholeTermRevision ? <MigrationReviewPanel
         detail={detail}
         projection={projection}
         categoryOptions={categoryOptions}
         canApprove={canApprove}
         onChanged={onChanged}
         onError={onError}
-      />
+      /> : null}
     </section>
   );
 }

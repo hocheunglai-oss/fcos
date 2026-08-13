@@ -53,6 +53,8 @@ test('verified runner blocks secret output and target overrides', () => {
   assert.throws(() => validateProviderArgs('supabase', ['db', 'push', '--project-ref', 'wrong']), /unapproved project ref/);
   assert.throws(() => validateProviderArgs('salesforce', ['org', 'display']), /expose access tokens/);
   assert.throws(() => validateProviderArgs('salesforce', ['data', 'query', '-o', 'other-org']), /unapproved org/);
+  assert.equal(validateProviderArgs('salesforce', ['data', 'query', '-o', 'fcos-devee']), true);
+  assert.equal(validateProviderArgs('salesforce', ['data', 'query', '--target-org', '00D1s0000008lFEEAY']), true);
   assert.throws(() => validateProviderArgs('supabase', ['login', '--token', 'secret']), /Secret-bearing CLI flags/);
 });
 

@@ -62,6 +62,7 @@ test('Salesforce owns priority while FCOS protects mutations and deletion', () =
   assert.match(service, /referenceId: 'newRule'/);
   assert.match(service, /composite\/sobjects\?ids=/);
   assert.match(service, /confirmationName/);
+  assert.match(service, /SPECIAL_TERMS_RETIRE_REQUIRED/);
   assert.doesNotMatch(service, /sanitizeRichText/);
   assert.match(service, /special_terms_operations/);
   assert.match(service, /operation_status === 'succeeded'/);
@@ -92,11 +93,29 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(page, /Copy Confirmation special remark/);
   assert.match(page, /Copy Nomination special remark/);
   assert.match(page, /richTextToCopyText/);
-  assert.match(page, /<ClauseProjectionSection/);
+  assert.match(page, /<WholeTermRevisionPanel/);
+  assert.match(page, /<MigrationBatchPanel/);
+  assert.match(page, /canDraft \?\? workspace\.canManage/);
+  assert.match(page, /Migration Queue/);
   assert.match(page, /<ClauseBankPanel/);
   const projectionSection = read('src/components/special-terms/ClauseProjectionSection.jsx');
   assert.match(projectionSection, /<ClauseComposer/);
   assert.match(projectionSection, /<MigrationReviewPanel/);
+  assert.match(projectionSection, /wholeTermRevision/);
+  const revisionPanel = read('src/components/special-terms/WholeTermRevisionPanel.jsx');
+  assert.match(revisionPanel, /specialTermRevisionSave/);
+  assert.match(revisionPanel, /specialTermRevisionApprove/);
+  assert.match(revisionPanel, /specialTermRevisionRollback/);
+  assert.match(revisionPanel, /Start whole-term draft/);
+  assert.match(revisionPanel, /Preserved live Salesforce legacy projections/);
+  assert.match(revisionPanel, /all three projections and the reviewed rules/);
+  const batchPanel = read('src/components/special-terms/MigrationBatchPanel.jsx');
+  assert.match(batchPanel, /specialTermMigrationBatchList/);
+  assert.match(batchPanel, /At most 20 related terms per batch/);
+  assert.match(batchPanel, /Manual segmentation/);
+  const clauseBank = read('src/components/special-terms/ClauseBankPanel.jsx');
+  assert.match(clauseBank, /value: 'Legacy', label: 'Legacy'/);
+  assert.match(clauseBank, /clause\.provenance/);
   assert.match(page, /<MigrationInventoryPanel/);
   assert.doesNotMatch(page, /specialTermEditorValue\(termForm\.termsText\)/);
   assert.match(clauseService, /compileClauseList/);
@@ -121,4 +140,13 @@ test('Special Terms owns the Salesforce response metadata used by its status bar
 
   assert.ok(stateDeclaration >= 0, 'Special Terms must declare response metadata in the page component');
   assert.ok(stateDeclaration < loadCallback, 'response metadata state must be in scope for the load callback');
+});
+
+test('System Health exposes redacted Special-Term migration readiness', () => {
+  const handler = read('api/functions/[name].js');
+  assert.match(handler, /async function specialTermsMigrationHealthRow/);
+  assert.match(handler, /Special-Term Clause Migration/);
+  assert.match(handler, /aiDraftingConfigured: Boolean\(process\.env\.OPENAI_API_KEY\)/);
+  assert.match(handler, /cachedHealthCheck\('special-terms-migration'/);
+  assert.doesNotMatch(handler, /specialTermsMigrationHealthRow[\s\S]{0,2500}Clause_Text__c/);
 });

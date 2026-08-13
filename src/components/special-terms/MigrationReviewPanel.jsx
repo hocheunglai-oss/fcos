@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, SplitSquareVertical } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Sparkles, SplitSquareVertical } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -14,7 +14,7 @@ function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export default function MigrationReviewPanel({ detail, projection = 'termsText', categoryOptions = [], canApprove, onChanged, onError }) {
+export default function MigrationReviewPanel({ detail, projection = 'termsText', categoryOptions = [], canApprove, onChanged, onError, draftOnly = false }) {
   const [preview, setPreview] = useState(null);
   const [reason, setReason] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
@@ -38,12 +38,35 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
   const saveReview = async () => {
     setBusy(true);
     onError?.('');
-    const response = await appClient.functions.invoke('specialTermMigrationSave', { termId: term.id, projection, style: preview.style, expectedLastModifiedAt: preview.expectedLastModifiedAt, auditReason: reason, segments: preview.segments.map((segment) => ({ shortName: segment.shortName, category: segment.category, clauseText: segment.clauseText, selectedClauseId: segment.selectedClauseId || null, selectedClauseVersionId: segment.selectedClauseVersionId || null })), operationId: operationId() }, { cache: false });
+    const response = await appClient.functions.invoke('specialTermMigrationSave', { termId: term.id, projection, style: preview.style, expectedLastModifiedAt: preview.expectedLastModifiedAt, auditReason: reason, segments: preview.segments.map((segment) => ({ shortName: segment.shortName, category: segment.category, clauseText: segment.clauseText, sourceClauseText: segment.sourceClauseText || segment.clauseText, legacySourceKey: segment.legacySourceKey, draftSource: segment.draftSource, aiModel: segment.aiModel, aiResponseId: segment.aiResponseId, selectedClauseId: segment.selectedClauseId || null, selectedClauseVersionId: segment.selectedClauseVersionId || null })), operationId: operationId() }, { cache: false });
     if (response.data?.error) onError?.(response.data.error);
     else {
       setPreview(null);
       setReason('');
       await onChanged?.(preview.segments.length ? `${projectionDetail.label} review saved. Draft clauses now await approval.` : `Empty ${projectionDetail.label} confirmed and structured with zero clauses.`);
+    }
+    setBusy(false);
+  };
+
+  const generateProfessionalDrafts = async () => {
+    const candidates = (preview?.segments || []).filter((segment) => !segment.selectedClauseId);
+    if (!candidates.length) return;
+    if (candidates.length > 20) {
+      onError?.('This projection exceeds the 20-clause AI review limit. Split and review its clause boundaries first.');
+      return;
+    }
+    setBusy(true);
+    onError?.('');
+    const response = await appClient.functions.invoke('specialTermClauseAiDraft', { termId: term.id, groups: candidates.map((segment, index) => ({ id: String(index), clauseText: segment.sourceClauseText || segment.clauseText })), operationId: operationId() }, { cache: false });
+    if (response.data?.error) onError?.(response.data.error);
+    else {
+      const drafts = new Map((response.data?.drafts || []).map((draft) => [draft.id, draft]));
+      let candidateIndex = 0;
+      setPreview((current) => ({ ...current, segments: current.segments.map((segment) => {
+        if (segment.selectedClauseId) return segment;
+        const draft = drafts.get(String(candidateIndex++));
+        return draft ? { ...segment, shortName: draft.shortName, category: draft.category, clauseText: draft.proposedText, draftSource: draft.draftSource, aiModel: draft.aiModel, aiResponseId: draft.aiResponseId, aiRationale: draft.rationale } : segment;
+      }) }));
     }
     setBusy(false);
   };
@@ -68,8 +91,8 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-700" /><strong className="text-sm">{projectionDetail.label} migration</strong><Badge variant="outline">{projectionDetail.status}</Badge>{projection !== 'termsText' ? <Badge variant="secondary">{projectionDetail.style}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">The original {projectionDetail.label} remains live until every proposed clause version is approved and activation succeeds atomically.</p></div>
         {projectionDetail.status === 'Legacy' ? <Button type="button" variant="outline" onClick={loadPreview} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <SplitSquareVertical className="mr-2 h-4 w-4" />}Prepare bullet review</Button> : null}
-        {projectionDetail.status === 'In Review' ? <Button type="button" onClick={() => setConfirmAction({ type: 'activate', reason: '' })} disabled={busy || !migrationReady}><CheckCircle2 className="mr-2 h-4 w-4" />Activate clauses</Button> : null}
-        {projectionDetail.status === 'Active' && projectionDetail.originalText ? <Button type="button" variant="outline" onClick={() => setConfirmAction({ type: 'rollback', reason: '' })} disabled={busy}><RotateCcw className="mr-2 h-4 w-4" />Rollback migration</Button> : null}
+        {!draftOnly && projectionDetail.status === 'In Review' ? <Button type="button" onClick={() => setConfirmAction({ type: 'activate', reason: '' })} disabled={busy || !migrationReady}><CheckCircle2 className="mr-2 h-4 w-4" />Activate clauses</Button> : null}
+        {!draftOnly && projectionDetail.status === 'Active' && projectionDetail.originalText ? <Button type="button" variant="outline" onClick={() => setConfirmAction({ type: 'rollback', reason: '' })} disabled={busy}><RotateCcw className="mr-2 h-4 w-4" />Rollback migration</Button> : null}
       </div>
       {projectionDetail.status === 'In Review' ? <div className="space-y-2">{proposed.map((row, index) => <div key={row.id} className="flex items-start gap-3 rounded-md border border-border bg-background p-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">{projectionDetail.style === 'Hyphen' ? '–' : index + 1}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{row.shortName}</strong><Badge variant={row.versionStatus === 'Approved' ? 'default' : 'secondary'}>{row.versionStatus} v{row.revisionNumber}</Badge></div><p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">{row.clauseText}</p></div></div>)}{!migrationReady ? <p className="text-xs text-amber-900">Approve every Draft clause in the Clause Bank before activation.</p> : null}</div> : null}
 
@@ -77,6 +100,7 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
         <DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto">
           <DialogHeader><DialogTitle>Review {preview?.projectionLabel} clauses for {preview?.termName}</DialogTitle><DialogDescription>Confirm boundaries, output style, and short names. Wording remains exactly as read from Salesforce unless you explicitly change it here.</DialogDescription></DialogHeader>
           {preview?.manualReviewRequired ? <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{preview.reason}</AlertDescription></Alert> : null}
+          {preview?.segments?.some((segment) => !segment.selectedClauseId) ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 p-3"><p className="text-xs text-muted-foreground">Generate consistent professional proposals for up to 20 unmatched clauses. Every proposal remains a Draft and retains its legacy source lineage.</p><Button type="button" variant="outline" onClick={generateProfessionalDrafts} disabled={busy}><Sparkles className="mr-2 h-4 w-4" />Generate professional drafts</Button></div> : null}
           {projection !== 'termsText' ? <div className="max-w-xs space-y-1.5"><Label>Bullet style</Label><Select value={preview?.style || 'Hyphen'} onValueChange={(style) => setPreview((current) => ({ ...current, style }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Hyphen">Hyphen (-)</SelectItem><SelectItem value="Numbered">Numbered (1, 2, 3)</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">The marker is generated automatically and is not part of clause wording.</p></div> : null}
           <div className="space-y-3">{preview?.segments.map((segment, index) => (
             <section key={`${index}:${segment.exactMatchClauseId || 'new'}`} className="grid gap-3 rounded-lg border border-border p-3 md:grid-cols-[2.5rem_1fr]">
@@ -89,6 +113,7 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
                 <div className="space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2"><Label>Clause wording</Label>{segment.selectedClauseId ? <Badge variant="outline">Bank clause selected</Badge> : <Badge variant="secondary">Separate Draft candidate</Badge>}</div>
                   <Textarea value={segment.clauseText} rows={6} onChange={(event) => setPreview((current) => ({ ...current, segments: current.segments.map((row, rowIndex) => rowIndex === index ? { ...row, clauseText: event.target.value, selectedClauseId: null, selectedClauseVersionId: null } : row) }))} />
+                  {segment.aiRationale ? <p className="text-xs text-muted-foreground">AI draft rationale: {segment.aiRationale}</p> : null}
                 </div>
                 {segment.selectedClauseId ? <Button type="button" size="sm" variant="outline" onClick={() => setPreview((current) => ({ ...current, segments: current.segments.map((row, rowIndex) => rowIndex === index ? { ...row, selectedClauseId: null, selectedClauseVersionId: null } : row) }))}>Keep as a separate clause</Button> : null}
                 {segment.nearMatches?.length ? <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/40 p-3"><p className="text-xs font-medium text-amber-900">Near bank wording — compare side by side; never merge material differences.</p>{segment.nearMatches.map((candidate) => <div key={candidate.versionId} className="space-y-3 rounded-md border border-border bg-background p-3"><div className="flex flex-wrap items-center gap-2"><strong className="text-xs">{candidate.shortName}</strong><Badge variant="outline">v{candidate.revisionNumber}</Badge>{candidate.materialDifference ? <Badge variant="destructive">Materially different</Badge> : <Badge variant="secondary">Review equivalence</Badge>}</div><div className="grid gap-3 md:grid-cols-2"><section className="rounded-md border border-border p-2"><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Original clause</p><p className="mt-2 whitespace-pre-wrap text-xs">{segment.clauseText}</p></section><section className="rounded-md border border-amber-200 bg-amber-50/30 p-2"><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Bank candidate</p><p className="mt-2 whitespace-pre-wrap text-xs">{candidate.clauseText}</p></section></div><div className="flex justify-end"><Button type="button" size="sm" variant="outline" disabled={candidate.materialDifference || candidate.status === 'Retired'} onClick={() => setPreview((current) => ({ ...current, segments: current.segments.map((row, rowIndex) => rowIndex === index ? { ...row, selectedClauseId: candidate.clauseId, selectedClauseVersionId: candidate.versionId, shortName: candidate.shortName, category: candidate.category } : row) }))}>Use bank clause</Button></div></div>)}</div> : null}

@@ -46,9 +46,6 @@ export function stripOuterClauseNumber(value) {
 
 export function normalizeClauseEquivalence(value) {
   return stripOuterClauseNumber(value)
-    .normalize('NFKC')
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
     .toLocaleLowerCase('en')
     .replace(/\s+/g, ' ')
     .trim();

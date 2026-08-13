@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Check, Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
@@ -9,8 +9,10 @@ import DataStatus from '@/components/common/DataStatus';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import ClauseBankPanel from '@/components/special-terms/ClauseBankPanel';
-import ClauseProjectionSection from '@/components/special-terms/ClauseProjectionSection';
 import MigrationInventoryPanel from '@/components/special-terms/MigrationInventoryPanel';
+import MigrationBatchPanel from '@/components/special-terms/MigrationBatchPanel';
+import WholeTermRevisionPanel from '@/components/special-terms/WholeTermRevisionPanel';
+import SpecialTermLookupField from '@/components/special-terms/SpecialTermLookupField';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -79,70 +81,6 @@ function conditionSummary(rule) {
     rule.productName || null,
     rule.country || null,
   ].filter(Boolean);
-}
-
-function LookupField({ label, kind, value, onChange, placeholder }) {
-  const [query, setQuery] = useState('');
-  const [options, setOptions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (value) setQuery('');
-  }, [value]);
-
-  useEffect(() => {
-    if (value || query.trim().length < 2) {
-      setOptions([]);
-      setLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      setLoading(true);
-      setError('');
-      const response = await appClient.functions.invoke('specialTermsOptions', { kind, query: query.trim() }, { cache: false });
-      if (cancelled) return;
-      if (response.data?.error) {
-        setError(response.data.error);
-        setOptions([]);
-      } else {
-        setOptions(response.data?.options || []);
-      }
-      setLoading(false);
-    }, 250);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [kind, query, value]);
-
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {value ? (
-        <div className="flex min-h-10 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm">
-          <span className="min-w-0"><strong className="block truncate font-medium">{value.label}</strong>{value.secondary && <small className="block truncate text-muted-foreground">{value.secondary}</small>}</span>
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => onChange(null)} title={`Clear ${label}`}><X className="h-4 w-4" /></Button>
-        </div>
-      ) : (
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={placeholder} className="pl-9" />
-          {(loading || error || options.length > 0) && (
-            <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
-              {loading && <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching...</div>}
-              {error && <div className="px-3 py-2 text-xs text-destructive">{error}</div>}
-              {!loading && options.map((option) => (
-                <button key={option.id} type="button" className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-muted" onClick={() => onChange(option)}>
-                  <strong className="block font-medium">{option.label}</strong>
-                  {option.secondary && <small className="text-muted-foreground">{option.secondary}</small>}
-                </button>
-              ))}
-              {!loading && !error && query.trim().length >= 2 && options.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No matching records.</div>}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export default function SpecialTerms() {
@@ -348,21 +286,6 @@ export default function SpecialTerms() {
     await load(true);
   };
 
-  const updateProjectionAssignments = useCallback((projection, activeAssignments) => {
-    setTermDetail((current) => {
-      if (!current?.projections?.[projection]) return current;
-      const next = {
-        ...current,
-        projections: {
-          ...current.projections,
-          [projection]: { ...current.projections[projection], activeAssignments },
-        },
-      };
-      if (projection === 'termsText') next.activeAssignments = activeAssignments;
-      return next;
-    });
-  }, []);
-
   const openRule = (rule = null) => {
     setSaveAttempted(false);
     setRuleForm(rule ? {
@@ -373,7 +296,7 @@ export default function SpecialTerms() {
     port: rule.portId ? { id: rule.portId, label: rule.portName, secondary: rule.portCountry || '' } : null,
     product: rule.productId ? { id: rule.productId, label: rule.productName, secondary: '' } : null,
     expectedLastModifiedAt: rule.lastModifiedAt,
-    } : { ...EMPTY_RULE, specialTermId: workspace?.terms?.[0]?.id || '' });
+    } : { ...EMPTY_RULE, specialTermId: (workspace?.terms || []).find((term) => term.revisionStatus !== 'Approved')?.id || '' });
   };
 
   const saveTerm = async () => {
@@ -381,23 +304,13 @@ export default function SpecialTerms() {
     if (termValidationIssues.length) return;
     setBusy(true);
     setError('');
-    const compositions = Object.values(termDetail?.projections || {})
-      .filter((projection) => projection.status === 'Active')
-      .map((projection) => ({ projection: projection.key, style: projection.style, versionIds: projection.activeAssignments.map((assignment) => assignment.clauseVersionId) }));
-    const structured = Boolean(termForm.id && compositions.length);
-    const functionName = structured ? 'specialTermCompositionSave' : 'specialTermsSave';
-    const payload = structured ? {
-      ...termForm,
-      termId: termForm.id,
-      compositions,
-      operationId: operationId(),
-    } : { ...termForm, operationId: operationId() };
-    const response = await appClient.functions.invoke(functionName, payload, { cache: false });
+    const payload = { ...termForm, operationId: operationId() };
+    const response = await appClient.functions.invoke('specialTermsSave', payload, { cache: false });
     if (response.data?.error) setError(response.data.error);
     else {
       setTermForm(null);
       setTermDetail(null);
-      setMessage(termForm.id ? structured ? 'Special Term clause projections updated in Salesforce.' : 'Special Term metadata updated in Salesforce.' : 'Special Term created in Salesforce. Reopen it to review and add approved clauses.');
+      setMessage(termForm.id ? 'Special Term metadata updated in Salesforce. Contractual wording remains in its whole-term revision.' : 'Special Term created in Salesforce. Reopen it to prepare one governed whole-term revision.');
       await load(true);
     }
     setBusy(false);
@@ -454,7 +367,7 @@ export default function SpecialTerms() {
           <div className="flex flex-wrap gap-2">
             <PageMethodology {...SPECIAL_TERMS_METHODOLOGY} />
             <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
-            {workspace?.canManage && ['terms', 'rules'].includes(activeTab) ? <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button> : null}
+            {(workspace?.canDraft ?? workspace?.canManage) && ['terms', 'rules'].includes(activeTab) ? <Button onClick={() => activeTab === 'terms' ? openTerm() : openRule()}><Plus className="mr-2 h-4 w-4" />{activeTab === 'terms' ? 'Add Special Term' : 'Add Rule'}</Button> : null}
           </div>
         )}
       />
@@ -467,7 +380,8 @@ export default function SpecialTerms() {
           { id: 'terms', label: 'Terms', count: workspace?.terms?.length || 0 },
           { id: 'rules', label: 'Rules', count: workspace?.rules?.length || 0 },
           { id: 'clauses', label: 'Clause Bank' },
-          ...(workspace?.canApproveClauses ? [{ id: 'migration', label: 'Migration Inventory' }] : []),
+          { id: 'migration', label: 'Migration Queue' },
+          ...(workspace?.canApproveClauses ? [{ id: 'inventory', label: 'Migration Inventory' }] : []),
         ]}
         value={activeTab}
         onValueChange={setActiveTab}
@@ -583,8 +497,8 @@ export default function SpecialTerms() {
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <Button variant="ghost" size="icon" onClick={() => downloadTerms([term])} disabled={exporting} title="Download Special Term PDF" aria-label={`Download ${term.name} PDF`}><Download className="h-4 w-4" /></Button>}
-                      {workspace.canManage && <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button>}
-                      {workspace.canManage && <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button>}
+                      {(workspace.canDraft ?? workspace.canManage) ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button> : null}
+                      {(workspace.canDraft ?? workspace.canManage) && !['Approved', 'Retired'].includes(term.revisionStatus) ? <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button> : null}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -599,7 +513,7 @@ export default function SpecialTerms() {
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[1050px]">
             <TableHeader><TableRow><TableHead>Rule</TableHead><TableHead>Special Term</TableHead><TableHead>Audience</TableHead><TableHead>Conditions</TableHead><TableHead>Priority</TableHead><TableHead>Last Modified</TableHead><TableHead className="w-24" /></TableRow></TableHeader>
-            <TableBody>{filteredRules.map((rule) => <TableRow key={rule.id}><TableCell><a href={salesforceUrl(workspace.instanceUrl, rule.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{rule.name}<ExternalLink className="h-3 w-3" /></a></TableCell><TableCell>{rule.specialTermName}</TableCell><TableCell><Badge variant="outline">{rule.audience || 'Not set'}</Badge></TableCell><TableCell><div className="flex max-w-xl flex-wrap gap-1.5">{conditionSummary(rule).map((condition) => <Badge key={condition} variant="secondary">{condition}</Badge>)}</div></TableCell><TableCell>{rule.priority ?? 'Pending Salesforce'}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDateTime(rule.lastModifiedAt)}</TableCell><TableCell>{workspace.canManage && <div className="flex justify-end gap-1"><Button variant="ghost" size="icon" onClick={() => openRule(rule)} title="Edit Rule"><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'rule', row: rule }); setDeleteReason(''); }} title="Remove Rule"><Trash2 className="h-4 w-4" /></Button></div>}</TableCell></TableRow>)}</TableBody>
+            <TableBody>{filteredRules.map((rule) => { const term = (workspace.terms || []).find((row) => row.id === rule.specialTermId); const governed = term?.revisionStatus === 'Approved'; return <TableRow key={rule.id}><TableCell><a href={salesforceUrl(workspace.instanceUrl, rule.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{rule.name}<ExternalLink className="h-3 w-3" /></a></TableCell><TableCell>{rule.specialTermName}</TableCell><TableCell><Badge variant="outline">{rule.audience || 'Not set'}</Badge></TableCell><TableCell><div className="flex max-w-xl flex-wrap gap-1.5">{conditionSummary(rule).map((condition) => <Badge key={condition} variant="secondary">{condition}</Badge>)}</div></TableCell><TableCell>{rule.priority ?? 'Pending Salesforce'}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDateTime(rule.lastModifiedAt)}</TableCell><TableCell>{(workspace.canDraft ?? workspace.canManage) ? <div className="flex justify-end gap-1">{governed ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit in whole-term revision"><ShieldCheck className="h-4 w-4" /></Button> : <><Button variant="ghost" size="icon" onClick={() => openRule(rule)} title="Edit Rule"><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'rule', row: rule }); setDeleteReason(''); }} title="Remove Rule"><Trash2 className="h-4 w-4" /></Button></>}</div> : null}</TableCell></TableRow>; })}</TableBody>
           </Table>
           {!filteredRules.length && <div className="p-10 text-center text-sm text-muted-foreground">No matching Special Term rules.</div>}
         </div>
@@ -607,14 +521,15 @@ export default function SpecialTerms() {
 
       {!loading && workspace && activeTab === 'clauses' ? (
         <ClauseBankPanel
-          canManage={workspace.canManage}
+          canManage={workspace.canDraft ?? workspace.canManage}
           canApprove={workspace.canApproveClauses}
           categoryOptions={workspace.clauseCategoryOptions || []}
           onChanged={() => load(true)}
         />
       ) : null}
 
-      {!loading && workspace && activeTab === 'migration' && workspace.canApproveClauses ? <MigrationInventoryPanel /> : null}
+      {!loading && workspace && activeTab === 'migration' ? <MigrationBatchPanel canDraft={workspace.canDraft ?? workspace.canManage} canApprove={workspace.canApproveClauses} onOpenTerm={openTerm} /> : null}
+      {!loading && workspace && activeTab === 'inventory' && workspace.canApproveClauses ? <MigrationInventoryPanel /> : null}
 
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => { if (!open && !busy) { setTermForm(null); setTermDetail(null); } }}>
         <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
@@ -628,32 +543,29 @@ export default function SpecialTerms() {
               </div>
               {termForm.id ? (
                 <div className="space-y-4">
-                  {['termsText', 'confirmationRemark', 'nominationRemark'].map((projection) => (
-                    <ClauseProjectionSection
-                      key={projection}
-                      detail={termDetail}
-                      projection={projection}
-                      canManage={workspace?.canManage}
-                      canApprove={workspace?.canApproveClauses}
-                      categoryOptions={workspace?.clauseCategoryOptions || []}
-                      onAssignmentsChange={updateProjectionAssignments}
-                      onError={setError}
-                      onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)}
-                    />
-                  ))}
+                  <WholeTermRevisionPanel
+                    detail={termDetail}
+                    canDraft={workspace?.canDraft ?? workspace?.canManage}
+                    canApprove={workspace?.canApproveClauses}
+                    categoryOptions={workspace?.clauseCategoryOptions || []}
+                    audienceOptions={workspace?.audienceOptions || []}
+                    countryOptions={workspace?.countryOptions || []}
+                    onError={setError}
+                    onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)}
+                  />
                 </div>
               ) : <Alert><AlertDescription>Save the Special Term first, then reopen it to review legacy wording and add approved clauses to each projection.</AlertDescription></Alert>}
               <WorkflowValidationSummary issues={saveAttempted ? termValidationIssues : []} />
             </div>
           )}
-          <DialogFooter><Button variant="outline" onClick={() => { setTermForm(null); setTermDetail(null); }} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy || termLoading}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => { setTermForm(null); setTermDetail(null); }} disabled={busy}>Cancel</Button><Button onClick={saveTerm} disabled={busy || termLoading || !(workspace?.canDraft ?? workspace?.canManage)}>{busy ? 'Saving...' : termForm?.id ? 'Save metadata' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={Boolean(ruleForm)} onOpenChange={(open) => !open && !busy && setRuleForm(null)}>
         <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto">
           <DialogHeader><DialogTitle>{ruleForm?.id ? 'Edit Special Term Rule' : 'Add Special Term Rule'}</DialogTitle><DialogDescription>Set the dimensions Salesforce will evaluate. Salesforce calculates priority after saving.</DialogDescription></DialogHeader>
-          {ruleForm && <div className="grid gap-4 md:grid-cols-2"><div className="space-y-1.5"><Label>Special Term</Label><Select value={ruleForm.specialTermId} onValueChange={(specialTermId) => setRuleForm((current) => ({ ...current, specialTermId }))}><SelectTrigger><SelectValue placeholder="Select a term" /></SelectTrigger><SelectContent>{(workspace?.terms || []).map((term) => <SelectItem key={term.id} value={term.id}>{term.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Audience</Label><Select value={ruleForm.audience} onValueChange={(audience) => setRuleForm((current) => ({ ...current, audience }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(workspace?.audienceOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><LookupField label="Account" kind="account" value={ruleForm.account} onChange={(account) => setRuleForm((current) => ({ ...current, account }))} placeholder="Search Account name or CL Key" /><LookupField label="Port" kind="port" value={ruleForm.port} onChange={(port) => setRuleForm((current) => ({ ...current, port }))} placeholder="Search port name" /><LookupField label="Product" kind="product" value={ruleForm.product} onChange={(product) => setRuleForm((current) => ({ ...current, product }))} placeholder="Search active product" /><div className="space-y-1.5"><Label>Country</Label><Select value={ruleForm.country} onValueChange={(country) => setRuleForm((current) => ({ ...current, country }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{(workspace?.countryOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><p className="md:col-span-2 text-xs text-muted-foreground">Leave dimensions empty when they should not restrict this rule. At least one Account, Port, Product, or Country is required.</p><div className="md:col-span-2"><WorkflowValidationSummary issues={saveAttempted ? ruleValidationIssues : []} /></div></div>}
+          {ruleForm && <div className="grid gap-4 md:grid-cols-2"><div className="space-y-1.5"><Label>Special Term</Label><Select value={ruleForm.specialTermId} onValueChange={(specialTermId) => setRuleForm((current) => ({ ...current, specialTermId }))}><SelectTrigger><SelectValue placeholder="Select a term" /></SelectTrigger><SelectContent>{(workspace?.terms || []).filter((term) => term.revisionStatus !== 'Approved' || term.id === ruleForm.specialTermId).map((term) => <SelectItem key={term.id} value={term.id}>{term.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Audience</Label><Select value={ruleForm.audience} onValueChange={(audience) => setRuleForm((current) => ({ ...current, audience }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(workspace?.audienceOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><SpecialTermLookupField label="Account" kind="account" value={ruleForm.account} onChange={(account) => setRuleForm((current) => ({ ...current, account }))} placeholder="Search Account name or CL Key" /><SpecialTermLookupField label="Port" kind="port" value={ruleForm.port} onChange={(port) => setRuleForm((current) => ({ ...current, port }))} placeholder="Search port name" /><SpecialTermLookupField label="Product" kind="product" value={ruleForm.product} onChange={(product) => setRuleForm((current) => ({ ...current, product }))} placeholder="Search active product" /><div className="space-y-1.5"><Label>Country</Label><Select value={ruleForm.country} onValueChange={(country) => setRuleForm((current) => ({ ...current, country }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{(workspace?.countryOptions || []).map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><p className="md:col-span-2 text-xs text-muted-foreground">Leave dimensions empty when they should not restrict this rule. At least one Account, Port, Product, or Country is required.</p><div className="md:col-span-2"><WorkflowValidationSummary issues={saveAttempted ? ruleValidationIssues : []} /></div></div>}
           <DialogFooter><Button variant="outline" onClick={() => setRuleForm(null)} disabled={busy}>Cancel</Button><Button onClick={saveRule} disabled={busy}>{busy ? 'Saving...' : 'Save to Salesforce'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>

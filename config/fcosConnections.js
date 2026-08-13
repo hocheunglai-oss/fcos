@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 2,
+  policyVersion: 3,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -130,12 +130,17 @@ const connectionPolicy = {
       cli: 'sf',
       executable: 'sf',
       identifiers: [
-        { label: 'Environment', value: 'Production' },
-        { label: 'Org ID', value: '00D2x000000Ei4oEAC' },
-        { label: 'Alias', value: 'source-salesforce' },
+        { label: 'Production Org ID', value: '00D2x000000Ei4oEAC' },
+        { label: 'Production alias', value: 'source-salesforce' },
+        { label: 'Devee Org ID', value: '00D1m0000008kioEAA' },
+        { label: 'Devee alias', value: 'fcos-devee' },
+        { label: 'Devee username', value: 'vincent@cosulich.com.hk.devee' },
+        { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
+        { label: 'QAT alias', value: 'fcos-qat' },
+        { label: 'QAT username', value: 'vincent-mndg@force.com.qat' },
       ],
       cliVersion: { minimum: '2.145.6', maximumExclusive: '3.0.0' },
-      requiredPermissions: ['organization.read', 'data.query'],
+      requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query'],
       availabilityCommand: 'sf version --json',
       identityCommand: 'npm run connections:verify -- salesforce',
       authCommand: 'npm run connections:auth -- salesforce',
@@ -148,8 +153,13 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI has no alternate auth home. FCOS retains its protected host session, pins the alias locally, and revalidates the production org and query capability live.',
-      nonBrowserRoute: 'Use Salesforce CLI or the approved API only after both the production Organization record and data-query capability match.',
+      persistence: 'Salesforce CLI retains protected host sessions for Production, Devee, and QAT. FCOS keeps only project-local aliases and the Production default, then revalidates all three exact org IDs and query capabilities live before use.',
+      nonBrowserRoute: 'Use Salesforce CLI or the approved API only after Production, Devee, and QAT each match their exact Organization ID and environment type. Deploy identical metadata to all three targets.',
+      environments: [
+        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
+        { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true },
+        { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent-mndg@force.com.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true },
+      ],
     },
   ],
 };
@@ -198,6 +208,20 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
     if (!Array.isArray(provider.requiredPermissions) || !provider.requiredPermissions.length) throw new Error(`${provider.id} permissions are required.`);
     if (!provider.cliVersion?.exact && !provider.cliVersion?.minimum) throw new Error(`${provider.id} CLI version policy is required.`);
     if (provider.credentialStorage === 'macos_keychain') requireString(provider.keychainService, `${provider.id}.keychainService`);
+    if (provider.id === 'salesforce') {
+      if (!Array.isArray(provider.environments) || provider.environments.length !== 3) throw new Error('Salesforce requires Production, Devee, and QAT targets.');
+      for (const environment of provider.environments) {
+        requireString(environment.key, `salesforce.${environment.key}.key`);
+        requireString(environment.label, `salesforce.${environment.key}.label`);
+        requireString(environment.alias, `salesforce.${environment.key}.alias`);
+        if (environment.isSandbox) {
+          requireString(environment.username, `salesforce.${environment.key}.username`);
+          requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
+        }
+        requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
+        if (typeof environment.isSandbox !== 'boolean') throw new Error(`Salesforce ${environment.key} isSandbox must be Boolean.`);
+      }
+    }
   }
   return true;
 }

@@ -127,6 +127,13 @@ test("notifications and commitments are actionable from one universal workspace"
   assert.match(notifications, /handled_at/);
   assert.match(notifications, /snoozed_until/);
   assert.match(notifications, /set_work_notification_state/);
+  assert.match(notifications, /listSpecialTermApprovalQueue/);
+  assert.match(notifications, /special_terms_notification_states/);
+  assert.match(notifications, /set_special_terms_notification_state/);
+  const commitmentService = await readFile(new URL('../api/_workCommitments.js', import.meta.url), 'utf8');
+  assert.match(commitmentService, /notification\.source === 'special_terms'/);
+  assert.match(commitmentService, /Review Special Term/);
+  assert.match(commitments, /key: "special_terms", label: "Special Terms"/);
   assert.match(commitments, /My Commitments/);
   assert.match(commitments, /Needs action/);
   assert.match(commitments, /Waiting for others/);
