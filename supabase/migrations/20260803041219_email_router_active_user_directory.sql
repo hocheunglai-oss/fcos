@@ -1,5 +1,62 @@
 begin;
 
+-- Compatibility bootstrap: this migration originally landed before the
+-- native Email Router base schema. Existing projects already have the schema,
+-- while clean installs need the minimum private objects so the historical
+-- change remains replayable in timestamp order.
+create extension if not exists pgcrypto;
+create schema if not exists emailrouter;
+revoke all on schema emailrouter from public, anon, authenticated;
+grant usage on schema emailrouter to service_role;
+
+create table if not exists emailrouter.destinations (
+  id uuid primary key default gen_random_uuid(),
+  destination_kind text not null check (destination_kind in ('fcos_profile', 'provider_directory')),
+  user_profile_id uuid references public.user_profiles(id) on delete restrict,
+  provider_directory_id text,
+  display_name text,
+  email_address text,
+  active boolean not null default true,
+  sort_order integer not null default 0 check (sort_order >= 0),
+  revision bigint not null default 1 check (revision > 0),
+  created_by uuid references public.user_profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (
+    (destination_kind = 'fcos_profile' and user_profile_id is not null and provider_directory_id is null and email_address is null)
+    or
+    (destination_kind = 'provider_directory' and user_profile_id is null and provider_directory_id is not null and email_address is not null)
+  )
+);
+
+create unique index if not exists emailrouter_destinations_profile_key
+  on emailrouter.destinations (user_profile_id)
+  where user_profile_id is not null;
+create unique index if not exists emailrouter_destinations_directory_key
+  on emailrouter.destinations (provider_directory_id)
+  where provider_directory_id is not null;
+create unique index if not exists emailrouter_destinations_external_email_key
+  on emailrouter.destinations (email_address)
+  where email_address is not null;
+
+create table if not exists emailrouter.events (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null check (event_type ~ '^[a-z0-9_.-]{1,120}$'),
+  entity_type text not null check (entity_type in ('mailbox', 'message', 'destination', 'group', 'preset', 'setting', 'mail_action', 'subscription', 'alert', 'ai_usage')),
+  entity_id uuid not null,
+  actor_user_id uuid references public.user_profiles(id) on delete set null,
+  correlation_id uuid,
+  idempotency_key text not null,
+  created_at timestamptz not null default now(),
+  unique (idempotency_key),
+  check (char_length(btrim(idempotency_key)) between 16 and 200)
+);
+
+alter table emailrouter.destinations enable row level security;
+alter table emailrouter.events enable row level security;
+revoke all on table emailrouter.destinations, emailrouter.events from public, anon, authenticated;
+grant select, insert, update, delete on table emailrouter.destinations, emailrouter.events to service_role;
+
 alter table emailrouter.destinations
   add column if not exists nickname text,
   add column if not exists redirect_enabled boolean not null default true;
