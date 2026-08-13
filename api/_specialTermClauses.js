@@ -1116,7 +1116,8 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
       body: JSON.stringify({ model, store: false, max_output_tokens: 6000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
         { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Preserve every amount, deadline, party, port, product, standard, and jurisdiction. Do not merge clauses. Return JSON only: {"drafts":[{"id":"...","shortName":"3-7 action-oriented words","category":"one supplied category","proposedText":"professional shall/may wording","rationale":"brief"}]}. Each response is a DRAFT requiring human approval.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ categories: CLAUSE_CATEGORIES, groups: inputGroups }) }] },
-      ], text: { format: { type: 'json_object' } }, signal: AbortSignal.timeout(60_000) }),
+      ], text: { format: { type: 'json_object' } } }),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw await clauseAiUpstreamError(response);
     const payload = await response.json();
