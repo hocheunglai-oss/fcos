@@ -173,6 +173,7 @@ test("General Manager is a protected user type with an atomic successor transfer
   ]);
 
   assert.match(sql, /'general_manager',[\s\S]*'General Manager'[\s\S]*true,[\s\S]*5/);
+  assert.match(sql, /not exists \(select 1 from public\.user_profiles\)[\s\S]*elsif coalesce\(cardinality\(v_general_manager_ids\), 0\) <> 1/);
   assert.match(sql, /from public\.user_type_module_permissions permission[\s\S]*permission\.user_type_id = 'administrator'/);
   assert.match(sql, /function public\.assign_general_manager_user_type[\s\S]*security invoker/);
   assert.match(sql, /pg_advisory_xact_lock\(hashtext\('fcos_general_manager_assignment'\)\)/);

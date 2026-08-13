@@ -95,15 +95,21 @@ begin
     and role_row.active
     and profile.active;
 
-  if coalesce(cardinality(v_general_manager_ids), 0) <> 1 then
+  -- A brand-new database has no FCOS identities yet. Leave the protected type
+  -- ready for the first Administrator to provision; once any identity exists,
+  -- the authority mapping must already be singular and UUID-backed.
+  if coalesce(cardinality(v_general_manager_ids), 0) = 0
+     and not exists (select 1 from public.user_profiles) then
+    null;
+  elsif coalesce(cardinality(v_general_manager_ids), 0) <> 1 then
     raise exception 'General Manager role validation failed. Exactly one active UUID-backed General Manager is required.';
+  else
+    update public.user_profiles
+    set user_type = 'general_manager',
+        use_type_defaults = true,
+        updated_at = now()
+    where id = v_general_manager_ids[1];
   end if;
-
-  update public.user_profiles
-  set user_type = 'general_manager',
-      use_type_defaults = true,
-      updated_at = now()
-  where id = v_general_manager_ids[1];
 end;
 $$;
 
