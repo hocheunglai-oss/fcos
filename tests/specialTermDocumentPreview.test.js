@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { documentPreviewKey, normalizeDocumentPreviewText, paginateDocumentText, specialTermDocumentModel } from '../src/lib/specialTermDocumentPreview.js';
+import { SPECIAL_TERMS_DOCUMENT_TOKENS } from '../src/lib/specialTermsDocumentTokens.js';
+
+test('document preview shares justified body and left final-line alignment tokens', () => {
+  assert.equal(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyAlignment, 'justify');
+  assert.equal(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lastLineAlignment, 'left');
+});
 
 test('document preview compiles only the Terms Text projection as numbered clauses', () => {
   const model = specialTermDocumentModel({

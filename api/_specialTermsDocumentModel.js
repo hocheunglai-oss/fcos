@@ -223,7 +223,11 @@ function pdfRenderBody(doc, model) {
       const nested = paragraph.nested;
       const raw = nested ? paragraph.text.replace(/^\s*[-\u2022\u2013\u2014]\s+/, '') : paragraph.text;
       const indent = nested ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm : marker ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
-      const lines = raw.split('\n').flatMap((hardLine) => pdfTextLines(doc, hardLine || ' ', PAGE.right - PAGE.left - indent));
+      const textWidth = PAGE.right - PAGE.left - indent;
+      const lines = raw.split('\n').flatMap((hardLine) => {
+        const wrapped = pdfTextLines(doc, hardLine || ' ', textWidth);
+        return wrapped.map((text, index) => ({ text, isParagraphEnd: index === wrapped.length - 1 }));
+      });
       const shortClauseHeight = lines.length <= 8 ? lines.length * lineHeight : Math.min(lines.length, 2) * lineHeight;
       const minimumBlock = shortClauseHeight + (item.type === 'clause' ? clauseGap : 0);
       if (y + minimumBlock > PAGE.bodyBottom) newPage();
@@ -231,7 +235,15 @@ function pdfRenderBody(doc, model) {
       if (nested) doc.text('-', PAGE.left + SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, y, { align: 'right' });
       lines.forEach((line) => {
         if (y + lineHeight > PAGE.bodyBottom) newPage();
-        doc.text(line, PAGE.left + indent, y); y += lineHeight;
+        if (SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyAlignment === 'justify' && !line.isParagraphEnd && /\s/.test(line.text.trim())) {
+          // jsPDF justifies every line except the last item in a text array.
+          // A zero-width final item gives this single visible line full
+          // justification without changing the deterministic baseline grid.
+          doc.text([line.text, ''], PAGE.left + indent, y, { align: 'justify', maxWidth: textWidth, lineHeightFactor: SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lineMultiplier });
+        } else {
+          doc.text(line.text, PAGE.left + indent, y, { align: SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lastLineAlignment });
+        }
+        y += lineHeight;
       });
       if (paragraphIndex < item.paragraphs.length - 1) y += 2.2;
     }
@@ -285,11 +297,11 @@ function docxBody(model) {
         ? Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 20)
         : 50;
       if (paragraph.nested) {
-        children.push(new Paragraph({ numbering: { reference: 'special-terms-bullet', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, numbering: { reference: 'special-terms-bullet', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       } else if (item.type === 'clause' && p === 0) {
-        children.push(new Paragraph({ numbering: { reference: 'special-terms-top', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, numbering: { reference: 'special-terms-top', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       } else {
-        children.push(new Paragraph({ indent: item.type === 'clause' ? { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm) } : undefined, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, indent: item.type === 'clause' ? { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm) } : undefined, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       }
     }
   }

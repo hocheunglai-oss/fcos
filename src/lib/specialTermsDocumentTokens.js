@@ -5,7 +5,7 @@ export const SPECIAL_TERMS_DOCUMENT_TOKENS = Object.freeze({
   page: Object.freeze({ widthMm: 210, heightMm: 297, leftMm: 22, rightMm: 22, headerTopMm: 10, headerBottomMm: 49, contentStartMm: 61, footerRuleMm: 280, footerTextMm: 286 }),
   logo: Object.freeze({ widthMm: 64, heightMm: 22.3 }),
   colour: Object.freeze({ brandBlue: '00417B', bodyInk: '1C232A', draft: 'B7BDC5' }),
-  typography: Object.freeze({ family: 'Arial', bodyPt: 12, lineMultiplier: 1.25, clauseAfterPt: 7, sectionLabelPt: 9, titlePt: 15, companyPt: 10, detailsPt: 6.5 }),
+  typography: Object.freeze({ family: 'Arial', bodyPt: 12, lineMultiplier: 1.25, clauseAfterPt: 7, bodyAlignment: 'justify', lastLineAlignment: 'left', sectionLabelPt: 9, titlePt: 15, companyPt: 10, detailsPt: 6.5 }),
   // The marker and text positions are separate on purpose. Numbers finish at
   // one fixed edge and every clause starts at the same text column, including
   // wrapped lines and multi-digit items.

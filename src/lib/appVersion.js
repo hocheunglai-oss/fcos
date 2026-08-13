@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.165',
+    releasedAt: '2026-08-14',
+    title: 'Justify Special Term clause text',
+    changes: [
+      'Aligns complete clause lines to both A4 margins while keeping each paragraph’s final line naturally left-aligned in the local preview, PDF, and Word exports.',
+      'Preserves the compact right-aligned number column and hanging text indent across numbered clauses, nested bullets, page continuations, and legacy wording.',
+      'Verifies the shared alignment tokens and native Word paragraph justification without changing Salesforce contractual text.',
+    ],
+  },
+  {
     version: '2.0.164',
     releasedAt: '2026-08-14',
     title: 'Improve Special Term document typography',

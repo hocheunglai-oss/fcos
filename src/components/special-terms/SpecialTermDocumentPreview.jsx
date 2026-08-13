@@ -13,9 +13,23 @@ const TYPE = SPECIAL_TERMS_DOCUMENT_TOKENS.typography;
 const pagePercent = (millimetres, dimension) => `${(millimetres / dimension) * 100}%`;
 const previewPointSize = (points) => `clamp(${Math.max(3, points * 0.4)}px, ${((points * 1.333) / 794) * 100}cqw, ${points * 1.333}px)`;
 
-function PreviewPageBody({ pageText, numbered }) {
+function PreviewPageBody({ pageText, nextPageText, numbered }) {
+  const lines = String(pageText || '').split('\n');
   let continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
-  return String(pageText || '').split('\n').map((line, index) => {
+  const isParagraphEnd = (index) => {
+    const next = lines[index + 1];
+    if (next == null) {
+      const nextPageFirstLine = String(nextPageText || '').split('\n').find((line) => line.trim());
+      return !nextPageFirstLine
+        || /^\s*\d+\.\s+/.test(nextPageFirstLine)
+        || /^\s*[-\u2022\u2013\u2014]\s+/.test(nextPageFirstLine);
+    }
+    return !next.trim()
+      || /^\s*\d+\.\s+/.test(next)
+      || /^\s*[-\u2022\u2013\u2014]\s+/.test(next);
+  };
+  const bodyAlignment = (index) => (isParagraphEnd(index) ? TYPE.lastLineAlignment : TYPE.bodyAlignment);
+  return lines.map((line, index) => {
     const numberedLine = line.match(/^\s*(\d+\.)\s+(.+)$/);
     const bulletLine = line.match(/^\s*[-\u2022\u2013\u2014]\s+(.+)$/);
     if (!line) {
@@ -24,17 +38,17 @@ function PreviewPageBody({ pageText, numbered }) {
     }
     if (numberedLine) {
       continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm;
-      return <div key={`number-${index}`} className="flex w-full"><span className="shrink-0 text-right tabular-nums" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, PAGE.widthMm) }}>{numberedLine[1]}</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerGapMm, PAGE.widthMm) }}>{numberedLine[2]}</span></div>;
+      return <div key={`number-${index}`} className="flex w-full"><span className="shrink-0 text-right tabular-nums" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, PAGE.widthMm) }}>{numberedLine[1]}</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerGapMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{numberedLine[2]}</span></div>;
     }
     if (bulletLine && numbered) {
       continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm;
-      return <div key={`bullet-${index}`} className="flex w-full"><span className="shrink-0 text-right" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>-</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>{bulletLine[1]}</span></div>;
+      return <div key={`bullet-${index}`} className="flex w-full"><span className="shrink-0 text-right" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>-</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{bulletLine[1]}</span></div>;
     }
-    return <div key={`line-${index}`} className="w-full" style={{ paddingLeft: pagePercent(continuationIndentMm, PAGE.widthMm) }}>{line}</div>;
+    return <div key={`line-${index}`} className="w-full" style={{ paddingLeft: pagePercent(continuationIndentMm, PAGE.widthMm), textAlign: bodyAlignment(index), textAlignLast: bodyAlignment(index) }}>{line}</div>;
   });
 }
 
-function DocumentSheet({ model, pageText, pageIndex, pageCount, zoom }) {
+function DocumentSheet({ model, pageText, nextPageText, pageIndex, pageCount, zoom }) {
   return (
     <article
       className={`relative mx-auto aspect-[210/297] bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 ${zoom === '100' ? 'w-[794px] max-w-none' : 'w-full max-w-[794px]'}`}
@@ -53,7 +67,7 @@ function DocumentSheet({ model, pageText, pageIndex, pageCount, zoom }) {
         <h2 className="text-left font-bold uppercase tracking-[0.08em] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.sectionLabelPt) }}>Special Terms</h2>
         <h3 className="mt-2 text-left font-bold leading-[1.15] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.titlePt) }}>{model.title}</h3>
         <div className="mt-2 h-px bg-[#00417b]" />
-        <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : 'No Terms Text clauses.'}</div>
+        <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} nextPageText={nextPageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : 'No Terms Text clauses.'}</div>
       </section>
       <footer className="absolute border-t border-[#00417b] pt-1 text-right text-[#00417b]" style={{ bottom: pagePercent(PAGE.heightMm - PAGE.footerTextMm, PAGE.heightMm), left: pagePercent(PAGE.leftMm, PAGE.widthMm), right: pagePercent(PAGE.rightMm, PAGE.widthMm), fontSize: previewPointSize(7) }}>Page {pageIndex + 1} of {pageCount}</footer>
     </article>
@@ -82,7 +96,7 @@ export default function SpecialTermDocumentPreview({ term, detail, revision, uns
         <span>{pages.length} {pages.length === 1 ? 'page' : 'pages'} · local preview</span>
         <div className="flex gap-1"><Button type="button" size="sm" variant={zoom === 'fit' ? 'secondary' : 'ghost'} onClick={() => setZoom('fit')}>Fit width</Button><Button type="button" size="sm" variant={zoom === '100' ? 'secondary' : 'ghost'} onClick={() => setZoom('100')}>100%</Button></div>
       </div>
-      <div className="max-h-[70vh] space-y-4 overflow-auto rounded-md bg-slate-100 p-3 sm:p-5">{pages.map((pageText, index) => <DocumentSheet key={`${index}-${pageText.slice(0, 32)}`} model={model} pageText={pageText} pageIndex={index} pageCount={pages.length} zoom={zoom} />)}</div>
+      <div className="max-h-[70vh] space-y-4 overflow-auto rounded-md bg-slate-100 p-3 sm:p-5">{pages.map((pageText, index) => <DocumentSheet key={`${index}-${pageText.slice(0, 32)}`} model={model} pageText={pageText} nextPageText={pages[index + 1]} pageIndex={index} pageCount={pages.length} zoom={zoom} />)}</div>
     </section>
   );
 }

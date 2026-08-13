@@ -55,6 +55,7 @@ test('Special Term DOCX contains editable terms, real numbering, A4 geometry, an
   assert.match(headerXml, /Low sulphur requirement/);
   assert.match(footerXml, /Page/);
   assert.match(numberingXml, /%1\./);
+  assert.match(documentXml, /<w:jc w:val="both"\/>/);
   assert.equal(specialTermsDocumentInternals.DOCX_BODY_LINE_TWIP, 300);
   assert.equal(specialTermsDocumentInternals.DOCX_BODY_HALF_POINTS, 24);
   assert.match(documentXml, /w:w="11906"/); // 210 mm in twentieths of a point
@@ -83,8 +84,9 @@ test('Special Term PDF wraps one exceptionally long clause without horizontal cl
   const generated = generateSpecialTermPdf({ ...term, termsText: `1. ${clause}`, clauses: [{ text: clause }] }, { generatedAt: new Date('2026-08-06T02:00:00.000Z') });
   assert.ok(generated.pageCount > 1);
   const parsed = await pdfParse(generated.buffer);
-  assert.match(parsed.text, /supporting compliance record 1 upon request/);
-  assert.match(parsed.text, /supporting compliance record 100 upon request/);
+  const normalizedText = parsed.text.replace(/\s+/g, ' ');
+  assert.match(normalizedText, /supporting compliance record 1 upon request/);
+  assert.match(normalizedText, /supporting compliance record 100 upon request/);
 });
 
 test('Special Term PDF normalizes line endings and suffixes duplicate filenames', () => {
@@ -117,6 +119,8 @@ test('shared document geometry uses readable type and a compact aligned marker c
   const tokens = specialTermsExportInternals.SPECIAL_TERMS_DOCUMENT_TOKENS;
   assert.equal(tokens.typography.bodyPt, 12);
   assert.equal(tokens.typography.lineMultiplier, 1.25);
+  assert.equal(tokens.typography.bodyAlignment, 'justify');
+  assert.equal(tokens.typography.lastLineAlignment, 'left');
   assert.equal(tokens.list.markerRightMm + tokens.list.markerGapMm, tokens.list.textIndentMm);
   assert.equal(tokens.page.leftMm, tokens.page.rightMm);
 });
