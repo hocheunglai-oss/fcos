@@ -1082,6 +1082,25 @@ function responseOutputText(payload) {
   return (payload?.output || []).flatMap((item) => item?.content || []).filter((part) => part?.type === 'output_text').map((part) => part.text).join('');
 }
 
+async function clauseAiUpstreamError(response) {
+  const payload = await response.json().catch(() => ({}));
+  const upstreamCode = text(payload?.error?.code || payload?.error?.type, 80).toLowerCase();
+  if (response.status === 401 || response.status === 403) {
+    return specialTermsError('The protected OpenAI credential is not authorized.', 503, 'OPENAI_AUTHENTICATION_FAILED');
+  }
+  if (response.status === 429) {
+    const code = upstreamCode === 'insufficient_quota' ? 'OPENAI_INSUFFICIENT_QUOTA' : 'OPENAI_RATE_LIMITED';
+    return specialTermsError(code === 'OPENAI_INSUFFICIENT_QUOTA' ? 'The protected OpenAI project has no available quota.' : 'The clause drafting service is temporarily rate limited.', 503, code);
+  }
+  if (response.status === 400 && ['model_not_found', 'unsupported_value'].includes(upstreamCode)) {
+    return specialTermsError('The configured OpenAI clause-drafting model is unavailable.', 503, 'OPENAI_MODEL_UNAVAILABLE');
+  }
+  if (response.status === 400) {
+    return specialTermsError('The protected OpenAI request contract was rejected.', 502, 'OPENAI_REQUEST_INVALID');
+  }
+  return specialTermsError('The clause drafting service is temporarily unavailable.', 503, 'SPECIAL_TERMS_AI_UNAVAILABLE');
+}
+
 export async function draftSpecialTermClausesWithAi(client, profile, body = {}, dependencies = {}) {
   const groups = Array.isArray(body.groups) ? body.groups : [];
   if (!groups.length || groups.length > 20) throw specialTermsError('AI drafting accepts between 1 and 20 clause groups.', 400, 'SPECIAL_TERMS_AI_BATCH_LIMIT');
@@ -1099,7 +1118,7 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ categories: CLAUSE_CATEGORIES, groups: inputGroups }) }] },
       ], text: { format: { type: 'json_object' } }, signal: AbortSignal.timeout(60_000) }),
     });
-    if (!response.ok) throw specialTermsError('The clause drafting service is temporarily unavailable.', 503, 'SPECIAL_TERMS_AI_UNAVAILABLE');
+    if (!response.ok) throw await clauseAiUpstreamError(response);
     const payload = await response.json();
     const parsed = JSON.parse(responseOutputText(payload));
     const aiResponseId = text(payload?.id, 100);

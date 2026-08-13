@@ -83,6 +83,10 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(service, /A Special Term revision must include Terms Text, Confirmation remark, and Nomination remark/);
   assert.match(service, /store: false/);
   assert.match(service, /const model = DEFAULT_DASHBOARD_AI_MODEL/);
+  assert.match(service, /OPENAI_AUTHENTICATION_FAILED/);
+  assert.match(service, /OPENAI_INSUFFICIENT_QUOTA/);
+  assert.match(service, /OPENAI_MODEL_UNAVAILABLE/);
+  assert.match(service, /OPENAI_REQUEST_INVALID/);
   assert.match(service, /groups\.length > 20/);
   assert.match(service, /hasMaterialDifference\(sourceById\.get\(draft\.id\), draft\.proposedText\)/);
 });
