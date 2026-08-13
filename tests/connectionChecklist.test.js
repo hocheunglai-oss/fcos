@@ -79,7 +79,7 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['Devee Org ID'], '00D1m0000008kioEAA');
   assert.equal(targets.salesforce['QAT Org ID'], '00D1s0000008lFEEAY');
   assert.equal(targets.salesforce['Devee username'], 'vincent@cosulich.com.hk.devee');
-  assert.equal(targets.salesforce['QAT username'], 'vincent-mndg@force.com.qat');
+  assert.equal(targets.salesforce['QAT username'], 'vincent@cosulich.com.hk.qat');
   assert.deepEqual(CONNECTION_TARGETS.map(({ id, credentialStorage }) => [id, credentialStorage]), [
     ['github', 'provider_secure_store'],
     ['vercel', 'macos_keychain'],

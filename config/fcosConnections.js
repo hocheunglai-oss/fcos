@@ -137,7 +137,7 @@ const connectionPolicy = {
         { label: 'Devee username', value: 'vincent@cosulich.com.hk.devee' },
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
-        { label: 'QAT username', value: 'vincent-mndg@force.com.qat' },
+        { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
       ],
       cliVersion: { minimum: '2.145.6', maximumExclusive: '3.0.0' },
       requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query'],
@@ -158,7 +158,7 @@ const connectionPolicy = {
       environments: [
         { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
         { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true },
-        { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent-mndg@force.com.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true },
+        { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent@cosulich.com.hk.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true },
       ],
     },
   ],

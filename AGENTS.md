@@ -8,7 +8,7 @@ These connection identities are specific to this repository. Do not infer or reu
 - Supabase project: `pjforfvchygdyqfcgpmw` (`FCOS`)
 - Salesforce Production: `00D2x000000Ei4oEAC` (alias `source-salesforce`)
 - Salesforce Devee sandbox: `00D1m0000008kioEAA` (alias `fcos-devee`, username `vincent@cosulich.com.hk.devee`)
-- Salesforce QAT sandbox: `00D1s0000008lFEEAY` (alias `fcos-qat`, username `vincent-mndg@force.com.qat`)
+- Salesforce QAT sandbox: `00D1s0000008lFEEAY` (alias `fcos-qat`, username `vincent@cosulich.com.hk.qat`)
 - Browser profile: `Otto`
 
 Before any GitHub mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials. Use the authorized GitHub connector for this repository or stop with a clear account-mismatch message.
