@@ -110,6 +110,7 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(revisionPanel, /specialTermRevisionRollback/);
   assert.match(revisionPanel, /Start whole-term draft/);
   assert.match(revisionPanel, /Preserved live Salesforce legacy projections/);
+  assert.match(revisionPanel, /richTextToCopyText\(source\.text\)/);
   assert.match(revisionPanel, /all three projections and the reviewed rules/);
   const batchPanel = read('src/components/special-terms/MigrationBatchPanel.jsx');
   assert.match(batchPanel, /specialTermMigrationBatchList/);

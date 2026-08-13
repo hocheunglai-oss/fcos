@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERM_REVISION_PROJECTIONS, revisionFromDetail, revisionPayload } from '@/lib/specialTermRevision';
+import { richTextToCopyText } from '@/lib/specialTermsText';
 
 function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -112,7 +113,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
           <div><div className="flex items-center gap-2"><FileClock className="h-4 w-4 text-amber-700" /><strong className="text-sm">Legacy term — whole-term review required</strong><Badge variant="outline">Legacy</Badge></div><p className="mt-1 text-xs text-muted-foreground">All three live projections remain unchanged until one proposed revision, including its rules, is reviewed and approved as a whole.</p></div>
           {canDraft ? <Button type="button" onClick={startRevisionDraft}><FileClock className="mr-2 h-4 w-4" />Start whole-term draft</Button> : null}
         </div>
-        <div className="grid gap-2 md:grid-cols-3">{SPECIAL_TERM_REVISION_PROJECTIONS.map((key) => { const source = detail?.projections?.[key] || {}; return <div key={key} className="rounded-md border border-border bg-background p-3"><p className="text-xs font-semibold">{source.label || key}</p><pre className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11px] text-muted-foreground">{source.text || 'No live wording'}</pre></div>; })}</div>
+        <div className="grid gap-2 md:grid-cols-3">{SPECIAL_TERM_REVISION_PROJECTIONS.map((key) => { const source = detail?.projections?.[key] || {}; return <div key={key} className="rounded-md border border-border bg-background p-3"><p className="text-xs font-semibold">{source.label || key}</p><pre className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11px] text-muted-foreground">{richTextToCopyText(source.text) || 'No live wording'}</pre></div>; })}</div>
         {canDraft ? <div className="space-y-3">{SPECIAL_TERM_REVISION_PROJECTIONS.map((projection) => <MigrationReviewPanel key={projection} detail={detail} projection={projection} categoryOptions={categoryOptions} canApprove={canDraft} draftOnly onChanged={onChanged} onError={onError} />)}</div> : null}
         {!canDraft ? <Alert><AlertDescription>You may view the preserved legacy wording and clause lineage. Any active FCOS user may propose a revision.</AlertDescription></Alert> : null}
       </section>

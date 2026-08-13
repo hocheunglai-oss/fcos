@@ -8,6 +8,17 @@ test('Special Term remarks copy as readable plain text', () => {
   assert.equal(richTextToPlain(richText), 'Hello & welcome - First item - Second item Final line');
 });
 
+test('Special Term legacy previews remove Salesforce rich-text markup', () => {
+  assert.equal(
+    richTextToCopyText('<p><span style="font-size: 14px;">- SUPPLIERS SHALL PROVIDE A QUALITY CLAIM TIME BAR OF (14) DAYS FROM THE DATE OF DELIVERY.</span></p>'),
+    '- SUPPLIERS SHALL PROVIDE A QUALITY CLAIM TIME BAR OF (14) DAYS FROM THE DATE OF DELIVERY.',
+  );
+  assert.equal(
+    richTextToCopyText('<p><span style="background-color: rgb(255, 255, 255);">- SUPPLIERS SHALL PROVIDE A QUALITY CLAIM TIME BAR OF (14) DAYS FROM THE DATE OF DELIVERY, OVERRIDING SUPPLIER GENERAL SALES TERMS AND CONDITIONS IF A SHORTER DEFAULT PERIOD IS SET OUT THEREIN.</span></p>'),
+    '- SUPPLIERS SHALL PROVIDE A QUALITY CLAIM TIME BAR OF (14) DAYS FROM THE DATE OF DELIVERY, OVERRIDING SUPPLIER GENERAL SALES TERMS AND CONDITIONS IF A SHORTER DEFAULT PERIOD IS SET OUT THEREIN.',
+  );
+});
+
 test('Special Term remark conversion tolerates malformed rich text and empty values', () => {
   assert.equal(richTextToCopyText('<p>Open <strong>format</p><li>Recovered'), 'Open format\n\n- Recovered');
   assert.equal(richTextToCopyText(''), '');
