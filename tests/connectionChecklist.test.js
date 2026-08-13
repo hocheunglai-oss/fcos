@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { FCOS_CONNECTION_POLICY, validateFcosConnectionPolicy } from '../config/fcosConnections.js';
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
@@ -125,4 +126,11 @@ test('canonical attestation output is stable after sanitization', () => {
   const second = canonicalConnectionAttestation(JSON.parse(first));
   assert.equal(first, second);
   assert.throws(() => canonicalConnectionAttestation({ accessToken: 'secret' }), /invalid/);
+});
+
+test('Salesforce multi-environment deploys fail closed on an exact sandbox username mismatch', async () => {
+  const source = await readFile(new URL('../scripts/deploy-salesforce-environments.mjs', import.meta.url), 'utf8');
+  assert.match(source, /display\?\.username === environment\.username/);
+  assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
+  assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
 });

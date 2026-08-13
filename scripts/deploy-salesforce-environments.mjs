@@ -29,8 +29,10 @@ function sf(args) {
 function verify(environment) {
   const display = sf(['org', 'display', '--target-org', environment.alias, '--json']).result;
   const organization = sf(['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']).result?.records?.[0];
-  if (display?.id !== environment.orgId || display?.connectedStatus !== 'Connected' || organization?.Id !== environment.orgId || organization?.IsSandbox !== environment.isSandbox) {
-    throw new Error(`${environment.label} Salesforce identity mismatch. Expected ${environment.orgId}.`);
+  const usernameMatches = !environment.username || display?.username === environment.username;
+  if (!usernameMatches || display?.id !== environment.orgId || display?.connectedStatus !== 'Connected' || organization?.Id !== environment.orgId || organization?.IsSandbox !== environment.isSandbox) {
+    const expectedUsername = environment.username ? ` and username ${environment.username}` : '';
+    throw new Error(`${environment.label} Salesforce identity mismatch. Expected ${environment.orgId}${expectedUsername}.`);
   }
 }
 

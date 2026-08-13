@@ -21,17 +21,17 @@ test('connection runtimes select pinned executables and repo-local provider conf
   const supabase = providerRuntime('supabase', { requireCredential: false });
   const salesforce = providerRuntime('salesforce', { requireCredential: false });
 
-  assert.match(github.env.GH_CONFIG_DIR, /\/FCOS\/\.fcos-cli\/github$/);
+  assert.equal(github.env.GH_CONFIG_DIR, new URL('../.fcos-cli/github', import.meta.url).pathname.replace(/\/$/, ''));
   assert.equal(github.env.GH_REPO, 'github.com/hocheunglai-oss/fcos');
   assert.equal(vercel.command, 'vercel');
   assert.deepEqual(vercel.injectedArgs.slice(0, 2), ['--global-config', `${github.env.GH_CONFIG_DIR.replace(/\/github$/, '')}/vercel`]);
-  assert.match(supabase.command, /\/FCOS\/node_modules\/\.bin\/supabase$/);
-  assert.match(supabase.env.SUPABASE_HOME, /\/FCOS\/\.fcos-cli\/supabase$/);
+  assert.equal(supabase.command, new URL('../node_modules/.bin/supabase', import.meta.url).pathname);
+  assert.equal(supabase.env.SUPABASE_HOME, new URL('../.fcos-cli/supabase', import.meta.url).pathname.replace(/\/$/, ''));
   assert.deepEqual(supabase.injectedArgs.slice(0, 2), ['--workdir', github.env.GH_CONFIG_DIR.replace(/\/\.fcos-cli\/github$/, '')]);
   assert.equal(salesforce.env.SF_TARGET_ORG, 'source-salesforce');
   assert.equal(vercel.env.VERCEL_TOKEN, undefined);
   assert.equal(supabase.env.SUPABASE_ACCESS_TOKEN, undefined);
-  assert.match(githubCredentialHelperValue(), /GH_CONFIG_DIR='.*\/FCOS\/\.fcos-cli\/github'/);
+  assert.match(githubCredentialHelperValue(), /GH_CONFIG_DIR='.*\/\.fcos-cli\/github'/);
   assert.match(githubCredentialHelperValue(), /gh auth git-credential/);
 });
 
