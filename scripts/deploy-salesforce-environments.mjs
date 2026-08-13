@@ -7,16 +7,19 @@ const salesforce = FCOS_CONNECTION_POLICY.providers.find((provider) => provider.
 const MANIFEST_INDEX = process.argv.indexOf('--manifest');
 const MANIFEST = MANIFEST_INDEX >= 0
   ? process.argv[MANIFEST_INDEX + 1]
-  : (process.env.FCOS_SALESFORCE_MANIFEST || 'manifest/special-term-clause-bank.xml');
+  : (process.env.FCOS_SALESFORCE_MANIFEST || '');
 const CHECK_ONLY = process.argv.includes('--check-only');
 const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
-const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || 'SpecialTermClauseCompilerTest,SpecialTermTriggerHandlerTest,SpecialTermRevisionServiceTest').split(',').map((value) => value.trim()).filter(Boolean);
+const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || 'ShipAgentInvoiceReadinessServiceTest,SpecialTermClauseCompilerTest,SpecialTermTriggerHandlerTest,SpecialTermRevisionServiceTest').split(',').map((value) => value.trim()).filter(Boolean);
 
-if (!MANIFEST || MANIFEST.startsWith('-')) throw new Error('Provide a manifest path after --manifest.');
-const manifestPath = path.resolve(process.cwd(), MANIFEST);
-const relativeManifest = path.relative(process.cwd(), manifestPath);
-if (!relativeManifest || relativeManifest.startsWith('..') || path.isAbsolute(relativeManifest) || !existsSync(manifestPath)) {
-  throw new Error('Salesforce manifest must be an existing file inside this project.');
+if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');
+if (MANIFEST && !CHECK_ONLY) {
+  throw new Error('Scoped manifests are validation-only. Deploy the complete force-app tree so every Salesforce environment and the shared repository remain identical.');
+}
+const sourcePath = MANIFEST ? path.resolve(process.cwd(), MANIFEST) : path.resolve(process.cwd(), 'force-app');
+const relativeSource = path.relative(process.cwd(), sourcePath);
+if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource) || !existsSync(sourcePath)) {
+  throw new Error(MANIFEST ? 'Salesforce manifest must be an existing file inside this project.' : 'The force-app source directory is missing.');
 }
 
 function sf(args) {
@@ -41,7 +44,8 @@ for (const environment of salesforce.environments) verify(environment);
 const validations = [];
 for (const environment of salesforce.environments) {
   verify(environment);
-  const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--manifest', relativeManifest, '--wait', WAIT_MINUTES, '--json'];
+  const sourceArgs = MANIFEST ? ['--manifest', relativeSource] : ['--source-dir', relativeSource];
+  const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, ...sourceArgs, '--wait', WAIT_MINUTES, '--json'];
   command.push('--test-level', TEST_CLASSES.length ? 'RunSpecifiedTests' : 'RunLocalTests');
   for (const testClass of TEST_CLASSES) command.push('--tests', testClass);
   const result = sf(command).result;
@@ -49,7 +53,19 @@ for (const environment of salesforce.environments) {
 }
 
 const deployments = [];
+let sharedPublication = null;
 if (!CHECK_ONLY) {
+  const publication = spawnSync(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', '--publish'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (publication.status !== 0) throw new Error(publication.stderr || publication.stdout || 'Shared Salesforce publication failed.');
+  try {
+    sharedPublication = JSON.parse(publication.stdout);
+  } catch {
+    throw new Error('Shared Salesforce publication returned an invalid response.');
+  }
   for (const validation of validations) {
     verify(validation.environment);
     const result = sf(['project', 'deploy', 'quick', '--target-org', validation.environment.alias, '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json']).result;
@@ -59,7 +75,8 @@ if (!CHECK_ONLY) {
 
 console.log(JSON.stringify({
   mode: CHECK_ONLY ? 'validate' : 'validate-then-deploy',
-  manifest: relativeManifest,
+  source: relativeSource,
   validations: validations.map(({ environment, ...result }) => ({ environment: environment.label, orgId: environment.orgId, ...result })),
   deployments,
+  sharedPublication,
 }, null, 2));

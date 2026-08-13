@@ -81,6 +81,8 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['QAT Org ID'], '00D1s0000008lFEEAY');
   assert.equal(targets.salesforce['Devee username'], 'vincent@cosulich.com.hk.devee');
   assert.equal(targets.salesforce['QAT username'], 'vincent@cosulich.com.hk.qat');
+  assert.equal(targets.salesforce['Shared GitHub account'], 'vincelessxai');
+  assert.equal(targets.salesforce['Shared Salesforce repository'], 'ivanyk20/fcbhk');
   assert.deepEqual(CONNECTION_TARGETS.map(({ id, credentialStorage }) => [id, credentialStorage]), [
     ['github', 'provider_secure_store'],
     ['vercel', 'macos_keychain'],
@@ -133,4 +135,10 @@ test('Salesforce multi-environment deploys fail closed on an exact sandbox usern
   assert.match(source, /display\?\.username === environment\.username/);
   assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
   assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
+  assert.match(source, /sync-salesforce-shared-repository\.mjs/);
+  assert.match(source, /Scoped manifests are validation-only/);
+  assert.ok(
+    source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']") < source.indexOf("['project', 'deploy', 'quick'"),
+    'Shared Salesforce publication must succeed before any validated org mutation begins.',
+  );
 });

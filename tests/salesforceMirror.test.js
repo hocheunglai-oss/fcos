@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { expectedManifest, sourceInventory } from '../scripts/sync-salesforce-shared-repository.mjs';
+
+test('Salesforce mirror inventory owns the complete authoritative metadata tree', () => {
+  const inventory = sourceInventory();
+  assert.ok(inventory.files.length >= 162);
+  assert.equal(inventory.sourceTreeHash.length, 64);
+  assert.ok(inventory.files.includes('classes/ShipAgentInvoiceReadinessService.cls'));
+  assert.ok(inventory.files.includes('classes/ShipAgentInvoiceReadinessServiceTest.cls'));
+  assert.ok(inventory.files.includes('objects/STEM__c/fields/Ship_Agent_Charges_Confirmed__c.field-meta.xml'));
+  assert.ok(inventory.files.includes('permissionsets/FCOS_Ship_Agent_Integration.permissionset-meta.xml'));
+  assert.ok(inventory.files.includes('triggers/InvoiceTrigger.trigger'));
+});
+
+test('Salesforce mirror manifest contains identifiers and no credentials', () => {
+  const manifest = expectedManifest(sourceInventory());
+  assert.equal(manifest.sourceRepository, 'hocheunglai-oss/fcos');
+  assert.equal(manifest.sourceRoot, 'force-app/main/default/');
+  assert.equal(manifest.targetRoot, 'src/');
+  assert.doesNotMatch(JSON.stringify(manifest), /token|password|credential|secret/i);
+});
+
+test('FCOS pushes with Salesforce changes require a current shared mirror', async () => {
+  const source = await readFile(new URL('../.githooks/pre-push', import.meta.url), 'utf8');
+  assert.match(source, /force-app\/main\/default\//);
+  assert.match(source, /salesforce:mirror:verify/);
+  assert.match(source, /ivanyk20\/fcbhk/);
+});
+
+test('closed shared pull requests cannot be silently reused for later Salesforce publication', async () => {
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  assert.match(source, /'pr', 'list'.*'--state', 'open'/s);
+  assert.match(source, /MODE === 'check'.*PUBLICATION\.defaultBranch/s);
+  assert.doesNotMatch(source, /remoteBranchHead\(PUBLICATION\.activeBranch\).*PUBLICATION\.activeBranch/s);
+});

@@ -4,6 +4,24 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.162',
+    releasedAt: '2026-08-13',
+    title: 'Enforce the shared Salesforce mirror',
+    changes: [
+      'Pins the separate vincelessxai authorization and ivanyk20/fcbhk repository as mandatory non-secret Salesforce publication targets in System Health.',
+      'Publishes the complete FCOS Salesforce metadata tree into the shared repository after successful Production, Devee, and QAT deployment while preserving unrelated shared source.',
+      'Blocks FCOS pushes containing Salesforce changes until the shared branch is byte-equivalent and records its owned-file inventory for safe future removals.',
+    ],
+  },
+  {
+    version: '2.0.161',
+    releasedAt: '2026-08-13',
+    title: 'Render Special Term remarks cleanly',
+    changes: [
+      'Converts preserved Salesforce rich-text Confirmation and Nomination remarks to readable bullet text in whole-term migration previews instead of showing HTML markup.',
+    ],
+  },
+  {
     version: '2.0.160',
     releasedAt: '2026-08-12',
     title: 'Scope and restore Ship-Agent reconciliation',

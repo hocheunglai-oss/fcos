@@ -255,6 +255,88 @@ function runCaptured(providerId, args, { inject = true, requireCredential = true
   });
 }
 
+function runSharedSalesforceGitHubCaptured(args) {
+  const publication = target('salesforce').publication;
+  const configDirectory = path.join(REPO_ROOT, publication.configPath);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn('gh', args, {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        GH_CONFIG_DIR: configDirectory,
+        GH_HOST: 'github.com',
+        GH_REPO: `github.com/${publication.repository}`,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        ok: value.status === 0,
+        status: value.status,
+        stdout,
+        stderr,
+        unavailable: value.unavailable === true,
+        latencyMs: Date.now() - startedAt,
+      });
+    };
+    const timer = setTimeout(() => {
+      stderr += '\nCommand timed out.';
+      child.kill('SIGTERM');
+      finish({ status: 124 });
+    }, COMMAND_TIMEOUT_MS);
+    child.stdout?.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      finish({ status: null, unavailable: error?.code === 'ENOENT' });
+    });
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      finish({ status });
+    });
+  });
+}
+
+function verifySharedSalesforceMirrorCaptured() {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', '--check'], {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: status === 0, status, stdout, stderr, latencyMs: Date.now() - startedAt });
+    };
+    const timer = setTimeout(() => {
+      stderr += '\nCommand timed out.';
+      child.kill('SIGTERM');
+      finish(124);
+    }, COMMAND_TIMEOUT_MS);
+    child.stdout?.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', () => {
+      clearTimeout(timer);
+      finish(null);
+    });
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      finish(status);
+    });
+  });
+}
+
 function safeJson(value) {
   try {
     return JSON.parse(value);
@@ -566,7 +648,8 @@ function readSalesforcePin() {
 async function verifySalesforce(version, metadata, startedAt) {
   const report = baseReport('salesforce', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const checks = await Promise.all(salesforceEnvironments().map(async (environment) => {
+  const [checks, sharedAccount, sharedRepository, sharedMirror] = await Promise.all([
+    Promise.all(salesforceEnvironments().map(async (environment) => {
     const [display, organization] = await Promise.all([
       runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json']),
       runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']),
@@ -583,13 +666,26 @@ async function verifySalesforce(version, metadata, startedAt) {
         && record?.Id === environment.orgId
         && record?.IsSandbox === environment.isSandbox,
     };
-  }));
+    })),
+    runSharedSalesforceGitHubCaptured(['api', 'user', '--jq', '.login']),
+    runSharedSalesforceGitHubCaptured(['api', `repos/${target('salesforce').publication.repository}`]),
+    verifySharedSalesforceMirrorCaptured(),
+  ]);
   if (checks.some((check) => !check.display.ok || !check.organization.ok)) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(...checks.flatMap((check) => [check.display, check.organization])) }, startedAt);
   }
-  const exactIdentity = checks.every((check) => check.verified);
+  if (!sharedAccount.ok || !sharedRepository.ok) {
+    return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(sharedAccount, sharedRepository) }, startedAt);
+  }
+  const sharedRepo = safeJson(sharedRepository.stdout);
+  const exactSharedIdentity = sharedAccount.stdout.trim() === target('salesforce').publication.requiredAccount
+    && sharedRepo?.full_name?.toLowerCase() === target('salesforce').publication.repository.toLowerCase();
+  const exactIdentity = checks.every((check) => check.verified) && exactSharedIdentity;
   const exactPin = readSalesforcePin() === target('salesforce').profileName;
   const permissions = checks.flatMap((check) => check.verified ? [`${check.environment.key}.organization.read`, `${check.environment.key}.data.query`] : []);
+  if (sharedRepo?.permissions?.pull === true) permissions.push('shared.repository.read');
+  if (sharedRepo?.permissions?.push === true) permissions.push('shared.repository.push');
+  if (sharedMirror.ok) permissions.push('shared.metadata.current');
   return finalizeReport({
     ...report,
     identityStatus: exactIdentity ? 'verified' : 'mismatch',

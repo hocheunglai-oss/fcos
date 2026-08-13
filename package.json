@@ -19,6 +19,8 @@
     "migrate:special-term-clauses": "node scripts/migrate-special-term-clause-bank.mjs",
     "salesforce:deploy:all": "node scripts/deploy-salesforce-environments.mjs",
     "salesforce:validate:all": "node scripts/deploy-salesforce-environments.mjs --check-only",
+    "salesforce:mirror:verify": "node scripts/sync-salesforce-shared-repository.mjs --check",
+    "salesforce:mirror:publish": "node scripts/sync-salesforce-shared-repository.mjs --publish",
     "improvements:agent": "node --env-file=.env.local scripts/fcos-improvements.mjs",
     "typecheck": "tsc -p ./jsconfig.json",
     "verify:migrations": "node scripts/verify-migrations.mjs",

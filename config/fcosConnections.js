@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 3,
+  policyVersion: 4,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -138,9 +138,12 @@ const connectionPolicy = {
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
+        { label: 'Shared GitHub account', value: 'vincelessxai' },
+        { label: 'Shared Salesforce repository', value: 'ivanyk20/fcbhk' },
+        { label: 'Shared repository path', value: 'src/' },
       ],
       cliVersion: { minimum: '2.145.6', maximumExclusive: '3.0.0' },
-      requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query'],
+      requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query', 'shared.repository.read', 'shared.repository.push', 'shared.metadata.current'],
       availabilityCommand: 'sf version --json',
       identityCommand: 'npm run connections:verify -- salesforce',
       authCommand: 'npm run connections:auth -- salesforce',
@@ -153,8 +156,21 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI retains protected host sessions for Production, Devee, and QAT. FCOS keeps only project-local aliases and the Production default, then revalidates all three exact org IDs and query capabilities live before use.',
-      nonBrowserRoute: 'Use Salesforce CLI or the approved API only after Production, Devee, and QAT each match their exact Organization ID and environment type. Deploy identical metadata to all three targets.',
+      persistence: 'Salesforce CLI retains protected host sessions for Production, Devee, and QAT. FCOS keeps only project-local aliases and the Production default, then revalidates all three exact org IDs and query capabilities live before use. The shared Salesforce mirror uses a separate ignored GitHub CLI profile.',
+      nonBrowserRoute: 'Use Salesforce CLI or the approved API only after Production, Devee, and QAT each match their exact Organization ID and environment type. Deploy identical metadata to all three targets, then publish a byte-equivalent mirror to the pinned shared repository before the FCOS Salesforce change may be pushed.',
+      publication: {
+        requiredAccount: 'vincelessxai',
+        repository: 'ivanyk20/fcbhk',
+        defaultBranch: 'main',
+        activeBranch: 'codex/special-term-clause-bank-migration',
+        branchPrefix: 'codex/salesforce-metadata-sync',
+        sourceRoot: 'force-app/main/default',
+        targetRoot: 'src',
+        manifestPath: '.fcos-salesforce-mirror.json',
+        configPath: '.fcos-cli/github-vincelessxai',
+        verifyCommand: 'npm run salesforce:mirror:verify',
+        publishCommand: 'npm run salesforce:mirror:publish',
+      },
       environments: [
         { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
         { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true },
@@ -221,6 +237,17 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
         requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
         if (typeof environment.isSandbox !== 'boolean') throw new Error(`Salesforce ${environment.key} isSandbox must be Boolean.`);
       }
+      requireString(provider.publication?.requiredAccount, 'salesforce.publication.requiredAccount');
+      requireString(provider.publication?.repository, 'salesforce.publication.repository');
+      requireString(provider.publication?.defaultBranch, 'salesforce.publication.defaultBranch');
+      requireString(provider.publication?.activeBranch, 'salesforce.publication.activeBranch');
+      requireString(provider.publication?.branchPrefix, 'salesforce.publication.branchPrefix');
+      requireString(provider.publication?.sourceRoot, 'salesforce.publication.sourceRoot');
+      requireString(provider.publication?.targetRoot, 'salesforce.publication.targetRoot');
+      requireString(provider.publication?.manifestPath, 'salesforce.publication.manifestPath');
+      requireString(provider.publication?.configPath, 'salesforce.publication.configPath');
+      requireString(provider.publication?.verifyCommand, 'salesforce.publication.verifyCommand');
+      requireString(provider.publication?.publishCommand, 'salesforce.publication.publishCommand');
     }
   }
   return true;
