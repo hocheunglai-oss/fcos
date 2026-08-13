@@ -87,7 +87,11 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(service, /OPENAI_INSUFFICIENT_QUOTA/);
   assert.match(service, /OPENAI_MODEL_UNAVAILABLE/);
   assert.match(service, /OPENAI_REQUEST_INVALID/);
-  assert.match(service, /text: \{ format: \{ type: 'json_object' \} \} \}\),\n\s+signal: AbortSignal\.timeout/);
+  assert.match(service, /type: 'json_schema'/);
+  assert.match(service, /strict: true/);
+  assert.match(service, /minItems: inputGroups\.length/);
+  assert.match(service, /maxItems: inputGroups\.length/);
+  assert.match(service, /signal: AbortSignal\.timeout/);
   assert.match(service, /groups\.length > 20/);
   assert.match(service, /hasMaterialDifference\(sourceById\.get\(draft\.id\), draft\.proposedText\)/);
 });

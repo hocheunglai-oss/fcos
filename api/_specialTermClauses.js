@@ -1111,12 +1111,36 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
     if (!apiKey) throw specialTermsError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
     const model = DEFAULT_DASHBOARD_AI_MODEL;
     const inputGroups = groups.map((group, index) => ({ id: String(group.id || index + 1).slice(0, 80), clauseText: cleanClauseText(group.clauseText || group.text) }));
+    const outputSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['drafts'],
+      properties: {
+        drafts: {
+          type: 'array',
+          minItems: inputGroups.length,
+          maxItems: inputGroups.length,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'shortName', 'category', 'proposedText', 'rationale'],
+            properties: {
+              id: { type: 'string' },
+              shortName: { type: 'string' },
+              category: { type: 'string', enum: CLAUSE_CATEGORIES },
+              proposedText: { type: 'string' },
+              rationale: { type: 'string' },
+            },
+          },
+        },
+      },
+    };
     const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
       method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model, store: false, max_output_tokens: 6000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
+      body: JSON.stringify({ model, store: false, max_output_tokens: 12_000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
         { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Preserve every amount, deadline, party, port, product, standard, and jurisdiction. Do not merge clauses. Return JSON only: {"drafts":[{"id":"...","shortName":"3-7 action-oriented words","category":"one supplied category","proposedText":"professional shall/may wording","rationale":"brief"}]}. Each response is a DRAFT requiring human approval.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ categories: CLAUSE_CATEGORIES, groups: inputGroups }) }] },
-      ], text: { format: { type: 'json_object' } } }),
+      ], text: { format: { type: 'json_schema', name: 'special_term_clause_drafts', strict: true, schema: outputSchema } } }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw await clauseAiUpstreamError(response);
