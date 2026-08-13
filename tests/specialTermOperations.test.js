@@ -82,7 +82,7 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(service, /callRevisionApex\(.*'rollback'/s);
   assert.match(service, /A Special Term revision must include Terms Text, Confirmation remark, and Nomination remark/);
   assert.match(service, /store: false/);
-  assert.match(service, /model: 'gpt-5\.6-terra'/);
+  assert.match(service, /const model = DEFAULT_DASHBOARD_AI_MODEL/);
   assert.match(service, /groups\.length > 20/);
   assert.match(service, /hasMaterialDifference\(sourceById\.get\(draft\.id\), draft\.proposedText\)/);
 });

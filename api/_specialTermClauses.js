@@ -31,6 +31,7 @@ import {
   suggestClauseCategory,
   suggestClauseShortName,
 } from './_specialTermClauseModel.js';
+import { DEFAULT_DASHBOARD_AI_MODEL } from './_dashboardAi.js';
 
 const OBJECTS = Object.freeze({
   term: 'Special_Term__c',
@@ -1089,10 +1090,11 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
   try {
     const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
     if (!apiKey) throw specialTermsError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
+    const model = DEFAULT_DASHBOARD_AI_MODEL;
     const inputGroups = groups.map((group, index) => ({ id: String(group.id || index + 1).slice(0, 80), clauseText: cleanClauseText(group.clauseText || group.text) }));
     const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
       method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-5.6-terra', store: false, max_output_tokens: 6000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
+      body: JSON.stringify({ model, store: false, max_output_tokens: 6000, reasoning: { effort: 'medium' }, safety_identifier: clauseHash(profile.id), input: [
         { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Preserve every amount, deadline, party, port, product, standard, and jurisdiction. Do not merge clauses. Return JSON only: {"drafts":[{"id":"...","shortName":"3-7 action-oriented words","category":"one supplied category","proposedText":"professional shall/may wording","rationale":"brief"}]}. Each response is a DRAFT requiring human approval.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ categories: CLAUSE_CATEGORIES, groups: inputGroups }) }] },
       ], text: { format: { type: 'json_object' } }, signal: AbortSignal.timeout(60_000) }),
@@ -1102,13 +1104,13 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
     const parsed = JSON.parse(responseOutputText(payload));
     const aiResponseId = text(payload?.id, 100);
     if (!aiResponseId) throw specialTermsError('The clause drafting service omitted response lineage.', 502, 'SPECIAL_TERMS_AI_RESPONSE_INVALID');
-    const drafts = (parsed?.drafts || []).map((draft) => ({ id: text(draft.id, 80), shortName: cleanShortName(draft.shortName), category: CLAUSE_CATEGORIES.includes(draft.category) ? draft.category : 'Other', proposedText: cleanClauseText(draft.proposedText), rationale: text(draft.rationale, 500), draftSource: 'AI Assisted', aiModel: 'gpt-5.6-terra', aiResponseId }));
+    const drafts = (parsed?.drafts || []).map((draft) => ({ id: text(draft.id, 80), shortName: cleanShortName(draft.shortName), category: CLAUSE_CATEGORIES.includes(draft.category) ? draft.category : 'Other', proposedText: cleanClauseText(draft.proposedText), rationale: text(draft.rationale, 500), draftSource: 'AI Assisted', aiModel: model, aiResponseId }));
     if (drafts.length !== inputGroups.length) throw specialTermsError('The clause drafting service returned an incomplete batch.', 502, 'SPECIAL_TERMS_AI_RESPONSE_INVALID');
     const sourceById = new Map(inputGroups.map((group) => [group.id, group.clauseText]));
     if (new Set(drafts.map((draft) => draft.id)).size !== drafts.length || drafts.some((draft) => !sourceById.has(draft.id))) throw specialTermsError('The clause drafting service returned mismatched group identifiers.', 502, 'SPECIAL_TERMS_AI_RESPONSE_INVALID');
     if (drafts.some((draft) => hasMaterialDifference(sourceById.get(draft.id), draft.proposedText))) throw specialTermsError('The clause drafting service changed protected contractual qualifiers. Review the original wording manually.', 409, 'SPECIAL_TERMS_MATERIAL_DIFFERENCE');
-    const result = { success: true, draftCount: drafts.length, model: 'gpt-5.6-terra', aiResponseId, drafts };
-    return finishOperation(client, operation.operation, result, { success: true, draftCount: drafts.length, model: 'gpt-5.6-terra', aiResponseId });
+    const result = { success: true, draftCount: drafts.length, model, aiResponseId, drafts };
+    return finishOperation(client, operation.operation, result, { success: true, draftCount: drafts.length, model, aiResponseId });
   } catch (error) { return failOperation(client, operation.operation, error); }
 }
 
