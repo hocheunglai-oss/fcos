@@ -203,19 +203,20 @@ export function suggestClauseShortName(value) {
 }
 
 function materialTokens(value) {
-  const text = normalizeClauseEquivalence(value);
+  const source = stripOuterClauseNumber(value);
+  const text = source.toLocaleLowerCase('en').replace(/\s+/g, ' ').trim();
   const jurisdictions = /\b(?:china|chinese|russia|russian|hong kong|singapore|england|english|united kingdom|uk|united states|usa|uae|united arab emirates|panama|malaysia|indonesia|philippines|japan|korea|taiwan|india|sri lanka|vietnam|thailand)\b/g;
   const standardsAndProducts = /\b(?:marpol(?:\s+annex\s+[ivx]+)?|bimco|cpc|formosa|petronas|pertamina|ioc|naftal|mops|iso\s*\d+(?::\d+)?|ss\s*\d+|tr\s*\d+|rmg\s*\d+|rmk\s*\d+|vlsfo|hsfo|ulsfo|ifo\s*\d+|mgo|lsmgo)\b/g;
   const moneyAndDeadlines = /(?:usd|eur|hkd|sgd|cny|jpy|gbp|\$|€|£)\s*[0-9][0-9,.]*|[0-9][0-9,.]*\s*(?:calendar\s+days?|business\s+days?|working\s+days?|days?|hours?|months?|years?|mt|pmt|%|percent|cents?|dollars?)/g;
   const allNumbers = /\b\d+(?:[.,]\d+)*\b/g;
-  const contextualEntities = /\b(?:supplier|seller|buyer|port|terminal|refinery|product|grade|standard|specification|jurisdiction|governed by|laws? of)\s+(?:of\s+|at\s+|in\s+|the\s+)?([a-z][a-z0-9&.'/-]*(?:\s+[a-z][a-z0-9&.'/-]*){0,3})/g;
   const tokens = new Set([
     ...(text.match(moneyAndDeadlines) || []).map((token) => `quantifier:${token}`),
     ...(text.match(allNumbers) || []).map((token) => `number:${token}`),
     ...(text.match(standardsAndProducts) || []).map((token) => `standard:${token}`),
     ...(text.match(jurisdictions) || []).map((token) => `jurisdiction:${token}`),
   ]);
-  for (const match of text.matchAll(contextualEntities)) tokens.add(`entity:${match[0]}`);
+  const quotedEntities = source.match(/["“”][^"“”\n]{2,80}["“”]/g) || [];
+  for (const entity of quotedEntities) tokens.add(`entity:${entity.toLocaleLowerCase('en').replace(/["“”]/g, '').trim()}`);
   return tokens;
 }
 

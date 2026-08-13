@@ -68,6 +68,9 @@ test('material differences keep amounts, deadlines, suppliers, and standards sep
   assert.equal(hasMaterialDifference('No warranty for MARPOL Annex VI.', 'NO WARRANTY FOR MARPOL ANNEX VI.'), false);
   assert.equal(hasMaterialDifference('Delivery at Singapore.', 'Delivery at Hong Kong.'), true);
   assert.equal(hasMaterialDifference('Product must meet ISO 8217:2017.', 'Product must meet ISO 8217:2024.'), true);
+  assert.equal(hasMaterialDifference('Physical supplier "SINOPEC Marine" shall deliver.', 'Physical supplier "PETROCHINA Marine" shall deliver.'), true);
+  assert.equal(hasMaterialDifference('The supplier will issue its invoice after delivery.', 'The supplier shall issue the invoice after delivery.'), false);
+  assert.equal(hasMaterialDifference('SUPPLIER WILL ISSUE ITS INVOICE AFTER DELIVERY.', 'The supplier shall issue the invoice after delivery.'), false);
   assert.ok(clauseSimilarity('Buyer must submit a quality claim within seven days.', 'Quality claims must be submitted within seven days by Buyer.') > 0.5);
 });
 
