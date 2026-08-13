@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { expectedManifest, sourceInventory } from '../scripts/sync-salesforce-shared-repository.mjs';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 
 test('Salesforce mirror inventory owns the complete authoritative metadata tree', () => {
   const inventory = sourceInventory();
@@ -34,4 +35,16 @@ test('closed shared pull requests cannot be silently reused for later Salesforce
   assert.match(source, /'pr', 'list'.*'--state', 'open'/s);
   assert.match(source, /MODE === 'check'.*PUBLICATION\.defaultBranch/s);
   assert.doesNotMatch(source, /remoteBranchHead\(PUBLICATION\.activeBranch\).*PUBLICATION\.activeBranch/s);
+});
+
+test('shared Salesforce commits are permanently attributed to the approved GitHub identity', async () => {
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
+  assert.equal(publication.requiredAccount, 'vincelessxai');
+  assert.equal(publication.requiredAccountId, 304336732);
+  assert.match(source, /requiredAccountId.*requiredAccount.*users\.noreply\.github\.com/);
+  assert.match(source, /configurePushIdentity\(checkout\)[\s\S]*git', \['add'/);
+  assert.match(source, /force-with-lease=refs\/heads\/\$\{branch\}:\$\{expectedRemoteHead\}/);
+  assert.match(source, /assertCommitAttribution\(commit\)/);
+  assert.doesNotMatch(source, /user\.name', 'Codex'|noreply@openai\.com/);
 });

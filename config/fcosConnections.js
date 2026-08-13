@@ -139,6 +139,7 @@ const connectionPolicy = {
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
         { label: 'Shared GitHub account', value: 'vincelessxai' },
+        { label: 'Shared GitHub account ID', value: '304336732' },
         { label: 'Shared Salesforce repository', value: 'ivanyk20/fcbhk' },
         { label: 'Shared repository path', value: 'src/' },
       ],
@@ -160,6 +161,7 @@ const connectionPolicy = {
       nonBrowserRoute: 'Use Salesforce CLI or the approved API only after Production, Devee, and QAT each match their exact Organization ID and environment type. Deploy identical metadata to all three targets, then publish a byte-equivalent mirror to the pinned shared repository before the FCOS Salesforce change may be pushed.',
       publication: {
         requiredAccount: 'vincelessxai',
+        requiredAccountId: 304336732,
         repository: 'ivanyk20/fcbhk',
         defaultBranch: 'main',
         activeBranch: 'codex/special-term-clause-bank-migration',
@@ -238,6 +240,9 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
         if (typeof environment.isSandbox !== 'boolean') throw new Error(`Salesforce ${environment.key} isSandbox must be Boolean.`);
       }
       requireString(provider.publication?.requiredAccount, 'salesforce.publication.requiredAccount');
+      if (!Number.isSafeInteger(provider.publication?.requiredAccountId) || provider.publication.requiredAccountId <= 0) {
+        throw new Error('salesforce.publication.requiredAccountId must be a positive integer.');
+      }
       requireString(provider.publication?.repository, 'salesforce.publication.repository');
       requireString(provider.publication?.defaultBranch, 'salesforce.publication.defaultBranch');
       requireString(provider.publication?.activeBranch, 'salesforce.publication.activeBranch');

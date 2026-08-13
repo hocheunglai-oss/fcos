@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.166',
+    releasedAt: '2026-08-14',
+    title: 'Guarantee shared Salesforce contribution attribution',
+    changes: [
+      'Pins the non-secret GitHub account ID for the shared Salesforce mirror and requires both commit author and committer to resolve to `vincelessxai` before publication succeeds.',
+      'Rebuilds an existing mirror branch from current shared main with an exact remote-head lease, preventing stale or divergent publication history.',
+      'Documents inherited Ship-Agent readiness metadata and byte-equivalent source evidence on the current shared pull request for repository-owner review.',
+    ],
+  },
+  {
     version: '2.0.165',
     releasedAt: '2026-08-14',
     title: 'Justify Special Term clause text',

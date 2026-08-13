@@ -100,9 +100,10 @@ function assertIdentity() {
   if (!existsSync(path.join(isolatedConfig, 'hosts.yml'))) {
     throw new Error('The isolated shared-repository GitHub authorization is unavailable.');
   }
-  const account = run('gh', ['api', 'user', '--jq', '.login'], { env: ghEnvironment });
+  const account = json('gh', ['api', 'user'], { env: ghEnvironment });
   const repository = json('gh', ['api', `repos/${PUBLICATION.repository}`], { env: ghEnvironment });
-  if (account !== PUBLICATION.requiredAccount
+  if (account?.login !== PUBLICATION.requiredAccount
+    || account?.id !== PUBLICATION.requiredAccountId
     || repository?.full_name?.toLowerCase() !== PUBLICATION.repository.toLowerCase()
     || repository?.permissions?.pull !== true
     || repository?.permissions?.push !== true
@@ -145,10 +146,10 @@ function publicationBranch() {
 
 function cloneBranch(destination, branch, existsRemotely) {
   const cloneArgs = ['repo', 'clone', PUBLICATION.repository, destination, '--'];
-  if (existsRemotely) cloneArgs.push('--branch', branch, '--single-branch');
-  else cloneArgs.push('--branch', PUBLICATION.defaultBranch, '--single-branch');
+  const cloneSourceBranch = MODE === 'publish' ? PUBLICATION.defaultBranch : branch;
+  cloneArgs.push('--branch', cloneSourceBranch, '--single-branch');
   run('gh', cloneArgs, { env: ghEnvironment });
-  if (!existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
+  if (MODE === 'publish') run('git', ['switch', '-c', branch], { cwd: destination });
 }
 
 function readOwnedFiles(checkout) {
@@ -203,8 +204,8 @@ function verifyCheckout(checkout, inventory, manifest) {
 
 function configurePushIdentity(checkout) {
   const helper = `!f() { env GH_CONFIG_DIR='${isolatedConfig.replaceAll("'", "'\"'\"'")}' gh auth git-credential \"$@\"; }; f`;
-  run('git', ['config', '--local', 'user.name', 'Codex'], { cwd: checkout });
-  run('git', ['config', '--local', 'user.email', 'noreply@openai.com'], { cwd: checkout });
+  run('git', ['config', '--local', 'user.name', PUBLICATION.requiredAccount], { cwd: checkout });
+  run('git', ['config', '--local', 'user.email', `${PUBLICATION.requiredAccountId}+${PUBLICATION.requiredAccount}@users.noreply.github.com`], { cwd: checkout });
   spawnSync('git', ['config', '--local', '--unset-all', 'credential.https://github.com.helper'], {
     cwd: checkout,
     stdio: 'ignore',
@@ -214,8 +215,19 @@ function configurePushIdentity(checkout) {
   run('git', ['config', '--local', 'credential.https://github.com.username', PUBLICATION.requiredAccount], { cwd: checkout });
 }
 
+function assertCommitAttribution(commit) {
+  const record = json('gh', ['api', `repos/${PUBLICATION.repository}/commits/${commit}`], { env: ghEnvironment });
+  if (record?.author?.login !== PUBLICATION.requiredAccount
+    || record?.author?.id !== PUBLICATION.requiredAccountId
+    || record?.committer?.login !== PUBLICATION.requiredAccount
+    || record?.committer?.id !== PUBLICATION.requiredAccountId) {
+    throw new Error('Shared Salesforce mirror commit attribution does not match the approved GitHub identity.');
+  }
+}
+
 function publish(checkout, branch, expectedRemoteHead, pullRequest) {
   const paths = [PUBLICATION.targetRoot, PUBLICATION.manifestPath];
+  configurePushIdentity(checkout);
   run('git', ['add', '--', ...paths], { cwd: checkout });
   const status = run('git', ['status', '--short'], { cwd: checkout });
   if (!status) return { changed: false, branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest };
@@ -224,9 +236,12 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest) {
   if (remoteBranchHead(branch) !== expectedRemoteHead) {
     throw new Error('The shared Salesforce branch changed during publication. Fetch and reconcile before retrying.');
   }
-  configurePushIdentity(checkout);
-  run('git', ['push', '--set-upstream', 'origin', `HEAD:${branch}`], { cwd: checkout, inherit: true });
+  const pushArgs = ['push', '--set-upstream'];
+  if (expectedRemoteHead) pushArgs.push(`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`);
+  pushArgs.push('origin', `HEAD:${branch}`);
+  run('git', pushArgs, { cwd: checkout, inherit: true });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
+  assertCommitAttribution(commit);
   if (!pullRequest) {
     const body = [
       'Mirrors only Salesforce metadata deployed from `hocheunglai-oss/fcos`.',
@@ -264,6 +279,7 @@ export function main() {
     const publication = MODE === 'publish'
       ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest)
       : { changed: false, branch: selected.branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest: selected.pullRequest };
+    if (MODE === 'check' && selected.pullRequest) assertCommitAttribution(publication.commit);
     process.stdout.write(`${JSON.stringify({
       mode: MODE,
       repository: PUBLICATION.repository,
