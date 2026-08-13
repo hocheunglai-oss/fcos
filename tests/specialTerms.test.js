@@ -32,6 +32,8 @@ test('Special Terms validates the authoritative Salesforce schema and rule looku
   assert.match(service, /clauseVersion: 'Special_Term_Clause_Version__c'/);
   assert.match(service, /clauseAssignment: 'Special_Term_Clause_Assignment__c'/);
   assert.match(service, /'Special_Term__c', \{ referenceTo: OBJECTS\.term/);
+  assert.match(service, /name === 'Clause__c' \? \{\} : \{ updateable: true \}/);
+  assert.match(service, /clauseAssignment, OBJECTS\.clauseAssignment, 'Special_Term__c'.*createable: true/s);
   assert.match(service, /'Account__c', \{ referenceTo: OBJECTS\.account/);
   assert.match(service, /'Port__c', \{ referenceTo: OBJECTS\.port/);
   assert.match(service, /'Product__c', \{ referenceTo: OBJECTS\.product/);
