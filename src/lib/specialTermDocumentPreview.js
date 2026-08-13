@@ -1,7 +1,33 @@
 // This module keeps the document projection local and accepts already-normalized
 // clause rows; no Salesforce or export request is made while composing.
+function decodeDocumentEntity(entity) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+  if (Object.hasOwn(named, entity)) return named[entity];
+  if (/^#\d+$/.test(entity)) return String.fromCodePoint(Number(entity.slice(1)));
+  if (/^#x[\da-f]+$/i.test(entity)) return String.fromCodePoint(Number.parseInt(entity.slice(2), 16));
+  return `&${entity};`;
+}
+
+export function normalizeDocumentPreviewText(value) {
+  let source = String(value || '').replace(/\r\n?/g, '\n');
+  if (/<\/?[a-z][\s\S]*>/i.test(source)) {
+    source = source
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<li\b[^>]*>/gi, '- ')
+      .replace(/<\/(?:p|div|h[1-6]|blockquote|li)>/gi, '\n\n')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&([^;\s]+);/g, (_, entity) => decodeDocumentEntity(entity));
+  }
+  return source
+    .replace(/\u00a0/g, ' ')
+    .replace(/\t/g, ' ')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function clean(value) {
-  return String(value || '').replace(/\r\n?/g, '\n').trim();
+  return normalizeDocumentPreviewText(value);
 }
 
 function fallbackCompile(rows, style) {
@@ -43,8 +69,8 @@ export function documentPreviewKey(model) {
   });
 }
 
-const PREVIEW_LINE_CAPACITY = 44;
-const PREVIEW_CHAR_CAPACITY = 88;
+const PREVIEW_LINE_CAPACITY = 38;
+const PREVIEW_CHAR_CAPACITY = 76;
 
 function previewBlocks(value) {
   const source = clean(value);

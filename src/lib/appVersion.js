@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.164',
+    releasedAt: '2026-08-14',
+    title: 'Improve Special Term document typography',
+    changes: [
+      'Increased Special Term body copy to readable 12 pt Arial with 1.25 line spacing across the A4 preview, PDF, and Word exports.',
+      'Rebuilt numbered and nested-list geometry with compact right-aligned markers, a consistent text column, aligned wrapped lines, and symmetric page margins.',
+      'Converts preserved Salesforce rich-text markup and tab separators to safe document text before preview and export without rewriting contractual wording.',
+    ],
+  },
+  {
     version: '2.0.163',
     releasedAt: '2026-08-14',
     title: 'Publish professional Special Term documents',

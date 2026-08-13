@@ -14,23 +14,23 @@ const pagePercent = (millimetres, dimension) => `${(millimetres / dimension) * 1
 const previewPointSize = (points) => `clamp(${Math.max(3, points * 0.4)}px, ${((points * 1.333) / 794) * 100}cqw, ${points * 1.333}px)`;
 
 function PreviewPageBody({ pageText, numbered }) {
-  let continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm : 0;
+  let continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
   return String(pageText || '').split('\n').map((line, index) => {
     const numberedLine = line.match(/^\s*(\d+\.)\s+(.+)$/);
     const bulletLine = line.match(/^\s*[-\u2022\u2013\u2014]\s+(.+)$/);
     if (!line) {
-      continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm : 0;
+      continuationIndentMm = numbered ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
       return <div key={`blank-${index}`} className="h-[0.7em]" aria-hidden="true" />;
     }
     if (numberedLine) {
-      continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm;
-      return <div key={`number-${index}`} className="flex"><span className="shrink-0" style={{ width: `${SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm}mm` }}>{numberedLine[1]}</span><span>{numberedLine[2]}</span></div>;
+      continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm;
+      return <div key={`number-${index}`} className="flex w-full"><span className="shrink-0 text-right tabular-nums" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, PAGE.widthMm) }}>{numberedLine[1]}</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerGapMm, PAGE.widthMm) }}>{numberedLine[2]}</span></div>;
     }
     if (bulletLine && numbered) {
-      continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedIndentMm;
-      return <div key={`bullet-${index}`} className="flex" style={{ paddingLeft: `${SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm}mm` }}><span className="shrink-0" style={{ width: `${SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm}mm` }}>-</span><span>{bulletLine[1]}</span></div>;
+      continuationIndentMm = SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm;
+      return <div key={`bullet-${index}`} className="flex w-full"><span className="shrink-0 text-right" style={{ width: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>-</span><span className="min-w-0 flex-1" style={{ marginLeft: pagePercent(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, PAGE.widthMm) }}>{bulletLine[1]}</span></div>;
     }
-    return <div key={`line-${index}`} style={{ paddingLeft: `${continuationIndentMm}mm` }}>{line}</div>;
+    return <div key={`line-${index}`} className="w-full" style={{ paddingLeft: pagePercent(continuationIndentMm, PAGE.widthMm) }}>{line}</div>;
   });
 }
 
@@ -53,7 +53,7 @@ function DocumentSheet({ model, pageText, pageIndex, pageCount, zoom }) {
         <h2 className="text-left font-bold uppercase tracking-[0.08em] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.sectionLabelPt) }}>Special Terms</h2>
         <h3 className="mt-2 text-left font-bold leading-[1.15] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.titlePt) }}>{model.title}</h3>
         <div className="mt-2 h-px bg-[#00417b]" />
-        <div className="mt-4 whitespace-pre-wrap leading-[1.15]" style={{ fontSize: previewPointSize(TYPE.bodyPt) }}>{pageText ? <PreviewPageBody pageText={pageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : 'No Terms Text clauses.'}</div>
+        <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : 'No Terms Text clauses.'}</div>
       </section>
       <footer className="absolute border-t border-[#00417b] pt-1 text-right text-[#00417b]" style={{ bottom: pagePercent(PAGE.heightMm - PAGE.footerTextMm, PAGE.heightMm), left: pagePercent(PAGE.leftMm, PAGE.widthMm), right: pagePercent(PAGE.rightMm, PAGE.widthMm), fontSize: previewPointSize(7) }}>Page {pageIndex + 1} of {pageCount}</footer>
     </article>

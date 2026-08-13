@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentPreviewKey, paginateDocumentText, specialTermDocumentModel } from '../src/lib/specialTermDocumentPreview.js';
+import { documentPreviewKey, normalizeDocumentPreviewText, paginateDocumentText, specialTermDocumentModel } from '../src/lib/specialTermDocumentPreview.js';
 
 test('document preview compiles only the Terms Text projection as numbered clauses', () => {
   const model = specialTermDocumentModel({
@@ -46,5 +46,14 @@ test('document preview keeps a clause together when it fits on a fresh page', ()
   const pages = paginateDocumentText(`${leading}\n\n${second}`, { title: 'Long terms' });
   const secondPageIndex = pages.findIndex((page) => page.includes('2. Second requirement'));
   assert.ok(secondPageIndex > 0);
-  assert.match(pages[secondPageIndex], /^2\. Second requirement/);
+  const secondClausePage = pages[secondPageIndex];
+  assert.match(secondClausePage, /(?:^|\n\n)2\. Second requirement/);
+  assert.doesNotMatch(secondClausePage, /2\.\s*$/m);
+});
+
+test('document preview strips Salesforce rich-text markup and tab spacing', () => {
+  const china = '<p>1.\tFIRST REQUIREMENT &amp; LOCATION.</p><p>CONTINUATION.</p><p>2.\tSECOND REQUIREMENT.</p>';
+  assert.equal(normalizeDocumentPreviewText(china), '1. FIRST REQUIREMENT & LOCATION.\n\nCONTINUATION.\n\n2. SECOND REQUIREMENT.');
+  const model = specialTermDocumentModel({ term: { name: 'China', termsText: china }, mode: 'live' });
+  assert.equal(model.termsText, '1. FIRST REQUIREMENT & LOCATION.\n\nCONTINUATION.\n\n2. SECOND REQUIREMENT.');
 });

@@ -55,7 +55,8 @@ test('Special Term DOCX contains editable terms, real numbering, A4 geometry, an
   assert.match(headerXml, /Low sulphur requirement/);
   assert.match(footerXml, /Page/);
   assert.match(numberingXml, /%1\./);
-  assert.equal(specialTermsDocumentInternals.DOCX_BODY_LINE_TWIP, 242);
+  assert.equal(specialTermsDocumentInternals.DOCX_BODY_LINE_TWIP, 300);
+  assert.equal(specialTermsDocumentInternals.DOCX_BODY_HALF_POINTS, 24);
   assert.match(documentXml, /w:w="11906"/); // 210 mm in twentieths of a point
   assert.match(documentXml, /w:left="1247"/); // 22 mm margin
   assert.doesNotMatch(documentXml, /Must not be exported|Also excluded/);
@@ -87,7 +88,7 @@ test('Special Term PDF wraps one exceptionally long clause without horizontal cl
 });
 
 test('Special Term PDF normalizes line endings and suffixes duplicate filenames', () => {
-  assert.equal(specialTermsExportInternals.normalizeTermsText(' First\r\n\r\nSecond\tvalue  \r\n'), 'First\n\nSecond    value');
+  assert.equal(specialTermsExportInternals.normalizeTermsText(' First\r\n\r\nSecond\tvalue  \r\n'), 'First\n\nSecond value');
   assert.equal(specialTermsExportInternals.safeFilenamePart('  Port / Product: Terms?  '), 'Port Product Terms');
   assert.equal(specialTermsExportInternals.duplicateSuffix(1), '-1');
   assert.equal(specialTermsExportInternals.duplicateSuffix(0), '');
@@ -101,6 +102,23 @@ test('Special Term PDF only parses safely sequential legacy numbering', () => {
   assert.deepEqual(specialTermsExportInternals.safelyParseLegacyNumbering('1. First\n\n2. Second').clauses, ['First', 'Second']);
   assert.equal(specialTermsExportInternals.safelyParseLegacyNumbering('1. First\n\n3. Different sequence').kind, 'raw');
   assert.equal(specialTermsExportInternals.safelyParseLegacyNumbering('A heading\n1. First').kind, 'raw');
+});
+
+test('legacy Salesforce rich text becomes readable plain text before numbering and export', () => {
+  const legacy = '<p>1.\tFIRST CHINA REQUIREMENT.</p><p>CONTINUATION AT THE SAME CLAUSE INDENT.</p><p>2.\tSECOND CHINA REQUIREMENT.</p>';
+  assert.equal(specialTermsExportInternals.normalizeTermsText(legacy), '1. FIRST CHINA REQUIREMENT.\n\nCONTINUATION AT THE SAME CLAUSE INDENT.\n\n2. SECOND CHINA REQUIREMENT.');
+  assert.deepEqual(specialTermsExportInternals.safelyParseLegacyNumbering(legacy).clauses, [
+    'FIRST CHINA REQUIREMENT.\n\nCONTINUATION AT THE SAME CLAUSE INDENT.',
+    'SECOND CHINA REQUIREMENT.',
+  ]);
+});
+
+test('shared document geometry uses readable type and a compact aligned marker column', () => {
+  const tokens = specialTermsExportInternals.SPECIAL_TERMS_DOCUMENT_TOKENS;
+  assert.equal(tokens.typography.bodyPt, 12);
+  assert.equal(tokens.typography.lineMultiplier, 1.25);
+  assert.equal(tokens.list.markerRightMm + tokens.list.markerGapMm, tokens.list.textIndentMm);
+  assert.equal(tokens.page.leftMm, tokens.page.rightMm);
 });
 
 test('Saved draft PDF is visibly marked and DOCX preserves legacy hard line breaks', async () => {

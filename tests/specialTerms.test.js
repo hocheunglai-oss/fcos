@@ -126,8 +126,9 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(preview, /SPECIAL TERMS/i);
   assert.match(preview, /Page \{pageIndex \+ 1\} of \{pageCount\}/);
   assert.match(preview, /Fit width/);
-  assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.hangingIndentMm/);
-  assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.nestedIndentMm/);
+  assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.markerRightMm/);
+  assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.textIndentMm/);
+  assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.nestedTextIndentMm/);
   assert.match(preview, /Word is editable; Salesforce remains authoritative\. Attachments are PDF-only\./);
   const batchPanel = read('src/components/special-terms/MigrationBatchPanel.jsx');
   assert.match(batchPanel, /specialTermMigrationBatchList/);

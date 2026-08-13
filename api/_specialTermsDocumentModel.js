@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { Document, Footer, Header, ImageRun, LevelFormat, Packer, PageNumber, Paragraph, TextRun, AlignmentType } from 'docx';
+import { Document, Footer, Header, ImageRun, LevelFormat, LevelSuffix, Packer, PageNumber, Paragraph, TextRun, AlignmentType } from 'docx';
+import { Parser } from 'htmlparser2';
 import { jsPDF } from 'jspdf';
 import { SPECIAL_TERMS_DOCUMENT_TOKENS } from '../src/lib/specialTermsDocumentTokens.js';
 
@@ -25,6 +26,7 @@ const PAGE = Object.freeze({
 const MM_TO_TWIP = 56.6929133858;
 const mmToTwip = (value) => Math.round(value * MM_TO_TWIP);
 const DOCX_BODY_LINE_TWIP = Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lineMultiplier * 20);
+const DOCX_BODY_HALF_POINTS = Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * 2);
 const LOGO = (() => {
   try { return readFileSync(new URL('./assets/hedge-letterhead-logo.jpg', import.meta.url)); } catch { return null; }
 })();
@@ -33,8 +35,33 @@ function clean(value) {
   return String(value ?? '').replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim();
 }
 
+function richTextToPlainText(value) {
+  const source = String(value ?? '');
+  if (!/<\/?[a-z][\s\S]*>/i.test(source)) return source;
+  let output = '';
+  const parser = new Parser({
+    onopentag(name) {
+      if (name === 'br') output += '\n';
+      if (name === 'li' && output && !output.endsWith('\n')) output += '\n';
+      if (name === 'li') output += '- ';
+    },
+    ontext(text) { output += text; },
+    onclosetag(name) {
+      if (name === 'li') output += '\n';
+      else if (['p', 'div', 'h1', 'h2', 'h3', 'h4', 'blockquote'].includes(name)) output += '\n\n';
+    },
+  }, { decodeEntities: true, lowerCaseTags: true });
+  parser.write(source);
+  parser.end();
+  return output;
+}
+
 export function normalizeTermsText(value) {
-  return clean(value).replace(/\t/g, '    ');
+  return clean(richTextToPlainText(value))
+    .replace(/\u00a0/g, ' ')
+    .replace(/\t/g, ' ')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
 export function hongKongDateToken(date = new Date()) {
@@ -183,9 +210,10 @@ function pdfRenderBody(doc, model) {
     y = pdfContentStart(doc, model);
     applyBodyStyle();
   };
-  // 10.5pt × 1.15 converted from typographic points to millimetres.
+  // Typographic points converted to millimetres; the shared token is also
+  // used by the DOCX and browser preview.
   const lineHeight = SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lineMultiplier * 0.352778;
-  const clauseGap = 2.82; // 8pt
+  const clauseGap = SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 0.352778;
   applyBodyStyle();
   for (let i = 0; i < model.body.length; i += 1) {
     const item = model.body[i];
@@ -194,13 +222,13 @@ function pdfRenderBody(doc, model) {
       const paragraph = item.paragraphs[paragraphIndex];
       const nested = paragraph.nested;
       const raw = nested ? paragraph.text.replace(/^\s*[-\u2022\u2013\u2014]\s+/, '') : paragraph.text;
-      const indent = nested ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedIndentMm : (marker && paragraphIndex === 0 ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm : marker ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm : 0);
+      const indent = nested ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm : marker ? SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm : 0;
       const lines = raw.split('\n').flatMap((hardLine) => pdfTextLines(doc, hardLine || ' ', PAGE.right - PAGE.left - indent));
       const shortClauseHeight = lines.length <= 8 ? lines.length * lineHeight : Math.min(lines.length, 2) * lineHeight;
       const minimumBlock = shortClauseHeight + (item.type === 'clause' ? clauseGap : 0);
       if (y + minimumBlock > PAGE.bodyBottom) newPage();
-      if (marker && paragraphIndex === 0) doc.text(marker, PAGE.left, y);
-      if (nested) doc.text('-', PAGE.left + SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm, y);
+      if (marker && paragraphIndex === 0) doc.text(marker, PAGE.left + SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm, y, { align: 'right' });
+      if (nested) doc.text('-', PAGE.left + SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm, y, { align: 'right' });
       lines.forEach((line) => {
         if (y + lineHeight > PAGE.bodyBottom) newPage();
         doc.text(line, PAGE.left + indent, y); y += lineHeight;
@@ -244,7 +272,7 @@ function docxTextRuns(value) {
   const lines = String(value ?? '').split('\n');
   return lines.flatMap((line, index) => [
     ...(index ? [new TextRun({ break: 1 })] : []),
-    new TextRun({ text: line, font: 'Arial', size: 21, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }),
+    new TextRun({ text: line, font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }),
   ]);
 }
 
@@ -253,15 +281,17 @@ function docxBody(model) {
   for (const item of model.body) {
     for (let p = 0; p < item.paragraphs.length; p += 1) {
       const paragraph = item.paragraphs[p];
+      const paragraphAfter = item.type === 'clause' && p === item.paragraphs.length - 1
+        ? Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 20)
+        : 50;
       if (paragraph.nested) {
-        children.push(new Paragraph({ numbering: { reference: 'special-terms-bullet', level: 0 }, keepLines: true, spacing: { after: 50, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ numbering: { reference: 'special-terms-bullet', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       } else if (item.type === 'clause' && p === 0) {
-        children.push(new Paragraph({ numbering: { reference: 'special-terms-top', level: 0 }, keepLines: true, spacing: { after: 50, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ numbering: { reference: 'special-terms-top', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       } else {
-        children.push(new Paragraph({ indent: item.type === 'clause' ? { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm) } : undefined, spacing: { after: 50, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
+        children.push(new Paragraph({ indent: item.type === 'clause' ? { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm) } : undefined, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
       }
     }
-    if (item.type === 'clause') children.push(new Paragraph({ spacing: { after: 110 }, children: [] }));
   }
   return children;
 }
@@ -270,8 +300,8 @@ export async function generateSpecialTermsDocxFromModel(model) {
   const doc = new Document({
     creator: 'FCOS', title: `Special Terms - ${model.name}`, subject: 'Special Terms',
     numbering: { config: [
-      { reference: 'special-terms-top', levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.LEFT, style: { run: { font: 'Arial', size: 21, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: 160 }, keepLines: true } } }] },
-      { reference: 'special-terms-bullet', levels: [{ level: 0, format: LevelFormat.BULLET, text: '-', alignment: AlignmentType.LEFT, style: { run: { font: 'Arial', size: 21, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.hangingIndentMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: 50 }, keepLines: true } } }] },
+      { reference: 'special-terms-top', levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.RIGHT, suffix: LevelSuffix.TAB, style: { run: { font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { leftTabStop: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm), indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 20) }, keepLines: true } } }] },
+      { reference: 'special-terms-bullet', levels: [{ level: 0, format: LevelFormat.BULLET, text: '-', alignment: AlignmentType.RIGHT, suffix: LevelSuffix.TAB, style: { run: { font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { leftTabStop: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm), indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: 50 }, keepLines: true } } }] },
     ] },
     sections: [{
       properties: {
@@ -289,4 +319,4 @@ export async function generateSpecialTermsDocxFromModel(model) {
   return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: `${model.filenameStem}.docx`, termName: model.name, source: model.source };
 }
 
-export const specialTermsDocumentInternals = { clean, paragraphsForClause, safelyParseLegacyNumbering, docxBodyTopMm, DOCX_BODY_LINE_TWIP };
+export const specialTermsDocumentInternals = { clean, richTextToPlainText, paragraphsForClause, safelyParseLegacyNumbering, docxBodyTopMm, DOCX_BODY_LINE_TWIP, DOCX_BODY_HALF_POINTS };
