@@ -1,0 +1,18 @@
+import { expect, test as setup } from '@playwright/test';
+
+const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
+const email = String(process.env.FCOS_E2E_EMAIL || '').trim();
+const password = String(process.env.FCOS_E2E_PASSWORD || '');
+
+setup('authenticate the dedicated FCOS CI viewer', async ({ page }) => {
+  if (!authState) throw new Error('FCOS_E2E_STORAGE_STATE is required.');
+  if (!email || !password) throw new Error('FCOS_E2E_EMAIL and FCOS_E2E_PASSWORD are required.');
+
+  await page.goto('/login');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: /sign in/i }).click();
+  await expect(page).not.toHaveURL(/\/login(?:\?|$)/);
+  await expect(page.getByText('Dashboard', { exact: true }).first()).toBeVisible();
+  await page.context().storageState({ path: authState });
+});

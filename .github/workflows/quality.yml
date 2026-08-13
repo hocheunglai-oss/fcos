@@ -29,8 +29,10 @@ jobs:
   authenticated-browser:
     runs-on: ubuntu-latest
     env:
-      FCOS_E2E_BASE_URL: ${{ secrets.FCOS_E2E_BASE_URL }}
+      FCOS_E2E_BASE_URL: https://fcos.fcuno.com
       FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
+      FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+      FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
       FCOS_REQUIRE_AUTH_E2E: 1
     steps:
       - uses: actions/checkout@v4
@@ -40,13 +42,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chrome
-      - name: Prepare authenticated browser state
-        env:
-          FCOS_E2E_STORAGE_STATE_BASE64: ${{ secrets.FCOS_E2E_STORAGE_STATE_BASE64 }}
+      - name: Verify renewable authenticated browser credentials
         run: |
           test -n "$FCOS_E2E_BASE_URL"
-          test -n "$FCOS_E2E_STORAGE_STATE_BASE64"
-          printf '%s' "$FCOS_E2E_STORAGE_STATE_BASE64" | base64 --decode > "$FCOS_E2E_STORAGE_STATE"
+          test -n "$FCOS_E2E_EMAIL"
+          test -n "$FCOS_E2E_PASSWORD"
       - run: npm run test:e2e
 
   dependency-review:

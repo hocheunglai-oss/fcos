@@ -23,7 +23,22 @@ export default defineConfig({
     timeout: 120_000,
   },
   projects: [
-    { name: 'desktop-chrome', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile-chrome', use: { ...devices['Pixel 7'] } },
+    ...(process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD ? [{
+      name: 'auth-setup',
+      testMatch: /auth\.setup\.js/,
+      use: { ...devices['Desktop Chrome'] },
+    }] : []),
+    {
+      name: 'desktop-chrome',
+      testIgnore: /auth\.setup\.js/,
+      dependencies: process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD ? ['auth-setup'] : [],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'mobile-chrome',
+      testIgnore: /auth\.setup\.js/,
+      dependencies: process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD ? ['auth-setup'] : [],
+      use: { ...devices['Pixel 7'] },
+    },
   ],
 });
