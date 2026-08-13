@@ -11,7 +11,7 @@ import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
-import { generateSpecialTermPdf } from '../_specialTermsExport.js';
+import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
@@ -152,7 +152,7 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermForExport, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   activateSpecialTermMigration,
   approveSpecialTermClause,
@@ -342,7 +342,6 @@ const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capa
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
-const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 const DEFAULT_USER_TYPES = [
   {
     id: 'general_manager',
@@ -1344,6 +1343,7 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskMaintenanceCron: [],
   specialTermsWorkspace: ['special_terms'],
   specialTermsPdfExport: ['special_terms'],
+  specialTermsDocumentExport: ['special_terms'],
   specialTermsOptions: ['special_terms'],
   specialTermDetail: ['special_terms'],
   specialTermClauseBank: ['special_terms'],
@@ -16848,18 +16848,32 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
   return { ...workspace, canManage: true, canDraft: true, canApproveClauses: canApproveRevisions, canApproveRevisions };
 }
 
-async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
+async function specialTermsDocumentExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  if (!SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED) {
-    throw appError('Special Terms PDF downloading is temporarily unavailable while the document layout is being revised.', 503, 'SPECIAL_TERMS_PDF_DISABLED', undefined, true);
-  }
-  const term = await getSpecialTermForExport(body.termId, { force: body.force === true });
-  const generated = generateSpecialTermPdf(term, {
+  const format = String(body.format || 'pdf').trim().toLowerCase();
+  const source = String(body.source || 'live').trim().toLowerCase();
+  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
+  if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
+  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
+  const term = await getSpecialTermDocumentForExport(body.termId, {
+    source,
+    revisionId: body.revisionId,
+    expectedLastModifiedAt: body.expectedLastModifiedAt,
+    expectedRevisionLastModifiedAt: body.expectedRevisionLastModifiedAt,
+    force: true,
+  });
+  const generated = await generateSpecialTermsDocument(term, {
+    format,
+    source,
     duplicateIndex: body.duplicateIndex,
   });
-  await writeAdminAudit(context.client, context.profile, 'special_terms_pdf_exported', null, null, {
+  await writeAdminAudit(context.client, context.profile, 'special_terms_document_exported', null, null, {
     termCount: 1,
-    pageCount: generated.pageCount,
+    termId: term.id,
+    format,
+    source,
+    pageCount: Number.isFinite(generated.pageCount) ? generated.pageCount : null,
+    outcome: 'success',
   });
   const asciiFilename = generated.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
   res.statusCode = 200;
@@ -16868,6 +16882,11 @@ async function specialTermsPdfExport(body = {}, req, res, accessContext = null) 
   res.setHeader('content-disposition', `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(generated.filename)}`);
   for (const [name, value] of Object.entries(telemetryResponseHeaders())) res.setHeader(name, value);
   res.end(generated.buffer);
+}
+
+/** Retained only for deployed FCOS clients that call the original route. */
+async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
+  return specialTermsDocumentExport({ ...body, format: 'pdf', source: body.source || 'live' }, req, res, accessContext);
 }
 
 async function specialTermsOptions(body = {}, req = null, accessContext = null) {
@@ -17440,10 +17459,12 @@ export default async function handler(req, res) {
           const body = await readBody(req);
           return await dashboardAccountInsightExport(body, req, res, accessContext);
         }
-        if (name === 'specialTermsPdfExport') {
+        if (name === 'specialTermsPdfExport' || name === 'specialTermsDocumentExport') {
           const accessContext = await requireHandlerAccess(name, req);
           const body = await readBody(req);
-          return await specialTermsPdfExport(body, req, res, accessContext);
+          return name === 'specialTermsPdfExport'
+            ? await specialTermsPdfExport(body, req, res, accessContext)
+            : await specialTermsDocumentExport(body, req, res, accessContext);
         }
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);

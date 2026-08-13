@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
-import { clauseHash } from './_specialTermClauseModel.js';
+import { clauseHash, compileNumberedClauses } from './_specialTermClauseModel.js';
 
 const OBJECTS = Object.freeze({
   term: 'Special_Term__c',
@@ -321,15 +321,73 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
 }
 
 export async function getSpecialTermForExport(termId, { force = false } = {}) {
+  return getSpecialTermDocumentForExport(termId, { force, source: 'live' });
+}
+
+function documentSource(value) {
+  const source = text(value, 20) || 'live';
+  if (!['live', 'draft'].includes(source)) throw specialTermsError('Document source must be live or draft.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
+  return source;
+}
+
+function assertDocumentCurrent(record, expectedLastModifiedAt, label = 'Special Term') {
+  if (expectedLastModifiedAt && record.LastModifiedDate !== expectedLastModifiedAt) {
+    throw specialTermsError(`${label} changed after it was opened. Refresh before exporting.`, 409, 'SPECIAL_TERMS_STALE', { currentLastModifiedAt: record.LastModifiedDate });
+  }
+}
+
+export function compiledTermsText(rows, { historical = false } = {}) {
+  const ordered = [...rows].sort((left, right) => Number(left.Sequence__c || 0) - Number(right.Sequence__c || 0) || String(left.Id).localeCompare(String(right.Id)));
+  const allowedClauseStatuses = historical ? ['Active', 'Retired'] : ['Active'];
+  if (ordered.some((row, index) => Number(row.Sequence__c) !== index + 1
+    || !row.Clause__c
+    || row.Clause__c !== row.Clause_Version__r?.Clause__c
+    || !allowedClauseStatuses.includes(row.Clause__r?.Status__c)
+    || !['Approved', 'Superseded'].includes(row.Clause_Version__r?.Status__c)
+    || !row.Clause_Version__r?.Clause_Text__c)) {
+    throw specialTermsError('The structured Special Term contains a non-approved clause version and cannot be exported.', 409, 'SPECIAL_TERMS_DOCUMENT_CLAUSE_UNAPPROVED');
+  }
+  try { return compileNumberedClauses(ordered.map((row) => row.Clause_Version__r.Clause_Text__c)); } catch {
+    throw specialTermsError('The structured Special Term contains invalid clause wording and cannot be exported.', 409, 'SPECIAL_TERMS_DOCUMENT_COMPILATION_INVALID');
+  }
+}
+
+/** Re-reads Salesforce immediately before document generation. Structured terms
+ * are never exported from a cache or a caller-supplied clause list. */
+export async function getSpecialTermDocumentForExport(termId, {
+  force = true,
+  source = 'live',
+  revisionId = null,
+  expectedLastModifiedAt = null,
+  expectedRevisionLastModifiedAt = null,
+} = {}) {
   await resolveSpecialTermsSchema({ force });
   const id = salesforceId(termId, 'Special Term');
-  const result = await sfQuery(
-    `SELECT Id,Name,Terms_Text__c,LastModifiedDate FROM Special_Term__c WHERE Id = '${soql(id)}' LIMIT 1`,
-    { clean: true, limit: 1 },
-  );
-  const record = result.records[0];
-  if (!record) throw specialTermsError('The selected Special Term is no longer available.', 409, 'SPECIAL_TERMS_STALE');
-  return mapTerm(record);
+  const selectedSource = documentSource(source);
+  const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,LastModifiedDate FROM Special_Term__c WHERE Id = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 });
+  const term = termResult.records[0];
+  if (!term) throw specialTermsError('The selected Special Term is no longer available.', 409, 'SPECIAL_TERMS_STALE');
+  assertDocumentCurrent(term, expectedLastModifiedAt);
+
+  if (selectedSource === 'live') {
+    const output = { ...mapTerm(term), source: 'live', clauses: [] };
+    if (term.Clause_Structure_Status__c !== 'Active') return output;
+    const assignmentResult = await sfQuery(`SELECT Id,Sequence__c,Clause__c,Clause__r.Status__c,Clause_Version__r.Clause__c,Clause_Version__r.Status__c,Clause_Version__r.Clause_Text__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(id)}' AND Projection__c = 'Terms Text' AND State__c = 'Active' ORDER BY Sequence__c,Id LIMIT 500`, { clean: true, limit: 500 });
+    const compiled = compiledTermsText(assignmentResult.records, { historical: true });
+    if (!term.Clause_Compiled_Hash__c || compiled !== (term.Terms_Text__c || '') || term.Clause_Compiled_Hash__c !== clauseHash(compiled)) {
+      throw specialTermsError('The live Special Term text no longer matches its approved clause assignments. Refresh and resolve the Salesforce conflict before exporting.', 409, 'SPECIAL_TERMS_DOCUMENT_COMPILATION_MISMATCH');
+    }
+    return { ...output, termsText: compiled, clauses: assignmentResult.records.map((row) => ({ text: row.Clause_Version__r.Clause_Text__c })) };
+  }
+
+  const resolvedRevisionId = salesforceId(revisionId, 'Special Term revision');
+  const revisionResult = await sfQuery(`SELECT Id,Special_Term__c,Status__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Id = '${soql(resolvedRevisionId)}' AND Special_Term__c = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 });
+  const revision = revisionResult.records[0];
+  if (!revision || !['Draft', 'In Review'].includes(revision.Status__c)) throw specialTermsError('The saved draft revision is no longer available for preview export.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_STALE');
+  assertDocumentCurrent(revision, expectedRevisionLastModifiedAt, 'Special Term draft');
+  const revisionClauses = await sfQuery(`SELECT Id,Sequence__c,Clause__c,Clause__r.Status__c,Clause_Version__r.Clause__c,Clause_Version__r.Status__c,Clause_Version__r.Clause_Text__c FROM Special_Term_Revision_Clause__c WHERE Special_Term_Revision__c = '${soql(resolvedRevisionId)}' AND Projection__c = 'Terms Text' AND State__c = 'Proposed' ORDER BY Sequence__c,Id LIMIT 500`, { clean: true, limit: 500 });
+  const compiled = compiledTermsText(revisionClauses.records);
+  return { ...mapTerm(term), source: 'draft', revisionId: revision.Id, revisionLastModifiedAt: revision.LastModifiedDate, termsText: compiled, clauses: revisionClauses.records.map((row) => ({ text: row.Clause_Version__r.Clause_Text__c })) };
 }
 
 export async function specialTermOptions({ kind, query = '' } = {}) {

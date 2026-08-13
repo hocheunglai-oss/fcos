@@ -474,7 +474,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Generated documents',
-      body: 'FCOS-generated Special Term PDF downloads are temporarily unavailable while the document typography, margins, and numbered-list alignment are being revised. Salesforce Confirmation and Nomination attachment settings remain authoritative and unchanged.',
+      body: 'FCOS generates live PDF and editable Word documents from the authoritative Salesforce Terms Text only. Both formats use the same A4 letterhead, typography, numbering, and page layout; Confirmation and Nomination remarks remain separate. Saved revisions may be reviewed as watermarked draft PDFs, while unsaved drafts and draft Word files cannot be downloaded. Editing a downloaded Word file never changes Salesforce or creates an approved FCOS revision.',
     },
     {
       title: 'Copying remarks',

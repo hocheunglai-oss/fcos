@@ -12,6 +12,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERM_REVISION_PROJECTIONS, revisionFromDetail, revisionPayload } from '@/lib/specialTermRevision';
+import SpecialTermDocumentPreview from '@/components/special-terms/SpecialTermDocumentPreview';
+import { documentPreviewKey, specialTermDocumentModel } from '@/lib/specialTermDocumentPreview';
 import { richTextToCopyText } from '@/lib/specialTermsText';
 
 function operationId() {
@@ -50,8 +52,16 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [revisionReason, setRevisionReason] = useState('');
+  const [mobilePane, setMobilePane] = useState('clauses');
+  const [exportingDocument, setExportingDocument] = useState(false);
+  const [savedDraftPreviewKey, setSavedDraftPreviewKey] = useState(null);
 
-  useEffect(() => setRevision(initialRevision), [initialRevision]);
+  useEffect(() => {
+    setRevision(initialRevision);
+    setSavedDraftPreviewKey(initialRevision?.id
+      ? documentPreviewKey(specialTermDocumentModel({ term: detail?.term, detail, revision: initialRevision, mode: 'draft' }))
+      : null);
+  }, [detail, initialRevision]);
 
   const legacy = !revision || revision.status === 'Legacy';
   const status = revision?.status || detail?.term?.revisionStatus || 'Legacy';
@@ -91,6 +101,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
       rules: detail?.rules || revision?.rules || [],
       provenance: { sourceLabel: 'Preserved live Salesforce legacy projections' },
     });
+    setSavedDraftPreviewKey(null);
   };
 
   const invoke = async (name, payload, success) => {
@@ -104,6 +115,35 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
     }
     setConfirm(null);
     await onChanged?.(success);
+  };
+
+  const exportDocument = async (format, mode) => {
+    if (exportingDocument || (mode === 'draft' && !revision?.id)) return;
+    setExportingDocument(true);
+    onError?.('');
+    try {
+      const result = await appClient.functions.download('specialTermsDocumentExport', {
+        termId: detail.term.id,
+        format,
+        source: mode,
+        revisionId: mode === 'draft' ? revision.id : null,
+        expectedLastModifiedAt: detail.term.lastModifiedAt || revision?.termLastModifiedAt || null,
+        expectedRevisionLastModifiedAt: mode === 'draft'
+          ? revision.expectedLastModifiedAt || revision.lastModifiedAt || null
+          : null,
+      });
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (error) {
+      onError?.(error.message || 'The Special Term document could not be exported.');
+    }
+    setExportingDocument(false);
   };
 
   if (legacy) {
@@ -121,21 +161,24 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   }
 
   const editable = canDraft && ['Draft', 'In Review', 'Changes Requested'].includes(status);
+  const previewModel = specialTermDocumentModel({ term: detail.term, detail, revision, mode: 'draft' });
+  const unsaved = !revision?.id || !savedDraftPreviewKey || savedDraftPreviewKey !== documentPreviewKey(previewModel);
+  const clauses = <div className="space-y-4">{SPECIAL_TERM_REVISION_PROJECTIONS.map((projection) => <ClauseProjectionSection key={projection} detail={{ ...detail, projections: revision.projections }} projection={projection} canManage={editable} canApprove={false} categoryOptions={categoryOptions} onAssignmentsChange={updateAssignments} onChanged={onChanged} onError={onError} wholeTermRevision />)}<RevisionRuleEditor rules={revision.rules || []} editable={editable} audienceOptions={audienceOptions} countryOptions={countryOptions} onChange={updateRules} />{editable ? <div className="space-y-1.5"><Label>Revision reason</Label><Textarea value={revisionReason} maxLength={1000} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Why this whole-term wording and rule revision is proposed" rows={3} /></div> : null}</div>;
+  const preview = <SpecialTermDocumentPreview term={detail.term} detail={detail} revision={revision} unsaved={unsaved} onExport={exportDocument} />;
   return (
     <section className="space-y-4 rounded-lg border border-border bg-muted/10 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex flex-wrap items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><strong className="text-sm">Whole-term revision</strong><Badge variant={status === 'Approved' || status === 'Active' ? 'default' : 'outline'}>{status}</Badge>{revision.number ? <Badge variant="secondary">Revision {revision.number}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Terms Text, both special remarks, and matching rules are saved, approved, activated, and rolled back together.</p></div>
         <div className="flex flex-wrap gap-2">
-          {editable ? <Button type="button" variant="outline" onClick={() => invoke('specialTermRevisionSave', { ...revisionPayload(revision), revisionReason }, 'Whole-term revision draft saved.')} disabled={busy || revisionReason.trim().length < 3}><Save className="mr-2 h-4 w-4" />Save draft</Button> : null}
+          {editable ? <Button type="button" variant="outline" onClick={() => invoke('specialTermRevisionSave', { ...revisionPayload(revision), revisionReason }, 'Whole-term revision draft saved.')} disabled={busy || exportingDocument || revisionReason.trim().length < 3}><Save className="mr-2 h-4 w-4" />Save draft</Button> : null}
           {canDraft && ['Approved', 'Active'].includes(status) ? <Button type="button" variant="outline" onClick={startRevisionDraft} disabled={busy}><FileClock className="mr-2 h-4 w-4" />Start new revision</Button> : null}
           {canApprove && revision.id && ['In Review', 'Ready for Approval'].includes(status) ? <Button type="button" onClick={() => setConfirm({ type: 'approve', reason: '' })} disabled={busy}><CheckCircle2 className="mr-2 h-4 w-4" />Approve and activate</Button> : null}
           {canApprove && ['Approved', 'Active'].includes(status) ? <Button type="button" variant="outline" onClick={() => setConfirm({ type: 'rollback', reason: '' })} disabled={busy}><RotateCcw className="mr-2 h-4 w-4" />Rollback whole term</Button> : null}
         </div>
       </div>
       {revision.provenance ? <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Legacy provenance:</span> {revision.provenance.sourceLabel || 'Salesforce legacy wording'}{revision.provenance.migratedAt ? ` · prepared ${revision.provenance.migratedAt}` : ''}{revision.provenance.mappingDecision ? ` · ${revision.provenance.mappingDecision}` : ''}</div> : null}
-      {SPECIAL_TERM_REVISION_PROJECTIONS.map((projection) => <ClauseProjectionSection key={projection} detail={{ ...detail, projections: revision.projections }} projection={projection} canManage={editable} canApprove={false} categoryOptions={categoryOptions} onAssignmentsChange={updateAssignments} onChanged={onChanged} onError={onError} wholeTermRevision />)}
-      <RevisionRuleEditor rules={revision.rules || []} editable={editable} audienceOptions={audienceOptions} countryOptions={countryOptions} onChange={updateRules} />
-      {editable ? <div className="space-y-1.5"><Label>Revision reason</Label><Textarea value={revisionReason} maxLength={1000} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Why this whole-term wording and rule revision is proposed" rows={3} /></div> : null}
+      <div className="flex gap-1 lg:hidden"><Button type="button" size="sm" variant={mobilePane === 'clauses' ? 'default' : 'outline'} onClick={() => setMobilePane('clauses')}>Clauses</Button><Button type="button" size="sm" variant={mobilePane === 'preview' ? 'default' : 'outline'} onClick={() => setMobilePane('preview')}>Preview</Button></div>
+      <div className="lg:grid lg:grid-cols-[55fr_45fr] lg:gap-4"><div className={mobilePane === 'clauses' ? 'block' : 'hidden lg:block'}>{clauses}</div><div className={mobilePane === 'preview' ? 'block' : 'hidden lg:block'}>{preview}</div></div>
 
       <Dialog open={Boolean(confirm)} onOpenChange={(open) => !open && !busy && setConfirm(null)}>
         <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>{confirm?.type === 'approve' ? 'Approve and activate this whole term?' : 'Rollback this whole term?'}</DialogTitle><DialogDescription>{confirm?.type === 'approve' ? 'This atomically activates all three projections and the reviewed rules. No partial activation is permitted.' : 'This atomically restores the preserved legacy projections and prior rule state.'}</DialogDescription></DialogHeader>{confirm ? <div className="space-y-1.5"><Label>Mandatory reason</Label><Textarea value={confirm.reason} maxLength={1000} onChange={(event) => setConfirm((current) => ({ ...current, reason: event.target.value }))} rows={4} /></div> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setConfirm(null)} disabled={busy}>Cancel</Button><Button type="button" variant={confirm?.type === 'rollback' ? 'destructive' : 'default'} disabled={busy || confirm?.reason.trim().length < 3} onClick={() => invoke(confirm.type === 'approve' ? 'specialTermRevisionApprove' : 'specialTermRevisionRollback', { revisionId: revision.id, expectedLastModifiedAt: revision.expectedLastModifiedAt || revision.lastModifiedAt, auditReason: confirm.reason }, confirm.type === 'approve' ? 'Whole-term revision approved and activated.' : 'Whole-term revision rolled back to preserved legacy wording.')}>{busy ? 'Working…' : confirm?.type === 'approve' ? 'Approve and activate' : 'Rollback'}</Button></DialogFooter></DialogContent>

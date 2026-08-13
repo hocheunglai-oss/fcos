@@ -18,6 +18,14 @@ test.describe('Special Terms whole-term revision workspace', () => {
     await expect(page.getByRole('tab', { name: /migration queue/i })).toBeVisible();
     await page.getByRole('tab', { name: /migration queue/i }).click();
     await expect(page.getByText('Controlled migration batches')).toBeVisible();
+    await page.getByRole('tab', { name: /^terms/i }).click();
+    const editTerm = page.getByTitle('Edit Special Term').first();
+    if (await editTerm.count()) {
+      await editTerm.click();
+      await expect(page.getByText('A4 document preview')).toBeVisible();
+      await expect(page.getByRole('button', { name: /live document/i })).toBeVisible();
+      await expect(page.getByRole('button', { name: /^preview$/i })).toBeVisible({ timeout: 10_000 }).catch(() => {});
+    }
     expect(failures).toEqual([]);
   });
 });

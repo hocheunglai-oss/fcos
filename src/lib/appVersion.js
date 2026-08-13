@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.163',
+    releasedAt: '2026-08-14',
+    title: 'Publish professional Special Term documents',
+    changes: [
+      'Restored live PDF downloads and added editable Word exports from Salesforce-authoritative Terms Text while excluding Confirmation and Nomination remarks.',
+      'Added a synchronized responsive A4 preview with shared letterhead, typography, numbering, nested bullets, draft watermarking, pagination, and live-versus-draft controls.',
+      'Fail-closes structured exports on stale records or clause-compilation drift, keeps legacy wording unchanged, and records only redacted document audit metadata.',
+    ],
+  },
+  {
     version: '2.0.162',
     releasedAt: '2026-08-13',
     title: 'Enforce the shared Salesforce mirror',

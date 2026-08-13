@@ -29,7 +29,6 @@ import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidati
 
 const EMPTY_TERM = { id: null, name: '', termsText: '', clauseStructureStatus: 'Active', addToConfirmation: true, addToNomination: false, confirmationRemark: '', confirmationClauseStatus: 'Legacy', confirmationClauseStyle: 'Hyphen', nominationRemark: '', nominationClauseStatus: 'Legacy', nominationClauseStyle: 'Hyphen', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
-const SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED = false;
 
 function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -142,8 +141,7 @@ export default function SpecialTerms() {
     setFailedTermIds((current) => current.filter((id) => available.has(id)));
   }, [workspace?.terms]);
 
-  const downloadTerms = async (terms) => {
-    if (!SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED) return;
+  const downloadTerms = async (terms, format = 'pdf') => {
     if (!terms.length || exporting) return;
     setExporting(true);
     setError('');
@@ -159,9 +157,12 @@ export default function SpecialTerms() {
       const duplicateIndex = duplicateNames.get(nameKey) || 0;
       duplicateNames.set(nameKey, duplicateIndex + 1);
       try {
-        const result = await appClient.functions.download('specialTermsPdfExport', {
+        const result = await appClient.functions.download('specialTermsDocumentExport', {
           termId: term.id,
+          format,
+          source: 'live',
           duplicateIndex,
+          expectedLastModifiedAt: term.lastModifiedAt || null,
         });
         triggerDownload(result);
         downloaded.push(term.id);
@@ -173,10 +174,10 @@ export default function SpecialTerms() {
     setSelectedTermIds((current) => current.filter((id) => !downloaded.includes(id)));
     setFailedTermIds(failed.map((item) => item.id));
     if (failed.length) {
-      setError(`${failed.length} Special Term PDF${failed.length === 1 ? '' : 's'} could not be downloaded. The failed selection remains available to retry.`);
-      setMessage(downloaded.length ? `${downloaded.length} Special Term PDF${downloaded.length === 1 ? '' : 's'} downloaded.` : '');
+      setError(`${failed.length} Special Term ${format.toUpperCase()} file${failed.length === 1 ? '' : 's'} could not be downloaded. The failed selection remains available to retry.`);
+      setMessage(downloaded.length ? `${downloaded.length} Special Term ${format.toUpperCase()} file${downloaded.length === 1 ? '' : 's'} downloaded.` : '');
     } else {
-      setMessage(`${downloaded.length} Special Term PDF${downloaded.length === 1 ? '' : 's'} downloaded.`);
+      setMessage(`${downloaded.length} Special Term ${format.toUpperCase()} file${downloaded.length === 1 ? '' : 's'} downloaded.`);
     }
     setExportProgress(null);
     setExporting(false);
@@ -389,20 +390,21 @@ export default function SpecialTerms() {
         trailing={['terms', 'rules'].includes(activeTab) ? <div className="relative w-full sm:w-80"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={activeTab === 'terms' ? 'Search term wording' : 'Search rule or condition'} className="pl-9" /></div> : null}
       />
 
-      {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && activeTab === 'terms' && selectedTerms.length > 0 && (
+      {activeTab === 'terms' && selectedTerms.length > 0 && (
         <div className="flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">{selectedTerms.length} Special Term{selectedTerms.length === 1 ? '' : 's'} selected</p>
             <p className="truncate text-xs text-muted-foreground" aria-live="polite">
-              {exportProgress ? `Downloading ${exportProgress.current} of ${exportProgress.total}: ${exportProgress.name}` : selectedTerms.length > 1 ? 'Your browser may ask permission to download multiple files.' : 'The PDF will use the current Salesforce wording.'}
+              {exportProgress ? `Downloading ${exportProgress.current} of ${exportProgress.total}: ${exportProgress.name}` : selectedTerms.length > 1 ? 'Your browser may ask permission to download multiple files.' : 'Live exports use the approved Salesforce Terms Text.'}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={clearTermSelection} disabled={exporting}>Clear</Button>
-            <Button onClick={() => downloadTerms(selectedTerms)} disabled={exporting}>
+            <Button size="sm" variant="outline" onClick={() => downloadTerms(selectedTerms, 'pdf')} disabled={exporting}>
               {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-              {exporting ? `Downloading ${exportProgress?.current || 1} of ${exportProgress?.total || selectedTerms.length}` : failedTermIds.length ? 'Retry failed' : 'Download selected'}
+              {exporting ? `Downloading ${exportProgress?.current || 1} of ${exportProgress?.total || selectedTerms.length}` : failedTermIds.length ? 'Retry PDF' : 'PDF'}
             </Button>
+            <Button size="sm" variant="outline" onClick={() => downloadTerms(selectedTerms, 'docx')} disabled={exporting} title="Editable export; only PDF may be attached">Word</Button>
           </div>
         </div>
       )}
@@ -414,14 +416,14 @@ export default function SpecialTerms() {
           <Table className="min-w-[1080px]">
             <TableHeader>
               <TableRow>
-                {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <TableHead className="w-11">
+                <TableHead className="w-11">
                   <Checkbox
                     checked={allFilteredSelected ? true : someFilteredSelected ? 'indeterminate' : false}
                     onCheckedChange={(checked) => toggleFilteredTerms(checked === true)}
                     aria-label="Select all filtered Special Terms"
                     title="Select all filtered Special Terms"
                   />
-                </TableHead>}
+                </TableHead>
                 <TableHead>Special Term</TableHead>
                 <TableHead>Numbered Clauses</TableHead>
                 <TableHead>Confirmation</TableHead>
@@ -438,15 +440,15 @@ export default function SpecialTerms() {
               const confirmationCopyKey = `confirmation:${term.id}`;
               const nominationCopyKey = `nomination:${term.id}`;
               return (
-                <TableRow key={term.id} data-state={SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && selectedTermSet.has(term.id) ? 'selected' : undefined}>
-                  {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <TableCell>
+                <TableRow key={term.id} data-state={selectedTermSet.has(term.id) ? 'selected' : undefined}>
+                  <TableCell>
                     <Checkbox
                       checked={selectedTermSet.has(term.id)}
                       onCheckedChange={(checked) => toggleTerm(term.id, checked === true)}
                       aria-label={`Select ${term.name}`}
                       title={`Select ${term.name}`}
                     />
-                  </TableCell>}
+                  </TableCell>
                   <TableCell className="font-medium">
                     <a href={salesforceUrl(workspace.instanceUrl, term.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       {term.name}<ExternalLink className="h-3 w-3" />
@@ -496,7 +498,8 @@ export default function SpecialTerms() {
                   <TableCell className="text-xs text-muted-foreground">{displayDateTime(term.lastModifiedAt)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      {SPECIAL_TERMS_PDF_DOWNLOADS_ENABLED && <Button variant="ghost" size="icon" onClick={() => downloadTerms([term])} disabled={exporting} title="Download Special Term PDF" aria-label={`Download ${term.name} PDF`}><Download className="h-4 w-4" /></Button>}
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadTerms([term], 'pdf')} disabled={exporting} title="Download live Special Term PDF" aria-label={`Download ${term.name} PDF`}>PDF</Button>
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadTerms([term], 'docx')} disabled={exporting} title="Download editable live Special Term Word document" aria-label={`Download ${term.name} Word document`}>Word</Button>
                       {(workspace.canDraft ?? workspace.canManage) ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button> : null}
                       {(workspace.canDraft ?? workspace.canManage) && !['Approved', 'Retired'].includes(term.revisionStatus) ? <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button> : null}
                     </div>
@@ -532,7 +535,7 @@ export default function SpecialTerms() {
       {!loading && workspace && activeTab === 'inventory' && workspace.canApproveClauses ? <MigrationInventoryPanel /> : null}
 
       <Dialog open={Boolean(termForm)} onOpenChange={(open) => { if (!open && !busy) { setTermForm(null); setTermDetail(null); } }}>
-        <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
+        <DialogContent className="max-h-[92vh] max-w-7xl overflow-y-auto">
           <DialogHeader><DialogTitle>{termForm?.id ? 'Edit Special Term' : 'Add Special Term'}</DialogTitle><DialogDescription>Salesforce remains authoritative. Terms Text, Confirmation remarks, and Nomination remarks are independent ordered projections of the shared approved Clause Bank.</DialogDescription></DialogHeader>
           {termForm && (
             <div className="space-y-5">
