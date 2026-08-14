@@ -12,7 +12,7 @@ const MANIFEST = MANIFEST_INDEX >= 0
   : (process.env.FCOS_SALESFORCE_MANIFEST || '');
 const CHECK_ONLY = process.argv.includes('--check-only');
 const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
-const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || 'ShipAgentInvoiceReadinessServiceTest,SpecialTermClauseCompilerTest,SpecialTermConsolidationTest,SpecialTermRevisionServiceTest,SpecialTermTriggerHandlerTest,StemLineItemTriggerHandlerTest').split(',').map((value) => value.trim()).filter(Boolean);
+const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || '').split(',').map((value) => value.trim()).filter(Boolean);
 const EXPECTED_ORDER = ['devee', 'qat', 'production'];
 
 if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');

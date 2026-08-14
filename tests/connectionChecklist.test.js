@@ -148,6 +148,7 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /Scoped manifests are validation-only/);
   assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
   assert.match(source, /writeDeveeSourceState/);
+  assert.match(source, /TEST_CLASSES\.length \? 'RunSpecifiedTests' : 'RunLocalTests'/);
   assert.ok(
     source.indexOf('const deveeDeployment = deploy(deveeValidation)') < source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']"),
     'DEVEE must be deployed successfully before shared publication.',
