@@ -26,6 +26,12 @@ function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function draftSaveKey(value) {
+  if (value?.versionId) return `version:${value.versionId}`;
+  if (value?.clauseId) return `clause:${value.clauseId}`;
+  return 'new';
+}
+
 export default function ClauseBankPanel({ canManage, canApprove, categoryOptions = [], onChanged, onOpenTerm }) {
   const [clauses, setClauses] = useState([]);
   const [consolidations, setConsolidations] = useState([]);
@@ -44,8 +50,10 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
   const [deletionConfirmation, setDeletionConfirmation] = useState('');
   const [deletionPending, setDeletionPending] = useState(() => new Set());
   const [approvalPending, setApprovalPending] = useState(() => new Set());
+  const [draftSavePending, setDraftSavePending] = useState(() => new Set());
   const approveButtons = useRef(new Map());
   const deleteButtons = useRef(new Map());
+  const draftButtons = useRef(new Map());
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -92,6 +100,48 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
   const openNew = () => setDraft({ ...EMPTY_DRAFT });
   const openRevision = (clause) => setDraft({ ...EMPTY_DRAFT, clauseId: clause.id, shortName: clause.shortName, category: clause.category, clauseText: clause.latestApprovedVersion?.clauseText || '', revisionReason: '', expectedLastModifiedAt: clause.lastModifiedAt });
   const openDraft = (clause) => setDraft({ ...EMPTY_DRAFT, clauseId: clause.id, versionId: clause.draftVersion?.id, shortName: clause.shortName, category: clause.category, clauseText: clause.draftVersion?.clauseText || '', revisionReason: clause.draftVersion?.revisionReason || '', expectedLastModifiedAt: clause.draftVersion?.lastModifiedAt, expectedClauseLastModifiedAt: clause.lastModifiedAt });
+
+  const saveDraft = async () => {
+    const submitted = draft;
+    if (!submitted) return;
+    const key = draftSaveKey(submitted);
+    if (draftSavePending.has(key)) return;
+    const viewport = { top: window.scrollY, left: window.scrollX };
+    const successMessage = submitted.versionId ? 'Draft clause updated.' : submitted.clauseId ? 'New clause revision proposed.' : 'New bank clause proposed.';
+    const restorePosition = () => window.requestAnimationFrame(() => {
+      if (document.querySelector('[role="dialog"]')) return;
+      window.scrollTo({ ...viewport, behavior: 'auto' });
+      draftButtons.current.get(key)?.focus({ preventScroll: true });
+    });
+    setDraft(null);
+    setError('');
+    setMessage('');
+    setDraftSavePending((current) => new Set(current).add(key));
+    restorePosition();
+    try {
+      const response = await appClient.functions.invoke('specialTermClauseDraftSave', { ...submitted, operationId: operationId() }, { cache: false });
+      if (response.data?.error || !response.data?.clause) {
+        setError(response.data?.error || 'Salesforce did not return the updated Draft clause. Refresh before retrying.');
+        setDraft((current) => current || submitted);
+        return;
+      }
+      setClauses((current) => current.some((clause) => clause.id === response.data.clause.id)
+        ? current.map((clause) => clause.id === response.data.clause.id ? response.data.clause : clause)
+        : [response.data.clause, ...current]);
+      setMessage(successMessage);
+      toast({ title: successMessage, description: 'The authoritative Salesforce row was updated without reloading the Clause Bank.' });
+    } catch (requestError) {
+      setError(requestError?.message || 'The Draft clause could not be saved.');
+      setDraft((current) => current || submitted);
+    } finally {
+      setDraftSavePending((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+      restorePosition();
+    }
+  };
 
   const approveClause = async () => {
     const submitted = approval;
@@ -250,7 +300,7 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
         <div className="flex flex-col gap-2 sm:flex-row">
           <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search clause bank" className="pl-9 sm:w-72" /></div>
           <Button variant="outline" onClick={() => load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
-          {canManage ? <Button onClick={openNew}><Plus className="mr-2 h-4 w-4" />Propose clause</Button> : null}
+          {canManage ? <Button ref={(node) => { if (node) draftButtons.current.set('new', node); else draftButtons.current.delete('new'); }} onClick={openNew} disabled={draftSavePending.has('new')}>{draftSavePending.has('new') ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}{draftSavePending.has('new') ? 'Saving…' : 'Propose clause'}</Button> : null}
         </div>
       </div>
 
@@ -260,13 +310,15 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
         const deletionId = deletionEntityType === 'clauseVersion' ? clause.draftVersion?.id : clause.id;
         const deletionKey = deletionEntityType ? `${deletionEntityType}:${deletionId}` : null;
         const structurallyBlocked = clause.status === 'Draft' && (clause.usageCount > 0 || Boolean(clause.consolidation));
+        const draftKey = clause.draftVersion ? `version:${clause.draftVersion.id}` : `clause:${clause.id}`;
+        const savingDraft = draftSavePending.has(draftKey);
         return (
           <section key={clause.id} className="space-y-3 rounded-lg border border-border bg-card p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div><div className="flex flex-wrap items-center gap-2"><strong>{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant={clause.status === 'Retired' ? 'destructive' : 'secondary'}>{clause.status === 'Active' ? 'Approved' : clause.status}</Badge>{clause.origin ? <Badge variant="outline">{clause.origin}</Badge> : null}{displayVersion ? <Badge variant="secondary">v{displayVersion.revisionNumber}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Used in {clause.usageCount} Special Term assignment(s){clause.provenance?.termName ? ` · preserved from ${clause.provenance.termName}` : ''}</p></div>
               <div className="flex flex-wrap gap-1">
-                {canManage && clause.status === 'Active' && !clause.draftVersion && !clause.consolidation ? <Button size="sm" variant="outline" onClick={() => openRevision(clause)}><Pencil className="mr-1 h-3.5 w-3.5" />Propose revision</Button> : null}
-                {canManage && clause.status !== 'Retired' && clause.draftVersion ? <Button size="sm" variant="outline" onClick={() => openDraft(clause)}><Pencil className="mr-1 h-3.5 w-3.5" />Edit Draft</Button> : null}
+                {canManage && clause.status === 'Active' && !clause.draftVersion && !clause.consolidation ? <Button ref={(node) => { if (node) draftButtons.current.set(draftKey, node); else draftButtons.current.delete(draftKey); }} size="sm" variant="outline" disabled={savingDraft} onClick={() => openRevision(clause)}>{savingDraft ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Pencil className="mr-1 h-3.5 w-3.5" />}{savingDraft ? 'Saving…' : 'Propose revision'}</Button> : null}
+                {canManage && clause.status !== 'Retired' && clause.draftVersion ? <Button ref={(node) => { if (node) draftButtons.current.set(draftKey, node); else draftButtons.current.delete(draftKey); }} size="sm" variant="outline" disabled={savingDraft} onClick={() => openDraft(clause)}>{savingDraft ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Pencil className="mr-1 h-3.5 w-3.5" />}{savingDraft ? 'Saving…' : 'Edit Draft'}</Button> : null}
                 {canApprove && clause.draftVersion ? <Button ref={(node) => { if (node) approveButtons.current.set(clause.draftVersion.id, node); else approveButtons.current.delete(clause.draftVersion.id); }} data-clause-approve={clause.draftVersion.id} size="sm" disabled={approvalPending.has(clause.draftVersion.id)} onClick={() => setApproval({ clause, reason: '' })}>{approvalPending.has(clause.draftVersion.id) ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}{approvalPending.has(clause.draftVersion.id) ? 'Approving…' : 'Approve'}</Button> : null}
                 {canApprove && clause.status === 'Active' && !clause.consolidation ? <Button size="sm" variant="outline" onClick={() => setConsolidation({ source: clause, replacementClauseId: '', reason: '', equivalenceConfirmed: false })}><Combine className="mr-1 h-3.5 w-3.5" />Consolidate</Button> : null}
                 {canApprove && clause.status === 'Active' && !clause.consolidation ? <Button size="sm" variant="outline" className="text-destructive" onClick={() => setRetirement({ clause, reason: '' })}><XCircle className="mr-1 h-3.5 w-3.5" />Retire</Button> : null}
@@ -283,11 +335,11 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
       })}</div>
       {!filtered.length ? <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">No clauses match this view.</div> : null}
 
-      <Dialog open={Boolean(draft)} onOpenChange={(open) => !open && !busy && setDraft(null)}>
+      <Dialog open={Boolean(draft)} onOpenChange={(open) => !open && setDraft(null)}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
           <DialogHeader><DialogTitle>{draft?.versionId ? 'Edit Draft clause' : draft?.clauseId ? 'Propose clause revision' : 'Propose a bank clause'}</DialogTitle><DialogDescription>Do not include the top-level number. Published wording remains unchanged until an authorized approver accepts this Draft.</DialogDescription></DialogHeader>
           {draft ? <div className="space-y-4"><div className="grid gap-4 md:grid-cols-2"><div className="space-y-1.5"><Label>Short name</Label><Input value={draft.shortName} maxLength={80} onChange={(event) => setDraft((current) => ({ ...current, shortName: event.target.value }))} placeholder="Best Endeavours – No Demurrage" /><p className="text-xs text-muted-foreground">Use 3–7 concise, action-oriented words and include material qualifiers.</p></div><div className="space-y-1.5"><Label>Category</Label><Select value={draft.category} onValueChange={(category) => setDraft((current) => ({ ...current, category }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{categoryOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-1.5"><Label>Clause wording</Label><Textarea value={draft.clauseText} onChange={(event) => setDraft((current) => ({ ...current, clauseText: event.target.value }))} rows={10} placeholder="Enter the clause without 1., 2., or another top-level number." /></div><div className="space-y-1.5"><Label>Revision reason</Label><Textarea value={draft.revisionReason} maxLength={1000} onChange={(event) => setDraft((current) => ({ ...current, revisionReason: event.target.value }))} rows={3} /></div></div> : null}
-          <DialogFooter><Button variant="outline" onClick={() => setDraft(null)} disabled={busy}>Cancel</Button><Button disabled={busy || !draft?.shortName.trim() || draft?.clauseText.trim().length < 3 || draft?.revisionReason.trim().length < 3} onClick={() => mutate('specialTermClauseDraftSave', draft, draft?.versionId ? 'Draft clause updated.' : draft?.clauseId ? 'New clause revision proposed.' : 'New bank clause proposed.')}>{busy ? 'Saving…' : 'Save Draft'}</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setDraft(null)}>Cancel</Button><Button disabled={!draft?.shortName.trim() || draft?.clauseText.trim().length < 3 || draft?.revisionReason.trim().length < 3} onClick={saveDraft}>Save Draft</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

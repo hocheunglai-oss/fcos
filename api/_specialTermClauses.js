@@ -803,6 +803,11 @@ async function ensureUniqueClause(shortName, canonicalKey, ignoreClauseId = null
   if (equivalent) throw specialTermsError(`Equivalent wording already exists as ${equivalent.Clause__r?.Name || equivalent.Clause__c}.`, 409, 'SPECIAL_TERMS_CLAUSE_EQUIVALENT_EXISTS', { clauseId: equivalent.Clause__c });
 }
 
+async function finishClauseDraftOperation(client, operation, result) {
+  const clause = await loadOneClause(result.clauseId);
+  return finishOperation(client, operation, { ...result, clause }, result);
+}
+
 export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
   const schema = await resolveSpecialTermsSchema({ force: true, write: true });
   const clauseText = cleanClauseText(body.clauseText);
@@ -817,7 +822,10 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
   await ensureUniqueClause(shortName, canonicalKey, clauseId);
   const operationType = clauseId || versionId ? 'clause_draft_revise' : 'clause_draft_create';
   const reservation = await reserveOperation(client, profile, body, operationType, { id: versionId || clauseId, clauseId, versionId, shortNameKey: shortNameKey(shortName), canonicalKey, category, contentHash: clauseHash(clauseText), revisionReasonHash: clauseHash(reason), expectedLastModifiedAt: body.expectedLastModifiedAt || null, expectedClauseLastModifiedAt: body.expectedClauseLastModifiedAt || null });
-  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  if (reservation.replay) {
+    const replayClauseId = reservation.replay.clauseId || clauseId;
+    return { ...reservation.replay, clause: replayClauseId ? await loadOneClause(replayClauseId) : null, idempotencyReplayed: true };
+  }
   try {
     if (versionId) {
       const [clauseRow, versionRow] = await Promise.all([
@@ -831,7 +839,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
       if (clauseRow.Status__c === 'Draft') requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Name: shortName, Short_Name_Key__c: shortNameKey(shortName), Canonical_Text_Key__c: canonicalKey, Category__c: category } });
       const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
       assertComposite(result, 'Salesforce rejected the Draft clause edit.');
-      return finishOperation(client, reservation.operation, { success: true, clauseId, versionId, operation: 'draft_updated' });
+      return finishClauseDraftOperation(client, reservation.operation, { success: true, clauseId, versionId, operation: 'draft_updated' });
     }
 
     if (clauseId) {
@@ -843,7 +851,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
       const revisionNumber = Number(versions.records[0]?.Revision_Number__c || 0) + 1;
       const created = await sfRequest(`/sobjects/${OBJECTS.version}`, { method: 'POST', body: { Clause__c: clauseId, Revision_Number__c: revisionNumber, Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Status__c: 'Draft', Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, ...provenance } });
       const createdVersionId = salesforceId(created?.id, 'Created clause version');
-      return finishOperation(client, reservation.operation, { success: true, clauseId, versionId: createdVersionId, revisionNumber, operation: 'revision_proposed' });
+      return finishClauseDraftOperation(client, reservation.operation, { success: true, clauseId, versionId: createdVersionId, revisionNumber, operation: 'revision_proposed' });
     }
 
     const result = await sfRequest('/composite', {
@@ -859,7 +867,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
     assertComposite(result, 'Salesforce rejected the Draft clause.');
     const clauseCreatedId = salesforceId(result.compositeResponse.find((response) => response.referenceId === 'clause')?.body?.id, 'Created clause');
     const versionCreatedId = salesforceId(result.compositeResponse.find((response) => response.referenceId === 'version')?.body?.id, 'Created clause version');
-    return finishOperation(client, reservation.operation, { success: true, clauseId: clauseCreatedId, versionId: versionCreatedId, revisionNumber: 1, operation: 'draft_created' });
+    return finishClauseDraftOperation(client, reservation.operation, { success: true, clauseId: clauseCreatedId, versionId: versionCreatedId, revisionNumber: 1, operation: 'draft_created' });
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
