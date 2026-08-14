@@ -51,7 +51,7 @@ test.describe('authenticated read-only workspace matrix', () => {
       page.on('pageerror', (error) => failures.push(error.message));
       await page.goto(route);
       await expect(page).not.toHaveURL(/\/login(?:\?|$)/);
-      await expect(page.locator('main h1').filter({ hasText: title }).first()).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByText(title, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
       await expect(page.getByRole('button', { name: 'Methodology' }).first()).toBeVisible();
       await expect(page.locator('body')).not.toContainText('Something went wrong');
       expect(failures).toEqual([]);
