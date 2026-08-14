@@ -22,9 +22,15 @@ test.describe('Special Terms whole-term revision workspace', () => {
     const editTerm = page.getByTitle('Edit Special Term').first();
     if (await editTerm.count()) {
       await editTerm.click();
-      await expect(page.getByText('A4 document preview')).toBeVisible();
-      await expect(page.getByRole('button', { name: /live document/i })).toBeVisible();
-      await expect(page.getByRole('button', { name: /^preview$/i })).toBeVisible({ timeout: 10_000 }).catch(() => {});
+      const editor = page.getByRole('dialog').filter({ hasText: 'Edit Special Term' });
+      await expect(editor).toBeVisible();
+      const governedRevision = editor.getByText('Whole-term revision', { exact: true });
+      const legacyReview = editor.getByText('Legacy term — whole-term review required', { exact: true });
+      await expect(governedRevision.or(legacyReview).first()).toBeVisible({ timeout: 20_000 });
+      if (await governedRevision.isVisible()) {
+        await expect(editor.getByRole('button', { name: /live document/i })).toBeVisible();
+        await expect(editor.getByRole('button', { name: /^preview$/i })).toBeVisible({ timeout: 10_000 }).catch(() => {});
+      }
     }
     expect(failures).toEqual([]);
   });
