@@ -73,6 +73,7 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
     Object.fromEntries(target.identifiers.map(({ label, value }) => [label, value])),
   ]));
   assert.equal(targets.github.Repository, 'hocheunglai-oss/fcos');
+  assert.equal(targets.github['Browser fallback profile'], 'Otto');
   assert.equal(targets.vercel['Team ID'], 'team_MbKDazzCrou3eKTuausPv4X2');
   assert.equal(targets.vercel['Project ID'], 'prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs');
   assert.equal(targets.supabase['Project ref'], 'pjforfvchygdyqfcgpmw');
@@ -83,6 +84,14 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['QAT username'], 'vincent@cosulich.com.hk.qat');
   assert.equal(targets.salesforce['Shared GitHub account'], 'vincelessxai');
   assert.equal(targets.salesforce['Shared Salesforce repository'], 'ivanyk20/fcbhk');
+  assert.equal(targets.salesforce['Shared browser fallback profile'], 'vincexai');
+  assert.equal(targets.salesforce['Development source'], 'DEVEE only');
+  assert.equal(targets.salesforce['Promotion order'], 'DEVEE → GitHub → QAT → Production');
+  const salesforce = CONNECTION_TARGETS.find(({ id }) => id === 'salesforce');
+  assert.deepEqual(salesforce.environments.map(({ key }) => key), ['devee', 'qat', 'production']);
+  assert.equal(salesforce.profileName, 'fcos-devee');
+  assert.equal(salesforce.publication.browserProfile, 'vincexai');
+  assert.equal(salesforce.publication.sourceEnvironmentKey, 'devee');
   assert.deepEqual(CONNECTION_TARGETS.map(({ id, credentialStorage }) => [id, credentialStorage]), [
     ['github', 'provider_secure_store'],
     ['vercel', 'macos_keychain'],
@@ -130,15 +139,21 @@ test('canonical attestation output is stable after sanitization', () => {
   assert.throws(() => canonicalConnectionAttestation({ accessToken: 'secret' }), /invalid/);
 });
 
-test('Salesforce multi-environment deploys fail closed on an exact sandbox username mismatch', async () => {
+test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Production order', async () => {
   const source = await readFile(new URL('../scripts/deploy-salesforce-environments.mjs', import.meta.url), 'utf8');
   assert.match(source, /display\?\.username === environment\.username/);
   assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
   assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
   assert.match(source, /sync-salesforce-shared-repository\.mjs/);
   assert.match(source, /Scoped manifests are validation-only/);
+  assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
+  assert.match(source, /writeDeveeSourceState/);
   assert.ok(
-    source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']") < source.indexOf("['project', 'deploy', 'quick'"),
-    'Shared Salesforce publication must succeed before any validated org mutation begins.',
+    source.indexOf('const deveeDeployment = deploy(deveeValidation)') < source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']"),
+    'DEVEE must be deployed successfully before shared publication.',
+  );
+  assert.ok(
+    source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']") < source.indexOf('salesforce.environments.slice(1)'),
+    'Shared publication must succeed before QAT and Production promotion.',
   );
 });

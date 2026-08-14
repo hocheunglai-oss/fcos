@@ -48,3 +48,13 @@ test('shared Salesforce commits are permanently attributed to the approved GitHu
   assert.match(source, /assertCommitAttribution\(commit\)/);
   assert.doesNotMatch(source, /user\.name', 'Codex'|noreply@openai\.com/);
 });
+
+test('shared Salesforce publication requires fresh proof from the exact DEVEE source deployment', async () => {
+  const mirror = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../scripts/salesforce-workflow-state.mjs', import.meta.url), 'utf8');
+  assert.match(mirror, /assertDeveeDeploymentProof\(inventory\)/);
+  assert.match(mirror, /deployment\?\.result\?\.status !== 'Succeeded'/);
+  assert.match(workflow, /record\?\.environment !== 'devee'/);
+  assert.match(workflow, /record\?\.sourceTreeHash !== sourceTreeHash/);
+  assert.match(workflow, /sourceStateMaximumAgeSeconds/);
+});

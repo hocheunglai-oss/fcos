@@ -122,6 +122,8 @@ For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will ex
 
 ## Deployment
 
+Salesforce metadata follows one source-controlled promotion path: deploy and verify the complete `force-app` tree in DEVEE, publish that exact DEVEE tree to the `ivanyk20/fcbhk` `src/` mirror, then promote the same source to QAT and finally Production. Run `npm run salesforce:deploy:all`; the command verifies every pinned org identity, enforces the order, records a non-secret DEVEE deployment proof, and blocks shared publication unless its source hash matches. Never develop or synchronize independently from QAT or Production.
+
 Production deploys are handled by Vercel:
 
 ```bash

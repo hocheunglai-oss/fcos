@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { sourceInventory } from './sync-salesforce-shared-repository.mjs';
+import { writeDeveeSourceState } from './salesforce-workflow-state.mjs';
 
 const salesforce = FCOS_CONNECTION_POLICY.providers.find((provider) => provider.id === 'salesforce');
 const MANIFEST_INDEX = process.argv.indexOf('--manifest');
@@ -10,7 +12,8 @@ const MANIFEST = MANIFEST_INDEX >= 0
   : (process.env.FCOS_SALESFORCE_MANIFEST || '');
 const CHECK_ONLY = process.argv.includes('--check-only');
 const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
-const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || 'ShipAgentInvoiceReadinessServiceTest,SpecialTermClauseCompilerTest,SpecialTermTriggerHandlerTest,SpecialTermRevisionServiceTest').split(',').map((value) => value.trim()).filter(Boolean);
+const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || 'ShipAgentInvoiceReadinessServiceTest,SpecialTermClauseCompilerTest,SpecialTermConsolidationTest,SpecialTermRevisionServiceTest,SpecialTermTriggerHandlerTest,StemLineItemTriggerHandlerTest').split(',').map((value) => value.trim()).filter(Boolean);
+const EXPECTED_ORDER = ['devee', 'qat', 'production'];
 
 if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');
 if (MANIFEST && !CHECK_ONLY) {
@@ -41,20 +44,52 @@ function verify(environment) {
 
 for (const environment of salesforce.environments) verify(environment);
 
-const validations = [];
-for (const environment of salesforce.environments) {
+if (salesforce.environments.map(({ key }) => key).join(',') !== EXPECTED_ORDER.join(',')) {
+  throw new Error('Salesforce promotion order must be DEVEE, QAT, then Production.');
+}
+
+function validate(environment) {
   verify(environment);
   const sourceArgs = MANIFEST ? ['--manifest', relativeSource] : ['--source-dir', relativeSource];
   const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, ...sourceArgs, '--wait', WAIT_MINUTES, '--json'];
   command.push('--test-level', TEST_CLASSES.length ? 'RunSpecifiedTests' : 'RunLocalTests');
   for (const testClass of TEST_CLASSES) command.push('--tests', testClass);
   const result = sf(command).result;
-  validations.push({ environment, jobId: result?.id, status: result?.status, components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`, tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}` });
+  if (result?.status !== 'Succeeded' || !result?.id) throw new Error(`${environment.label} validation did not succeed.`);
+  return { environment, jobId: result.id, status: result.status, components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`, tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}` };
 }
 
+function deploy(validation) {
+  verify(validation.environment);
+  const result = sf(['project', 'deploy', 'quick', '--target-org', validation.environment.alias, '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json']).result;
+  if (result?.status !== 'Succeeded') throw new Error(`${validation.environment.label} deployment did not succeed; later promotion stages were not started.`);
+  return {
+    environment: validation.environment.label,
+    orgId: validation.environment.orgId,
+    jobId: result?.id || validation.jobId,
+    status: result.status,
+    components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`,
+    tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}`,
+  };
+}
+
+const validations = [];
 const deployments = [];
 let sharedPublication = null;
-if (!CHECK_ONLY) {
+if (CHECK_ONLY) {
+  for (const environment of salesforce.environments) validations.push(validate(environment));
+} else {
+  const devee = salesforce.environments[0];
+  const deveeValidation = validate(devee);
+  validations.push(deveeValidation);
+  const deveeDeployment = deploy(deveeValidation);
+  deployments.push(deveeDeployment);
+  const inventory = sourceInventory();
+  writeDeveeSourceState({
+    sourceTreeHash: inventory.sourceTreeHash,
+    deploymentJobId: deveeDeployment.jobId,
+  });
+
   const publication = spawnSync(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', '--publish'], {
     cwd: process.cwd(),
     encoding: 'utf8',
@@ -66,10 +101,11 @@ if (!CHECK_ONLY) {
   } catch {
     throw new Error('Shared Salesforce publication returned an invalid response.');
   }
-  for (const validation of validations) {
-    verify(validation.environment);
-    const result = sf(['project', 'deploy', 'quick', '--target-org', validation.environment.alias, '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json']).result;
-    deployments.push({ environment: validation.environment.label, orgId: validation.environment.orgId, jobId: result?.id || validation.jobId, status: result?.status, components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`, tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}` });
+
+  for (const environment of salesforce.environments.slice(1)) {
+    const validation = validate(environment);
+    validations.push(validation);
+    deployments.push(deploy(validation));
   }
 }
 

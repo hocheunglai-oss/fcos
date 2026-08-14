@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.167',
+    releasedAt: '2026-08-14',
+    title: 'Enforce DEVEE-first Salesforce promotion',
+    changes: [
+      'Pins DEVEE as the only Salesforce development/source environment and records the fixed DEVEE → shared GitHub → QAT → Production promotion order in System Health.',
+      'Requires a fresh successful DEVEE deployment proof for the exact Salesforce source-tree hash before the shared repository can be updated.',
+      'Records Otto for primary FCOS authentication and vincexai as the isolated shared Salesforce GitHub browser fallback while retaining CLI-first verification.',
+    ],
+  },
+  {
     version: '2.0.166',
     releasedAt: '2026-08-14',
     title: 'Guarantee shared Salesforce contribution attribution',

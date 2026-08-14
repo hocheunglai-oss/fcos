@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 4,
+  policyVersion: 5,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -35,8 +35,8 @@ const connectionPolicy = {
     },
     {
       id: 'browser_fallback',
-      label: 'Use Otto only for blocked authentication',
-      detail: 'Chrome remains locked unless the CLI cannot authenticate. Return to the CLI and publish a signed verification afterward.',
+      label: 'Use only the pinned browser profile for blocked authentication',
+      detail: 'Chrome remains locked unless the CLI cannot authenticate. Use Otto for FCOS and Salesforce, or vincexai only for the shared Salesforce GitHub account, then return to the CLI and publish a signed verification.',
     },
   ],
   providers: [
@@ -48,6 +48,7 @@ const connectionPolicy = {
       identifiers: [
         { label: 'Required account', value: 'hocheunglai-oss' },
         { label: 'Repository', value: 'hocheunglai-oss/fcos' },
+        { label: 'Browser fallback profile', value: 'Otto' },
       ],
       cliVersion: { minimum: '2.96.0', maximumExclusive: '3.0.0' },
       requiredPermissions: ['repository.read', 'repository.push', 'workflow.update', 'git.push.authentication'],
@@ -142,6 +143,9 @@ const connectionPolicy = {
         { label: 'Shared GitHub account ID', value: '304336732' },
         { label: 'Shared Salesforce repository', value: 'ivanyk20/fcbhk' },
         { label: 'Shared repository path', value: 'src/' },
+        { label: 'Shared browser fallback profile', value: 'vincexai' },
+        { label: 'Development source', value: 'DEVEE only' },
+        { label: 'Promotion order', value: 'DEVEE → GitHub → QAT → Production' },
       ],
       cliVersion: { minimum: '2.145.6', maximumExclusive: '3.0.0' },
       requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query', 'shared.repository.read', 'shared.repository.push', 'shared.metadata.current'],
@@ -152,13 +156,13 @@ const connectionPolicy = {
       authorizationMode: 'Repo-pinned target with protected host authorization',
       isolationMechanism: 'Project-local target-org + SF_TARGET_ORG',
       configPath: '.sf',
-      profileName: 'source-salesforce',
+      profileName: 'fcos-devee',
       fullyIsolated: false,
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI retains protected host sessions for Production, Devee, and QAT. FCOS keeps only project-local aliases and the Production default, then revalidates all three exact org IDs and query capabilities live before use. The shared Salesforce mirror uses a separate ignored GitHub CLI profile.',
-      nonBrowserRoute: 'Use Salesforce CLI or the approved API only after Production, Devee, and QAT each match their exact Organization ID and environment type. Deploy identical metadata to all three targets, then publish a byte-equivalent mirror to the pinned shared repository before the FCOS Salesforce change may be pushed.',
+      persistence: 'Salesforce CLI retains protected host sessions for DEVEE, QAT, and Production. FCOS pins DEVEE as the development/source target and revalidates every exact org ID, username, environment type, and query capability before use. The shared Salesforce mirror uses a separate ignored GitHub CLI profile.',
+      nonBrowserRoute: 'Use Salesforce CLI only after DEVEE, QAT, and Production match their exact identities. Deploy and verify in DEVEE, publish the byte-equivalent DEVEE source to the shared repository, then promote the same source to QAT and Production in order.',
       publication: {
         requiredAccount: 'vincelessxai',
         requiredAccountId: 304336732,
@@ -170,13 +174,17 @@ const connectionPolicy = {
         targetRoot: 'src',
         manifestPath: '.fcos-salesforce-mirror.json',
         configPath: '.fcos-cli/github-vincelessxai',
+        browserProfile: 'vincexai',
+        sourceEnvironmentKey: 'devee',
+        sourceStatePath: '.fcos-cli/salesforce/devee-source-state.json',
+        sourceStateMaximumAgeSeconds: 14400,
         verifyCommand: 'npm run salesforce:mirror:verify',
         publishCommand: 'npm run salesforce:mirror:publish',
       },
       environments: [
-        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
         { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true },
         { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent@cosulich.com.hk.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true },
+        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
       ],
     },
   ],
@@ -227,7 +235,10 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
     if (!provider.cliVersion?.exact && !provider.cliVersion?.minimum) throw new Error(`${provider.id} CLI version policy is required.`);
     if (provider.credentialStorage === 'macos_keychain') requireString(provider.keychainService, `${provider.id}.keychainService`);
     if (provider.id === 'salesforce') {
-      if (!Array.isArray(provider.environments) || provider.environments.length !== 3) throw new Error('Salesforce requires Production, Devee, and QAT targets.');
+      if (!Array.isArray(provider.environments) || provider.environments.length !== 3) throw new Error('Salesforce requires Devee, QAT, and Production targets.');
+      if (provider.environments.map(({ key }) => key).join(',') !== 'devee,qat,production') {
+        throw new Error('Salesforce environment order must be Devee, QAT, then Production.');
+      }
       for (const environment of provider.environments) {
         requireString(environment.key, `salesforce.${environment.key}.key`);
         requireString(environment.label, `salesforce.${environment.key}.label`);
@@ -251,6 +262,10 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       requireString(provider.publication?.targetRoot, 'salesforce.publication.targetRoot');
       requireString(provider.publication?.manifestPath, 'salesforce.publication.manifestPath');
       requireString(provider.publication?.configPath, 'salesforce.publication.configPath');
+      requireString(provider.publication?.browserProfile, 'salesforce.publication.browserProfile');
+      requireString(provider.publication?.sourceEnvironmentKey, 'salesforce.publication.sourceEnvironmentKey');
+      requireString(provider.publication?.sourceStatePath, 'salesforce.publication.sourceStatePath');
+      requirePositiveInteger(provider.publication?.sourceStateMaximumAgeSeconds, 'salesforce.publication.sourceStateMaximumAgeSeconds');
       requireString(provider.publication?.verifyCommand, 'salesforce.publication.verifyCommand');
       requireString(provider.publication?.publishCommand, 'salesforce.publication.publishCommand');
     }

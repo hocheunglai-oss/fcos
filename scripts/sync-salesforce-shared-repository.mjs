@@ -15,6 +15,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import {
+  deveeEnvironment,
+  readDeveeSourceState,
+  validateDeveeSourceState,
+} from './salesforce-workflow-state.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SALESFORCE_POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -111,6 +116,31 @@ function assertIdentity() {
     throw new Error('Shared Salesforce repository identity, default branch, or WRITE permission mismatch.');
   }
   return repository;
+}
+
+function assertDeveeDeploymentProof(inventory) {
+  const environment = deveeEnvironment();
+  const record = readDeveeSourceState();
+  validateDeveeSourceState(record, inventory.sourceTreeHash);
+  const display = json('sf', ['org', 'display', '--target-org', environment.alias, '--json']);
+  const organization = json('sf', [
+    'data', 'query', '--target-org', environment.alias,
+    '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json',
+  ]);
+  const deployment = json('sf', [
+    'project', 'deploy', 'report', '--target-org', environment.alias,
+    '--job-id', record.deploymentJobId, '--json',
+  ]);
+  if (display?.result?.id !== environment.orgId
+    || display?.result?.username !== environment.username
+    || display?.result?.connectedStatus !== 'Connected'
+    || organization?.result?.records?.[0]?.Id !== environment.orgId
+    || organization?.result?.records?.[0]?.IsSandbox !== true
+    || deployment?.result?.status !== 'Succeeded'
+    || deployment?.result?.checkOnly === true) {
+    throw new Error('The live DEVEE identity or successful deployment proof no longer matches publication policy.');
+  }
+  return record;
 }
 
 function remoteBranchHead(branch) {
@@ -264,6 +294,7 @@ export function main() {
   }
   assertIdentity();
   const inventory = sourceInventory();
+  const deveeDeployment = MODE === 'publish' ? assertDeveeDeploymentProof(inventory) : null;
   const manifest = expectedManifest(inventory);
   const selected = publicationBranch();
   const initialRemoteHead = remoteBranchHead(selected.branch);
@@ -286,6 +317,8 @@ export function main() {
       account: PUBLICATION.requiredAccount,
       sourceFiles: inventory.files.length,
       sourceTreeHash: inventory.sourceTreeHash,
+      sourceEnvironment: 'devee',
+      sourceDeploymentJobId: deveeDeployment?.deploymentJobId || null,
       ...publication,
     }, null, 2)}\n`);
   } finally {

@@ -28,7 +28,7 @@ test('connection runtimes select pinned executables and repo-local provider conf
   assert.equal(supabase.command, new URL('../node_modules/.bin/supabase', import.meta.url).pathname);
   assert.equal(supabase.env.SUPABASE_HOME, new URL('../.fcos-cli/supabase', import.meta.url).pathname.replace(/\/$/, ''));
   assert.deepEqual(supabase.injectedArgs.slice(0, 2), ['--workdir', github.env.GH_CONFIG_DIR.replace(/\/\.fcos-cli\/github$/, '')]);
-  assert.equal(salesforce.env.SF_TARGET_ORG, 'source-salesforce');
+  assert.equal(salesforce.env.SF_TARGET_ORG, 'fcos-devee');
   assert.equal(vercel.env.VERCEL_TOKEN, undefined);
   assert.equal(supabase.env.SUPABASE_ACCESS_TOKEN, undefined);
   assert.match(githubCredentialHelperValue(), /GH_CONFIG_DIR='.*\/\.fcos-cli\/github'/);
