@@ -457,6 +457,10 @@ export const SPECIAL_TERMS_METHODOLOGY = {
       body: 'Every active FCOS user may propose a Special Term, Draft clause, revision, or matching-rule change. Only the active General Manager or an Administrator may approve, activate, retire, or roll back contractual wording. Approved versions are immutable; a new approval never silently changes an existing active term.',
     },
     {
+      title: 'Equivalent-clause consolidation',
+      body: 'A General Manager or Administrator may start a version-pinned consolidation only after comparing both clauses and confirming that meaning and every material qualifier are equivalent. The source remains approved while term owners prepare governed whole-term relink revisions. Live wording never changes automatically; the source can be retired only after Salesforce confirms that no live or pending reference remains, and all historical versions and assignments are retained.',
+    },
+    {
       title: 'Legacy migration',
       body: 'Each legacy projection stays live while clause boundaries and exact-equivalence candidates are reviewed in Salesforce. Existing numbered and hyphen remarks are parsed without changing their wording; unmarked or mixed records are flagged for manual segmentation. FCOS prepares controlled batches of up to 20 related terms, preserving original text and mapping lineage. Activation requires every proposed clause version and rule in one whole-term revision to be approved, then atomically writes all three projections, styles, assignments, rules, compilations, and verification hashes. Rollback restores the preserved whole-term state.',
     },

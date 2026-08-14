@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Loader2, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +68,7 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
       state: 'Active',
       upgradeAvailable: false,
       latestApprovedVersion: clause.latestApprovedVersion,
+      consolidation: clause.consolidation || null,
     };
     const next = [...assignments];
     next.splice(picker.index, 0, row);
@@ -126,9 +127,11 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
                 <Badge variant="outline">{row.category || 'Other'}</Badge>
                 <Badge variant="secondary">v{row.revisionNumber}</Badge>
                 {row.clauseStatus === 'Retired' ? <Badge variant="destructive">Retired</Badge> : null}
+                {row.consolidation ? <Badge className="border-amber-400 bg-amber-100 text-amber-950 hover:bg-amber-100">Relink required</Badge> : null}
                 {row.upgradeAvailable ? <><Button type="button" variant="outline" size="sm" className="h-7 border-amber-300 bg-amber-50 text-amber-900" onClick={() => setUpgradeTarget(row)}><RefreshCw className="mr-1 h-3.5 w-3.5" />Upgrade v{row.revisionNumber} → v{row.latestApprovedVersion?.revisionNumber}</Button><label className="inline-flex items-center gap-1.5 text-xs text-amber-950"><Checkbox checked={selectedUpgradeIds.includes(row.clauseId)} onCheckedChange={(checked) => setSelectedUpgradeIds((current) => checked === true ? [...new Set([...current, row.clauseId])] : current.filter((clauseId) => clauseId !== row.clauseId))} disabled={disabled} />Select</label></> : null}
               </div>
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{row.clauseText}</p>
+              {row.consolidation ? <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />This clause is being consolidated into {row.consolidation.replacementShortName}. You may still use it, but the saved whole-term draft will join the relink queue.</p> : null}
             </div>
             <div className="flex items-start justify-end gap-1 sm:flex-col">
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => move(index, -1)} disabled={disabled || index === 0} title="Move clause up"><ArrowUp className="h-4 w-4" /></Button>
@@ -150,6 +153,7 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
             <button key={clause.id} type="button" onClick={() => insert(clause)} className="block w-full rounded-lg border border-border p-3 text-left transition hover:border-primary/50 hover:bg-muted/40">
               <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{clause.shortName}</strong><Badge variant="outline">{clause.category}</Badge><Badge variant="secondary">v{clause.latestApprovedVersion.revisionNumber}</Badge><span className="text-xs text-muted-foreground">Used in {clause.usageCount} assignment(s)</span></div>
               <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">{clause.latestApprovedVersion.clauseText}</p>
+              {clause.consolidation ? <p className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs font-medium text-amber-950"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Relinking to {clause.consolidation.replacementShortName}. New use is allowed but will require a governed relink.</p> : null}
             </button>
           ))}{!options.length && !pickerError ? <p className="py-10 text-center text-sm text-muted-foreground">No unused approved clauses match this search. Create a Draft in the Clause Bank when new wording is needed.</p> : null}</div> : null}
         </DialogContent>

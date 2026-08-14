@@ -17,7 +17,7 @@ public without sharing class SpecialTermRevisionService {
         Integer expected = 1;
         for (Special_Term_Revision_Clause__c row : rows) {
             require(row.Sequence__c != null && row.Sequence__c.intValue() == expected, 'Revision clauses must use continuous sequence numbers from 1 within each projection.');
-            require(row.Clause__c == row.Clause_Version__r.Clause__c && row.Clause_Version__r.Status__c == 'Approved', 'Every activated revision clause must reference an approved version of its clause.');
+            require(row.Clause__c == row.Clause_Version__r.Clause__c && row.Clause_Version__r.Status__c == 'Approved' && row.Clause_Version__r.Clause__r.Status__c == 'Active', 'Every activated revision clause must reference an approved version of an active clause.');
             String wording = SpecialTermClauseCompiler.normalizeClauseText(row.Clause_Version__r.Clause_Text__c);
             require(!String.isBlank(wording) && !SpecialTermClauseCompiler.hasTopLevelListMarker(wording), 'Revision clause wording is invalid.');
             values.add(style == 'Hyphen' ? '- ' + wording : String.valueOf(expected) + '. ' + wording);
@@ -34,7 +34,7 @@ public without sharing class SpecialTermRevisionService {
         };
         for (Special_Term_Revision_Clause__c row : [
             SELECT Id, Clause__c, Clause_Version__c, Projection__c, Sequence__c, State__c,
-                Clause_Version__r.Clause__c, Clause_Version__r.Status__c, Clause_Version__r.Clause_Text__c
+                Clause_Version__r.Clause__c, Clause_Version__r.Clause__r.Status__c, Clause_Version__r.Status__c, Clause_Version__r.Clause_Text__c
             FROM Special_Term_Revision_Clause__c WHERE Special_Term_Revision__c = :revisionId
             ORDER BY Projection__c, Sequence__c, Id
         ]) values.get(SpecialTermClauseCompiler.normalizeProjection(row.Projection__c)).add(row);
@@ -89,10 +89,8 @@ public without sharing class SpecialTermRevisionService {
         SpecialTermTriggerHandler.allowCompiledProjectionUpdate = true;
         SpecialTermTriggerHandler.allowRevisionLifecycleUpdate = true;
         try {
-            List<Special_Term_Clause_Assignment__c> pending = [SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :revision.Special_Term__c AND State__c = 'Proposed'];
-            if (!pending.isEmpty()) delete pending;
             List<Special_Term_Clause_Assignment__c> previous = [SELECT Id, State__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :revision.Special_Term__c AND State__c = 'Active'];
-            for (Special_Term_Clause_Assignment__c row : previous) row.State__c = 'Proposed';
+            for (Special_Term_Clause_Assignment__c row : previous) row.State__c = 'Historical';
             if (!previous.isEmpty()) update previous;
             List<Special_Term_Clause_Assignment__c> assignments = new List<Special_Term_Clause_Assignment__c>();
             for (String projection : SpecialTermClauseCompiler.PROJECTIONS) for (Special_Term_Revision_Clause__c row : rows.get(projection)) assignments.add(new Special_Term_Clause_Assignment__c(
@@ -155,8 +153,9 @@ public without sharing class SpecialTermRevisionService {
         SpecialTermTriggerHandler.allowCompiledProjectionUpdate = true;
         SpecialTermTriggerHandler.allowRevisionLifecycleUpdate = true;
         try {
-            List<Special_Term_Clause_Assignment__c> active = [SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :revision.Special_Term__c AND State__c = 'Active'];
-            if (!active.isEmpty()) delete active;
+            List<Special_Term_Clause_Assignment__c> active = [SELECT Id, State__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :revision.Special_Term__c AND State__c = 'Active'];
+            for (Special_Term_Clause_Assignment__c assignment : active) assignment.State__c = 'Historical';
+            if (!active.isEmpty()) update active;
             List<Special_Term_Revision_Clause__c> clauses = [SELECT Id, State__c FROM Special_Term_Revision_Clause__c WHERE Special_Term_Revision__c = :revisionId];
             for (Special_Term_Revision_Clause__c row : clauses) row.State__c = 'Proposed';
             if (!clauses.isEmpty()) update clauses;

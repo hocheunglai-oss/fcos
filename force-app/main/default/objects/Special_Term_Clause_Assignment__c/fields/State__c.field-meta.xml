@@ -20,6 +20,11 @@
                 <default>false</default>
                 <label>Active</label>
             </value>
+            <value>
+                <fullName>Historical</fullName>
+                <default>false</default>
+                <label>Historical</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

@@ -1,5 +1,5 @@
 import { validSystemErrorSignature } from './_systemErrorNotifications.js';
-import { listSpecialTermApprovalQueue } from './_specialTermClauses.js';
+import { listSpecialTermApprovalQueue, listSpecialTermClauseConsolidations } from './_specialTermClauses.js';
 
 function cleanIds(values, limit = 100) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, limit);
@@ -149,6 +149,24 @@ function specialTermsNotification(row, state = {}) {
   };
 }
 
+function specialTermsRelinkNotification(consolidation, term, state = {}) {
+  const notificationKey = `relink:${consolidation.id}:${term.termId}:${term.revisionId || term.termLastModifiedAt || 'live'}`;
+  return {
+    id: `special_terms:${notificationKey}`,
+    source: 'special_terms',
+    sourceId: term.termId,
+    type: term.revisionState === 'Awaiting Approval' ? 'relink_approval_required' : 'clause_relink_required',
+    severity: term.revisionState === 'Conflict' ? 'critical' : 'warning',
+    title: `${term.termName || 'Special Term'} needs clause relinking`,
+    message: `${consolidation.sourceShortName} is being consolidated into ${consolidation.replacementShortName}. Review the governed whole-term replacement.`,
+    link: `/special-terms?termId=${encodeURIComponent(term.termId)}&tab=terms&consolidationId=${encodeURIComponent(consolidation.id)}`,
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: term.revisionLastModifiedAt || term.termLastModifiedAt || consolidation.lastModifiedAt,
+  };
+}
+
 function notificationVisible(row, body, now) {
   const state = String(body.state || 'active');
   const snoozed = row.snoozedUntil && row.snoozedUntil > now;
@@ -172,7 +190,7 @@ export async function workNotificationsList(body = {}, accessContext) {
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const router = client.schema('emailrouter');
-  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, shipAgentCases, shipAgentStates, generalManagerRoles, specialTermsQueue, specialTermsStates] = await Promise.all([
+  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, shipAgentCases, shipAgentStates, generalManagerRoles, specialTermsQueue, specialTermsConsolidationQueue, specialTermsStates] = await Promise.all([
     client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('fcos_improvement_notifications').select('id,ticket_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
@@ -187,6 +205,7 @@ export async function workNotificationsList(body = {}, accessContext) {
     client.from('ship_agent_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
     client.from('collaboration_roles').select('user_id').eq('role', 'general_manager').eq('active', true),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
+    listSpecialTermClauseConsolidations({ includeClosed: false }).then((data) => ({ data: data.consolidations || [], error: null })).catch((error) => ({ data: [], error })),
     client.from('special_terms_notification_states').select('notification_key,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
   ]);
 
@@ -223,6 +242,7 @@ export async function workNotificationsList(body = {}, accessContext) {
   if (shipAgentStates.error && !unavailableTable(shipAgentStates.error)) throw shipAgentStates.error;
   if (generalManagerRoles.error && !unavailableTable(generalManagerRoles.error)) throw generalManagerRoles.error;
   if (specialTermsQueue.error) unavailableSources.push('Special Terms');
+  if (specialTermsConsolidationQueue.error && !unavailableSources.includes('Special Terms')) unavailableSources.push('Special Terms');
   if (specialTermsStates.error && !unavailableTable(specialTermsStates.error)) throw specialTermsStates.error;
 
   const routerStateByAlert = new Map((emailRouterStates.data || []).map((row) => [row.alert_id, row]));
@@ -251,15 +271,22 @@ export async function workNotificationsList(body = {}, accessContext) {
         return specialTermsNotification(row, specialTermsStateByKey.get(key));
       })
     : [];
+  const profileEmail = String(profile.email || '').trim().toLowerCase();
+  const specialTermsRelinkNotifications = (specialTermsConsolidationQueue.data || []).flatMap((consolidation) => (consolidation.affectedTerms || [])
+    .filter((term) => specialTermsApprover || (profileEmail && String(term.ownerEmail || '').trim().toLowerCase() === profileEmail))
+    .map((term) => {
+      const key = `relink:${consolidation.id}:${term.termId}:${term.revisionId || term.termLastModifiedAt || 'live'}`;
+      return specialTermsRelinkNotification(consolidation, term, specialTermsStateByKey.get(key));
+    }));
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications]
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',

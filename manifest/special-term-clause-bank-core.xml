@@ -5,6 +5,8 @@
         <members>SpecialTermClauseCompiler</members>
         <members>SpecialTermClauseCompilerTest</members>
         <members>SpecialTermClauseHandler</members>
+        <members>SpecialTermConsolidationHandler</members>
+        <members>SpecialTermConsolidationTest</members>
         <members>SpecialTermRevisionClauseHandler</members>
         <members>SpecialTermRevisionHandler</members>
         <members>SpecialTermRevisionRest</members>
@@ -25,11 +27,14 @@
         <members>SpecialTermClauseAssignmentTrigger</members>
         <members>SpecialTermClauseTrigger</members>
         <members>SpecialTermClauseVersionTrigger</members>
+        <members>SpecialTermClauseConsolidationTrigger</members>
+        <members>SpecialTermClauseConsolidationMapTrigger</members>
         <members>SpecialTermTrigger</members>
         <name>ApexTrigger</name>
     </types>
     <types>
         <members>Special_Term_Clause__c.Origin__c</members>
+        <members>Special_Term_Clause_Assignment__c.State__c</members>
         <members>Special_Term_Clause__c.Legacy_Original_Text__c</members>
         <members>Special_Term_Clause_Version__c.AI_Model__c</members>
         <members>Special_Term_Clause_Version__c.AI_Response_Id__c</members>
@@ -73,6 +78,8 @@
         <members>Special_Term_Clause__c</members>
         <members>Special_Term_Clause_Version__c</members>
         <members>Special_Term_Clause_Assignment__c</members>
+        <members>Special_Term_Clause_Consolidation__c</members>
+        <members>Special_Term_Clause_Consolidation_Map__c</members>
         <name>CustomObject</name>
     </types>
     <version>67.0</version>

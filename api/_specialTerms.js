@@ -12,6 +12,8 @@ const OBJECTS = Object.freeze({
   clause: 'Special_Term_Clause__c',
   clauseVersion: 'Special_Term_Clause_Version__c',
   clauseAssignment: 'Special_Term_Clause_Assignment__c',
+  clauseConsolidation: 'Special_Term_Clause_Consolidation__c',
+  revisionClause: 'Special_Term_Revision_Clause__c',
 });
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const OPERATION_OBJECTS = Object.freeze({
@@ -26,6 +28,10 @@ const OPERATION_OBJECTS = Object.freeze({
   clause_draft_revise: OBJECTS.clauseVersion,
   clause_approve: OBJECTS.clauseVersion,
   clause_retire: OBJECTS.clause,
+  clause_consolidation_start: OBJECTS.clauseConsolidation,
+  clause_consolidation_relink: OBJECTS.clauseConsolidation,
+  clause_consolidation_cancel: OBJECTS.clauseConsolidation,
+  clause_consolidation_complete: OBJECTS.clauseConsolidation,
   migration_review_save: OBJECTS.clauseAssignment,
   migration_activate: OBJECTS.term,
   migration_rollback: OBJECTS.term,
@@ -226,6 +232,7 @@ function mapTerm(row) {
     nominationActiveClauseCount: Number(row.nominationActiveClauseCount || 0),
     nominationProposedClauseCount: Number(row.nominationProposedClauseCount || 0),
     nominationUpgradeCount: Number(row.nominationUpgradeCount || 0),
+    relinkRequiredCount: Number(row.relinkRequiredCount || 0),
     lastModifiedAt: row.LastModifiedDate || null,
   };
 }
@@ -292,21 +299,36 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
       const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
       const loadedTermIds = termResult.records.map((term) => term.Id).filter(isSalesforceRecordId);
       const assignmentResult = loadedTermIds.length
-        ? await sfQuery(`SELECT Special_Term__c,Projection__c,State__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
+        ? await sfQuery(`SELECT Special_Term__c,Projection__c,State__c,Clause__c,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
         : { records: [], totalSize: 0 };
-      if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length || assignmentResult.totalSize > assignmentResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
+      const consolidationResult = await sfQuery(`SELECT Id,Source_Clause__c FROM ${OBJECTS.clauseConsolidation} WHERE Status__c IN ('Relinking','Paused','Ready to Retire') LIMIT 5000`, { clean: true, limit: 5000 });
+      const consolidatingClauseIds = new Set(consolidationResult.records.map((row) => row.Source_Clause__c));
+      const revisionRelinkResult = loadedTermIds.length && consolidatingClauseIds.size
+        ? await sfQuery(`SELECT Id,Special_Term_Revision__r.Special_Term__c,Clause__c FROM ${OBJECTS.revisionClause} WHERE Special_Term_Revision__r.Special_Term__c IN (${loadedTermIds.map((id) => `'${soql(id)}'`).join(',')}) AND Special_Term_Revision__r.Status__c IN ('Draft','In Review') AND Clause__c IN (${[...consolidatingClauseIds].map((id) => `'${soql(id)}'`).join(',')}) LIMIT 10000`, { clean: true, limit: 10000 })
+        : { records: [], totalSize: 0 };
+      if (termResult.totalSize > termResult.records.length || ruleResult.totalSize > ruleResult.records.length || assignmentResult.totalSize > assignmentResult.records.length || consolidationResult.totalSize > consolidationResult.records.length || revisionRelinkResult.totalSize > revisionRelinkResult.records.length) throw specialTermsError('Special Terms exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
       const summaries = new Map();
       for (const assignment of assignmentResult.records) {
-        const summary = summaries.get(assignment.Special_Term__c) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0, confirmationActiveClauseCount: 0, confirmationProposedClauseCount: 0, confirmationUpgradeCount: 0, nominationActiveClauseCount: 0, nominationProposedClauseCount: 0, nominationUpgradeCount: 0 };
+        const summary = summaries.get(assignment.Special_Term__c) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0, confirmationActiveClauseCount: 0, confirmationProposedClauseCount: 0, confirmationUpgradeCount: 0, nominationActiveClauseCount: 0, nominationProposedClauseCount: 0, nominationUpgradeCount: 0, relinkRequiredCount: 0, relinkClauseIds: new Set() };
         const prefix = assignment.Projection__c === 'Confirmation Remark' ? 'confirmation' : assignment.Projection__c === 'Nomination Remark' ? 'nomination' : '';
         const activeKey = prefix ? `${prefix}ActiveClauseCount` : 'activeClauseCount';
         const proposedKey = prefix ? `${prefix}ProposedClauseCount` : 'proposedClauseCount';
         const upgradeKey = prefix ? `${prefix}UpgradeCount` : 'upgradeCount';
         if (assignment.State__c === 'Active') {
           summary[activeKey] += 1;
+          if (consolidatingClauseIds.has(assignment.Clause__c)) summary.relinkClauseIds.add(assignment.Clause__c);
           if (Number(assignment.Clause__r?.Latest_Approved_Version_Number__c || 0) > Number(assignment.Clause_Version__r?.Revision_Number__c || 0)) summary[upgradeKey] += 1;
         } else if (assignment.State__c === 'Proposed') summary[proposedKey] += 1;
+        summary.relinkRequiredCount = summary.relinkClauseIds.size;
         summaries.set(assignment.Special_Term__c, summary);
+      }
+      for (const revisionClause of revisionRelinkResult.records) {
+        const termId = revisionClause.Special_Term_Revision__r?.Special_Term__c;
+        if (!termId) continue;
+        const summary = summaries.get(termId) || { activeClauseCount: 0, proposedClauseCount: 0, upgradeCount: 0, confirmationActiveClauseCount: 0, confirmationProposedClauseCount: 0, confirmationUpgradeCount: 0, nominationActiveClauseCount: 0, nominationProposedClauseCount: 0, nominationUpgradeCount: 0, relinkRequiredCount: 0, relinkClauseIds: new Set() };
+        summary.relinkClauseIds.add(revisionClause.Clause__c);
+        summary.relinkRequiredCount = summary.relinkClauseIds.size;
+        summaries.set(termId, summary);
       }
       return { terms: termResult.records.map((term) => mapTerm({ ...term, ...(summaries.get(term.Id) || {}) })), rules: ruleResult.records.map(mapRule), fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
     },

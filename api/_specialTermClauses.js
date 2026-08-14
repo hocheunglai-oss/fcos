@@ -1,5 +1,5 @@
 import { getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
-import { getOrLoadRuntimeCache } from './_runtimeCache.js';
+import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
 import {
   assertCurrent,
   currentRecord,
@@ -38,6 +38,10 @@ const OBJECTS = Object.freeze({
   clause: 'Special_Term_Clause__c',
   version: 'Special_Term_Clause_Version__c',
   assignment: 'Special_Term_Clause_Assignment__c',
+  consolidation: 'Special_Term_Clause_Consolidation__c',
+  consolidationMap: 'Special_Term_Clause_Consolidation_Map__c',
+  revision: 'Special_Term_Revision__c',
+  revisionClause: 'Special_Term_Revision_Clause__c',
 });
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const PROJECTION_FIELDS = Object.freeze({
@@ -179,11 +183,98 @@ function mapClause(row, { versions = [], usageCount = 0 } = {}) {
     latestApprovedVersion: mapVersion(latestApproved),
     draftVersion: mapVersion(draft),
     replacementClauseId: row.Replacement_Clause__c || null,
+    consolidation: row.consolidation || null,
     retirementReason: row.Retirement_Reason__c || '',
     usageCount: Number(usageCount || 0),
     lastApprovedAt: row.Last_Approved_At__c || null,
     lastModifiedAt: row.LastModifiedDate || null,
     _versions: ordered.map(mapVersion),
+  };
+}
+
+const CLAUSE_SELECT = 'Id,Name,Short_Name_Key__c,Canonical_Text_Key__c,Category__c,Status__c,Origin__c,Legacy_Original_Text__c,Latest_Approved_Version_Number__c,Last_Approved_At__c,Replacement_Clause__c,Retirement_Reason__c,LastModifiedDate';
+const VERSION_SELECT = 'Id,Clause__c,Revision_Number__c,Clause_Text__c,Content_Hash__c,Status__c,Revision_Reason__c,Proposed_By_Email__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,Draft_Source__c,AI_Model__c,AI_Response_Id__c,Legacy_Source_Key__c,LastModifiedDate';
+
+async function expireSpecialTermClauseCaches(termIds = []) {
+  await expireRuntimeCacheTags([
+    'salesforce:special-terms',
+    'salesforce:special-terms:clauses',
+    ...termIds.filter(isId).map((termId) => `salesforce:special-term:${termId}`),
+  ]);
+}
+
+async function loadOneClause(clauseId) {
+  const [clauseResult, versionResult, usageResult, consolidationResult] = await Promise.all([
+    sfQuery(`SELECT ${CLAUSE_SELECT} FROM ${OBJECTS.clause} WHERE Id = '${soql(clauseId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT ${VERSION_SELECT} FROM ${OBJECTS.version} WHERE Clause__c = '${soql(clauseId)}' ORDER BY Revision_Number__c DESC LIMIT 100`, { clean: true, limit: 100 }),
+    sfQuery(`SELECT COUNT(Id) usageCount FROM ${OBJECTS.assignment} WHERE Clause__c = '${soql(clauseId)}'`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id,Status__c,Replacement_Clause__c,Replacement_Clause__r.Name,Replacement_Version__c,Replacement_Version__r.Revision_Number__c,LastModifiedDate FROM ${OBJECTS.consolidation} WHERE Source_Clause__c = '${soql(clauseId)}' AND Status__c IN ('Relinking','Paused','Ready to Retire') ORDER BY CreatedDate DESC LIMIT 1`, { clean: true, limit: 1 }),
+  ]);
+  const row = clauseResult.records[0];
+  if (!row) throw specialTermsError('Clause no longer exists.', 409, 'SPECIAL_TERMS_CLAUSE_MISSING');
+  const activeConsolidation = consolidationResult.records[0] || null;
+  row.consolidation = activeConsolidation ? {
+    id: activeConsolidation.Id,
+    status: activeConsolidation.Status__c,
+    replacementClauseId: activeConsolidation.Replacement_Clause__c,
+    replacementShortName: activeConsolidation.Replacement_Clause__r?.Name || '',
+    replacementVersionId: activeConsolidation.Replacement_Version__c,
+    replacementRevisionNumber: Number(activeConsolidation.Replacement_Version__r?.Revision_Number__c || 0),
+    lastModifiedAt: activeConsolidation.LastModifiedDate || null,
+  } : null;
+  return mapClause(row, { versions: versionResult.records, usageCount: Number(usageResult.records[0]?.usageCount || 0) });
+}
+
+async function resolveConsolidationSchema() {
+  const required = {
+    [OBJECTS.consolidation]: ['Consolidation_Key__c', 'Source_Clause__c', 'Replacement_Clause__c', 'Replacement_Version__c', 'Status__c', 'Reason__c', 'Confirmed_By_Email__c', 'Confirmed_At__c', 'Completed_By_Email__c', 'Completed_At__c', 'Cancelled_By_Email__c', 'Cancelled_At__c'],
+    [OBJECTS.consolidationMap]: ['Consolidation__c', 'Source_Version__c', 'Replacement_Version__c', 'Equivalence_Status__c', 'Mapping_Key__c', 'Source_Content_Hash__c', 'Replacement_Content_Hash__c', 'Confirmed_By_Email__c', 'Confirmed_At__c'],
+  };
+  const describes = await Promise.all(Object.keys(required).map((name) => sfRequest(`/sobjects/${encodeURIComponent(name)}/describe/`, { readOnly: true })));
+  Object.entries(required).forEach(([name, fields], index) => {
+    const describe = describes[index];
+    const available = new Map((describe.fields || []).map((field) => [field.name, field]));
+    if (describe.createable !== true || describe.updateable !== true) throw specialTermsError(`Special Terms requires write access to ${name}.`, 503, 'SPECIAL_TERMS_CONSOLIDATION_SCHEMA_INVALID');
+    for (const fieldName of fields) {
+      const field = available.get(fieldName);
+      if (!field || (fieldName !== 'Status__c' && field.createable !== true)) throw specialTermsError(`Special Terms consolidation requires ${name}.${fieldName}.`, 503, 'SPECIAL_TERMS_CONSOLIDATION_SCHEMA_INVALID');
+    }
+  });
+}
+
+function consolidationSelect() {
+  return 'Id,Consolidation_Key__c,Source_Clause__c,Source_Clause__r.Name,Source_Clause__r.Status__c,Replacement_Clause__c,Replacement_Clause__r.Name,Replacement_Clause__r.Status__c,Replacement_Clause__r.Latest_Approved_Version_Number__c,Replacement_Version__c,Replacement_Version__r.Revision_Number__c,Replacement_Version__r.Status__c,Replacement_Version__r.Content_Hash__c,Status__c,Reason__c,Confirmed_By_Email__c,Confirmed_At__c,Completed_By_Email__c,Completed_At__c,Cancelled_By_Email__c,Cancelled_At__c,LastModifiedDate';
+}
+
+function mapConsolidation(row, mappings = [], affectedTerms = []) {
+  const targetChanged = row.Replacement_Clause__r?.Status__c !== 'Active'
+    || row.Replacement_Version__r?.Status__c !== 'Approved'
+    || Number(row.Replacement_Clause__r?.Latest_Approved_Version_Number__c || row.Replacement_Version__r?.Revision_Number__c || 0) !== Number(row.Replacement_Version__r?.Revision_Number__c || 0);
+  const unresolvedDrafts = affectedTerms.some((term) => term.revisionState === 'Conflict');
+  const effectiveStatus = row.Status__c === 'Relinking' && !affectedTerms.length && !unresolvedDrafts ? 'Ready to Retire'
+    : targetChanged && !['Completed', 'Cancelled'].includes(row.Status__c) ? 'Paused'
+      : row.Status__c;
+  return {
+    id: row.Id,
+    key: row.Consolidation_Key__c,
+    sourceClauseId: row.Source_Clause__c,
+    sourceShortName: row.Source_Clause__r?.Name || '',
+    sourceStatus: row.Source_Clause__r?.Status__c || '',
+    replacementClauseId: row.Replacement_Clause__c,
+    replacementShortName: row.Replacement_Clause__r?.Name || '',
+    replacementVersionId: row.Replacement_Version__c,
+    replacementRevisionNumber: Number(row.Replacement_Version__r?.Revision_Number__c || 0),
+    status: effectiveStatus,
+    storedStatus: row.Status__c,
+    targetChanged,
+    reason: row.Reason__c || '',
+    confirmedByEmail: row.Confirmed_By_Email__c || '',
+    confirmedAt: row.Confirmed_At__c || null,
+    completedAt: row.Completed_At__c || null,
+    lastModifiedAt: row.LastModifiedDate || null,
+    mappings,
+    affectedTerms,
+    remainingTermCount: affectedTerms.length,
   };
 }
 
@@ -199,10 +290,11 @@ async function loadClauseRows({ force = false } = {}) {
     tags: ['salesforce:special-terms', 'salesforce:special-terms:clauses'],
     force,
     loader: async () => {
-      const [clauseResult, versionResult, usageResult] = await Promise.all([
-        sfQuery('SELECT Id,Name,Short_Name_Key__c,Canonical_Text_Key__c,Category__c,Status__c,Origin__c,Legacy_Original_Text__c,Latest_Approved_Version_Number__c,Last_Approved_At__c,Replacement_Clause__c,Retirement_Reason__c,LastModifiedDate FROM Special_Term_Clause__c ORDER BY Name LIMIT 5000', { clean: true, limit: 5000 }),
-        sfQuery('SELECT Id,Clause__c,Revision_Number__c,Clause_Text__c,Content_Hash__c,Status__c,Revision_Reason__c,Proposed_By_Email__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,Draft_Source__c,AI_Model__c,AI_Response_Id__c,Legacy_Source_Key__c,LastModifiedDate FROM Special_Term_Clause_Version__c ORDER BY Clause__c,Revision_Number__c DESC LIMIT 10000', { clean: true, limit: 10000 }),
+      const [clauseResult, versionResult, usageResult, consolidationResult] = await Promise.all([
+        sfQuery(`SELECT ${CLAUSE_SELECT} FROM Special_Term_Clause__c ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 }),
+        sfQuery(`SELECT ${VERSION_SELECT} FROM Special_Term_Clause_Version__c ORDER BY Clause__c,Revision_Number__c DESC LIMIT 10000`, { clean: true, limit: 10000 }),
         sfQuery('SELECT Clause__c clauseId,COUNT(Id) usageCount FROM Special_Term_Clause_Assignment__c GROUP BY Clause__c LIMIT 2000', { clean: true, limit: 2000 }),
+        sfQuery(`SELECT Id,Source_Clause__c,Status__c,Replacement_Clause__c,Replacement_Clause__r.Name,Replacement_Version__c,Replacement_Version__r.Revision_Number__c,LastModifiedDate FROM ${OBJECTS.consolidation} WHERE Status__c IN ('Relinking','Paused','Ready to Retire') ORDER BY CreatedDate DESC LIMIT 5000`, { clean: true, limit: 5000 }),
       ]);
       if (clauseResult.totalSize > clauseResult.records.length || versionResult.totalSize > versionResult.records.length) throw specialTermsError('The clause bank exceeds the current safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
       const versionsByClause = new Map();
@@ -211,6 +303,17 @@ async function loadClauseRows({ force = false } = {}) {
         versionsByClause.get(version.Clause__c).push(version);
       }
       const usageByClause = new Map(usageResult.records.map((row) => [row.clauseId, Number(row.usageCount || 0)]));
+      const consolidationByClause = new Map();
+      for (const row of consolidationResult.records) if (!consolidationByClause.has(row.Source_Clause__c)) consolidationByClause.set(row.Source_Clause__c, {
+        id: row.Id,
+        status: row.Status__c,
+        replacementClauseId: row.Replacement_Clause__c,
+        replacementShortName: row.Replacement_Clause__r?.Name || '',
+        replacementVersionId: row.Replacement_Version__c,
+        replacementRevisionNumber: Number(row.Replacement_Version__r?.Revision_Number__c || 0),
+        lastModifiedAt: row.LastModifiedDate || null,
+      });
+      for (const row of clauseResult.records) row.consolidation = consolidationByClause.get(row.Id) || null;
       return { clauses: clauseResult.records.map((row) => mapClause(row, { versions: versionsByClause.get(row.Id) || [], usageCount: usageByClause.get(row.Id) || 0 })), fetchedAt: new Date().toISOString() };
     },
   });
@@ -232,6 +335,92 @@ export async function listSpecialTermClauseBank({ query = '', status = '', force
     if (clauses.length >= Math.min(Math.max(Number(limit) || 200, 1), 500)) break;
   }
   return { clauses, fetchedAt: bank.fetchedAt, cacheStatus: bank.cacheStatus };
+}
+
+export async function listSpecialTermClauseConsolidations({ includeClosed = false } = {}) {
+  await resolveConsolidationSchema();
+  const where = includeClosed ? '' : " WHERE Status__c IN ('Relinking','Paused','Ready to Retire')";
+  const consolidationResult = await sfQuery(`SELECT ${consolidationSelect()} FROM ${OBJECTS.consolidation}${where} ORDER BY CreatedDate DESC LIMIT 500`, { clean: true, limit: 500 });
+  if (consolidationResult.totalSize > consolidationResult.records.length) throw specialTermsError('The clause consolidation queue exceeds the safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
+  const rows = consolidationResult.records;
+  if (!rows.length) return { consolidations: [], fetchedAt: new Date().toISOString() };
+  const consolidationIds = rows.map((row) => row.Id);
+  const sourceIds = [...new Set(rows.map((row) => row.Source_Clause__c))];
+  const [mappingResult, assignmentResult, pendingReferenceResult] = await Promise.all([
+    sfQuery(`SELECT Id,Consolidation__c,Source_Version__c,Source_Version__r.Revision_Number__c,Source_Content_Hash__c,Replacement_Version__c,Replacement_Version__r.Revision_Number__c,Replacement_Content_Hash__c,Equivalence_Status__c,Confirmed_By_Email__c,Confirmed_At__c,LastModifiedDate FROM ${OBJECTS.consolidationMap} WHERE Consolidation__c IN (${consolidationIds.map((id) => `'${soql(id)}'`).join(',')}) ORDER BY Consolidation__c,Source_Version__r.Revision_Number__c LIMIT 5000`, { clean: true, limit: 5000 }),
+    sfQuery(`SELECT Id,Special_Term__c,Special_Term__r.Name,Special_Term__r.OwnerId,Special_Term__r.Owner.Email,Special_Term__r.LastModifiedDate,Projection__c,Sequence__c,Clause__c,Clause_Version__c,Clause_Version__r.Revision_Number__c FROM ${OBJECTS.assignment} WHERE Clause__c IN (${sourceIds.map((id) => `'${soql(id)}'`).join(',')}) AND State__c = 'Active' ORDER BY Special_Term__c,Projection__c,Sequence__c LIMIT 10000`, { clean: true, limit: 10000 }),
+    sfQuery(`SELECT Id,Special_Term_Revision__c,Special_Term_Revision__r.Special_Term__c,Special_Term_Revision__r.Special_Term__r.Name,Special_Term_Revision__r.Special_Term__r.OwnerId,Special_Term_Revision__r.Special_Term__r.Owner.Email,Special_Term_Revision__r.Special_Term__r.LastModifiedDate,Special_Term_Revision__r.Status__c,Special_Term_Revision__r.LastModifiedDate,Projection__c,Sequence__c,Clause__c,Clause_Version__c,Clause_Version__r.Revision_Number__c FROM ${OBJECTS.revisionClause} WHERE Clause__c IN (${sourceIds.map((id) => `'${soql(id)}'`).join(',')}) AND Special_Term_Revision__r.Status__c IN ('Draft','In Review') ORDER BY Special_Term_Revision__r.Special_Term__c,Projection__c,Sequence__c LIMIT 10000`, { clean: true, limit: 10000 }),
+  ]);
+  if (mappingResult.totalSize > mappingResult.records.length || assignmentResult.totalSize > assignmentResult.records.length || pendingReferenceResult.totalSize > pendingReferenceResult.records.length) throw specialTermsError('The clause consolidation queue exceeds the safe mapping or assignment limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
+  const affectedTermIds = [...new Set([
+    ...assignmentResult.records.map((row) => row.Special_Term__c),
+    ...pendingReferenceResult.records.map((row) => row.Special_Term_Revision__r?.Special_Term__c),
+  ].filter(isId))];
+  let revisions = [];
+  let revisionClauses = [];
+  if (affectedTermIds.length) {
+    const revisionResult = await sfQuery(`SELECT Id,Special_Term__c,Status__c,Revision_Number__c,LastModifiedDate FROM ${OBJECTS.revision} WHERE Special_Term__c IN (${affectedTermIds.map((id) => `'${soql(id)}'`).join(',')}) AND Status__c IN ('Draft','In Review') ORDER BY Revision_Number__c DESC LIMIT 1000`, { clean: true, limit: 1000 });
+    revisions = revisionResult.records;
+    if (revisions.length) revisionClauses = (await sfQuery(`SELECT Id,Special_Term_Revision__c,Clause__c,Clause_Version__c,Projection__c,Sequence__c,LastModifiedDate FROM ${OBJECTS.revisionClause} WHERE Special_Term_Revision__c IN (${revisions.map((row) => `'${soql(row.Id)}'`).join(',')}) ORDER BY Projection__c,Sequence__c LIMIT 10000`, { clean: true, limit: 10000 })).records;
+  }
+  const mappingsByConsolidation = new Map();
+  for (const mapping of mappingResult.records) {
+    if (!mappingsByConsolidation.has(mapping.Consolidation__c)) mappingsByConsolidation.set(mapping.Consolidation__c, []);
+    mappingsByConsolidation.get(mapping.Consolidation__c).push({
+      id: mapping.Id,
+      sourceVersionId: mapping.Source_Version__c,
+      sourceRevisionNumber: Number(mapping.Source_Version__r?.Revision_Number__c || 0),
+      replacementVersionId: mapping.Replacement_Version__c,
+      replacementRevisionNumber: Number(mapping.Replacement_Version__r?.Revision_Number__c || 0),
+      equivalenceStatus: mapping.Equivalence_Status__c,
+      lastModifiedAt: mapping.LastModifiedDate || null,
+    });
+  }
+  const revisionsByTerm = new Map();
+  for (const revision of revisions) if (!revisionsByTerm.has(revision.Special_Term__c)) revisionsByTerm.set(revision.Special_Term__c, revision);
+  const revisionClausesByRevision = new Map();
+  for (const row of revisionClauses) {
+    if (!revisionClausesByRevision.has(row.Special_Term_Revision__c)) revisionClausesByRevision.set(row.Special_Term_Revision__c, []);
+    revisionClausesByRevision.get(row.Special_Term_Revision__c).push(row);
+  }
+  const consolidations = rows.map((row) => {
+    const terms = new Map();
+    for (const assignment of assignmentResult.records.filter((item) => item.Clause__c === row.Source_Clause__c)) {
+      if (!terms.has(assignment.Special_Term__c)) terms.set(assignment.Special_Term__c, {
+        termId: assignment.Special_Term__c,
+        termName: assignment.Special_Term__r?.Name || assignment.Special_Term__c,
+        ownerId: assignment.Special_Term__r?.OwnerId || null,
+        ownerEmail: assignment.Special_Term__r?.Owner?.Email || null,
+        termLastModifiedAt: assignment.Special_Term__r?.LastModifiedDate || null,
+        occurrences: [],
+      });
+      terms.get(assignment.Special_Term__c).occurrences.push({ id: assignment.Id, projection: assignment.Projection__c, sequence: Number(assignment.Sequence__c || 0), sourceVersionId: assignment.Clause_Version__c, sourceRevisionNumber: Number(assignment.Clause_Version__r?.Revision_Number__c || 0) });
+    }
+    for (const reference of pendingReferenceResult.records.filter((item) => item.Clause__c === row.Source_Clause__c)) {
+      const termId = reference.Special_Term_Revision__r?.Special_Term__c;
+      if (!isId(termId)) continue;
+      if (!terms.has(termId)) terms.set(termId, {
+        termId,
+        termName: reference.Special_Term_Revision__r?.Special_Term__r?.Name || termId,
+        ownerId: reference.Special_Term_Revision__r?.Special_Term__r?.OwnerId || null,
+        ownerEmail: reference.Special_Term_Revision__r?.Special_Term__r?.Owner?.Email || null,
+        termLastModifiedAt: reference.Special_Term_Revision__r?.Special_Term__r?.LastModifiedDate || null,
+        occurrences: [],
+      });
+      terms.get(termId).occurrences.push({ id: reference.Id, projection: reference.Projection__c, sequence: Number(reference.Sequence__c || 0), sourceVersionId: reference.Clause_Version__c, sourceRevisionNumber: Number(reference.Clause_Version__r?.Revision_Number__c || 0), pending: true });
+    }
+    for (const term of terms.values()) {
+      const revision = revisionsByTerm.get(term.termId) || null;
+      const children = revisionClausesByRevision.get(revision?.Id) || [];
+      const usesSource = children.some((item) => item.Clause__c === row.Source_Clause__c);
+      const usesReplacement = children.some((item) => item.Clause__c === row.Replacement_Clause__c);
+      term.revisionId = revision?.Id || null;
+      term.revisionLastModifiedAt = revision?.LastModifiedDate || null;
+      term.revisionState = !revision ? 'Needs Relink' : usesSource ? 'Conflict' : usesReplacement ? 'Awaiting Approval' : 'Conflict';
+    }
+    return mapConsolidation(row, mappingsByConsolidation.get(row.Id) || [], [...terms.values()]);
+  });
+  return { consolidations, fetchedAt: new Date().toISOString() };
 }
 
 export async function getSpecialTermMigrationInventory({ force = false } = {}) {
@@ -364,6 +553,21 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       lastModifiedAt: row.LastModifiedDate || null,
     };
   });
+  const activeClauseIds = [...new Set(assignments.filter((row) => row.state === 'Active').map((row) => row.clauseId))];
+  const consolidationRows = activeClauseIds.length ? (await sfQuery(`SELECT ${consolidationSelect()},Replacement_Version__r.Clause_Text__c FROM ${OBJECTS.consolidation} WHERE Source_Clause__c IN (${activeClauseIds.map((clauseId) => `'${soql(clauseId)}'`).join(',')}) AND Status__c IN ('Relinking','Paused','Ready to Retire') ORDER BY CreatedDate DESC LIMIT 100`, { clean: true, limit: 100 })).records : [];
+  const consolidationPrompts = consolidationRows.map((row) => ({
+    id: row.Id,
+    status: row.Status__c,
+    sourceClauseId: row.Source_Clause__c,
+    sourceShortName: row.Source_Clause__r?.Name || '',
+    replacementClauseId: row.Replacement_Clause__c,
+    replacementShortName: row.Replacement_Clause__r?.Name || '',
+    replacementVersionId: row.Replacement_Version__c,
+    replacementRevisionNumber: Number(row.Replacement_Version__r?.Revision_Number__c || 0),
+    replacementText: row.Replacement_Version__r?.Clause_Text__c || '',
+    lastModifiedAt: row.LastModifiedDate || null,
+    occurrences: assignments.filter((assignment) => assignment.state === 'Active' && assignment.clauseId === row.Source_Clause__c).map((assignment) => ({ projection: assignment.projection, projectionValue: assignment.projectionValue, sequence: assignment.sequence, sourceVersionId: assignment.clauseVersionId, sourceRevisionNumber: assignment.revisionNumber, sourceText: assignment.clauseText })),
+  }));
   const projectionDetails = {};
   for (const config of PROJECTION_LIST) {
     const projected = assignments.filter((assignment) => assignment.projection === config.key);
@@ -416,6 +620,7 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       id: revisionRow?.Id || null,
       status: revisionRow?.Status__c || (PROJECTION_LIST.every((config) => projectionDetails[config.key].status === 'Active') ? 'Approved' : 'Legacy'),
       proposedByEmail: revisionRow?.Proposed_By_Email__c || null,
+      revisionReason: revisionRow?.Revision_Reason__c || '',
       revisionNumber: Number(revisionRow?.Revision_Number__c || 0) || null,
       expectedLastModifiedAt: revisionRow?.LastModifiedDate || null,
       lastModifiedAt: revisionRow?.LastModifiedDate || null,
@@ -427,6 +632,7 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       rules: revisionRuleRows.filter((row) => row.Snapshot_Type__c === 'Proposed').map((row) => ({ id: row.Id, sourceRuleId: row.Special_Term_Rule__c || null, audience: row.Audience__c || '', accountId: row.Account__c || null, accountName: row.Account__r?.Name || '', accountClKey: row.Account__r?.Company_Code__c || '', portId: row.Port__c || null, portName: row.Port__r?.Name || '', portCountry: row.Port__r?.Country__c || '', productId: row.Product__c || null, productName: row.Product__r?.Name || '', country: row.Country__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), sequence: Number(row.Sequence__c || 0), state: row.State__c || '', lastModifiedAt: row.LastModifiedDate || null })),
     },
     rules: liveRuleResult.records.map((row) => ({ id: row.Id, name: row.Name || '', accountId: row.Account__c || null, portId: row.Port__c || null, productId: row.Product__c || null, country: row.Country__c || '', audience: row.Supplier_Buyer__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), lastModifiedAt: row.LastModifiedDate || null })),
+    consolidationPrompts,
     instanceUrl: getInstanceUrl(),
   };
 }
@@ -509,7 +715,7 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
   const versionId = salesforceId(body.versionId, 'Clause version');
   const reason = requiredReason(body.approvalReason, 'Approval reason');
   const reservation = await reserveOperation(client, profile, body, 'clause_approve', { id: versionId, clauseId, versionId, approvalReasonHash: clauseHash(reason), expectedClauseLastModifiedAt: body.expectedClauseLastModifiedAt, expectedVersionLastModifiedAt: body.expectedVersionLastModifiedAt });
-  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  if (reservation.replay) return { ...reservation.replay, clause: await loadOneClause(clauseId), idempotencyReplayed: true };
   try {
     const [clauseRow, versionRow] = await Promise.all([
       currentRecord(OBJECTS.clause, clauseId, ['Id', 'Status__c', 'LastModifiedDate']),
@@ -522,6 +728,8 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
     cleanClauseText(versionRow.Clause_Text__c);
     const currentApproved = await sfQuery(`SELECT Id FROM Special_Term_Clause_Version__c WHERE Clause__c = '${soql(clauseId)}' AND Status__c = 'Approved' LIMIT 2`, { clean: true, limit: 2 });
     if (currentApproved.records.length > 1) throw specialTermsError('Clause has multiple approved versions and requires repair.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_CONFLICT');
+    const dependentConsolidations = await sfQuery(`SELECT Id,Status__c FROM ${OBJECTS.consolidation} WHERE Replacement_Clause__c = '${soql(clauseId)}' AND Status__c IN ('Relinking','Ready to Retire') LIMIT 201`, { clean: true, limit: 201 });
+    if (dependentConsolidations.records.length > 200) throw specialTermsError('More than 200 active consolidations depend on this clause. Resolve them before approving another version.', 409, 'SPECIAL_TERMS_CONSOLIDATION_LIMIT');
     const now = new Date().toISOString();
     const requests = [];
     if (currentApproved.records[0]) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${currentApproved.records[0].Id}`, referenceId: 'superseded', body: { Status__c: 'Superseded' } });
@@ -529,9 +737,17 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
       { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'approved', body: { Status__c: 'Approved', Approved_By_Email__c: profile.email, Approved_At__c: now, Approval_Reason__c: reason } },
       { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Status__c: 'Active', Latest_Approved_Version_Number__c: versionRow.Revision_Number__c, Last_Approved_At__c: now, Retirement_Reason__c: null, Replacement_Clause__c: null } },
     );
+    if (dependentConsolidations.records.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'pauseConsolidations', body: { allOrNone: true, records: dependentConsolidations.records.map((row) => ({ attributes: { type: OBJECTS.consolidation }, Id: row.Id, Status__c: 'Paused' })) } });
     const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
     assertComposite(result, 'Salesforce rejected the clause approval.');
-    return finishOperation(client, reservation.operation, { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved' });
+    await expireSpecialTermClauseCaches();
+    const clause = await loadOneClause(clauseId);
+    return finishOperation(
+      client,
+      reservation.operation,
+      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved', clause },
+      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved' },
+    );
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
@@ -549,12 +765,274 @@ export async function retireSpecialTermClause(client, profile, body = {}) {
     const clauseRow = await currentRecord(OBJECTS.clause, clauseId, ['Id', 'Status__c', 'LastModifiedDate']);
     assertCurrent(clauseRow, body.expectedLastModifiedAt);
     if (clauseRow.Status__c !== 'Active') throw specialTermsError('Only an active clause can be retired.', 409, 'SPECIAL_TERMS_CLAUSE_NOT_ACTIVE');
+    const [openConsolidation, liveUse, pendingUse] = await Promise.all([
+      sfQuery(`SELECT Id FROM ${OBJECTS.consolidation} WHERE Source_Clause__c = '${soql(clauseId)}' AND Status__c IN ('Relinking','Paused','Ready to Retire') LIMIT 1`, { clean: true, limit: 1 }),
+      sfQuery(`SELECT Id FROM ${OBJECTS.assignment} WHERE Clause__c = '${soql(clauseId)}' AND State__c = 'Active' LIMIT 1`, { clean: true, limit: 1 }),
+      sfQuery(`SELECT Id FROM ${OBJECTS.revisionClause} WHERE Clause__c = '${soql(clauseId)}' AND Special_Term_Revision__r.Status__c IN ('Draft','In Review') LIMIT 1`, { clean: true, limit: 1 }),
+    ]);
+    if (openConsolidation.records.length) throw specialTermsError('Complete or cancel the governed consolidation before retiring this clause.', 409, 'SPECIAL_TERMS_CONSOLIDATION_OPEN');
+    if (liveUse.records.length || pendingUse.records.length) throw specialTermsError('A clause with live or pending Special Term references must use the governed Consolidate workflow.', 409, 'SPECIAL_TERMS_CLAUSE_IN_USE');
     if (replacementClauseId) {
       const replacement = await currentRecord(OBJECTS.clause, replacementClauseId, ['Id', 'Status__c']);
       if (replacement.Status__c !== 'Active') throw specialTermsError('Replacement clause must be active.');
     }
     await sfRequest(`/sobjects/${OBJECTS.clause}/${clauseId}`, { method: 'PATCH', body: { Status__c: 'Retired', Retirement_Reason__c: reason, Replacement_Clause__c: replacementClauseId } });
     return finishOperation(client, reservation.operation, { success: true, clauseId, replacementClauseId, operation: 'retired' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+async function consolidationRecord(consolidationId) {
+  const result = await sfQuery(`SELECT ${consolidationSelect()} FROM ${OBJECTS.consolidation} WHERE Id = '${soql(consolidationId)}' LIMIT 1`, { clean: true, limit: 1 });
+  const row = result.records[0];
+  if (!row) throw specialTermsError('Clause consolidation no longer exists.', 409, 'SPECIAL_TERMS_CONSOLIDATION_MISSING');
+  return row;
+}
+
+export async function startSpecialTermClauseConsolidation(client, profile, body = {}) {
+  await Promise.all([resolveSpecialTermsSchema({ force: true, write: true }), resolveConsolidationSchema()]);
+  const sourceClauseId = salesforceId(body.sourceClauseId, 'Source clause');
+  const replacementClauseId = salesforceId(body.replacementClauseId, 'Replacement clause');
+  if (sourceClauseId === replacementClauseId) throw specialTermsError('A clause cannot replace itself.');
+  if (body.equivalenceConfirmed !== true) throw specialTermsError('Confirm that contractual meaning and every material qualifier are equivalent.', 400, 'SPECIAL_TERMS_EQUIVALENCE_CONFIRMATION_REQUIRED');
+  const reason = requiredReason(body.reason, 'Consolidation reason');
+  const reservation = await reserveOperation(client, profile, body, 'clause_consolidation_start', {
+    id: sourceClauseId,
+    sourceClauseId,
+    replacementClauseId,
+    reasonHash: clauseHash(reason),
+    expectedSourceLastModifiedAt: body.expectedSourceLastModifiedAt,
+    expectedReplacementLastModifiedAt: body.expectedReplacementLastModifiedAt,
+  });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const [source, replacement, existing] = await Promise.all([
+      currentRecord(OBJECTS.clause, sourceClauseId, ['Id', 'Name', 'Status__c', 'Latest_Approved_Version_Number__c', 'LastModifiedDate']),
+      currentRecord(OBJECTS.clause, replacementClauseId, ['Id', 'Name', 'Status__c', 'Latest_Approved_Version_Number__c', 'LastModifiedDate']),
+      sfQuery(`SELECT Id FROM ${OBJECTS.consolidation} WHERE Status__c IN ('Relinking','Paused','Ready to Retire') AND (Source_Clause__c IN ('${soql(sourceClauseId)}','${soql(replacementClauseId)}') OR Replacement_Clause__c IN ('${soql(sourceClauseId)}','${soql(replacementClauseId)}')) LIMIT 3`, { clean: true, limit: 3 }),
+    ]);
+    assertCurrent(source, body.expectedSourceLastModifiedAt);
+    assertCurrent(replacement, body.expectedReplacementLastModifiedAt);
+    if (source.Status__c !== 'Active' || replacement.Status__c !== 'Active') throw specialTermsError('Both source and replacement clauses must be approved and active.', 409, 'SPECIAL_TERMS_CLAUSE_NOT_ACTIVE');
+    if (existing.records.length) throw specialTermsError('The source or replacement clause already has an active elimination workflow.', 409, 'SPECIAL_TERMS_CONSOLIDATION_EXISTS');
+    const replacementVersions = await sfQuery(`SELECT ${VERSION_SELECT} FROM ${OBJECTS.version} WHERE Clause__c = '${soql(replacementClauseId)}' AND Status__c = 'Approved' ORDER BY Revision_Number__c DESC LIMIT 2`, { clean: true, limit: 2 });
+    if (replacementVersions.records.length !== 1) throw specialTermsError('Replacement clause must have exactly one current approved version.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_CONFLICT');
+    const replacementVersion = replacementVersions.records[0];
+    if (Number(replacement.Latest_Approved_Version_Number__c || 0) !== Number(replacementVersion.Revision_Number__c || 0)) throw specialTermsError('Replacement clause version is out of sync. Refresh before consolidating.', 409, 'SPECIAL_TERMS_STALE');
+    const [usedVersions, pendingUsedVersions] = await Promise.all([
+      sfQuery(`SELECT Clause_Version__c FROM ${OBJECTS.assignment} WHERE Clause__c = '${soql(sourceClauseId)}' AND State__c = 'Active' GROUP BY Clause_Version__c LIMIT 200`, { clean: true, limit: 200 }),
+      sfQuery(`SELECT Clause_Version__c FROM ${OBJECTS.revisionClause} WHERE Clause__c = '${soql(sourceClauseId)}' AND Special_Term_Revision__r.Status__c IN ('Draft','In Review') GROUP BY Clause_Version__c LIMIT 200`, { clean: true, limit: 200 }),
+    ]);
+    const usedVersionIds = [...new Set([...usedVersions.records, ...pendingUsedVersions.records].map((row) => row.Clause_Version__c).filter(isId))];
+    const approvedSource = await sfQuery(`SELECT ${VERSION_SELECT} FROM ${OBJECTS.version} WHERE Clause__c = '${soql(sourceClauseId)}' AND Status__c = 'Approved' LIMIT 2`, { clean: true, limit: 2 });
+    for (const row of approvedSource.records) if (!usedVersionIds.includes(row.Id)) usedVersionIds.push(row.Id);
+    if (!usedVersionIds.length) throw specialTermsError('Source clause has no retained approved version to map.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_MISSING');
+    const sourceVersions = await sfQuery(`SELECT ${VERSION_SELECT} FROM ${OBJECTS.version} WHERE Id IN (${usedVersionIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 200`, { clean: true, limit: 200 });
+    if (sourceVersions.records.length !== usedVersionIds.length) throw specialTermsError('A source version changed or is unavailable.', 409, 'SPECIAL_TERMS_STALE');
+    for (const version of sourceVersions.records) {
+      if (!['Approved', 'Superseded'].includes(version.Status__c)) throw specialTermsError('Every used source version must be approved or retained as superseded.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_IMMUTABLE');
+      if (hasMaterialDifference(version.Clause_Text__c, replacementVersion.Clause_Text__c)) throw specialTermsError(`Source v${version.Revision_Number__c} differs in an amount, deadline, entity, port, product, standard, or jurisdiction. Keep it as a distinct clause.`, 409, 'SPECIAL_TERMS_MATERIAL_DIFFERENCE');
+    }
+    const now = new Date().toISOString();
+    const consolidationKey = `${sourceClauseId}:${text(body.operationId, 100)}`.slice(0, 120);
+    const requests = [{ method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.consolidation}`, referenceId: 'consolidation', body: {
+      Consolidation_Key__c: consolidationKey,
+      Source_Clause__c: sourceClauseId,
+      Replacement_Clause__c: replacementClauseId,
+      Replacement_Version__c: replacementVersion.Id,
+      Status__c: 'Relinking',
+      Reason__c: reason,
+      Confirmed_By_Email__c: profile.email,
+      Confirmed_At__c: now,
+    } }];
+    sourceVersions.records.forEach((version, index) => requests.push({ method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.consolidationMap}`, referenceId: `mapping${index}`, body: {
+      Consolidation__c: '@{consolidation.id}',
+      Source_Version__c: version.Id,
+      Replacement_Version__c: replacementVersion.Id,
+      Equivalence_Status__c: canonicalClauseKey(version.Clause_Text__c) === canonicalClauseKey(replacementVersion.Clause_Text__c) ? 'Exact Normalized' : 'Approved Equivalent',
+      Mapping_Key__c: `${version.Id}:${replacementVersion.Id}:${text(body.operationId, 100)}`.slice(0, 150),
+      Source_Content_Hash__c: version.Content_Hash__c,
+      Replacement_Content_Hash__c: replacementVersion.Content_Hash__c,
+      Confirmed_By_Email__c: profile.email,
+      Confirmed_At__c: now,
+    } }));
+    requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${sourceClauseId}`, referenceId: 'sourceClause', body: { Replacement_Clause__c: replacementClauseId } });
+    const write = await sfRequest('/composite/graph', { method: 'POST', body: { graphs: [{ graphId: 'specialTermClauseConsolidation', compositeRequest: requests }] } });
+    assertCompositeGraph(write, 'Salesforce rejected the clause consolidation.');
+    const consolidationId = write.graphs?.[0]?.graphResponse?.compositeResponse?.find((row) => row.referenceId === 'consolidation')?.body?.id || null;
+    await expireSpecialTermClauseCaches();
+    return finishOperation(client, reservation.operation, { success: true, consolidationId, sourceClauseId, replacementClauseId, replacementVersionId: replacementVersion.Id, mappedVersionCount: sourceVersions.records.length, operation: 'consolidation_started' }, { success: true, consolidationId, sourceClauseId, replacementClauseId, replacementVersionId: replacementVersion.Id, mappedVersionCount: sourceVersions.records.length, operation: 'consolidation_started' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+export async function cancelSpecialTermClauseConsolidation(client, profile, body = {}) {
+  await Promise.all([resolveSpecialTermsSchema({ force: true, write: true }), resolveConsolidationSchema()]);
+  const consolidationId = salesforceId(body.consolidationId, 'Clause consolidation');
+  const reason = requiredReason(body.reason, 'Cancellation reason');
+  const reservation = await reserveOperation(client, profile, body, 'clause_consolidation_cancel', { id: consolidationId, reasonHash: clauseHash(reason), expectedLastModifiedAt: body.expectedLastModifiedAt });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const row = await consolidationRecord(consolidationId);
+    assertCurrent(row, body.expectedLastModifiedAt);
+    if (!['Relinking', 'Paused', 'Ready to Retire'].includes(row.Status__c)) throw specialTermsError('Only an open consolidation can be cancelled.', 409, 'SPECIAL_TERMS_CONSOLIDATION_CLOSED');
+    const now = new Date().toISOString();
+    const write = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: [
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.consolidation}/${consolidationId}`, referenceId: 'consolidation', body: { Status__c: 'Cancelled', Cancelled_By_Email__c: profile.email, Cancelled_At__c: now, Reason__c: reason } },
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${row.Source_Clause__c}`, referenceId: 'sourceClause', body: { Replacement_Clause__c: null } },
+    ] } });
+    assertComposite(write, 'Salesforce rejected consolidation cancellation.');
+    await expireSpecialTermClauseCaches();
+    return finishOperation(client, reservation.operation, { success: true, consolidationId, operation: 'consolidation_cancelled' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+export async function completeSpecialTermClauseConsolidation(client, profile, body = {}) {
+  await Promise.all([resolveSpecialTermsSchema({ force: true, write: true }), resolveConsolidationSchema()]);
+  const consolidationId = salesforceId(body.consolidationId, 'Clause consolidation');
+  const reason = requiredReason(body.reason, 'Retirement reason');
+  const reservation = await reserveOperation(client, profile, body, 'clause_consolidation_complete', { id: consolidationId, reasonHash: clauseHash(reason), expectedLastModifiedAt: body.expectedLastModifiedAt });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const row = await consolidationRecord(consolidationId);
+    assertCurrent(row, body.expectedLastModifiedAt);
+    if (!['Relinking', 'Ready to Retire'].includes(row.Status__c)) throw specialTermsError('This consolidation is not ready for retirement.', 409, 'SPECIAL_TERMS_CONSOLIDATION_NOT_READY');
+    if (row.Source_Clause__r?.Status__c !== 'Active' || row.Replacement_Clause__r?.Status__c !== 'Active' || row.Replacement_Version__r?.Status__c !== 'Approved' || Number(row.Replacement_Clause__r?.Latest_Approved_Version_Number__c || 0) !== Number(row.Replacement_Version__r?.Revision_Number__c || 0)) throw specialTermsError('The pinned replacement changed. Cancel this mapping and start a newly reviewed consolidation before retirement.', 409, 'SPECIAL_TERMS_CONSOLIDATION_TARGET_CHANGED');
+    const [liveUses, pendingUses] = await Promise.all([
+      sfQuery(`SELECT Id FROM ${OBJECTS.assignment} WHERE Clause__c = '${soql(row.Source_Clause__c)}' AND State__c = 'Active' LIMIT 1`, { clean: true, limit: 1 }),
+      sfQuery(`SELECT Id FROM ${OBJECTS.revisionClause} WHERE Clause__c = '${soql(row.Source_Clause__c)}' AND Special_Term_Revision__r.Status__c IN ('Draft','In Review') LIMIT 1`, { clean: true, limit: 1 }),
+    ]);
+    if (liveUses.records.length || pendingUses.records.length) throw specialTermsError('Every live and pending source-clause reference must be relinked before retirement.', 409, 'SPECIAL_TERMS_CONSOLIDATION_REFERENCES_REMAIN');
+    const now = new Date().toISOString();
+    const requests = [];
+    if (row.Status__c !== 'Ready to Retire') requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.consolidation}/${consolidationId}`, referenceId: 'ready', body: { Status__c: 'Ready to Retire' } });
+    requests.push(
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.consolidation}/${consolidationId}`, referenceId: 'completed', body: { Status__c: 'Completed', Completed_By_Email__c: profile.email, Completed_At__c: now } },
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${row.Source_Clause__c}`, referenceId: 'retiredClause', body: { Status__c: 'Retired', Replacement_Clause__c: row.Replacement_Clause__c, Retirement_Reason__c: reason } },
+    );
+    const write = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
+    assertComposite(write, 'Salesforce rejected final clause retirement.');
+    await expireSpecialTermClauseCaches();
+    const clause = await loadOneClause(row.Source_Clause__c);
+    return finishOperation(client, reservation.operation, { success: true, consolidationId, clause, operation: 'consolidation_completed' }, { success: true, consolidationId, clauseId: row.Source_Clause__c, operation: 'consolidation_completed' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+function relinkProjectionPayload(detail, sourceClauseId, replacementClauseId, replacementVersionId) {
+  return PROJECTION_LIST.map((config) => {
+    const projection = detail.projections?.[config.key] || {};
+    const rows = projection.activeAssignments || [];
+    const replaced = rows.map((row) => row.clauseId === sourceClauseId ? { ...row, clauseId: replacementClauseId, clauseVersionId: replacementVersionId } : row);
+    const clauseIds = replaced.map((row) => row.clauseId);
+    if (new Set(clauseIds).size !== clauseIds.length) throw specialTermsError(`${config.label} already contains the replacement clause and requires individual conflict review.`, 409, 'SPECIAL_TERMS_CONSOLIDATION_DRAFT_CONFLICT');
+    return { projection: config.key, style: projection.style || config.defaultStyle, versionIds: replaced.map((row) => row.clauseVersionId) };
+  });
+}
+
+function relinkRulePayload(detail) {
+  return (detail.rules || []).map((rule) => ({
+    sourceRuleId: rule.id,
+    audience: rule.audience || null,
+    accountId: rule.accountId || null,
+    portId: rule.portId || null,
+    productId: rule.productId || null,
+    country: rule.country || null,
+    lastModifiedAt: rule.lastModifiedAt || null,
+  }));
+}
+
+export async function relinkSpecialTermClauseConsolidation(client, profile, body = {}) {
+  await Promise.all([resolveSpecialTermsSchema({ force: true, write: true }), resolveConsolidationSchema()]);
+  const consolidationId = salesforceId(body.consolidationId, 'Clause consolidation');
+  const requestedTerms = (Array.isArray(body.terms) ? body.terms : []).map((row) => ({
+    termId: salesforceId(row.termId || row.id, 'Special Term'),
+    expectedLastModifiedAt: text(row.expectedLastModifiedAt, 100),
+    expectedRevisionLastModifiedAt: text(row.expectedRevisionLastModifiedAt, 100),
+  }));
+  if (!requestedTerms.length || requestedTerms.length > 20 || new Set(requestedTerms.map((row) => row.termId)).size !== requestedTerms.length) throw specialTermsError('Select between 1 and 20 distinct affected Special Terms.', 400, 'SPECIAL_TERMS_CONSOLIDATION_BATCH_INVALID');
+  const reason = requiredReason(body.reason, 'Relink reason');
+  const reservation = await reserveOperation(client, profile, body, 'clause_consolidation_relink', {
+    id: consolidationId,
+    consolidationId,
+    termIds: requestedTerms.map((row) => row.termId).sort(),
+    reasonHash: clauseHash(reason),
+    expectedLastModifiedAt: body.expectedLastModifiedAt,
+    termTimestamps: requestedTerms.map((row) => [row.termId, row.expectedLastModifiedAt, row.expectedRevisionLastModifiedAt]),
+  });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const consolidation = await consolidationRecord(consolidationId);
+    assertCurrent(consolidation, body.expectedLastModifiedAt);
+    if (consolidation.Status__c !== 'Relinking') throw specialTermsError('Only a current Relinking consolidation can create replacement drafts.', 409, 'SPECIAL_TERMS_CONSOLIDATION_PAUSED');
+    if (consolidation.Source_Clause__r?.Status__c !== 'Active' || consolidation.Replacement_Clause__r?.Status__c !== 'Active' || consolidation.Replacement_Version__r?.Status__c !== 'Approved' || Number(consolidation.Replacement_Clause__r?.Latest_Approved_Version_Number__c || 0) !== Number(consolidation.Replacement_Version__r?.Revision_Number__c || 0)) throw specialTermsError('The pinned replacement is no longer the current approved version. A GM or Administrator must revalidate the mapping.', 409, 'SPECIAL_TERMS_CONSOLIDATION_TARGET_CHANGED');
+    const mappingResult = await sfQuery(`SELECT Source_Version__c FROM ${OBJECTS.consolidationMap} WHERE Consolidation__c = '${soql(consolidationId)}' LIMIT 200`, { clean: true, limit: 200 });
+    const mappedSourceVersionIds = new Set(mappingResult.records.map((row) => row.Source_Version__c));
+    const results = [];
+    for (let index = 0; index < requestedTerms.length; index += 1) {
+      const requested = requestedTerms[index];
+      try {
+        const detail = await getSpecialTermDetail(requested.termId, { force: true });
+        if (!requested.expectedLastModifiedAt || detail.term.lastModifiedAt !== requested.expectedLastModifiedAt) throw specialTermsError('This Special Term changed after the consolidation queue was opened. Refresh before relinking.', 409, 'SPECIAL_TERMS_STALE');
+        const liveSourceRows = PROJECTION_LIST.flatMap((config) => detail.projections?.[config.key]?.activeAssignments || []).filter((row) => row.clauseId === consolidation.Source_Clause__c);
+        if (liveSourceRows.some((row) => !mappedSourceVersionIds.has(row.clauseVersionId))) throw specialTermsError('This term uses an unreviewed source version. A GM or Administrator must update the equivalence mapping.', 409, 'SPECIAL_TERMS_CONSOLIDATION_MAPPING_MISSING');
+        const pendingRevision = detail.revision && ['Draft', 'In Review'].includes(detail.revision.status) ? detail.revision : null;
+        if (pendingRevision) {
+          if (!requested.expectedRevisionLastModifiedAt || pendingRevision.lastModifiedAt !== requested.expectedRevisionLastModifiedAt) throw specialTermsError('The existing whole-term draft changed after the queue was opened. Refresh before relinking.', 409, 'SPECIAL_TERMS_STALE');
+          const proposedRows = PROJECTION_LIST.flatMap((config) => (pendingRevision.projections?.[config.key]?.rows || []).map((row) => ({ ...row, projection: config.key })));
+          const sourceRows = proposedRows.filter((row) => row.clauseId === consolidation.Source_Clause__c);
+          const replacementRows = proposedRows.filter((row) => row.clauseId === consolidation.Replacement_Clause__c);
+          if (sourceRows.some((row) => !mappedSourceVersionIds.has(row.clauseVersionId))) throw specialTermsError('This draft uses an unreviewed source version. A GM or Administrator must update the equivalence mapping.', 409, 'SPECIAL_TERMS_CONSOLIDATION_MAPPING_MISSING');
+          if (!sourceRows.length) {
+            if (replacementRows.length) results.push({ termId: requested.termId, status: 'awaiting_approval', revisionId: pendingRevision.id });
+            else if (!liveSourceRows.length) results.push({ termId: requested.termId, status: 'already_relinked', revisionId: pendingRevision.id });
+            else throw specialTermsError('The existing draft already substitutes another clause and requires individual review.', 409, 'SPECIAL_TERMS_CONSOLIDATION_DRAFT_CONFLICT');
+            continue;
+          }
+          for (const sourceRow of sourceRows) if (replacementRows.some((row) => row.projection === sourceRow.projection)) throw specialTermsError('The existing draft already contains both source and replacement clauses in one projection.', 409, 'SPECIAL_TERMS_CONSOLIDATION_DRAFT_CONFLICT');
+          const write = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: [{
+            method: 'PATCH',
+            url: `/services/data/${getApiVersion()}/composite/sobjects`,
+            referenceId: 'relinkRevisionClauses',
+            body: { allOrNone: true, records: sourceRows.map((row) => ({ attributes: { type: OBJECTS.revisionClause }, Id: row.id, Clause__c: consolidation.Replacement_Clause__c, Clause_Version__c: consolidation.Replacement_Version__c })) },
+          }, {
+            method: 'PATCH',
+            url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revision}/${pendingRevision.id}`,
+            referenceId: 'touchRevision',
+            body: { Revision_Reason__c: pendingRevision.revisionReason },
+          }] } });
+          assertComposite(write, 'Salesforce rejected the existing-draft relink.');
+          const refreshed = await currentRecord(OBJECTS.revision, pendingRevision.id, ['Id', 'LastModifiedDate']);
+          results.push({ termId: requested.termId, status: 'awaiting_approval', revisionId: pendingRevision.id, revisionLastModifiedAt: refreshed.LastModifiedDate || null });
+          continue;
+        }
+        if (!liveSourceRows.length) {
+          results.push({ termId: requested.termId, status: 'already_relinked', revisionId: null });
+          continue;
+        }
+        const revisionResult = await saveSpecialTermRevision(client, profile, {
+          operationId: `${text(body.operationId, 90)}:${index}`.slice(0, 100),
+          termId: requested.termId,
+          revisionId: `${text(body.operationId, 90)}:${index}`.slice(0, 100),
+          expectedLastModifiedAt: requested.expectedLastModifiedAt,
+          revisionReason: reason,
+          projections: relinkProjectionPayload(detail, consolidation.Source_Clause__c, consolidation.Replacement_Clause__c, consolidation.Replacement_Version__c),
+          rules: relinkRulePayload(detail),
+        });
+        results.push({ termId: requested.termId, status: 'awaiting_approval', revisionId: revisionResult.revisionId || null });
+      } catch (error) {
+        results.push({ termId: requested.termId, status: 'failed', error: error.message || 'Relink draft could not be prepared.', errorCode: error.code || 'SPECIAL_TERMS_CONSOLIDATION_RELINK_FAILED' });
+      }
+    }
+    await expireSpecialTermClauseCaches(requestedTerms.map((row) => row.termId));
+    const failedCount = results.filter((row) => row.status === 'failed').length;
+    if (failedCount === results.length) throw specialTermsError('No selected Special Term could be relinked. Review the individual conflicts.', 409, 'SPECIAL_TERMS_CONSOLIDATION_RELINK_FAILED', { results });
+    return finishOperation(client, reservation.operation, { success: failedCount === 0, partial: failedCount > 0, consolidationId, results, operation: 'consolidation_relinked' }, { success: failedCount === 0, partial: failedCount > 0, consolidationId, termIds: results.filter((row) => row.status !== 'failed').map((row) => row.termId), failedTermIds: results.filter((row) => row.status === 'failed').map((row) => row.termId), operation: 'consolidation_relinked' });
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
@@ -796,7 +1274,7 @@ export async function saveSpecialTermMigrationReview(client, profile, body = {})
     if (new Set(candidateKeys).size !== candidateKeys.length) throw specialTermsError(`The same equivalent clause appears more than once in ${config.label}. Review the clause boundaries.`, 409, 'SPECIAL_TERMS_DUPLICATE_CLAUSE');
     const existing = await sfQuery(`SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(termId)}' AND ${projectionWhere(config)} AND State__c = 'Proposed' LIMIT 500`, { clean: true, limit: 500 });
     if (existing.totalSize > existing.records.length) throw specialTermsError('This migration review exceeds the safe assignment limit.', 409, 'SPECIAL_TERMS_RESULT_LIMIT');
-    const requests = existing.records.map((row, index) => ({ method: 'DELETE', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.assignment}/${row.Id}`, referenceId: `deleteProposed${index}` }));
+    const requests = existing.records.length ? [{ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'archivePriorProposal', body: { allOrNone: true, records: existing.records.map((row) => ({ attributes: { type: OBJECTS.assignment }, Id: row.Id, State__c: 'Historical' })) } }] : [];
     for (const candidate of candidates.filter((row) => row.isNew)) {
       requests.push(
         { method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}`, referenceId: candidate.clauseRef, body: { Name: candidate.shortName, Short_Name_Key__c: shortNameKey(candidate.shortName), Canonical_Text_Key__c: candidate.canonicalKey, Category__c: candidate.category, Status__c: 'Draft', Origin__c: 'Legacy', Legacy_Original_Text__c: candidate.sourceClauseText, Latest_Approved_Version_Number__c: 0 } },
@@ -852,7 +1330,7 @@ export async function activateSpecialTermMigration(client, profile, body = {}) {
     const compiledHash = clauseHash(compiledText);
     const active = await sfQuery(`SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(termId)}' AND ${projectionWhere(config)} AND State__c = 'Active' LIMIT 500`, { clean: true, limit: 500 });
     const requests = [];
-    if (active.records.length) requests.push({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${active.records.map((row) => row.Id).join(',')}&allOrNone=true`, referenceId: 'deleteActive' });
+    if (active.records.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'archiveActive', body: { allOrNone: true, records: active.records.map((row) => ({ attributes: { type: OBJECTS.assignment }, Id: row.Id, State__c: 'Historical' })) } });
     if (rows.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'activateAssignments', body: { allOrNone: true, records: rows.map((row) => ({ attributes: { type: OBJECTS.assignment }, Id: row.Id, State__c: 'Active' })) } });
     requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.term}/${termId}`, referenceId: 'term', body: { [config.textField]: compiledText || null, [config.hashField]: compiledHash, [config.statusField]: 'Active' } });
     const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
@@ -874,13 +1352,13 @@ export async function rollbackSpecialTermMigration(client, profile, body = {}) {
     const term = await currentRecord(OBJECTS.term, termId, ['Id', config.statusField, config.originalField, 'LastModifiedDate']);
     assertCurrent(term, body.expectedLastModifiedAt);
     if (term[config.statusField] !== 'Active' || term[config.originalField] == null) throw specialTermsError(`Only a migrated ${config.label} with preserved original text can be rolled back.`, 409, 'SPECIAL_TERMS_ROLLBACK_UNAVAILABLE');
-    const assignments = await sfQuery(`SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(termId)}' AND ${projectionWhere(config)} LIMIT 500`, { clean: true, limit: 500 });
+    const assignments = await sfQuery(`SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(termId)}' AND ${projectionWhere(config)} AND State__c != 'Historical' LIMIT 500`, { clean: true, limit: 500 });
     const requests = [];
-    if (assignments.records.length) requests.push({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${assignments.records.map((row) => row.Id).join(',')}&allOrNone=true`, referenceId: 'deleteAssignments' });
+    if (assignments.records.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'archiveAssignments', body: { allOrNone: true, records: assignments.records.map((row) => ({ attributes: { type: OBJECTS.assignment }, Id: row.Id, State__c: 'Historical' })) } });
     requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.term}/${termId}`, referenceId: 'term', body: { [config.textField]: term[config.originalField] || null, [config.hashField]: null, [config.statusField]: 'Legacy', [config.batchField]: null } });
     const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
     assertComposite(result, 'Salesforce rejected the migration rollback.');
-    return finishOperation(client, reservation.operation, { success: true, id: termId, projection: config.key, removedAssignmentCount: assignments.records.length, operation: 'rolled_back' });
+    return finishOperation(client, reservation.operation, { success: true, id: termId, projection: config.key, archivedAssignmentCount: assignments.records.length, operation: 'rolled_back' });
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
@@ -1158,4 +1636,4 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
   } catch (error) { return failOperation(client, operation.operation, error); }
 }
 
-export const specialTermClauseServiceInternals = Object.freeze({ CLAUSE_CATEGORIES, assertCompositeGraph, cleanClauseText, cleanShortName, failureFromComposite });
+export const specialTermClauseServiceInternals = Object.freeze({ CLAUSE_CATEGORIES, assertCompositeGraph, cleanClauseText, cleanShortName, failureFromComposite, relinkProjectionPayload });

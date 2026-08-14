@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, FileClock, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileClock, Merge, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import ClauseProjectionSection from '@/components/special-terms/ClauseProjectionSection';
 import MigrationReviewPanel from '@/components/special-terms/MigrationReviewPanel';
@@ -55,6 +55,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   const [mobilePane, setMobilePane] = useState('clauses');
   const [exportingDocument, setExportingDocument] = useState(false);
   const [savedDraftPreviewKey, setSavedDraftPreviewKey] = useState(null);
+  const [relink, setRelink] = useState(null);
 
   useEffect(() => {
     setRevision(initialRevision);
@@ -114,6 +115,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
       return;
     }
     setConfirm(null);
+    setRelink(null);
     await onChanged?.(success);
   };
 
@@ -167,6 +169,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   const preview = <SpecialTermDocumentPreview term={detail.term} detail={detail} revision={revision} unsaved={unsaved} onExport={exportDocument} />;
   return (
     <section className="space-y-4 rounded-lg border border-border bg-muted/10 p-4">
+      {(detail?.consolidationPrompts || []).map((prompt) => <div key={prompt.id} className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950 sm:flex-row sm:items-start sm:justify-between"><div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="text-sm font-semibold">Relink required: {prompt.sourceShortName} → {prompt.replacementShortName} v{prompt.replacementRevisionNumber}</p><p className="mt-1 text-xs">{prompt.occurrences.map((row) => `${row.projectionValue} #${row.sequence}`).join(', ')}. Live wording remains unchanged until this whole-term revision is approved.</p></div></div>{canDraft && prompt.status === 'Relinking' ? <Button type="button" size="sm" onClick={() => setRelink({ prompt, reason: '' })} disabled={busy}><Merge className="mr-1.5 h-3.5 w-3.5" />Relink now</Button> : null}</div>)}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex flex-wrap items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><strong className="text-sm">Whole-term revision</strong><Badge variant={status === 'Approved' || status === 'Active' ? 'default' : 'outline'}>{status}</Badge>{revision.number ? <Badge variant="secondary">Revision {revision.number}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Terms Text, both special remarks, and matching rules are saved, approved, activated, and rolled back together.</p></div>
         <div className="flex flex-wrap gap-2">
@@ -182,6 +185,10 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
 
       <Dialog open={Boolean(confirm)} onOpenChange={(open) => !open && !busy && setConfirm(null)}>
         <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>{confirm?.type === 'approve' ? 'Approve and activate this whole term?' : 'Rollback this whole term?'}</DialogTitle><DialogDescription>{confirm?.type === 'approve' ? 'This atomically activates all three projections and the reviewed rules. No partial activation is permitted.' : 'This atomically restores the preserved legacy projections and prior rule state.'}</DialogDescription></DialogHeader>{confirm ? <div className="space-y-1.5"><Label>Mandatory reason</Label><Textarea value={confirm.reason} maxLength={1000} onChange={(event) => setConfirm((current) => ({ ...current, reason: event.target.value }))} rows={4} /></div> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setConfirm(null)} disabled={busy}>Cancel</Button><Button type="button" variant={confirm?.type === 'rollback' ? 'destructive' : 'default'} disabled={busy || confirm?.reason.trim().length < 3} onClick={() => invoke(confirm.type === 'approve' ? 'specialTermRevisionApprove' : 'specialTermRevisionRollback', { revisionId: revision.id, expectedLastModifiedAt: revision.expectedLastModifiedAt || revision.lastModifiedAt, auditReason: confirm.reason }, confirm.type === 'approve' ? 'Whole-term revision approved and activated.' : 'Whole-term revision rolled back to preserved legacy wording.')}>{busy ? 'Working…' : confirm?.type === 'approve' ? 'Approve and activate' : 'Rollback'}</Button></DialogFooter></DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(relink)} onOpenChange={(open) => !open && !busy && setRelink(null)}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Relink {relink?.prompt?.sourceShortName}</DialogTitle><DialogDescription>This replaces only matching clause references in the saved whole-term draft, or prepares a complete revision from the live term when no draft exists.</DialogDescription></DialogHeader>{relink ? <div className="space-y-4"><div className="grid gap-3 md:grid-cols-2"><section className="rounded-lg border border-border p-3"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current source wording</p><p className="mt-2 whitespace-pre-wrap text-sm">{relink.prompt.occurrences[0]?.sourceText}</p></section><section className="rounded-lg border border-border p-3"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reviewed replacement wording</p><p className="mt-2 whitespace-pre-wrap text-sm">{relink.prompt.replacementText}</p></section></div><div className="space-y-1.5"><Label>Relink reason</Label><Textarea value={relink.reason} maxLength={1000} rows={3} onChange={(event) => setRelink((current) => ({ ...current, reason: event.target.value }))} /></div></div> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setRelink(null)} disabled={busy}>Cancel</Button><Button type="button" disabled={busy || relink?.reason.trim().length < 3} onClick={() => invoke('specialTermClauseConsolidationRelink', { consolidationId: relink.prompt.id, expectedLastModifiedAt: relink.prompt.lastModifiedAt, reason: relink.reason, terms: [{ termId: detail.term.id, expectedLastModifiedAt: detail.term.lastModifiedAt, expectedRevisionLastModifiedAt: detail.revision?.lastModifiedAt || null }] }, 'Clause relink draft prepared for whole-term approval.')}>{busy ? 'Preparing…' : 'Prepare relink draft'}</Button></DialogFooter></DialogContent>
       </Dialog>
     </section>
   );

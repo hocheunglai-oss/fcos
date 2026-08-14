@@ -19,6 +19,14 @@ public class SpecialTermAssignmentHandler {
                 continue;
             }
             Special_Term_Clause_Assignment__c oldAssignment = oldMap == null ? null : oldMap.get(assignment.Id);
+            if (oldAssignment != null && oldAssignment.State__c == 'Historical') {
+                if (assignment.State__c != 'Historical'
+                    || assignment.Special_Term__c != oldAssignment.Special_Term__c
+                    || assignment.Projection__c != oldAssignment.Projection__c
+                    || assignment.Clause__c != oldAssignment.Clause__c
+                    || assignment.Clause_Version__c != oldAssignment.Clause_Version__c
+                    || assignment.Sequence__c != oldAssignment.Sequence__c) assignment.addError('Historical clause assignments are immutable.');
+            }
             Boolean retainedExistingUse = oldAssignment != null
                 && oldAssignment.State__c == 'Active'
                 && oldAssignment.Clause__c == assignment.Clause__c
@@ -36,13 +44,24 @@ public class SpecialTermAssignmentHandler {
                     && version.Clause__r.Status__c == 'Active';
                 if (!currentlySelectable && !retainedButClosed && !reviewedHistoricalMigration) assignment.addError('New active assignments require the current approved version of an active clause.');
             }
-            if (assignment.State__c != 'Active' && assignment.State__c != 'Proposed') assignment.addError('Clause assignment state is invalid.');
+            if (assignment.State__c == 'Historical' && oldAssignment == null) assignment.addError('Historical clause assignments can only be retained from an existing assignment.');
+            if (assignment.State__c == 'Historical' && oldAssignment != null && !new Set<String>{ 'Active', 'Proposed', 'Historical' }.contains(oldAssignment.State__c)) assignment.addError('Only a retained assignment can become Historical.');
+            if (!new Set<String>{ 'Active', 'Proposed', 'Historical' }.contains(assignment.State__c)) assignment.addError('Clause assignment state is invalid.');
             if (assignment.Special_Term__c != null && assignment.Sequence__c != null && assignment.Clause__c != null) {
                 String prefix = String.valueOf(assignment.Special_Term__c) + ':' + assignment.Projection__c + ':' + assignment.State__c + ':';
-                assignment.Assignment_Key__c = prefix + String.valueOf(assignment.Sequence__c.intValue());
-                assignment.Clause_Use_Key__c = prefix + String.valueOf(assignment.Clause__c);
+                if (assignment.State__c == 'Historical' && assignment.Id != null) {
+                    assignment.Assignment_Key__c = prefix + String.valueOf(assignment.Id);
+                    assignment.Clause_Use_Key__c = prefix + String.valueOf(assignment.Id);
+                } else {
+                    assignment.Assignment_Key__c = prefix + String.valueOf(assignment.Sequence__c.intValue());
+                    assignment.Clause_Use_Key__c = prefix + String.valueOf(assignment.Clause__c);
+                }
             }
         }
+    }
+
+    public static void beforeDelete(List<Special_Term_Clause_Assignment__c> assignments) {
+        for (Special_Term_Clause_Assignment__c assignment : assignments) assignment.addError('Clause assignment lineage must be retained. Archive the assignment as Historical.');
     }
 
     private static String sequenceKey(Special_Term_Clause_Assignment__c assignment) {

@@ -68,16 +68,18 @@ private class SpecialTermClauseCompilerTest {
         }
 
         List<Special_Term_Clause_Assignment__c> activeRows = [
-            SELECT Id, Sequence__c
+            SELECT Id, Sequence__c, State__c
             FROM Special_Term_Clause_Assignment__c
             WHERE Special_Term__c = :term.Id AND State__c = 'Active'
             ORDER BY Sequence__c
         ];
-        Database.delete(activeRows[0], AccessLevel.SYSTEM_MODE);
+        activeRows[0].State__c = 'Historical';
+        Database.update(activeRows[0], AccessLevel.SYSTEM_MODE);
         Special_Term__c recompiled = [SELECT Terms_Text__c FROM Special_Term__c WHERE Id = :term.Id];
         Special_Term_Clause_Assignment__c remaining = [SELECT Sequence__c FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active' LIMIT 1];
         System.assertEquals(Decimal.valueOf('1'), remaining.Sequence__c);
         System.assertEquals('1. No warranty is provided.\n- Local specifications apply.', recompiled.Terms_Text__c);
+        System.assertEquals(1, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical']);
     }
 
     @isTest static void compilesAndProtectsIndependentRemarkStyles() {

@@ -55,6 +55,9 @@ private class SpecialTermRevisionServiceTest {
         System.assertEquals('Legacy wording.', term.Terms_Text__c);
         System.assertEquals('Legacy', term.Clause_Structure_Status__c);
         System.assertEquals(0, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active']);
+        System.assertEquals(1, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical']);
+        Special_Term_Clause_Assignment__c retainedAssignment = [SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical' LIMIT 1];
+        try { delete retainedAssignment; System.assert(false, 'Historical assignment lineage must not be deleted.'); } catch (DmlException error) { System.assert(error.getMessage().contains('lineage must be retained')); }
         System.assertEquals('Rolled Back', [SELECT Status__c FROM Special_Term_Revision__c WHERE Id = :revision.Id].Status__c);
     }
 

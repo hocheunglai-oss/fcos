@@ -21,6 +21,16 @@ public class SpecialTermVersionHandler {
     }
 
     public static void beforeUpdate(List<Special_Term_Clause_Version__c> versions, Map<Id, Special_Term_Clause_Version__c> oldMap) {
+        Set<Id> approvingClauseIds = new Set<Id>();
+        for (Special_Term_Clause_Version__c version : versions) {
+            Special_Term_Clause_Version__c oldVersion = oldMap.get(version.Id);
+            if (oldVersion != null && oldVersion.Status__c == 'Draft' && version.Status__c == 'Approved' && version.Clause__c != null) approvingClauseIds.add(version.Clause__c);
+        }
+        Set<Id> consolidatingClauseIds = new Set<Id>();
+        if (!approvingClauseIds.isEmpty()) for (Special_Term_Clause_Consolidation__c row : [
+            SELECT Source_Clause__c FROM Special_Term_Clause_Consolidation__c
+            WHERE Source_Clause__c IN :approvingClauseIds AND Status__c IN ('Relinking', 'Paused', 'Ready to Retire')
+        ]) consolidatingClauseIds.add(row.Source_Clause__c);
         for (Special_Term_Clause_Version__c version : versions) {
             Special_Term_Clause_Version__c oldVersion = oldMap.get(version.Id);
             if (changed(version.Clause__c, oldVersion.Clause__c) || changed(version.Revision_Number__c, oldVersion.Revision_Number__c)) {
@@ -48,6 +58,7 @@ public class SpecialTermVersionHandler {
             if (SpecialTermClauseCompiler.hasTopLevelListMarker(normalizedText)) version.addError('Clause text cannot contain its own top-level number or hyphen marker.');
             if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
             if (version.Status__c == 'Approved') {
+                if (consolidatingClauseIds.contains(version.Clause__c)) version.addError('Cancel the active clause consolidation before approving another source version.');
                 if (changed(normalizedText, SpecialTermClauseCompiler.normalizeClauseText(oldVersion.Clause_Text__c))) {
                     version.addError('Save the final Draft wording before approving it.');
                 }
@@ -67,5 +78,20 @@ public class SpecialTermVersionHandler {
         for (Special_Term_Clause_Version__c version : versions) {
             if (version.Status__c != 'Draft') version.addError('Approved and superseded clause versions cannot be deleted.');
         }
+    }
+
+    public static void afterUpdate(List<Special_Term_Clause_Version__c> versions, Map<Id, Special_Term_Clause_Version__c> oldMap) {
+        Set<Id> newlyApprovedClauseIds = new Set<Id>();
+        for (Special_Term_Clause_Version__c version : versions) {
+            Special_Term_Clause_Version__c prior = oldMap.get(version.Id);
+            if (prior.Status__c == 'Draft' && version.Status__c == 'Approved') newlyApprovedClauseIds.add(version.Clause__c);
+        }
+        if (newlyApprovedClauseIds.isEmpty()) return;
+        List<Special_Term_Clause_Consolidation__c> pauses = new List<Special_Term_Clause_Consolidation__c>();
+        for (Special_Term_Clause_Consolidation__c consolidation : [
+            SELECT Id FROM Special_Term_Clause_Consolidation__c
+            WHERE Replacement_Clause__c IN :newlyApprovedClauseIds AND Status__c IN ('Relinking', 'Ready to Retire')
+        ]) pauses.add(new Special_Term_Clause_Consolidation__c(Id = consolidation.Id, Status__c = 'Paused'));
+        if (!pauses.isEmpty()) Database.update(pauses, AccessLevel.SYSTEM_MODE);
     }
 }

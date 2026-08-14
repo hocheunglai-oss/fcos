@@ -110,3 +110,43 @@ test('operations use service-only atomic RPCs and do not retain reviewer prose',
   assert.match(migration, /revoke all on function public\.reserve_special_terms_operation/);
   assert.match(migration, /special_terms_notification_states/);
 });
+
+test('clause consolidation relinks every projection without changing order', () => {
+  const detail = {
+    projections: {
+      termsText: { style: 'Numbered', activeAssignments: [{ clauseId: 'source', clauseVersionId: 'source-v1' }, { clauseId: 'other', clauseVersionId: 'other-v1' }] },
+      confirmationRemark: { style: 'Hyphen', activeAssignments: [{ clauseId: 'source', clauseVersionId: 'source-v2' }] },
+      nominationRemark: { style: 'Hyphen', activeAssignments: [] },
+    },
+  };
+  assert.deepEqual(specialTermClauseServiceInternals.relinkProjectionPayload(detail, 'source', 'replacement', 'replacement-v3'), [
+    { projection: 'termsText', style: 'Numbered', versionIds: ['replacement-v3', 'other-v1'] },
+    { projection: 'confirmationRemark', style: 'Hyphen', versionIds: ['replacement-v3'] },
+    { projection: 'nominationRemark', style: 'Hyphen', versionIds: [] },
+  ]);
+  assert.throws(() => specialTermClauseServiceInternals.relinkProjectionPayload({ ...detail, projections: { ...detail.projections, termsText: { style: 'Numbered', activeAssignments: [{ clauseId: 'source', clauseVersionId: 'source-v1' }, { clauseId: 'replacement', clauseVersionId: 'replacement-v3' }] } } }, 'source', 'replacement', 'replacement-v3'), /individual conflict review/i);
+});
+
+test('consolidation is Salesforce-owned and Supabase records identifiers only', () => {
+  const service = read('api/_specialTermClauses.js');
+  const migration = read('supabase/migrations/20260814040851_special_term_clause_consolidation_operations.sql');
+  const apex = read('force-app/main/default/classes/SpecialTermConsolidationHandler.cls');
+  assert.match(service, /Special_Term_Clause_Consolidation__c/);
+  assert.match(service, /Special_Term_Clause_Consolidation_Map__c/);
+  assert.match(service, /hasMaterialDifference\(version\.Clause_Text__c, replacementVersion\.Clause_Text__c\)/);
+  assert.match(service, /requestedTerms\.length > 20/);
+  assert.match(service, /Every live and pending source-clause reference must be relinked before retirement/);
+  assert.match(service, /pendingReferenceResult/);
+  assert.match(service, /Special_Term_Revision__r\.Status__c IN \('Draft','In Review'\)/);
+  assert.match(migration, /clause_consolidation_start/);
+  assert.match(migration, /revoke all on table public\.special_terms_operations from anon, authenticated/);
+  assert.doesNotMatch(migration, /Clause_Text__c|Terms_Text__c/);
+  assert.match(apex, /Clause consolidation lineage must be retained/);
+  assert.match(apex, /Version mapping does not match the consolidation identities/);
+  assert.match(apex, /Live and pending Special Term references must be relinked/);
+  assert.match(apex, /The pinned replacement must be the current approved version/);
+  const clauseGuard = read('force-app/main/default/classes/SpecialTermClauseHandler.cls');
+  assert.match(clauseGuard, /cannot be retired while live or pending Special Term references/);
+  const versionGuard = read('force-app/main/default/classes/SpecialTermVersionHandler.cls');
+  assert.match(versionGuard, /Status__c = 'Paused'/);
+});

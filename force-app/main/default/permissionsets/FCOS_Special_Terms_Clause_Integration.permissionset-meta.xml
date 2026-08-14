@@ -9,6 +9,19 @@
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.AI_Model__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.AI_Response_Id__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Version__c.Legacy_Source_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Consolidation_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Reason__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Confirmed_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Confirmed_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Completed_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Completed_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Cancelled_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation__c.Cancelled_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Mapping_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Source_Content_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Replacement_Content_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Confirmed_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Confirmed_At__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Revision_Number__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Revision_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Status__c</field><readable>true</readable></fieldPermissions>
@@ -155,6 +168,12 @@
     <label>FCOS Special Terms Clause Integration</label>
     <objectPermissions>
         <allowCreate>true</allowCreate><allowDelete>true</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead><modifyAllRecords>true</modifyAllRecords><object>Special_Term_Revision__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>true</allowCreate><allowDelete>false</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead><modifyAllRecords>false</modifyAllRecords><object>Special_Term_Clause_Consolidation__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>true</allowCreate><allowDelete>false</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead><modifyAllRecords>false</modifyAllRecords><object>Special_Term_Clause_Consolidation_Map__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>
     </objectPermissions>
     <objectPermissions>
         <allowCreate>true</allowCreate><allowDelete>true</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead><modifyAllRecords>true</modifyAllRecords><object>Special_Term_Revision_Clause__c</object><viewAllFields>true</viewAllFields><viewAllRecords>true</viewAllRecords>

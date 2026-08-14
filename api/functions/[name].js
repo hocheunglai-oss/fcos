@@ -171,6 +171,11 @@ import {
   listSpecialTermMigrationBatches,
   listSpecialTermApprovalQueue,
   draftSpecialTermClausesWithAi,
+  listSpecialTermClauseConsolidations,
+  startSpecialTermClauseConsolidation,
+  relinkSpecialTermClauseConsolidation,
+  cancelSpecialTermClauseConsolidation,
+  completeSpecialTermClauseConsolidation,
 } from '../_specialTermClauses.js';
 import {
   emailRouterActionHandler as nativeEmailRouterAction,
@@ -1351,6 +1356,11 @@ const HANDLER_MODULE_ACCESS = {
   specialTermClauseDraftSave: ['special_terms'],
   specialTermClauseApprove: ['special_terms'],
   specialTermClauseRetire: ['special_terms'],
+  specialTermClauseConsolidationList: ['special_terms'],
+  specialTermClauseConsolidationStart: ['special_terms'],
+  specialTermClauseConsolidationRelink: ['special_terms'],
+  specialTermClauseConsolidationCancel: ['special_terms'],
+  specialTermClauseConsolidationComplete: ['special_terms'],
   specialTermCompositionSave: ['special_terms'],
   specialTermMigrationPreview: ['special_terms'],
   specialTermMigrationSave: ['special_terms'],
@@ -16936,6 +16946,34 @@ async function specialTermClauseRetire(body = {}, req = null, accessContext = nu
   return retireSpecialTermClause(context.client, context.profile, body);
 }
 
+async function specialTermClauseConsolidationList(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return listSpecialTermClauseConsolidations({ includeClosed: body.includeClosed === true });
+}
+
+async function specialTermClauseConsolidationStart(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return startSpecialTermClauseConsolidation(context.client, context.profile, body);
+}
+
+async function specialTermClauseConsolidationRelink(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return relinkSpecialTermClauseConsolidation(context.client, context.profile, body);
+}
+
+async function specialTermClauseConsolidationCancel(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return cancelSpecialTermClauseConsolidation(context.client, context.profile, body);
+}
+
+async function specialTermClauseConsolidationComplete(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return completeSpecialTermClauseConsolidation(context.client, context.profile, body);
+}
+
 async function specialTermCompositionSave(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   throw appError('Direct projection composition is retired. Save a complete Special Term revision instead.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
@@ -17231,6 +17269,11 @@ const handlers = {
   specialTermClauseDraftSave,
   specialTermClauseApprove,
   specialTermClauseRetire,
+  specialTermClauseConsolidationList,
+  specialTermClauseConsolidationStart,
+  specialTermClauseConsolidationRelink,
+  specialTermClauseConsolidationCancel,
+  specialTermClauseConsolidationComplete,
   specialTermCompositionSave,
   specialTermMigrationPreview,
   specialTermMigrationSave,

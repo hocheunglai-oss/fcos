@@ -137,6 +137,18 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   const clauseBank = read('src/components/special-terms/ClauseBankPanel.jsx');
   assert.match(clauseBank, /value: 'Legacy', label: 'Legacy'/);
   assert.match(clauseBank, /clause\.provenance/);
+  assert.match(clauseBank, /approvalPending/);
+  assert.match(clauseBank, /setClauses\(\(current\) => current\.map/);
+  assert.match(clauseBank, /window\.scrollTo\(\{ \.\.\.viewport, behavior: 'auto' \}\)/);
+  assert.match(clauseBank, /focus\(\{ preventScroll: true \}\)/);
+  assert.doesNotMatch(clauseBank.match(/const approveClause = async[\s\S]*?\n  };/)?.[0] || '', /load\(true\)|onChanged/);
+  const composer = read('src/components/special-terms/ClauseComposer.jsx');
+  assert.match(composer, /New use is allowed but will require a governed relink/);
+  const consolidationQueue = read('src/components/special-terms/ClauseConsolidationQueue.jsx');
+  assert.match(consolidationQueue, /specialTermClauseConsolidationRelink/);
+  assert.match(consolidationQueue, /Complete retirement/);
+  assert.match(consolidationQueue, /Live wording remains unchanged/);
+  assert.match(consolidationQueue, /term\.revisionState !== 'Awaiting Approval'/);
   assert.match(page, /<MigrationInventoryPanel/);
   assert.doesNotMatch(page, /specialTermEditorValue\(termForm\.termsText\)/);
   assert.match(clauseService, /compileClauseList/);

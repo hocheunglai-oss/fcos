@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
@@ -84,6 +85,7 @@ function conditionSummary(rule) {
 
 export default function SpecialTerms() {
   const { request: requestSpecialTerms } = useNavigationAwareRequest('reference');
+  const [searchParams] = useSearchParams();
   const [workspace, setWorkspace] = useState(null);
   const [activeTab, setActiveTab] = useState('terms');
   const [search, setSearch] = useState('');
@@ -106,6 +108,7 @@ export default function SpecialTerms() {
   const [failedTermIds, setFailedTermIds] = useState([]);
   const [copiedRemarks, setCopiedRemarks] = useState({});
   const copyTimers = useRef(new Map());
+  const appliedRoute = useRef('');
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -254,7 +257,7 @@ export default function SpecialTerms() {
   const termValidationIssues = useMemo(() => termForm ? specialTermIssues(termForm) : [], [termForm]);
   const ruleValidationIssues = useMemo(() => ruleForm ? specialTermRuleIssues(ruleForm) : [], [ruleForm]);
 
-  const openTerm = async (term = null) => {
+  const openTerm = useCallback(async (term = null) => {
     setSaveAttempted(false);
     setError('');
     if (!term) {
@@ -272,7 +275,21 @@ export default function SpecialTerms() {
       setTermForm({ ...EMPTY_TERM, ...detail.term, expectedLastModifiedAt: detail.term.lastModifiedAt });
     }
     setTermLoading(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!workspace) return;
+    const requestedTab = searchParams.get('tab');
+    const requestedTermId = searchParams.get('termId');
+    const routeKey = `${requestedTab || ''}:${requestedTermId || ''}`;
+    if (routeKey === ':' || appliedRoute.current === routeKey) return;
+    appliedRoute.current = routeKey;
+    if (['terms', 'rules', 'clauses', 'migration', 'inventory'].includes(requestedTab)) setActiveTab(requestedTab);
+    if (requestedTermId) {
+      const term = (workspace.terms || []).find((row) => row.id === requestedTermId);
+      if (term) void openTerm(term);
+    }
+  }, [openTerm, searchParams, workspace]);
 
   const refreshOpenTerm = async (termId, successMessage = '') => {
     const response = await appClient.functions.invoke('specialTermDetail', { termId, force: true }, { cache: false });
@@ -455,7 +472,7 @@ export default function SpecialTerms() {
                     </a>
                   </TableCell>
                   <TableCell className="max-w-md">
-                    <div className="mb-1 flex flex-wrap items-center gap-1.5"><Badge variant={term.clauseStructureStatus === 'Active' ? 'default' : 'outline'}>{term.clauseStructureStatus}</Badge><span className="text-xs text-muted-foreground">{term.activeClauseCount || 0} active · {term.proposedClauseCount || 0} proposed</span>{term.upgradeCount ? <Badge className="bg-amber-600">{term.upgradeCount} upgrade{term.upgradeCount === 1 ? '' : 's'}</Badge> : null}</div>
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5"><Badge variant={term.clauseStructureStatus === 'Active' ? 'default' : 'outline'}>{term.clauseStructureStatus}</Badge><span className="text-xs text-muted-foreground">{term.activeClauseCount || 0} active · {term.proposedClauseCount || 0} proposed</span>{term.upgradeCount ? <Badge className="bg-amber-600">{term.upgradeCount} upgrade{term.upgradeCount === 1 ? '' : 's'}</Badge> : null}{term.relinkRequiredCount ? <Badge variant="destructive">Relink {term.relinkRequiredCount} clause{term.relinkRequiredCount === 1 ? '' : 's'}</Badge> : null}</div>
                     <p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'No clauses'}</p>
                   </TableCell>
                   <TableCell>
@@ -528,6 +545,7 @@ export default function SpecialTerms() {
           canApprove={workspace.canApproveClauses}
           categoryOptions={workspace.clauseCategoryOptions || []}
           onChanged={() => load(true)}
+          onOpenTerm={openTerm}
         />
       ) : null}
 

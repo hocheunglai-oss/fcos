@@ -17,6 +17,9 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('dashboardAccountInsight').cache, 'server');
   assert.equal(registeredHandlerBehavior('specialTermsPdfExport').mutation, false);
   assert.equal(registeredHandlerBehavior('specialTermMigrationInventory').capability, 'special_terms_clause_approve');
+  assert.equal(registeredHandlerBehavior('specialTermClauseConsolidationStart').capability, 'special_terms_clause_approve');
+  assert.equal(registeredHandlerBehavior('specialTermClauseConsolidationRelink').capability, null);
+  assert.equal(registeredHandlerBehavior('specialTermClauseConsolidationComplete').externalAction, true);
   assert.equal(registeredHandlerBehavior('emailRouterActionStatus').externalAction, true);
 });
 
