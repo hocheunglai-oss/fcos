@@ -145,7 +145,9 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
   assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
   assert.match(source, /sync-salesforce-shared-repository\.mjs/);
-  assert.match(source, /Scoped manifests are validation-only/);
+  assert.match(source, /promotion requires an explicit reviewed manifest/);
+  assert.match(source, /manifestTestClasses/);
+  assert.match(source, /Apex promotion manifest must include at least one \*Test Apex class/);
   assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
   assert.match(source, /writeDeveeSourceState/);
   assert.match(source, /TEST_CLASSES\.length \? 'RunSpecifiedTests' : 'RunLocalTests'/);

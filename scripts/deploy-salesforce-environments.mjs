@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { sourceInventory } from './sync-salesforce-shared-repository.mjs';
@@ -12,17 +12,29 @@ const MANIFEST = MANIFEST_INDEX >= 0
   : (process.env.FCOS_SALESFORCE_MANIFEST || '');
 const CHECK_ONLY = process.argv.includes('--check-only');
 const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
-const TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || '').split(',').map((value) => value.trim()).filter(Boolean);
 const EXPECTED_ORDER = ['devee', 'qat', 'production'];
 
 if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');
-if (MANIFEST && !CHECK_ONLY) {
-  throw new Error('Scoped manifests are validation-only. Deploy the complete force-app tree so every Salesforce environment and the shared repository remain identical.');
-}
+if (!MANIFEST && !CHECK_ONLY) throw new Error('Salesforce promotion requires an explicit reviewed manifest. Use --manifest manifest/<change>.xml.');
 const sourcePath = MANIFEST ? path.resolve(process.cwd(), MANIFEST) : path.resolve(process.cwd(), 'force-app');
 const relativeSource = path.relative(process.cwd(), sourcePath);
 if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource) || !existsSync(sourcePath)) {
   throw new Error(MANIFEST ? 'Salesforce manifest must be an existing file inside this project.' : 'The force-app source directory is missing.');
+}
+
+function manifestTestClasses(manifestPath) {
+  if (!manifestPath) return [];
+  const xml = readFileSync(manifestPath, 'utf8');
+  const apexBlocks = [...xml.matchAll(/<types>([\s\S]*?)<name>ApexClass<\/name>[\s\S]*?<\/types>/gu)];
+  return [...new Set(apexBlocks.flatMap(([, block]) => (
+    [...block.matchAll(/<members>([^<]+)<\/members>/gu)].map(([, member]) => member.trim())
+  )).filter((member) => /Test$/u.test(member)))];
+}
+
+const EXPLICIT_TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || '').split(',').map((value) => value.trim()).filter(Boolean);
+const TEST_CLASSES = EXPLICIT_TEST_CLASSES.length ? EXPLICIT_TEST_CLASSES : manifestTestClasses(MANIFEST ? sourcePath : '');
+if (MANIFEST && /<name>Apex(?:Class|Trigger)<\/name>/u.test(readFileSync(sourcePath, 'utf8')) && !TEST_CLASSES.length) {
+  throw new Error('An Apex promotion manifest must include at least one *Test Apex class or set FCOS_SALESFORCE_TESTS.');
 }
 
 function sf(args) {
@@ -88,6 +100,7 @@ if (CHECK_ONLY) {
   writeDeveeSourceState({
     sourceTreeHash: inventory.sourceTreeHash,
     deploymentJobId: deveeDeployment.jobId,
+    deploymentScope: relativeSource,
   });
 
   const publication = spawnSync(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', '--publish'], {

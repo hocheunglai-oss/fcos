@@ -122,7 +122,7 @@ For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will ex
 
 ## Deployment
 
-Salesforce metadata follows one source-controlled promotion path: deploy and verify the complete `force-app` tree in DEVEE, publish that exact DEVEE tree to the `ivanyk20/fcbhk` `src/` mirror, then promote the same source to QAT and finally Production. Run `npm run salesforce:deploy:all`; the command verifies every pinned org identity, enforces the order, records a non-secret DEVEE deployment proof, and blocks shared publication unless its source hash matches. Never develop or synchronize independently from QAT or Production.
+Salesforce metadata follows one source-controlled promotion path: deploy and verify an explicit reviewed change manifest in DEVEE, publish the complete current DEVEE-owned `force-app` tree to the `ivanyk20/fcbhk` `src/` mirror, then promote the same manifest to QAT and finally Production. Run `npm run salesforce:deploy:all -- --manifest manifest/<change>.xml`; the command verifies every pinned org identity, derives the scoped Apex tests from the manifest, enforces the order, records a non-secret DEVEE deployment proof bound to the complete source-tree hash, and blocks shared publication unless that hash matches. Never develop or synchronize independently from QAT or Production. Full-tree validation remains available through `npm run salesforce:validate:all`, but it intentionally includes unrelated local org tests and is not the normal promotion route.
 
 Production deploys are handled by Vercel:
 

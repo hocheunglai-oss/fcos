@@ -23,7 +23,7 @@ export function sourceStatePath() {
   return absolute;
 }
 
-export function writeDeveeSourceState({ sourceTreeHash, deploymentJobId, deployedAt = new Date().toISOString() }) {
+export function writeDeveeSourceState({ sourceTreeHash, deploymentJobId, deploymentScope, deployedAt = new Date().toISOString() }) {
   const environment = deveeEnvironment();
   if (!/^[a-f0-9]{64}$/u.test(String(sourceTreeHash || '')) || !String(deploymentJobId || '').trim()) {
     throw new Error('A source hash and successful DEVEE deployment job are required.');
@@ -36,6 +36,7 @@ export function writeDeveeSourceState({ sourceTreeHash, deploymentJobId, deploye
     isSandbox: true,
     sourceTreeHash,
     deploymentJobId,
+    deploymentScope: String(deploymentScope || '').trim(),
     deploymentStatus: 'Succeeded',
     deployedAt,
   };
@@ -67,6 +68,7 @@ export function validateDeveeSourceState(record, sourceTreeHash, now = new Date(
     || record?.deploymentStatus !== 'Succeeded'
     || record?.sourceTreeHash !== sourceTreeHash
     || !String(record?.deploymentJobId || '').trim()
+    || !String(record?.deploymentScope || '').trim()
     || ageSeconds > PUBLICATION.sourceStateMaximumAgeSeconds) {
     throw new Error('Shared publication requires a fresh successful DEVEE deployment for the exact source-tree hash.');
   }
