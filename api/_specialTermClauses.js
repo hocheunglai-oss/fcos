@@ -3,9 +3,12 @@ import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.j
 import {
   assertCurrent,
   currentRecord,
+  deletionAuthorization,
   failOperation,
   finishOperation,
+  isSpecialTermsRecordCreator,
   listSpecialTerms,
+  normalizedEmail,
   reserveOperation,
   resolveSpecialTermsSchema,
   salesforceId,
@@ -223,6 +226,159 @@ async function loadOneClause(clauseId) {
     lastModifiedAt: activeConsolidation.LastModifiedDate || null,
   } : null;
   return mapClause(row, { versions: versionResult.records, usageCount: Number(usageResult.records[0]?.usageCount || 0) });
+}
+
+function clauseDeletionPreview(clause, { entityType, action, version = null, blockers = [], authorized = false, isCreator = false, isApprover = false, counts = {} }) {
+  return {
+    entityType,
+    id: entityType === 'clauseVersion' ? version.Id : clause.Id,
+    clauseId: clause.Id,
+    versionId: version?.Id || null,
+    name: clause.Name || '',
+    origin: clause.Origin__c || 'Manual',
+    action,
+    eligible: blockers.length === 0 && authorized,
+    authorized,
+    isCreator,
+    isApprover,
+    blockers,
+    counts,
+    confirmationLabel: clause.Name || '',
+    expectedLastModifiedAt: clause.LastModifiedDate || null,
+    expectedVersionLastModifiedAt: version?.LastModifiedDate || null,
+  };
+}
+
+async function clauseIdentityDeletionPreview(client, profile, clauseId, { isApprover = false } = {}) {
+  const [clause, versions, assignmentUse, revisionUse, consolidationUse, replacementUse] = await Promise.all([
+    currentRecord(OBJECTS.clause, clauseId, ['Id', 'Name', 'Status__c', 'Origin__c', 'LastModifiedDate']),
+    sfQuery(`SELECT Id,Status__c,Proposed_By_Email__c,LastModifiedDate FROM ${OBJECTS.version} WHERE Clause__c = '${soql(clauseId)}' ORDER BY Revision_Number__c,Id LIMIT 101`, { clean: true, limit: 101 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.assignment} WHERE Clause__c = '${soql(clauseId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.revisionClause} WHERE Clause__c = '${soql(clauseId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.consolidation} WHERE Source_Clause__c = '${soql(clauseId)}' OR Replacement_Clause__c = '${soql(clauseId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.clause} WHERE Replacement_Clause__c = '${soql(clauseId)}' LIMIT 1`, { clean: true, limit: 1 }),
+  ]);
+  const versionIds = versions.records.map((row) => row.Id);
+  const mappingUse = versionIds.length ? await sfQuery(`SELECT Id FROM ${OBJECTS.consolidationMap} WHERE Source_Version__c IN (${versionIds.map((id) => `'${soql(id)}'`).join(',')}) OR Replacement_Version__c IN (${versionIds.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 1`, { clean: true, limit: 1 }) : { records: [] };
+  const actorEmail = normalizedEmail(profile?.email);
+  const isCreator = Boolean(versions.records.length && versions.records.every((row) => actorEmail && actorEmail === normalizedEmail(row.Proposed_By_Email__c)));
+  const authorized = deletionAuthorization({ isApprover, isCreator });
+  const blockers = [];
+  if (clause.Status__c !== 'Draft') blockers.push('Approved and retired clause identities must be retained.');
+  if (!versions.records.length) blockers.push('A Draft clause must retain a verifiable Draft version before deletion.');
+  if (versions.totalSize > versions.records.length || versions.records.length > 100) blockers.push('This clause has too many versions for one verified deletion.');
+  if (versions.records.some((row) => row.Status__c !== 'Draft')) blockers.push('Approved and superseded clause versions must be retained.');
+  if (assignmentUse.records.length) blockers.push('Clause assignment lineage must be retained.');
+  if (revisionUse.records.length) blockers.push('This clause is referenced by Special Term revision history.');
+  if (consolidationUse.records.length || mappingUse.records.length) blockers.push('Clause consolidation lineage must be retained.');
+  if (replacementUse.records.length) blockers.push('Another clause identifies this clause as its governed replacement.');
+  if (!authorized) blockers.push('Only the original creator or an active General Manager/Administrator may delete this Draft clause.');
+  return clauseDeletionPreview(clause, {
+    entityType: 'clause',
+    action: clause.Origin__c === 'Legacy' ? 'delete_legacy_draft' : 'delete_draft_clause',
+    blockers,
+    authorized,
+    isCreator,
+    isApprover,
+    counts: { versionCount: versions.records.length, assignmentCount: assignmentUse.records.length, revisionReferenceCount: revisionUse.records.length, consolidationReferenceCount: consolidationUse.records.length + mappingUse.records.length },
+  });
+}
+
+async function clauseVersionDeletionPreview(client, profile, versionId, { isApprover = false } = {}) {
+  const version = await currentRecord(OBJECTS.version, versionId, ['Id', 'Clause__c', 'Status__c', 'Proposed_By_Email__c', 'LastModifiedDate']);
+  const clause = await currentRecord(OBJECTS.clause, version.Clause__c, ['Id', 'Name', 'Status__c', 'Origin__c', 'LastModifiedDate']);
+  const [assignmentUse, revisionUse, consolidationUse, mappingUse] = await Promise.all([
+    sfQuery(`SELECT Id FROM ${OBJECTS.assignment} WHERE Clause_Version__c = '${soql(versionId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.revisionClause} WHERE Clause_Version__c = '${soql(versionId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.consolidation} WHERE Replacement_Version__c = '${soql(versionId)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.consolidationMap} WHERE Source_Version__c = '${soql(versionId)}' OR Replacement_Version__c = '${soql(versionId)}' LIMIT 1`, { clean: true, limit: 1 }),
+  ]);
+  const isCreator = await isSpecialTermsRecordCreator(client, profile, versionId, ['clause_draft_revise'], version.Proposed_By_Email__c);
+  const authorized = deletionAuthorization({ isApprover, isCreator });
+  const blockers = [];
+  if (clause.Status__c !== 'Active') blockers.push('Delete a never-approved Draft clause as a complete identity instead.');
+  if (version.Status__c !== 'Draft') blockers.push('Approved and superseded clause versions must be retained.');
+  if (assignmentUse.records.length) blockers.push('Clause assignment lineage must be retained.');
+  if (revisionUse.records.length) blockers.push('This Draft version is referenced by a Special Term revision.');
+  if (consolidationUse.records.length || mappingUse.records.length) blockers.push('Clause consolidation lineage must be retained.');
+  if (!authorized) blockers.push('Only the Draft proposer or an active General Manager/Administrator may discard this version.');
+  return clauseDeletionPreview(clause, {
+    entityType: 'clauseVersion',
+    action: 'discard_draft_version',
+    version,
+    blockers,
+    authorized,
+    isCreator,
+    isApprover,
+    counts: { assignmentCount: assignmentUse.records.length, revisionReferenceCount: revisionUse.records.length, consolidationReferenceCount: consolidationUse.records.length + mappingUse.records.length },
+  });
+}
+
+export async function previewSpecialTermClauseDeletion(client, profile, body = {}, options = {}) {
+  await resolveSpecialTermsSchema({ force: true, write: false });
+  const entityType = text(body.entityType, 30);
+  if (entityType === 'clause') return clauseIdentityDeletionPreview(client, profile, salesforceId(body.id, 'Clause'), options);
+  if (entityType === 'clauseVersion') return clauseVersionDeletionPreview(client, profile, salesforceId(body.id, 'Clause version'), options);
+  throw specialTermsError('Deletion preview supports a Draft clause or Draft clause version.', 400, 'SPECIAL_TERMS_DELETE_ENTITY_INVALID');
+}
+
+function requireClauseDeletion(preview) {
+  if (!preview.eligible) throw specialTermsError(preview.blockers[0] || 'This clause cannot be deleted.', 409, 'SPECIAL_TERMS_DELETE_BLOCKED', { blockers: preview.blockers });
+}
+
+function confirmedClauseName(body, preview) {
+  if (text(body.confirmationName, 80) !== preview.name) throw specialTermsError(`Type ${preview.name} to confirm deletion.`);
+}
+
+export async function deleteSpecialTermClause(client, profile, body = {}, options = {}) {
+  await resolveSpecialTermsSchema({ force: true, write: true });
+  const clauseId = salesforceId(body.clauseId || body.id, 'Clause');
+  const reason = requiredReason(body.auditReason, 'Deletion reason');
+  const initial = await clauseIdentityDeletionPreview(client, profile, clauseId, options);
+  requireClauseDeletion(initial);
+  assertCurrent({ LastModifiedDate: initial.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+  confirmedClauseName(body, initial);
+  const reservation = await reserveOperation(client, profile, body, 'clause_draft_delete', { id: clauseId, expectedLastModifiedAt: body.expectedLastModifiedAt, deletionReasonHash: clauseHash(reason) });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const live = await clauseIdentityDeletionPreview(client, profile, clauseId, options);
+    requireClauseDeletion(live);
+    assertCurrent({ LastModifiedDate: live.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+    confirmedClauseName(body, live);
+    const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: [{ method: 'DELETE', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause' }] } });
+    assertComposite(result, 'Salesforce rejected Draft clause deletion.');
+    await expireSpecialTermClauseCaches();
+    return finishOperation(client, reservation.operation, { success: true, id: clauseId, clauseId, operation: 'draft_clause_deleted' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+export async function discardSpecialTermClauseDraft(client, profile, body = {}, options = {}) {
+  await resolveSpecialTermsSchema({ force: true, write: true });
+  const versionId = salesforceId(body.versionId || body.id, 'Clause version');
+  const reason = requiredReason(body.auditReason, 'Deletion reason');
+  const initial = await clauseVersionDeletionPreview(client, profile, versionId, options);
+  requireClauseDeletion(initial);
+  assertCurrent({ LastModifiedDate: initial.expectedLastModifiedAt }, body.expectedClauseLastModifiedAt);
+  assertCurrent({ LastModifiedDate: initial.expectedVersionLastModifiedAt }, body.expectedVersionLastModifiedAt);
+  confirmedClauseName(body, initial);
+  const reservation = await reserveOperation(client, profile, body, 'clause_version_discard', { id: versionId, clauseId: initial.clauseId, expectedClauseLastModifiedAt: body.expectedClauseLastModifiedAt, expectedVersionLastModifiedAt: body.expectedVersionLastModifiedAt, deletionReasonHash: clauseHash(reason) });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const live = await clauseVersionDeletionPreview(client, profile, versionId, options);
+    requireClauseDeletion(live);
+    assertCurrent({ LastModifiedDate: live.expectedLastModifiedAt }, body.expectedClauseLastModifiedAt);
+    assertCurrent({ LastModifiedDate: live.expectedVersionLastModifiedAt }, body.expectedVersionLastModifiedAt);
+    confirmedClauseName(body, live);
+    const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: [{ method: 'DELETE', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'version' }] } });
+    assertComposite(result, 'Salesforce rejected Draft clause version deletion.');
+    await expireSpecialTermClauseCaches();
+    const clause = await loadOneClause(live.clauseId);
+    return finishOperation(client, reservation.operation, { success: true, id: versionId, clauseId: live.clauseId, versionId, clause, operation: 'draft_version_discarded' }, { success: true, id: versionId, clauseId: live.clauseId, versionId, operation: 'draft_version_discarded' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
 }
 
 async function resolveConsolidationSchema() {

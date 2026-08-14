@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Combine, Loader2, Pencil, Plus, RefreshCw, Search, XCircle } from 'lucide-react';
+import { CheckCircle2, Combine, Loader2, Pencil, Plus, RefreshCw, Search, Trash2, XCircle } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import StateBlock from '@/components/common/StateBlock';
 import ClauseConsolidationQueue from '@/components/special-terms/ClauseConsolidationQueue';
@@ -39,8 +39,13 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
   const [approval, setApproval] = useState(null);
   const [retirement, setRetirement] = useState(null);
   const [consolidation, setConsolidation] = useState(null);
+  const [deletion, setDeletion] = useState(null);
+  const [deletionReason, setDeletionReason] = useState('');
+  const [deletionConfirmation, setDeletionConfirmation] = useState('');
+  const [deletionPending, setDeletionPending] = useState(() => new Set());
   const [approvalPending, setApprovalPending] = useState(() => new Set());
   const approveButtons = useRef(new Map());
+  const deleteButtons = useRef(new Map());
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -151,6 +156,86 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
     await load(true);
   };
 
+  const openDeletion = async (clause, entityType) => {
+    const id = entityType === 'clauseVersion' ? clause.draftVersion?.id : clause.id;
+    const key = `${entityType}:${id}`;
+    if (!id || deletionPending.has(key)) return;
+    setError('');
+    setDeletionPending((current) => new Set(current).add(key));
+    try {
+      const response = await appClient.functions.invoke('specialTermDeletePreview', { entityType, id }, { cache: false });
+      if (response.data?.error) {
+        setError(response.data.error);
+        return;
+      }
+      if (!response.data?.eligible) {
+        setError((response.data?.blockers || ['This clause cannot be deleted.']).join(' '));
+        return;
+      }
+      setDeletion({ clause, preview: response.data });
+      setDeletionReason('');
+      setDeletionConfirmation('');
+    } catch (requestError) {
+      setError(requestError?.message || 'The deletion check could not be completed.');
+    } finally {
+      setDeletionPending((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  const submitDeletion = async () => {
+    const submitted = deletion;
+    if (!submitted) return;
+    const { preview, clause } = submitted;
+    const key = `${preview.entityType}:${preview.id}`;
+    const viewport = { top: window.scrollY, left: window.scrollX };
+    setDeletion(null);
+    setDeletionReason('');
+    setDeletionConfirmation('');
+    setError('');
+    setDeletionPending((current) => new Set(current).add(key));
+    const functionName = preview.entityType === 'clause' ? 'specialTermClauseDelete' : 'specialTermClauseDraftDiscard';
+    try {
+      const response = await appClient.functions.invoke(functionName, {
+        id: preview.id,
+        clauseId: preview.clauseId,
+        versionId: preview.versionId,
+        expectedLastModifiedAt: preview.expectedLastModifiedAt,
+        expectedClauseLastModifiedAt: preview.expectedLastModifiedAt,
+        expectedVersionLastModifiedAt: preview.expectedVersionLastModifiedAt,
+        confirmationName: preview.confirmationLabel,
+        auditReason: deletionReason,
+        operationId: operationId(),
+      }, { cache: false });
+      if (response.data?.error) setError(response.data.error);
+      else if (preview.entityType === 'clause') {
+        setClauses((current) => current.filter((row) => row.id !== clause.id));
+        setMessage(`${clause.shortName} deleted.`);
+        toast({ title: 'Draft clause deleted', description: 'No approved or referenced history was removed.' });
+      } else if (response.data?.clause) {
+        setClauses((current) => current.map((row) => row.id === response.data.clause.id ? response.data.clause : row));
+        setMessage(`${clause.shortName} Draft version discarded.`);
+        toast({ title: 'Draft version discarded', description: 'The approved clause and all historical uses were preserved.' });
+      } else setError('Salesforce did not return the updated clause state. Refresh before continuing.');
+    } catch (requestError) {
+      setError(requestError?.message || 'The deletion could not be completed.');
+    } finally {
+      setDeletionPending((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ ...viewport, behavior: 'auto' });
+        const next = [...deleteButtons.current.values()].find((button) => button && !button.disabled);
+        next?.focus({ preventScroll: true });
+      });
+    }
+  };
+
   const replacementClause = consolidation ? clauses.find((clause) => clause.id === consolidation.replacementClauseId) : null;
 
   if (loading && !clauses.length) return <StateBlock title="Loading Clause Bank" description="Reading versioned wording from Salesforce." icon={Loader2} />;
@@ -171,6 +256,10 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
 
       <div className="grid gap-3 xl:grid-cols-2">{filtered.map((clause) => {
         const displayVersion = status === 'Draft' ? clause.draftVersion : clause.latestApprovedVersion || clause.legacyVersion;
+        const deletionEntityType = clause.status === 'Draft' ? 'clause' : clause.status === 'Active' && clause.draftVersion ? 'clauseVersion' : null;
+        const deletionId = deletionEntityType === 'clauseVersion' ? clause.draftVersion?.id : clause.id;
+        const deletionKey = deletionEntityType ? `${deletionEntityType}:${deletionId}` : null;
+        const structurallyBlocked = clause.status === 'Draft' && (clause.usageCount > 0 || Boolean(clause.consolidation));
         return (
           <section key={clause.id} className="space-y-3 rounded-lg border border-border bg-card p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -181,6 +270,8 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
                 {canApprove && clause.draftVersion ? <Button ref={(node) => { if (node) approveButtons.current.set(clause.draftVersion.id, node); else approveButtons.current.delete(clause.draftVersion.id); }} data-clause-approve={clause.draftVersion.id} size="sm" disabled={approvalPending.has(clause.draftVersion.id)} onClick={() => setApproval({ clause, reason: '' })}>{approvalPending.has(clause.draftVersion.id) ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}{approvalPending.has(clause.draftVersion.id) ? 'Approving…' : 'Approve'}</Button> : null}
                 {canApprove && clause.status === 'Active' && !clause.consolidation ? <Button size="sm" variant="outline" onClick={() => setConsolidation({ source: clause, replacementClauseId: '', reason: '', equivalenceConfirmed: false })}><Combine className="mr-1 h-3.5 w-3.5" />Consolidate</Button> : null}
                 {canApprove && clause.status === 'Active' && !clause.consolidation ? <Button size="sm" variant="outline" className="text-destructive" onClick={() => setRetirement({ clause, reason: '' })}><XCircle className="mr-1 h-3.5 w-3.5" />Retire</Button> : null}
+                {canManage && deletionEntityType ? <Button ref={(node) => { if (node) deleteButtons.current.set(deletionKey, node); else deleteButtons.current.delete(deletionKey); }} size="sm" variant="outline" className="text-destructive" disabled={structurallyBlocked || deletionPending.has(deletionKey)} title={structurallyBlocked ? 'Referenced Draft clauses must be retained.' : deletionEntityType === 'clause' ? clause.origin === 'Legacy' ? 'Delete unapproved Legacy draft' : 'Delete unapproved Draft clause' : 'Discard only this unapproved Draft version'} onClick={() => openDeletion(clause, deletionEntityType)}>{deletionPending.has(deletionKey) ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}{deletionPending.has(deletionKey) ? 'Checking…' : deletionEntityType === 'clauseVersion' ? 'Discard Draft' : clause.origin === 'Legacy' ? 'Delete Legacy Draft' : 'Delete Draft'}</Button> : null}
+                {canManage && status === 'Legacy' && clause.status !== 'Draft' && !clause.draftVersion ? <Button size="sm" variant="outline" className="text-destructive" disabled title="Approved, used, and retired Legacy clauses must be consolidated or retired; they cannot be deleted."><Trash2 className="mr-1 h-3.5 w-3.5" />Delete unavailable</Button> : null}
               </div>
             </div>
             <p className="whitespace-pre-wrap text-sm leading-relaxed">{displayVersion?.clauseText || 'No approved wording yet.'}</p>
@@ -202,6 +293,20 @@ export default function ClauseBankPanel({ canManage, canApprove, categoryOptions
 
       <Dialog open={Boolean(approval)} onOpenChange={(open) => !open && setApproval(null)}>
         <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Approve {approval?.clause?.shortName}</DialogTitle><DialogDescription>Approval publishes Draft v{approval?.clause?.draftVersion?.revisionNumber}. Existing terms remain on their current version and will show an upgrade badge.</DialogDescription></DialogHeader>{approval ? <><div className="rounded-lg border border-border p-3"><p className="whitespace-pre-wrap text-sm">{approval.clause.draftVersion.clauseText}</p></div><div className="space-y-1.5"><Label>Approval reason</Label><Textarea value={approval.reason} onChange={(event) => setApproval((current) => ({ ...current, reason: event.target.value }))} rows={3} /></div></> : null}<DialogFooter><Button variant="outline" onClick={() => setApproval(null)}>Cancel</Button><Button disabled={approval?.reason.trim().length < 3} onClick={approveClause}>Approve version</Button></DialogFooter></DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deletion)} onOpenChange={(open) => !open && setDeletion(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{deletion?.preview?.entityType === 'clauseVersion' ? `Discard Draft for ${deletion?.clause?.shortName}` : `Delete ${deletion?.clause?.shortName}`}</DialogTitle>
+            <DialogDescription>{deletion?.preview?.entityType === 'clauseVersion' ? 'Only the unapproved Draft version will be deleted. The approved clause identity, wording, and every historical use remain unchanged.' : `This never-approved ${deletion?.clause?.origin === 'Legacy' ? 'Legacy ' : ''}clause identity and ${deletion?.preview?.counts?.versionCount || 0} Draft version(s) will be permanently deleted.`}</DialogDescription>
+          </DialogHeader>
+          {deletion ? <div className="space-y-4">
+            <div className="space-y-1.5"><Label>Type {deletion.preview.confirmationLabel} to confirm</Label><Input value={deletionConfirmation} onChange={(event) => setDeletionConfirmation(event.target.value)} autoComplete="off" autoFocus /></div>
+            <div className="space-y-1.5"><Label>Deletion reason</Label><Textarea value={deletionReason} maxLength={500} rows={4} onChange={(event) => setDeletionReason(event.target.value)} placeholder="Required; only a redacted hash is retained outside Salesforce" /></div>
+          </div> : null}
+          <DialogFooter><Button variant="outline" onClick={() => setDeletion(null)}>Cancel</Button><Button variant="destructive" disabled={deletionReason.trim().length < 3 || deletionConfirmation !== deletion?.preview?.confirmationLabel} onClick={submitDeletion}><Trash2 className="mr-2 h-4 w-4" />{deletion?.preview?.entityType === 'clauseVersion' ? 'Discard Draft version' : 'Delete from Clause Bank'}</Button></DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <Dialog open={Boolean(retirement)} onOpenChange={(open) => !open && !busy && setRetirement(null)}>

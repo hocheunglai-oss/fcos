@@ -2,6 +2,30 @@ public class SpecialTermTriggerHandler {
     public static Boolean allowCompiledProjectionUpdate = false;
     public static Boolean allowRevisionLifecycleUpdate = false;
 
+    public static void validateDelete(List<Special_Term__c> terms) {
+        Set<Id> termIds = new Map<Id, Special_Term__c>(terms).keySet();
+        Set<Id> protectedRevisionTerms = new Set<Id>();
+        Set<Id> assignmentTerms = new Set<Id>();
+        for (Special_Term_Revision__c revision : [
+            SELECT Special_Term__c FROM Special_Term_Revision__c
+            WHERE Special_Term__c IN :termIds
+            AND Status__c NOT IN ('Draft', 'In Review')
+        ]) protectedRevisionTerms.add(revision.Special_Term__c);
+        for (Special_Term_Clause_Assignment__c assignment : [
+            SELECT Special_Term__c FROM Special_Term_Clause_Assignment__c
+            WHERE Special_Term__c IN :termIds
+        ]) assignmentTerms.add(assignment.Special_Term__c);
+        for (Special_Term__c term : terms) {
+            if (term.Approval_Status__c != null && !new Set<String>{ 'Draft', 'Legacy' }.contains(term.Approval_Status__c)) {
+                term.addError('Approved and retired Special Terms must be retained.');
+            } else if (protectedRevisionTerms.contains(term.Id)) {
+                term.addError('Approved, rejected, superseded, and rolled-back Special Term revision history must be retained.');
+            } else if (assignmentTerms.contains(term.Id)) {
+                term.addError('Special Term clause assignment lineage must be retained.');
+            }
+        }
+    }
+
     public static void updateSpecialRemarks(List<Special_Term__c> specialTerms) {
         for (Special_Term__c specialTerm : specialTerms) {
             if (specialTerm.Add_to_Confirmation__c

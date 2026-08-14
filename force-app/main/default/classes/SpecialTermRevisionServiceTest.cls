@@ -124,4 +124,41 @@ private class SpecialTermRevisionServiceTest {
         insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
         try { SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Stale test.', '2000-01-01 00:00:00'); System.assert(false, 'Stale activation must fail.'); } catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('changed after it was opened')); }
     }
+
+    @isTest static void deletesOnlyTransientUngovernedTermGraph() {
+        Special_Term__c disposable = new Special_Term__c(Name = 'Disposable draft term', Approval_Status__c = 'Draft', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert disposable;
+        Special_Term_Revision__c draftRevision = new Special_Term_Revision__c(Special_Term__c = disposable.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Disposable draft', Proposed_By_Email__c = 'creator@example.com');
+        insert draftRevision;
+        Special_Term_Rule__c disposableRule = new Special_Term_Rule__c(Special_Term__c = disposable.Id, Supplier_Buyer__c = 'Buyer', Country__c = 'ARGENTINA');
+        insert disposableRule;
+        delete draftRevision;
+        delete disposableRule;
+        delete disposable;
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term__c WHERE Id = :disposable.Id]);
+
+        Special_Term__c retained = new Special_Term__c(Name = 'Rejected history term', Approval_Status__c = 'Legacy', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert retained;
+        Special_Term_Revision__c rejected = new Special_Term_Revision__c(Special_Term__c = retained.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Rejected draft', Proposed_By_Email__c = 'creator@example.com');
+        insert rejected;
+        rejected.Status__c = 'Rejected';
+        Database.update(rejected, AccessLevel.SYSTEM_MODE);
+        try { delete retained; System.assert(false, 'Rejected revision history must block term deletion.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('revision history must be retained')); }
+        try { delete rejected; System.assert(false, 'Rejected revisions must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Historical revision lineage must be retained')); }
+    }
+
+    @isTest static void blocksRuleDeletionWhenRevisionSnapshotExists() {
+        Special_Term__c term = new Special_Term__c(Name = 'Referenced rule term', Approval_Status__c = 'Legacy', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Rule__c rule = new Special_Term_Rule__c(Special_Term__c = term.Id, Supplier_Buyer__c = 'Buyer', Country__c = 'CHINA');
+        insert rule;
+        rule = [SELECT Id, LastModifiedDate FROM Special_Term_Rule__c WHERE Id = :rule.Id];
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Retained rule snapshot');
+        insert revision;
+        insert new Special_Term_Revision_Rule__c(Special_Term_Revision__c = revision.Id, Special_Term_Rule__c = rule.Id, Snapshot_Type__c = 'Baseline', Sequence__c = 1, Audience__c = 'Buyer', Country__c = 'CHINA', Source_Last_Modified__c = rule.LastModifiedDate, State__c = 'Proposed');
+        try { delete rule; System.assert(false, 'Revision-referenced rules must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('rule revision lineage must be retained')); }
+    }
 }

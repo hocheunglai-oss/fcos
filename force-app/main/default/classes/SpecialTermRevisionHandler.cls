@@ -31,4 +31,12 @@ public class SpecialTermRevisionHandler {
             if (String.isBlank(revision.Revision_Reason__c)) revision.addError('Revision reason is required.');
         }
     }
+
+    public static void beforeDelete(List<Special_Term_Revision__c> revisions) {
+        for (Special_Term_Revision__c revision : revisions) {
+            if (!new Set<String>{ 'Draft', 'In Review' }.contains(revision.Status__c)) {
+                revision.addError('Only transient Draft or In Review revisions may be deleted. Historical revision lineage must be retained.');
+            }
+        }
+    }
 }

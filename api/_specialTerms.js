@@ -14,6 +14,8 @@ const OBJECTS = Object.freeze({
   clauseAssignment: 'Special_Term_Clause_Assignment__c',
   clauseConsolidation: 'Special_Term_Clause_Consolidation__c',
   revisionClause: 'Special_Term_Revision_Clause__c',
+  revision: 'Special_Term_Revision__c',
+  revisionRule: 'Special_Term_Revision_Rule__c',
 });
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const OPERATION_OBJECTS = Object.freeze({
@@ -26,6 +28,8 @@ const OPERATION_OBJECTS = Object.freeze({
   composition_save: OBJECTS.clauseAssignment,
   clause_draft_create: OBJECTS.clause,
   clause_draft_revise: OBJECTS.clauseVersion,
+  clause_draft_delete: OBJECTS.clause,
+  clause_version_discard: OBJECTS.clauseVersion,
   clause_approve: OBJECTS.clauseVersion,
   clause_retire: OBJECTS.clause,
   clause_consolidation_start: OBJECTS.clauseConsolidation,
@@ -53,6 +57,10 @@ export function specialTermsError(message, status = 400, code = null, details = 
 
 export function text(value, max = 10000) {
   return String(value ?? '').trim().slice(0, max);
+}
+
+export function normalizedEmail(value) {
+  return text(value, 320).toLowerCase();
 }
 
 function isSalesforceRecordId(value) {
@@ -447,7 +455,18 @@ export async function reserveOperation(client, profile, body, operationType, pay
   // The production migration exposes this as one security-invoker transaction. Keep
   // the narrow table fallback for local/test clients that predate the migration.
   if (typeof client.rpc === 'function') {
-    const rpc = await client.rpc('reserve_special_terms_operation', {
+    const auditReasonHash = text(payload?.deletionReasonHash, 64) || null;
+    let rpc = await client.rpc('reserve_special_terms_operation_v2', {
+      p_operation_id: operationId,
+      p_operation_type: operationType,
+      p_request_hash: requestHash,
+      p_salesforce_object: OPERATION_OBJECTS[operationType],
+      p_salesforce_record_id: payload.id || null,
+      p_actor_user_id: profile.id,
+      p_actor_email: profile.email || null,
+      p_audit_reason_hash: auditReasonHash,
+    });
+    if (rpc.error?.code === '42883') rpc = await client.rpc('reserve_special_terms_operation', {
       p_operation_id: operationId,
       p_operation_type: operationType,
       p_request_hash: requestHash,
@@ -479,7 +498,7 @@ export async function reserveOperation(client, profile, body, operationType, pay
   }
   // Contractual text and reviewer rationale remain in Salesforce. Supabase retains
   // operation identity/status only, never a recoverable contractual narrative.
-  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: OPERATION_OBJECTS[operationType], salesforce_record_id: payload.id || null, audit_reason: null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
+  const row = { operation_id: operationId, operation_type: operationType, request_hash: requestHash, operation_status: 'pending', salesforce_object: OPERATION_OBJECTS[operationType], salesforce_record_id: payload.id || null, audit_reason: null, audit_reason_hash: text(payload?.deletionReasonHash, 64) || null, actor_user_id: profile.id, actor_email: profile.email, error_code: null, error_message: null, result_snapshot: {}, updated_at: new Date().toISOString(), completed_at: null };
   const result = existing.data ? await client.from('special_terms_operations').update(row).eq('id', existing.data.id).select('*').single() : await client.from('special_terms_operations').insert(row).select('*').single();
   if (result.error?.code === '23505') {
     const raced = await client.from('special_terms_operations').select('*').eq('operation_id', operationId).maybeSingle();
@@ -507,9 +526,66 @@ export async function finishOperation(client, operation, result, persistedResult
     }
     if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError(`Special Terms operation could not be completed: ${rpc.error.message}`, 502);
   }
-  await client.from('special_terms_operations').update({ operation_status: 'succeeded', result_snapshot: persistedResult, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
+  const completedRecordId = text(persistedResult?.id || persistedResult?.clauseId || persistedResult?.versionId, 18) || operation.salesforce_record_id || null;
+  await client.from('special_terms_operations').update({ operation_status: 'succeeded', salesforce_record_id: completedRecordId, result_snapshot: persistedResult, updated_at: completedAt, completed_at: completedAt }).eq('id', operation.id);
   await expireRuntimeCacheTags(['salesforce:special-terms', 'salesforce:special-terms:clauses', 'salesforce:schema']);
   return result;
+}
+
+export async function isSpecialTermsRecordCreator(client, profile, recordId, operationTypes = [], proposedByEmail = null) {
+  const actorEmail = normalizedEmail(profile?.email);
+  if (proposedByEmail != null) return Boolean(actorEmail && actorEmail === normalizedEmail(proposedByEmail));
+  if (!profile?.id || !actorEmail || !isSalesforceRecordId(recordId) || !operationTypes.length) return false;
+  if (typeof client.rpc === 'function') {
+    const rpc = await client.rpc('special_terms_record_creator', {
+      p_salesforce_record_id: recordId,
+      p_operation_types: operationTypes,
+      p_actor_user_id: profile.id,
+      p_actor_email: actorEmail,
+    });
+    if (!rpc.error) return rpc.data === true;
+    if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError('Special Terms creator authorization could not be verified.', 503, 'SPECIAL_TERMS_CREATOR_LOOKUP_FAILED');
+  }
+  const result = await client.from('special_terms_operations')
+    .select('actor_user_id,actor_email')
+    .eq('salesforce_record_id', recordId)
+    .eq('operation_status', 'succeeded')
+    .in('operation_type', operationTypes)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (result.error) throw specialTermsError('Special Terms creator authorization could not be verified.', 503, 'SPECIAL_TERMS_CREATOR_LOOKUP_FAILED');
+  return Boolean(result.data && (result.data.actor_user_id === profile.id || normalizedEmail(result.data.actor_email) === actorEmail));
+}
+
+export async function areSpecialTermsRecordsCreatedBy(client, profile, recordIds = [], operationTypes = []) {
+  const ids = [...new Set(recordIds.map((value) => text(value, 18)).filter(isSalesforceRecordId))];
+  const actorEmail = normalizedEmail(profile?.email);
+  if (!ids.length) return true;
+  if (!profile?.id || !actorEmail || !operationTypes.length) return false;
+  if (typeof client.rpc === 'function') {
+    const rpc = await client.rpc('special_terms_records_created_by', {
+      p_salesforce_record_ids: ids,
+      p_operation_types: operationTypes,
+      p_actor_user_id: profile.id,
+      p_actor_email: actorEmail,
+    });
+    if (!rpc.error) return rpc.data === true;
+    if (rpc.error.code !== '42883' && rpc.error.code !== '42P01') throw specialTermsError('Special Terms child ownership could not be verified.', 503, 'SPECIAL_TERMS_CREATOR_LOOKUP_FAILED');
+  }
+  const result = await client.from('special_terms_operations')
+    .select('salesforce_record_id,actor_user_id,actor_email,created_at')
+    .in('salesforce_record_id', ids)
+    .eq('operation_status', 'succeeded')
+    .in('operation_type', operationTypes)
+    .order('created_at', { ascending: true });
+  if (result.error) throw specialTermsError('Special Terms child ownership could not be verified.', 503, 'SPECIAL_TERMS_CREATOR_LOOKUP_FAILED');
+  const owned = new Set((result.data || []).filter((row) => row.actor_user_id === profile.id || normalizedEmail(row.actor_email) === actorEmail).map((row) => row.salesforce_record_id));
+  return ids.every((id) => owned.has(id));
+}
+
+export function deletionAuthorization({ isApprover = false, isCreator = false } = {}) {
+  return isApprover === true || isCreator === true;
 }
 
 export async function failOperation(client, operation, error) {
@@ -614,35 +690,111 @@ export async function saveSpecialTerm(client, profile, body = {}) {
   }
 }
 
-export async function deleteSpecialTerm(client, profile, body = {}) {
+const PROTECTED_TERM_REVISION_STATUSES = new Set(['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back']);
+
+function deletionPreview(entityType, row, { action, blockers = [], counts = {}, authorized = false, isCreator = false, isApprover = false } = {}) {
+  return {
+    entityType,
+    id: row.Id,
+    name: row.Name || '',
+    action,
+    eligible: blockers.length === 0 && authorized,
+    authorized,
+    isCreator,
+    isApprover,
+    blockers,
+    counts,
+    confirmationLabel: row.Name || '',
+    expectedLastModifiedAt: row.LastModifiedDate || null,
+  };
+}
+
+async function previewTermDeletion(client, profile, id, { isApprover = false } = {}) {
+  const [term, revisionResult, assignmentResult, ruleResult] = await Promise.all([
+    currentRecord(OBJECTS.term, id, ['Id', 'Name', 'Approval_Status__c', 'Current_Revision__c', 'LastModifiedDate']),
+    sfQuery(`SELECT Id,Status__c,Proposed_By_Email__c,LastModifiedDate FROM ${OBJECTS.revision} WHERE Special_Term__c = '${soql(id)}' ORDER BY Revision_Number__c,Id LIMIT 201`, { clean: true, limit: 201 }),
+    sfQuery(`SELECT Id FROM ${OBJECTS.clauseAssignment} WHERE Special_Term__c = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 }),
+    sfQuery(`SELECT Id,Name,LastModifiedDate FROM ${OBJECTS.rule} WHERE Special_Term__c = '${soql(id)}' ORDER BY Id LIMIT 4601`, { clean: true, limit: 4601 }),
+  ]);
+  const revisions = revisionResult.records;
+  const rules = ruleResult.records;
+  const actorEmail = normalizedEmail(profile?.email);
+  const [ownsRecords, foreignRuleReference] = await Promise.all([
+    areSpecialTermsRecordsCreatedBy(client, profile, [id, ...rules.map((row) => row.Id)], ['term_create', 'rule_create', 'rule_update']),
+    rules.length ? sfQuery(`SELECT Id FROM ${OBJECTS.revisionRule} WHERE Special_Term_Rule__c IN (${rules.map((row) => `'${soql(row.Id)}'`).join(',')}) AND Special_Term_Revision__r.Special_Term__c != '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 }) : Promise.resolve({ records: [] }),
+  ]);
+  const ownsRevisions = revisions.every((row) => actorEmail && actorEmail === normalizedEmail(row.Proposed_By_Email__c));
+  const isCreator = ownsRecords && ownsRevisions;
+  const authorized = deletionAuthorization({ isApprover, isCreator });
+  const blockers = [];
+  if (!['Draft', 'Legacy'].includes(term.Approval_Status__c || 'Legacy')) blockers.push('Approved or retired Special Terms must be retained.');
+  if (revisionResult.totalSize > revisions.length || revisions.length > 200) blockers.push('This term has too many revision records for one atomic deletion.');
+  if (revisions.some((row) => PROTECTED_TERM_REVISION_STATUSES.has(row.Status__c))) blockers.push('Approved, rejected, superseded, or rolled-back revision history must be retained.');
+  if (assignmentResult.records.length) blockers.push('Clause assignment lineage must be retained.');
+  if (ruleResult.totalSize > rules.length || rules.length > 4600) blockers.push('This term has too many linked rules for one atomic deletion.');
+  if (foreignRuleReference.records.length) blockers.push('A linked rule is referenced by another Special Term revision.');
+  if (!authorized) blockers.push('Only the original creator or an active General Manager/Administrator may delete this record.');
+  return {
+    ...deletionPreview('term', term, { action: 'delete_term', blockers, authorized, isCreator, isApprover, counts: { revisionCount: revisions.length, ruleCount: rules.length, assignmentCount: assignmentResult.records.length } }),
+    removableRevisionIds: revisions.filter((row) => ['Draft', 'In Review'].includes(row.Status__c)).map((row) => row.Id),
+    removableRuleIds: rules.map((row) => row.Id),
+  };
+}
+
+async function previewRuleDeletion(client, profile, id, { isApprover = false } = {}) {
+  const [rule, revisionUse] = await Promise.all([
+    currentRecord(OBJECTS.rule, id, ['Id', 'Name', 'Special_Term__c', 'Special_Term__r.Approval_Status__c', 'LastModifiedDate']),
+    sfQuery(`SELECT Id FROM ${OBJECTS.revisionRule} WHERE Special_Term_Rule__c = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 }),
+  ]);
+  const isCreator = await isSpecialTermsRecordCreator(client, profile, id, ['rule_create', 'rule_update']);
+  const authorized = deletionAuthorization({ isApprover, isCreator });
+  const blockers = [];
+  if (!['Draft', 'Legacy'].includes(rule.Special_Term__r?.Approval_Status__c || 'Legacy')) blockers.push('Rules for approved or retired Special Terms must be changed through a whole-term revision.');
+  if (revisionUse.records.length) blockers.push('This rule is retained by Special Term revision history.');
+  if (!authorized) blockers.push('Only the original creator or an active General Manager/Administrator may delete this record.');
+  return deletionPreview('rule', rule, { action: 'delete_rule', blockers, authorized, isCreator, isApprover, counts: { revisionReferenceCount: revisionUse.records.length } });
+}
+
+export async function previewSpecialTermDeletion(client, profile, body = {}, options = {}) {
+  await resolveSpecialTermsSchema({ force: true, write: false });
+  const entityType = text(body.entityType, 30);
+  if (entityType === 'term') return previewTermDeletion(client, profile, salesforceId(body.id, 'Special Term'), options);
+  if (entityType === 'rule') return previewRuleDeletion(client, profile, salesforceId(body.id, 'Special Term Rule'), options);
+  throw specialTermsError('Deletion preview supports a Special Term or Special Term Rule.', 400, 'SPECIAL_TERMS_DELETE_ENTITY_INVALID');
+}
+
+function requireEligibleDeletion(preview) {
+  if (!preview.eligible) throw specialTermsError(preview.blockers[0] || 'This record cannot be deleted.', 409, 'SPECIAL_TERMS_DELETE_BLOCKED', { blockers: preview.blockers });
+}
+
+export async function deleteSpecialTerm(client, profile, body = {}, options = {}) {
   await resolveSpecialTermsSchema({ force: true, write: true });
   const id = salesforceId(body.id, 'Special Term');
-  if (text(body.auditReason, 500).length < 3) throw specialTermsError('A deletion reason is required.');
-  const reservation = await reserveOperation(client, profile, body, 'term_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt });
+  const reason = text(body.auditReason, 500);
+  if (reason.length < 3) throw specialTermsError('A deletion reason is required.');
+  const initial = await previewTermDeletion(client, profile, id, options);
+  requireEligibleDeletion(initial);
+  assertCurrent({ LastModifiedDate: initial.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+  if (text(body.confirmationName, 80) !== initial.name) throw specialTermsError(`Type ${initial.name} to confirm deletion.`);
+  const reservation = await reserveOperation(client, profile, body, 'term_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt, deletionReasonHash: clauseHash(reason) });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
   try {
-    const current = await currentRecord(OBJECTS.term, id, ['Id', 'Name', 'Approval_Status__c', 'Current_Revision__c', 'LastModifiedDate']);
-    assertCurrent(current, body.expectedLastModifiedAt);
-    if (current.Approval_Status__c === 'Approved' || current.Current_Revision__c) {
-      throw specialTermsError('Approved or revision-controlled Special Terms must be retired through the governed lifecycle and cannot be deleted.', 409, 'SPECIAL_TERMS_RETIRE_REQUIRED');
-    }
-    if (text(body.confirmationName, 80) !== current.Name) throw specialTermsError(`Type ${current.Name} to confirm deletion.`);
-    const linked = await sfQuery(`SELECT Id FROM ${OBJECTS.rule} WHERE Special_Term__c = '${soql(id)}' ORDER BY Id LIMIT 4800`, { clean: true, limit: 4800 });
-    if (linked.totalSize > linked.records.length) throw specialTermsError('This term has too many linked rules for one atomic deletion.', 409);
+    const live = await previewTermDeletion(client, profile, id, options);
+    requireEligibleDeletion(live);
+    assertCurrent({ LastModifiedDate: live.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+    if (text(body.confirmationName, 80) !== live.name) throw specialTermsError(`Type ${live.name} to confirm deletion.`);
+    const revisionChunks = live.removableRevisionIds.length ? [live.removableRevisionIds] : [];
     const ruleChunks = [];
-    for (let index = 0; index < linked.records.length; index += 200) ruleChunks.push(linked.records.slice(index, index + 200));
+    for (let index = 0; index < live.removableRuleIds.length; index += 200) ruleChunks.push(live.removableRuleIds.slice(index, index + 200));
     const requests = [
-      ...ruleChunks.map((rules, index) => ({
-        method: 'DELETE',
-        url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${rules.map((rule) => rule.Id).join(',')}&allOrNone=true`,
-        referenceId: `ruleBatch${index}`,
-      })),
+      ...revisionChunks.map((ids, index) => ({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${ids.join(',')}&allOrNone=true`, referenceId: `revisionBatch${index}` })),
+      ...ruleChunks.map((ids, index) => ({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${ids.join(',')}&allOrNone=true`, referenceId: `ruleBatch${index}` })),
       { method: 'DELETE', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.term}/${id}`, referenceId: 'term' },
     ];
     const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
     const failure = (result.compositeResponse || []).find((response) => response.httpStatusCode < 200 || response.httpStatusCode >= 300);
     if (failure) throw specialTermsError(failure.body?.[0]?.message || 'Salesforce rejected Special Term deletion.', failure.httpStatusCode || 502);
-    return finishOperation(client, reservation.operation, { success: true, id, deletedRuleCount: linked.records.length });
+    return finishOperation(client, reservation.operation, { success: true, id, deletedRuleCount: live.removableRuleIds.length, deletedRevisionCount: live.removableRevisionIds.length });
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
@@ -694,19 +846,29 @@ export async function saveSpecialTermRule(client, profile, body = {}) {
   }
 }
 
-export async function deleteSpecialTermRule(client, profile, body = {}) {
+export async function deleteSpecialTermRule(client, profile, body = {}, options = {}) {
   await resolveSpecialTermsSchema({ force: true, write: true });
   const id = salesforceId(body.id, 'Special Term Rule');
-  if (text(body.auditReason, 500).length < 3) throw specialTermsError('A deletion reason is required.');
-  const reservation = await reserveOperation(client, profile, body, 'rule_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt });
+  const reason = text(body.auditReason, 500);
+  if (reason.length < 3) throw specialTermsError('A deletion reason is required.');
+  const initial = await previewRuleDeletion(client, profile, id, options);
+  requireEligibleDeletion(initial);
+  assertCurrent({ LastModifiedDate: initial.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+  if (text(body.confirmationName, 80) !== initial.name) throw specialTermsError(`Type ${initial.name} to confirm deletion.`);
+  const reservation = await reserveOperation(client, profile, body, 'rule_delete', { id, expectedLastModifiedAt: body.expectedLastModifiedAt, deletionReasonHash: clauseHash(reason) });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
   try {
-    const currentRule = await currentRecord(OBJECTS.rule, id, ['Id', 'Special_Term__r.Approval_Status__c', 'LastModifiedDate']);
-    assertCurrent(currentRule, body.expectedLastModifiedAt);
-    if (currentRule.Special_Term__r?.Approval_Status__c === 'Approved') throw specialTermsError('Rules for an approved Special Term must be changed through a whole-term revision.', 409, 'SPECIAL_TERMS_REVISION_REQUIRED');
-    await sfRequest(`/sobjects/${OBJECTS.rule}/${id}`, { method: 'DELETE' });
+    const live = await previewRuleDeletion(client, profile, id, options);
+    requireEligibleDeletion(live);
+    assertCurrent({ LastModifiedDate: live.expectedLastModifiedAt }, body.expectedLastModifiedAt);
+    if (text(body.confirmationName, 80) !== live.name) throw specialTermsError(`Type ${live.name} to confirm deletion.`);
+    const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: [{ method: 'DELETE', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.rule}/${id}`, referenceId: 'rule' }] } });
+    const failure = (result.compositeResponse || []).find((response) => response.httpStatusCode < 200 || response.httpStatusCode >= 300);
+    if (failure) throw specialTermsError(failure.body?.[0]?.message || 'Salesforce rejected Special Term Rule deletion.', failure.httpStatusCode || 502);
     return finishOperation(client, reservation.operation, { success: true, id });
   } catch (error) {
     return failOperation(client, reservation.operation, error);
   }
 }
+
+export const specialTermDeletionInternals = Object.freeze({ PROTECTED_TERM_REVISION_STATUSES, deletionAuthorization, normalizedEmail });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertCurrent, reserveOperation } from '../api/_specialTerms.js';
+import { assertCurrent, reserveOperation, specialTermDeletionInternals } from '../api/_specialTerms.js';
 import { specialTermClauseServiceInternals } from '../api/_specialTermClauses.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +44,18 @@ test('stale Salesforce timestamps fail closed', () => {
   assert.doesNotThrow(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:00.000Z' }, '2026-08-10T00:00:00.000Z'));
   assert.throws(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:01.000Z' }, '2026-08-10T00:00:00.000Z'), /changed after it was opened/i);
   assert.throws(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:00.000Z' }, null), /Refresh before saving/i);
+});
+
+test('safe deletion authorization normalizes creator email and preserves protected history', () => {
+  assert.equal(specialTermDeletionInternals.normalizedEmail('  Creator@Example.COM '), 'creator@example.com');
+  assert.equal(specialTermDeletionInternals.deletionAuthorization({ isCreator: true }), true);
+  assert.equal(specialTermDeletionInternals.deletionAuthorization({ isApprover: true }), true);
+  assert.equal(specialTermDeletionInternals.deletionAuthorization({}), false);
+  for (const status of ['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back']) {
+    assert.equal(specialTermDeletionInternals.PROTECTED_TERM_REVISION_STATUSES.has(status), true);
+  }
+  assert.equal(specialTermDeletionInternals.PROTECTED_TERM_REVISION_STATUSES.has('Draft'), false);
+  assert.equal(specialTermDeletionInternals.PROTECTED_TERM_REVISION_STATUSES.has('In Review'), false);
 });
 
 test('operation reservations replay only an identical successful request', async () => {
@@ -109,6 +121,50 @@ test('operations use service-only atomic RPCs and do not retain reviewer prose',
   assert.match(migration, /revoke all on table public\.special_terms_notification_states from anon, authenticated/);
   assert.match(migration, /revoke all on function public\.reserve_special_terms_operation/);
   assert.match(migration, /special_terms_notification_states/);
+});
+
+test('safe deletion is creator-or-approver only, dependency checked, and service-ledger redacted', () => {
+  const termService = read('api/_specialTerms.js');
+  const clauseService = read('api/_specialTermClauses.js');
+  const handlers = read('api/functions/[name].js');
+  const migration = read('supabase/migrations/20260814082441_special_term_safe_deletion.sql');
+  assert.match(termService, /previewSpecialTermDeletion/);
+  assert.match(termService, /PROTECTED_TERM_REVISION_STATUSES/);
+  assert.match(termService, /Special_Term_Revision_Rule__c/);
+  assert.match(termService, /deletionReasonHash: clauseHash\(reason\)/);
+  assert.match(termService, /allOrNone: true/);
+  assert.match(clauseService, /previewSpecialTermClauseDeletion/);
+  assert.match(clauseService, /deleteSpecialTermClause/);
+  assert.match(clauseService, /discardSpecialTermClauseDraft/);
+  assert.match(clauseService, /Clause assignment lineage must be retained/);
+  assert.match(clauseService, /Clause consolidation lineage must be retained/);
+  assert.match(handlers, /specialTermDeletePreview/);
+  assert.match(handlers, /isSpecialTermClauseApprover/);
+  assert.match(migration, /clause_draft_delete/);
+  assert.match(migration, /clause_version_discard/);
+  assert.match(migration, /reserve_special_terms_operation_v2/);
+  assert.match(migration, /special_terms_record_creator/);
+  assert.match(migration, /special_terms_records_created_by/);
+  assert.match(migration, /security invoker/);
+  assert.match(migration, /revoke all on table public\.special_terms_operations from anon, authenticated/);
+  assert.match(migration, /audit_reason_hash = p_audit_reason_hash/);
+  assert.doesNotMatch(migration, /Clause_Text__c|Terms_Text__c/);
+});
+
+test('Salesforce blocks deletion of governed Special Term lineage', () => {
+  const termTrigger = read('force-app/main/default/triggers/SpecialTermTrigger.trigger');
+  const termHandler = read('force-app/main/default/classes/SpecialTermTriggerHandler.cls');
+  const revisionHandler = read('force-app/main/default/classes/SpecialTermRevisionHandler.cls');
+  const ruleHandler = read('force-app/main/default/classes/SpecialTermRuleRevisionHandler.cls');
+  const clauseHandler = read('force-app/main/default/classes/SpecialTermClauseHandler.cls');
+  const versionHandler = read('force-app/main/default/classes/SpecialTermVersionHandler.cls');
+  assert.match(termTrigger, /before delete/);
+  assert.match(termHandler, /validateDelete/);
+  assert.match(termHandler, /Status__c NOT IN \('Draft', 'In Review'\)/);
+  assert.match(revisionHandler, /Only transient Draft or In Review revisions may be deleted/);
+  assert.match(ruleHandler, /Special Term rule revision lineage must be retained/);
+  assert.match(clauseHandler, /Referenced clause identities/);
+  assert.match(versionHandler, /Referenced clause versions/);
 });
 
 test('clause consolidation relinks every projection without changing order', () => {

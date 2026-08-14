@@ -35,7 +35,9 @@ trigger StemLineItemTrigger on STEM_Line_Item__c (before insert, before update, 
             StemLineItemTriggerHandler.updateUninvoicedPayments(Trigger.new, Trigger.oldMap, Trigger.operationType);
             StemLineItemTriggerHandler.createReconfirmTasks(Trigger.new, Trigger.oldMap, Trigger.operationType);
             StemLineItemTriggerHandler.createCashflows(Trigger.newMap, Trigger.oldMap);
-            StemLineItemTriggerHandler.applyEnquirySpecialTerms(Trigger.new);
+            if (StemLineItemTriggerHandler.shouldApplyEnquirySpecialTerms(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null)) {
+                StemLineItemTriggerHandler.applyEnquirySpecialTerms(Trigger.new);
+            }
             StemLineItemTriggerHandler.createDepositPayment(Trigger.new, Trigger.oldMap, Trigger.operationType);
         }
 

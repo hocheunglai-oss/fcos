@@ -100,6 +100,7 @@ export default function SpecialTerms() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deletePending, setDeletePending] = useState(() => new Set());
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [responseMeta, setResponseMeta] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -108,6 +109,7 @@ export default function SpecialTerms() {
   const [failedTermIds, setFailedTermIds] = useState([]);
   const [copiedRemarks, setCopiedRemarks] = useState({});
   const copyTimers = useRef(new Map());
+  const deleteButtons = useRef(new Map());
   const appliedRoute = useRef('');
 
   const load = useCallback(async (force = false) => {
@@ -359,21 +361,69 @@ export default function SpecialTerms() {
     setBusy(false);
   };
 
-  const remove = async () => {
-    if (!deleteTarget) return;
-    setBusy(true);
+  const openDeletion = async (type, row) => {
+    const key = `${type}:${row.id}`;
+    if (deletePending.has(key)) return;
     setError('');
-    const functionName = deleteTarget.type === 'term' ? 'specialTermsDelete' : 'specialTermRuleDelete';
-    const response = await appClient.functions.invoke(functionName, { id: deleteTarget.row.id, expectedLastModifiedAt: deleteTarget.row.lastModifiedAt, auditReason: deleteReason, confirmationName: deleteConfirmation, operationId: operationId() }, { cache: false });
-    if (response.data?.error) setError(response.data.error);
-    else {
-      setDeleteTarget(null);
+    setDeletePending((current) => new Set(current).add(key));
+    try {
+      const response = await appClient.functions.invoke('specialTermDeletePreview', { entityType: type, id: row.id }, { cache: false });
+      if (response.data?.error) {
+        setError(response.data.error);
+        return;
+      }
+      if (!response.data?.eligible) {
+        setError((response.data?.blockers || ['This record cannot be deleted.']).join(' '));
+        return;
+      }
+      setDeleteTarget({ type, row, preview: response.data });
       setDeleteReason('');
       setDeleteConfirmation('');
-      setMessage(deleteTarget.type === 'term' ? 'Special Term and its linked rules removed from Salesforce.' : 'Special Term rule removed from Salesforce.');
-      await load(true);
+    } catch (requestError) {
+      setError(requestError?.message || 'The deletion check could not be completed.');
+    } finally {
+      setDeletePending((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
     }
-    setBusy(false);
+  };
+
+  const remove = async () => {
+    if (!deleteTarget) return;
+    const submitted = deleteTarget;
+    const key = `${submitted.type}:${submitted.row.id}`;
+    const viewport = { top: window.scrollY, left: window.scrollX };
+    setDeleteTarget(null);
+    setDeleteReason('');
+    setDeleteConfirmation('');
+    setDeletePending((current) => new Set(current).add(key));
+    setError('');
+    const functionName = submitted.type === 'term' ? 'specialTermsDelete' : 'specialTermRuleDelete';
+    try {
+      const response = await appClient.functions.invoke(functionName, { id: submitted.row.id, expectedLastModifiedAt: submitted.preview.expectedLastModifiedAt, auditReason: deleteReason, confirmationName: submitted.preview.confirmationLabel, operationId: operationId() }, { cache: false });
+      if (response.data?.error) setError(response.data.error);
+      else {
+        setWorkspace((current) => !current ? current : submitted.type === 'term'
+          ? { ...current, terms: (current.terms || []).filter((term) => term.id !== submitted.row.id), rules: (current.rules || []).filter((rule) => rule.specialTermId !== submitted.row.id) }
+          : { ...current, rules: (current.rules || []).filter((rule) => rule.id !== submitted.row.id) });
+        setMessage(submitted.type === 'term' ? 'Draft or Legacy Special Term and its eligible linked records deleted from Salesforce.' : 'Unapproved Special Term rule deleted from Salesforce.');
+      }
+    } catch (requestError) {
+      setError(requestError?.message || 'The deletion could not be completed.');
+    } finally {
+      setDeletePending((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ ...viewport, behavior: 'auto' });
+        const next = [...deleteButtons.current.values()].find((button) => button && !button.disabled);
+        next?.focus({ preventScroll: true });
+      });
+    }
   };
 
   return (
@@ -518,7 +568,7 @@ export default function SpecialTerms() {
                       <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadTerms([term], 'pdf')} disabled={exporting} title="Download live Special Term PDF" aria-label={`Download ${term.name} PDF`}>PDF</Button>
                       <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadTerms([term], 'docx')} disabled={exporting} title="Download editable live Special Term Word document" aria-label={`Download ${term.name} Word document`}>Word</Button>
                       {(workspace.canDraft ?? workspace.canManage) ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit Special Term"><Pencil className="h-4 w-4" /></Button> : null}
-                      {(workspace.canDraft ?? workspace.canManage) && !['Approved', 'Retired'].includes(term.revisionStatus) ? <Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'term', row: term, ruleCount: termRules.length }); setDeleteReason(''); setDeleteConfirmation(''); }} title="Remove Special Term"><Trash2 className="h-4 w-4" /></Button> : null}
+                      {(workspace.canDraft ?? workspace.canManage) && !['Approved', 'Retired'].includes(term.revisionStatus) ? <Button ref={(node) => { const key = `term:${term.id}`; if (node) deleteButtons.current.set(key, node); else deleteButtons.current.delete(key); }} variant="ghost" size="icon" className="text-destructive" disabled={deletePending.has(`term:${term.id}`)} onClick={() => openDeletion('term', term)} title="Delete unapproved Special Term" aria-label={`Delete ${term.name}`}>{deletePending.has(`term:${term.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}</Button> : null}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -533,7 +583,7 @@ export default function SpecialTerms() {
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[1050px]">
             <TableHeader><TableRow><TableHead>Rule</TableHead><TableHead>Special Term</TableHead><TableHead>Audience</TableHead><TableHead>Conditions</TableHead><TableHead>Priority</TableHead><TableHead>Last Modified</TableHead><TableHead className="w-24" /></TableRow></TableHeader>
-            <TableBody>{filteredRules.map((rule) => { const term = (workspace.terms || []).find((row) => row.id === rule.specialTermId); const governed = term?.revisionStatus === 'Approved'; return <TableRow key={rule.id}><TableCell><a href={salesforceUrl(workspace.instanceUrl, rule.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{rule.name}<ExternalLink className="h-3 w-3" /></a></TableCell><TableCell>{rule.specialTermName}</TableCell><TableCell><Badge variant="outline">{rule.audience || 'Not set'}</Badge></TableCell><TableCell><div className="flex max-w-xl flex-wrap gap-1.5">{conditionSummary(rule).map((condition) => <Badge key={condition} variant="secondary">{condition}</Badge>)}</div></TableCell><TableCell>{rule.priority ?? 'Pending Salesforce'}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDateTime(rule.lastModifiedAt)}</TableCell><TableCell>{(workspace.canDraft ?? workspace.canManage) ? <div className="flex justify-end gap-1">{governed ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit in whole-term revision"><ShieldCheck className="h-4 w-4" /></Button> : <><Button variant="ghost" size="icon" onClick={() => openRule(rule)} title="Edit Rule"><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" onClick={() => { setDeleteTarget({ type: 'rule', row: rule }); setDeleteReason(''); }} title="Remove Rule"><Trash2 className="h-4 w-4" /></Button></>}</div> : null}</TableCell></TableRow>; })}</TableBody>
+            <TableBody>{filteredRules.map((rule) => { const term = (workspace.terms || []).find((row) => row.id === rule.specialTermId); const governed = ['Approved', 'Retired'].includes(term?.revisionStatus); const deleteKey = `rule:${rule.id}`; return <TableRow key={rule.id}><TableCell><a href={salesforceUrl(workspace.instanceUrl, rule.id)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{rule.name}<ExternalLink className="h-3 w-3" /></a></TableCell><TableCell>{rule.specialTermName}</TableCell><TableCell><Badge variant="outline">{rule.audience || 'Not set'}</Badge></TableCell><TableCell><div className="flex max-w-xl flex-wrap gap-1.5">{conditionSummary(rule).map((condition) => <Badge key={condition} variant="secondary">{condition}</Badge>)}</div></TableCell><TableCell>{rule.priority ?? 'Pending Salesforce'}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDateTime(rule.lastModifiedAt)}</TableCell><TableCell>{(workspace.canDraft ?? workspace.canManage) ? <div className="flex justify-end gap-1">{governed ? <Button variant="ghost" size="icon" onClick={() => openTerm(term)} title="Edit in whole-term revision"><ShieldCheck className="h-4 w-4" /></Button> : <><Button variant="ghost" size="icon" onClick={() => openRule(rule)} title="Edit Rule"><Pencil className="h-4 w-4" /></Button><Button ref={(node) => { if (node) deleteButtons.current.set(deleteKey, node); else deleteButtons.current.delete(deleteKey); }} variant="ghost" size="icon" className="text-destructive" disabled={deletePending.has(deleteKey)} onClick={() => openDeletion('rule', rule)} title="Delete unapproved rule" aria-label={`Delete ${rule.name}`}>{deletePending.has(deleteKey) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}</Button></>}</div> : null}</TableCell></TableRow>; })}</TableBody>
           </Table>
           {!filteredRules.length && <div className="p-10 text-center text-sm text-muted-foreground">No matching Special Term rules.</div>}
         </div>
@@ -591,8 +641,18 @@ export default function SpecialTerms() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && !busy && setDeleteTarget(null)}>
-        <DialogContent className="max-w-lg"><DialogHeader><DialogTitle>{deleteTarget?.type === 'term' ? 'Remove Special Term?' : 'Remove Special Term Rule?'}</DialogTitle><DialogDescription>{deleteTarget?.type === 'term' ? `${deleteTarget?.row?.name || 'This term'} and ${deleteTarget?.ruleCount || 0} linked rule(s) will be removed from Salesforce atomically.` : `${deleteTarget?.row?.name || 'This rule'} will be removed from Salesforce.`}</DialogDescription></DialogHeader><div className="space-y-4">{deleteTarget?.type === 'term' && <div className="space-y-1.5"><Label>Type {deleteTarget.row.name} to confirm</Label><Input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" /></div>}<div className="space-y-1.5"><Label>Deletion reason</Label><Textarea value={deleteReason} maxLength={500} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Required for the audit trail" /></div></div><DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={busy}>Cancel</Button><Button variant="destructive" onClick={remove} disabled={busy || deleteReason.trim().length < 3 || (deleteTarget?.type === 'term' && deleteConfirmation !== deleteTarget.row.name)}><Trash2 className="mr-2 h-4 w-4" />{busy ? 'Removing...' : 'Remove from Salesforce'}</Button></DialogFooter></DialogContent>
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{deleteTarget?.type === 'term' ? 'Delete unapproved Special Term?' : 'Delete unapproved Special Term Rule?'}</DialogTitle>
+            <DialogDescription>{deleteTarget?.type === 'term' ? `${deleteTarget?.row?.name || 'This term'}, ${deleteTarget?.preview?.counts?.ruleCount || 0} eligible rule(s), and ${deleteTarget?.preview?.counts?.revisionCount || 0} transient revision(s) will be deleted atomically. Approved and historical records are never eligible.` : `${deleteTarget?.row?.name || 'This rule'} will be permanently deleted. Revision-referenced rules are never eligible.`}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5"><Label>Type {deleteTarget?.preview?.confirmationLabel} to confirm</Label><Input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" autoFocus /></div>
+            <div className="space-y-1.5"><Label>Deletion reason</Label><Textarea value={deleteReason} maxLength={500} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Required; only a redacted hash is retained outside Salesforce" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={remove} disabled={deleteReason.trim().length < 3 || deleteConfirmation !== deleteTarget?.preview?.confirmationLabel}><Trash2 className="mr-2 h-4 w-4" />Delete from Salesforce</Button></DialogFooter>
+        </DialogContent>
       </Dialog>
     </div>
   );

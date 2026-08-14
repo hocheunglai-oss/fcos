@@ -266,4 +266,45 @@ private class SpecialTermClauseCompilerTest {
             System.assert(error.getMessage().contains('must be retained'));
         }
     }
+
+    @isTest static void deletesOnlyUnreferencedDraftClauseRecords() {
+        Special_Term_Clause__c disposable = clause('Disposable Draft Clause', 'abababababababababababababababababababababababababababababababab');
+        Special_Term_Clause_Version__c disposableVersion = new Special_Term_Clause_Version__c(
+            Clause__c = disposable.Id, Revision_Number__c = 1, Clause_Text__c = 'Disposable draft wording.',
+            Status__c = 'Draft', Revision_Reason__c = 'Delete test', Proposed_By_Email__c = 'creator@example.com'
+        );
+        insert disposableVersion;
+        delete disposable;
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term_Clause__c WHERE Id = :disposable.Id]);
+
+        Special_Term_Clause__c retained = clause('Referenced Draft Clause', 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd');
+        Special_Term_Clause_Version__c retainedVersion = new Special_Term_Clause_Version__c(
+            Clause__c = retained.Id, Revision_Number__c = 1, Clause_Text__c = 'Referenced draft wording.',
+            Status__c = 'Draft', Revision_Reason__c = 'Reference test', Proposed_By_Email__c = 'creator@example.com'
+        );
+        insert retainedVersion;
+        Special_Term__c term = new Special_Term__c(Name = 'Draft version reference term', Approval_Status__c = 'Legacy', Clause_Structure_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Reference draft version');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = retained.Id, Clause_Version__c = retainedVersion.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        try { delete retainedVersion; System.assert(false, 'Revision-referenced Draft versions must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Referenced clause versions')); }
+        try { delete retained; System.assert(false, 'Revision-referenced Draft clause identities must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Referenced clause identities')); }
+
+        Special_Term_Clause__c protectedIdentity = clause('Protected Version Draft Identity', 'efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef');
+        Special_Term_Clause_Version__c approvedVersion = new Special_Term_Clause_Version__c(
+            Clause__c = protectedIdentity.Id, Revision_Number__c = 1, Clause_Text__c = 'Approved wording must be retained.',
+            Status__c = 'Draft', Revision_Reason__c = 'Approval history test', Proposed_By_Email__c = 'creator@example.com'
+        );
+        insert approvedVersion;
+        approvedVersion.Status__c = 'Approved';
+        approvedVersion.Approved_By_Email__c = 'gm@example.com';
+        approvedVersion.Approved_At__c = System.now();
+        approvedVersion.Approval_Reason__c = 'Approved for retention test.';
+        Database.update(approvedVersion, AccessLevel.SYSTEM_MODE);
+        try { delete protectedIdentity; System.assert(false, 'A Draft identity cannot cascade-delete approved version history.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('approved or superseded version history')); }
+    }
 }

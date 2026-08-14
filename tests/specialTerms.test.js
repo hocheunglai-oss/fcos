@@ -19,7 +19,7 @@ test('Special Terms is a default-visible Trading page with controlled management
   assert.match(functions, /specialTermsSave:[\s\S]*\['special_terms'\]/);
   assert.match(functions, /specialTermsPdfExport: \['special_terms'\]/);
   assert.match(functions, /requireCapability\(context\.client, context\.profile, 'special_terms_manage'/);
-  assert.match(functions, /activeGeneralManager\?\.id !== context\.profile\.id/);
+  assert.match(functions, /activeGeneralManager\?\.id === context\.profile\.id/);
 });
 
 test('Special Terms validates the authoritative Salesforce schema and rule lookups', () => {
@@ -64,7 +64,8 @@ test('Salesforce owns priority while FCOS protects mutations and deletion', () =
   assert.match(service, /referenceId: 'newRule'/);
   assert.match(service, /composite\/sobjects\?ids=/);
   assert.match(service, /confirmationName/);
-  assert.match(service, /SPECIAL_TERMS_RETIRE_REQUIRED/);
+  assert.match(service, /previewSpecialTermDeletion/);
+  assert.match(service, /Approved, rejected, superseded, or rolled-back revision history must be retained/);
   assert.doesNotMatch(service, /sanitizeRichText/);
   assert.match(service, /special_terms_operations/);
   assert.match(service, /operation_status === 'succeeded'/);
@@ -161,7 +162,15 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(clauseService, /hasMaterialDifference/);
   assert.doesNotMatch(clauseMigration, /Clause_Text__c|Terms_Text__c/);
   assert.doesNotMatch(page, /view: activeTab,[\s\S]*search: search\.trim\(\)/);
-  assert.match(page, /Type \{deleteTarget\.row\.name\} to confirm/);
+  assert.match(page, /Type \{deleteTarget\?\.preview\?\.confirmationLabel\} to confirm/);
+  assert.match(page, /specialTermDeletePreview/);
+  assert.match(page, /setWorkspace\(\(current\).*terms:.*filter/s);
+  assert.doesNotMatch(page.match(/const remove = async[\s\S]*?\n  };/)?.[0] || '', /load\(true\)/);
+  assert.match(clauseBank, /specialTermClauseDelete/);
+  assert.match(clauseBank, /specialTermClauseDraftDiscard/);
+  assert.match(clauseBank, /Delete Legacy Draft/);
+  assert.match(clauseBank, /Discard Draft/);
+  assert.doesNotMatch(clauseBank.match(/const submitDeletion = async[\s\S]*?\n  };/)?.[0] || '', /load\(true\)|onChanged/);
   assert.doesNotMatch(page, /termForm\?\.termsText\.trim\(\)\.length < 3/);
 });
 

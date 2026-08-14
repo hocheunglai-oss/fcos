@@ -152,7 +152,7 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTerms, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTerms, previewSpecialTermDeletion, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   activateSpecialTermMigration,
   approveSpecialTermClause,
@@ -176,6 +176,9 @@ import {
   relinkSpecialTermClauseConsolidation,
   cancelSpecialTermClauseConsolidation,
   completeSpecialTermClauseConsolidation,
+  deleteSpecialTermClause,
+  discardSpecialTermClauseDraft,
+  previewSpecialTermClauseDeletion,
 } from '../_specialTermClauses.js';
 import {
   emailRouterActionHandler as nativeEmailRouterAction,
@@ -1352,10 +1355,13 @@ const HANDLER_MODULE_ACCESS = {
   specialTermsOptions: ['special_terms'],
   specialTermDetail: ['special_terms'],
   specialTermClauseBank: ['special_terms'],
+  specialTermDeletePreview: ['special_terms'],
   specialTermMigrationInventory: ['special_terms'],
   specialTermClauseDraftSave: ['special_terms'],
   specialTermClauseApprove: ['special_terms'],
   specialTermClauseRetire: ['special_terms'],
+  specialTermClauseDelete: ['special_terms'],
+  specialTermClauseDraftDiscard: ['special_terms'],
   specialTermClauseConsolidationList: ['special_terms'],
   specialTermClauseConsolidationStart: ['special_terms'],
   specialTermClauseConsolidationRelink: ['special_terms'],
@@ -16904,13 +16910,18 @@ async function specialTermsOptions(body = {}, req = null, accessContext = null) 
   return { options: await specialTermOptions(body) };
 }
 
-async function requireSpecialTermClauseApprover(context) {
-  await requireCapability(context.client, context.profile, 'special_terms_clause_approve', 'Special Term clause approval permission is required.');
+async function isSpecialTermClauseApprover(context) {
+  const hasCapability = await userHasCapability(context.client, context.profile, 'special_terms_clause_approve');
+  if (!hasCapability) return false;
   const isAdministrator = context.profile.user_type === 'administrator';
   const activeGeneralManager = context.profile.user_type === 'general_manager'
     ? await loadActiveGeneralManager(context.client)
     : null;
-  if (!isAdministrator && activeGeneralManager?.id !== context.profile.id) throw appError('Only the active General Manager or an Administrator may approve clause wording and migrations.', 403, 'SPECIAL_TERMS_CLAUSE_APPROVER_REQUIRED');
+  return isAdministrator || activeGeneralManager?.id === context.profile.id;
+}
+
+async function requireSpecialTermClauseApprover(context) {
+  if (!(await isSpecialTermClauseApprover(context))) throw appError('Only the active General Manager or an Administrator may approve clause wording and migrations.', 403, 'SPECIAL_TERMS_CLAUSE_APPROVER_REQUIRED');
 }
 
 async function specialTermDetail(body = {}, req = null, accessContext = null) {
@@ -16921,6 +16932,13 @@ async function specialTermDetail(body = {}, req = null, accessContext = null) {
 async function specialTermClauseBank(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   return listSpecialTermClauseBank(body);
+}
+
+async function specialTermDeletePreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const options = { isApprover: await isSpecialTermClauseApprover(context) };
+  if (body.entityType === 'clause' || body.entityType === 'clauseVersion') return previewSpecialTermClauseDeletion(context.client, context.profile, body, options);
+  return previewSpecialTermDeletion(context.client, context.profile, body, options);
 }
 
 async function specialTermMigrationInventory(body = {}, req = null, accessContext = null) {
@@ -16944,6 +16962,16 @@ async function specialTermClauseRetire(body = {}, req = null, accessContext = nu
   const context = accessContext || (await requireActiveUser(req));
   await requireSpecialTermClauseApprover(context);
   return retireSpecialTermClause(context.client, context.profile, body);
+}
+
+async function specialTermClauseDelete(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return deleteSpecialTermClause(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
+}
+
+async function specialTermClauseDraftDiscard(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return discardSpecialTermClauseDraft(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
 }
 
 async function specialTermClauseConsolidationList(body = {}, req = null, accessContext = null) {
@@ -17040,7 +17068,7 @@ async function specialTermsSave(body = {}, req = null, accessContext = null) {
 async function specialTermsDelete(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
-  return deleteSpecialTerm(context.client, context.profile, body);
+  return deleteSpecialTerm(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
 }
 
 async function specialTermRuleSave(body = {}, req = null, accessContext = null) {
@@ -17052,7 +17080,7 @@ async function specialTermRuleSave(body = {}, req = null, accessContext = null) 
 async function specialTermRuleDelete(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
-  return deleteSpecialTermRule(context.client, context.profile, body);
+  return deleteSpecialTermRule(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
 }
 
 function nativeEmailRouterDependencies(accessContext) {
@@ -17265,10 +17293,13 @@ const handlers = {
   specialTermsOptions,
   specialTermDetail,
   specialTermClauseBank,
+  specialTermDeletePreview,
   specialTermMigrationInventory,
   specialTermClauseDraftSave,
   specialTermClauseApprove,
   specialTermClauseRetire,
+  specialTermClauseDelete,
+  specialTermClauseDraftDiscard,
   specialTermClauseConsolidationList,
   specialTermClauseConsolidationStart,
   specialTermClauseConsolidationRelink,

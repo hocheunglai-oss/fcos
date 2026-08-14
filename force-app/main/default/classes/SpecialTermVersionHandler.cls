@@ -75,8 +75,27 @@ public class SpecialTermVersionHandler {
     }
 
     public static void beforeDelete(List<Special_Term_Clause_Version__c> versions) {
+        Set<Id> versionIds = new Map<Id, Special_Term_Clause_Version__c>(versions).keySet();
+        Set<Id> referencedIds = new Set<Id>();
+        for (Special_Term_Clause_Assignment__c row : [
+            SELECT Clause_Version__c FROM Special_Term_Clause_Assignment__c WHERE Clause_Version__c IN :versionIds
+        ]) referencedIds.add(row.Clause_Version__c);
+        for (Special_Term_Revision_Clause__c row : [
+            SELECT Clause_Version__c FROM Special_Term_Revision_Clause__c WHERE Clause_Version__c IN :versionIds
+        ]) referencedIds.add(row.Clause_Version__c);
+        for (Special_Term_Clause_Consolidation__c row : [
+            SELECT Replacement_Version__c FROM Special_Term_Clause_Consolidation__c WHERE Replacement_Version__c IN :versionIds
+        ]) referencedIds.add(row.Replacement_Version__c);
+        for (Special_Term_Clause_Consolidation_Map__c row : [
+            SELECT Source_Version__c, Replacement_Version__c FROM Special_Term_Clause_Consolidation_Map__c
+            WHERE Source_Version__c IN :versionIds OR Replacement_Version__c IN :versionIds
+        ]) {
+            if (row.Source_Version__c != null) referencedIds.add(row.Source_Version__c);
+            if (row.Replacement_Version__c != null) referencedIds.add(row.Replacement_Version__c);
+        }
         for (Special_Term_Clause_Version__c version : versions) {
             if (version.Status__c != 'Draft') version.addError('Approved and superseded clause versions cannot be deleted.');
+            else if (referencedIds.contains(version.Id)) version.addError('Referenced clause versions and their assignment, revision, or consolidation lineage must be retained.');
         }
     }
 
