@@ -24,6 +24,20 @@ export function canonicalSalesforceAccountId(value) {
   return SALESFORCE_ID_PATTERN.test(accountId) ? accountId.slice(0, 15) : '';
 }
 
+export function buyerReminderCandidateByAccount(row = {}, anchor = {}) {
+  if (row.stemId && row.stemId === anchor.stemId) return true;
+  const anchorAccountId = canonicalSalesforceAccountId(anchor.buyerAccountId);
+  const rowAccountId = canonicalSalesforceAccountId(row.buyerAccountId);
+  if (anchorAccountId && rowAccountId === anchorAccountId) return true;
+  const anchorParentId = canonicalSalesforceAccountId(anchor.buyerParentAccountId);
+  const rowParentId = canonicalSalesforceAccountId(row.buyerParentAccountId);
+  return Boolean(
+    anchorParentId
+    && rowParentId === anchorParentId
+    && !/\bfratelli\s+cosulich\b/i.test(String(anchor.buyerGroupName || '')),
+  );
+}
+
 export function buyerReminderAccountType(account = {}) {
   if (account.Is_Broker__c === true || account.isBroker === true) return null;
   const recordTypeName = String(account.RecordType?.Name || account.recordTypeName || '').trim().toLowerCase();
@@ -204,6 +218,8 @@ export function applyBuyerReminderRules(rows = [], rules = [], rulesAvailable = 
       reminderRuleSourceAccountId: rule.sourceAccountId,
       reminderRuleSourceAccountName: rule.sourceAccountName,
       reminderRuleNote: rule.note,
+      reminderRuleRevision: rule.revision,
+      reminderRuleUpdatedAt: rule.updatedAt,
       paymentReminderEligible: eligibility.eligible,
       paymentReminderBlockingReason: eligibility.blockingReason,
       paymentReminderRuleApplied: eligibility.ruleApplied,

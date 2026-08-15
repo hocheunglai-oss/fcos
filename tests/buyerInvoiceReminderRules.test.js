@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyBuyerReminderRules,
   buyerReminderAccountType,
+  buyerReminderCandidateByAccount,
   canonicalSalesforceAccountId,
   evaluateBuyerReminderSelection,
   resolveBuyerReminderRule,
@@ -15,6 +16,18 @@ test('canonicalizes valid Salesforce IDs and rejects malformed values', () => {
   assert.equal(canonicalSalesforceAccountId(buyerId), '0012x00000BUYER');
   assert.equal(canonicalSalesforceAccountId('0012x00000BUYER'), '0012x00000BUYER');
   assert.equal(canonicalSalesforceAccountId('not-an-id'), '');
+});
+
+test('candidate scope uses exact Account identities and excludes the internal Fratelli group', () => {
+  const anchor = { stemId: 'anchor', buyerAccountId: buyerId, buyerParentAccountId: groupId, buyerGroupName: 'External Group' };
+  assert.equal(buyerReminderCandidateByAccount({ stemId: 'anchor' }, anchor), true);
+  assert.equal(buyerReminderCandidateByAccount({ buyerAccountId: buyerId }, anchor), true);
+  assert.equal(buyerReminderCandidateByAccount({ buyerAccountId: '0012x00000OTHERAAA', buyerParentAccountId: groupId }, anchor), true);
+  assert.equal(buyerReminderCandidateByAccount({ buyerAccountId: '0012x00000OTHERAAA', buyerParentAccountId: '0012x00000OTHERBBB' }, anchor), false);
+  assert.equal(buyerReminderCandidateByAccount(
+    { buyerAccountId: '0012x00000OTHERAAA', buyerParentAccountId: groupId },
+    { ...anchor, buyerGroupName: 'Fratelli Cosulich' },
+  ), false);
 });
 
 test('classifies GROUP, Buyer, and Buyer & Supplier accounts', () => {

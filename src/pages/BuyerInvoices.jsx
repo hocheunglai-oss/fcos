@@ -136,7 +136,6 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
     ],
   },
 ];
-const PAYMENT_REMINDER_STEPS = ['Select invoices', 'Review recipients', 'Email preview'];
 const REMINDER_RULES_PAGE_SIZE = 100;
 
 const COPY_ROW_FIELDS = [
@@ -327,6 +326,24 @@ function uniqueEmailList(...values) {
   };
   values.forEach(add);
   return emails;
+}
+
+function paymentReminderOperationId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `payment-reminder-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isLocalPaymentReminderCandidate(candidate, anchor) {
+  if (!candidate || !anchor) return false;
+  if (candidate.stemId === anchor.stemId) return true;
+  const accountId = String(anchor.buyerAccountId || '').slice(0, 15);
+  if (accountId && String(candidate.buyerAccountId || '').slice(0, 15) === accountId) return true;
+  const parentId = String(anchor.buyerParentAccountId || '').slice(0, 15);
+  return Boolean(
+    parentId
+    && !/\bfratelli\s+cosulich\b/i.test(String(anchor.buyerGroupName || ''))
+    && String(candidate.buyerParentAccountId || '').slice(0, 15) === parentId,
+  );
 }
 
 function richTemplateValue(value, fallback = DEFAULT_EMAIL_SETTINGS.paymentReminderBody) {
@@ -1573,7 +1590,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
   );
 }
 
-function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose, onSent }) {
+function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead, canManageSettings, onClose, onSent }) {
   const draftKey = row?.stemId ? `buyer-invoices:payment-reminder:${row.stemId}:${daysAhead}` : null;
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -1581,10 +1598,14 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   const [error, setError] = useState(null);
   const [templateMessage, setTemplateMessage] = useState('');
   const [templateEditing, setTemplateEditing] = useState(false);
+  const [recipientsEditing, setRecipientsEditing] = useState(false);
+  const [authoritativeReady, setAuthoritativeReady] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => paymentReminderOperationId());
+  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [data, setData] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
   const reminderBodyEditorRef = useRef(null);
+  const skipNextPrepareRef = useRef(false);
   const [form, setForm] = useState({
     recipientBatches: {},
     subject: '',
@@ -1594,17 +1615,36 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   const [restoredAt, setRestoredAt] = useState(null);
 
   useEffect(() => {
-    if (open) setCurrentStep(0);
-  }, [open, row?.stemId]);
-
-  useEffect(() => {
     if (!open || !row) return;
+    if (skipNextPrepareRef.current) {
+      skipNextPrepareRef.current = false;
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       setError(null);
       setTemplateMessage('');
       setTemplateEditing(false);
+      setRecipientsEditing(false);
+      setAuthoritativeReady(false);
+      setIdempotencyKey(paymentReminderOperationId());
+      setHasSubmitted(false);
+      const localCandidates = rows
+        .filter((candidate) => isLocalPaymentReminderCandidate(candidate, row))
+        .sort((left, right) => String(left.buyerInvoiceDueDate || '').localeCompare(String(right.buyerInvoiceDueDate || '')) || String(left.stemName || '').localeCompare(String(right.stemName || '')));
+      const localSelectedIds = localCandidates.filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+      const localForm = {
+        recipientBatches: {},
+        templateCc: initialSettings?.paymentReminderCc || '',
+        templateBcc: initialSettings?.paymentReminderBcc || '',
+        subject: initialSettings?.paymentReminderSubject || DEFAULT_EMAIL_SETTINGS.paymentReminderSubject,
+        body: richTemplateValue(initialSettings?.paymentReminderBody || DEFAULT_EMAIL_SETTINGS.paymentReminderBody),
+      };
+      setData({ selected: row, candidates: localCandidates, routingGroups: [], routingWarnings: [], settings: { emailDelivery: { hasServerProvider: true } }, previewToken: null, localSeed: true });
+      setSelectedIds(localSelectedIds);
+      setForm(localForm);
+      setBaseDraftValue({ form: localForm, selectedIds: localSelectedIds });
       const res = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
         stemId: row.stemId,
         daysAhead,
@@ -1612,7 +1652,6 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
       if (cancelled) return;
       if (res.data?.error) {
         setError(res.data.error);
-        setData(null);
       } else {
         const candidates = res.data.candidates || [];
         const baseRecipientBatches = Object.fromEntries((res.data.routingGroups || []).map((group) => [
@@ -1646,6 +1685,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
             }
           : baseForm;
         setData(res.data);
+        setAuthoritativeReady(Boolean(res.data.previewToken));
         setSelectedIds(draftSelectedIds.length ? draftSelectedIds : baseSelectedIds);
         setForm(nextForm);
         const nextBaseDraftValue = { form: baseForm, selectedIds: baseSelectedIds };
@@ -1659,7 +1699,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     return () => {
       cancelled = true;
     };
-  }, [daysAhead, draftKey, open, row]);
+  }, [daysAhead, draftKey, initialSettings, open, row, rows]);
 
   const candidates = data?.candidates || [];
   const eligibleCandidates = useMemo(
@@ -1760,8 +1800,17 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
 
   if (!open || !row) return null;
 
-  const updateForm = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const resetSubmittedOperation = () => {
+    if (!hasSubmitted) return;
+    setHasSubmitted(false);
+    setIdempotencyKey(paymentReminderOperationId());
+  };
+  const updateForm = (key, value) => {
+    resetSubmittedOperation();
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
   const updateBatchRecipient = (groupKey, field, value) => {
+    resetSubmittedOperation();
     setForm((prev) => ({
       ...prev,
       recipientBatches: {
@@ -1799,6 +1848,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   };
   const toggleInvoice = (stemId) => {
     if (!eligibleCandidates.some((candidate) => candidate.stemId === stemId)) return;
+    resetSubmittedOperation();
     setSelectedIds((prev) => (
       prev.includes(stemId)
         ? prev.filter((id) => id !== stemId)
@@ -1806,6 +1856,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     ));
   };
   const toggleAll = () => {
+    resetSubmittedOperation();
     setSelectedIds((prev) => (
       prev.length === eligibleCandidates.length ? [] : eligibleCandidates.map((candidate) => candidate.stemId)
     ));
@@ -1824,11 +1875,15 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     }));
     const missingRecipientBatch = reviewedRecipientBatches.find((batch) => !uniqueEmailList(batch.to).length);
     if (missingRecipientBatch) {
-      setCurrentStep(1);
       setError('Enter at least one To email before sending.');
       return;
     }
+    if (!authoritativeReady || !data?.previewToken) {
+      setError('Live Salesforce verification must finish before sending.');
+      return;
+    }
     setSending(true);
+    setHasSubmitted(true);
     setError(null);
     const hasServerEmailProvider = Boolean(data?.settings?.emailDelivery?.hasServerProvider);
     if (!hasServerEmailProvider) {
@@ -1843,14 +1898,62 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
       recipientBatches: reviewedRecipientBatches,
       subject: form.subject,
       body: form.body,
-    });
+      previewToken: data.previewToken,
+      idempotencyKey,
+    }, { invalidateCache: false });
     if (res.data?.error) {
       setError(res.data.error);
+      if (['PAYMENT_REMINDER_REVIEW_STALE', 'PAYMENT_REMINDER_SELECTION_STALE', 'PAYMENT_REMINDER_SELECTION_RESTRICTED'].includes(res.data.code)) {
+        setLoading(true);
+        setAuthoritativeReady(false);
+        const refreshed = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
+          stemId: row.stemId,
+          daysAhead,
+        }, { invalidateCache: false });
+        if (!refreshed.data?.error) {
+          const refreshedCandidates = refreshed.data.candidates || [];
+          const eligibleIds = refreshedCandidates.filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+          const eligibleSet = new Set(eligibleIds);
+          const preservedIds = selectedIds.filter((stemId) => eligibleSet.has(stemId));
+          const refreshedRecipientBatches = Object.fromEntries((refreshed.data.routingGroups || []).map((group) => [group.key, routingGroupRecipients(group)]));
+          const refreshedBaseForm = {
+            recipientBatches: refreshedRecipientBatches,
+            templateCc: refreshed.data.settings?.paymentReminderCc || '',
+            templateBcc: refreshed.data.settings?.paymentReminderBcc || '',
+            subject: refreshed.data.subject || '',
+            body: richTemplateValue(refreshed.data.body || ''),
+          };
+          const refreshedForm = {
+            ...refreshedBaseForm,
+            ...form,
+            recipientBatches: Object.fromEntries((refreshed.data.routingGroups || []).map((group) => [
+              group.key,
+              form.recipientBatches?.[group.key] || refreshedRecipientBatches[group.key],
+            ])),
+          };
+          const nextSelectedIds = preservedIds.length ? preservedIds : eligibleIds;
+          setData(refreshed.data);
+          setForm(refreshedForm);
+          setSelectedIds(nextSelectedIds);
+          setBaseDraftValue({ form: refreshedBaseForm, selectedIds: eligibleIds });
+          setAuthoritativeReady(Boolean(refreshed.data.previewToken));
+          setIdempotencyKey(paymentReminderOperationId());
+          setHasSubmitted(false);
+          setError(`${res.data.error} The live review has been refreshed.`);
+        }
+        setLoading(false);
+      }
     } else {
       clearDraft(draftKey);
-      appClient.functions.clearCache();
+      appClient.functions.invalidateCache({ names: ['salesforceBuyerInvoicesDue', 'buyerInvoiceCollectionList', 'paymentCollectionsReconcile'] });
+      skipNextPrepareRef.current = res.data.partial === true;
       onSent(res.data);
-      onClose();
+      if (res.data.partial) {
+        const failedCount = res.data.failedBatches?.length || 0;
+        setError(`${res.data.emails || 0} email batch${res.data.emails === 1 ? '' : 'es'} sent. ${failedCount} batch${failedCount === 1 ? '' : 'es'} require review before retrying.`);
+      } else {
+        onClose();
+      }
     }
     setSending(false);
   };
@@ -1866,15 +1969,38 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
         paymentReminderBody: form.body,
       },
       expectedRevision: data?.settingsRevision,
-    });
+    }, { invalidateCache: false });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
-      setData((prev) => prev ? { ...prev, settingsRevision: Number(res.data?.meta?.revision || prev.settingsRevision + 1) } : prev);
-      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
-      clearDraft(draftKey);
-      setTemplateMessage('Payment reminder template saved.');
-      setTemplateEditing(false);
+      setAuthoritativeReady(false);
+      const prepared = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
+        stemId: row.stemId,
+        daysAhead,
+      }, { invalidateCache: false });
+      if (prepared.data?.error) {
+        setError(`Template saved, but live reminder verification failed: ${prepared.data.error}`);
+      } else {
+        const refreshedRecipientBatches = Object.fromEntries((prepared.data.routingGroups || []).map((group) => [group.key, routingGroupRecipients(group)]));
+        const refreshedForm = {
+          recipientBatches: refreshedRecipientBatches,
+          templateCc: prepared.data.settings?.paymentReminderCc || '',
+          templateBcc: prepared.data.settings?.paymentReminderBcc || '',
+          subject: prepared.data.subject || '',
+          body: richTemplateValue(prepared.data.body || ''),
+        };
+        const refreshedSelectedIds = (prepared.data.candidates || []).filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+        setData(prepared.data);
+        setForm(refreshedForm);
+        setSelectedIds(refreshedSelectedIds);
+        setBaseDraftValue({ form: refreshedForm, selectedIds: refreshedSelectedIds });
+        setAuthoritativeReady(Boolean(prepared.data.previewToken));
+        setIdempotencyKey(paymentReminderOperationId());
+        setHasSubmitted(false);
+        clearDraft(draftKey);
+        setTemplateMessage('Payment reminder template saved and live review refreshed.');
+        setTemplateEditing(false);
+      }
     }
     setTemplateSaving(false);
   };
@@ -1890,23 +2016,6 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     setTemplateMessage('');
     setTemplateEditing(false);
   };
-
-  const goToStep = (step) => {
-    if (step > 0 && !selectedRows.length) {
-      setError('Select at least one invoice before continuing.');
-      return;
-    }
-    if (step > 1 && hasMissingRecipient) {
-      setError('Enter at least one To email before sending.');
-      setCurrentStep(1);
-      return;
-    }
-    setError(null);
-    setCurrentStep(Math.max(0, Math.min(step, PAYMENT_REMINDER_STEPS.length - 1)));
-  };
-
-  const goNext = () => goToStep(currentStep + 1);
-  const goBack = () => goToStep(currentStep - 1);
 
   return (
     <Dialog open={open && Boolean(row)} onOpenChange={(nextOpen) => {
@@ -1938,19 +2047,31 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
         </DialogHeader>
 
         <div className="max-h-[calc(94vh-152px)] overflow-auto px-5 py-4">
-          {loading && (
+          {loading && !data && (
             <StateBlock icon={Loader2} title="Preparing reminder..." description="Finding related buyer and buyer group invoices in the current due window." />
           )}
 
-          {!loading && error && (
+          {error && !data && (
             <div className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
             </div>
           )}
 
-          {!loading && data && (
+          {data && (
             <div className="space-y-4">
               <DraftNotice restoredAt={restoredAt} label="Draft restored" onDiscard={discardDraft} />
+
+              {loading ? (
+                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800" role="status">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Verifying live Salesforce balances, eligibility, routing, and sender configuration…
+                </div>
+              ) : authoritativeReady ? (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800" role="status">
+                  <Check className="h-4 w-4" />
+                  Live review ready. FCOS will verify the selected invoices again immediately before delivery.
+                </div>
+              ) : null}
 
               <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -1976,39 +2097,6 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-                {PAYMENT_REMINDER_STEPS.map((step, index) => {
-                  const isActive = currentStep === index;
-                  const isComplete = index < currentStep;
-                  const disabled = loading || (index > 0 && !selectedRows.length) || (index > 1 && hasMissingRecipient);
-                  return (
-                    <button
-                      key={step}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => goToStep(index)}
-                      className={cn(
-                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors',
-                        isActive
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : isComplete
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-                        disabled && !isActive && 'cursor-not-allowed opacity-50 hover:bg-white',
-                      )}
-                    >
-                      <span className={cn(
-                        'flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
-                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600',
-                      )}>
-                        {isComplete ? <Check className="h-3 w-3" /> : index + 1}
-                      </span>
-                      {step}
-                    </button>
-                  );
-                })}
-              </div>
-
               {selectedRoutingWarnings.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                   <div className="font-semibold">Check broker routing</div>
@@ -2018,7 +2106,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 0 && (
+              {(
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -2029,7 +2117,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                       {selectedIds.length === eligibleCandidates.length ? 'Clear all' : 'Select eligible'}
                     </Button>
                   </div>
-                  <div className="max-h-[52vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+                  <div className="max-h-[32vh] overflow-auto rounded-lg border border-slate-200 bg-white">
                     <table className="w-full min-w-[1180px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-200 bg-slate-50">
@@ -2114,11 +2202,16 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 1 && (
+              {(
                 <div className="space-y-3">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-950">Review recipients</h3>
-                    <p className="text-xs text-slate-500">Only the addresses shown here will be used.</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-950">Recipients</h3>
+                      <p className="text-xs text-slate-500">Only the reviewed addresses below will be used.</p>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setRecipientsEditing((value) => !value)} disabled={loading || sending}>
+                      {recipientsEditing ? 'Finish editing recipients' : 'Edit recipients'}
+                    </Button>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {selectedRecipientBatches.map((group, index) => (
@@ -2141,17 +2234,18 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                             <Input
                               value={group.recipients.to}
                               onChange={(event) => updateBatchRecipient(group.key, 'to', event.target.value)}
+                              disabled={!recipientsEditing}
                               placeholder="Enter recipient email"
                               className={cn(!uniqueEmailList(group.recipients.to).length && 'border-red-300 focus-visible:ring-red-400')}
                             />
                           </div>
                           <div className="space-y-1.5">
                             <Label className="text-xs text-slate-500">CC</Label>
-                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} />
+                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} disabled={!recipientsEditing} />
                           </div>
                           <div className="space-y-1.5">
                             <Label className="text-xs text-slate-500">BCC</Label>
-                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} />
+                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} disabled={!recipientsEditing} />
                           </div>
                         </div>
                       </div>
@@ -2160,7 +2254,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 2 && (
+              {(
                 <div className="space-y-3">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Email preview</h3>
@@ -2270,19 +2364,19 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
               )}
             </div>
             <div className="flex flex-wrap justify-end gap-2">
-              {canManageSettings && data && currentStep === PAYMENT_REMINDER_STEPS.length - 1 && (
+              {canManageSettings && data && (
                 !templateEditing ? (
-                  <Button type="button" variant="outline" onClick={() => setTemplateEditing(true)} disabled={sending} className="gap-2">
+                  <Button type="button" variant="outline" onClick={() => setTemplateEditing(true)} disabled={loading || sending} className="gap-2">
                     <Mail className="h-4 w-4" />
-                    Edit Template
+                    Edit message
                   </Button>
                 ) : (
                   <>
-                    <Button type="button" variant="outline" onClick={cancelPaymentReminderTemplateChanges} disabled={sending || templateSaving} className="gap-2">
+                    <Button type="button" variant="outline" onClick={cancelPaymentReminderTemplateChanges} disabled={loading || sending || templateSaving} className="gap-2">
                       <X className="h-4 w-4" />
                       Cancel
                     </Button>
-                    <Button type="button" variant="outline" onClick={savePaymentReminderTemplateFromModal} disabled={sending || templateSaving} className="gap-2">
+                    <Button type="button" variant="outline" onClick={savePaymentReminderTemplateFromModal} disabled={loading || sending || templateSaving} className="gap-2">
                       {templateSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       Save Template
                     </Button>
@@ -2290,18 +2384,10 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 )
               )}
               <Button type="button" variant="outline" onClick={onClose} disabled={sending}>Close</Button>
-              {data && currentStep > 0 && (
-                <Button type="button" variant="outline" onClick={goBack} disabled={sending}>Back</Button>
-              )}
-              {data && currentStep < PAYMENT_REMINDER_STEPS.length - 1 && (
-                <Button type="button" onClick={goNext} disabled={sending || (currentStep === 0 && !selectedRows.length)}>
-                  Next
-                </Button>
-              )}
-              {data && currentStep === PAYMENT_REMINDER_STEPS.length - 1 && (
-                <Button type="button" onClick={sendReminder} disabled={sending || !selectedRows.length} className="gap-2">
+              {data && (
+                <Button type="button" onClick={sendReminder} disabled={sending || loading || !authoritativeReady || !selectedRows.length || hasMissingRecipient} className="gap-2">
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  Send Email
+                  {sending ? 'Sending…' : `Send ${selectedRows.length.toLocaleString()} invoice${selectedRows.length === 1 ? '' : 's'}`}
                 </Button>
               )}
             </div>
@@ -3457,6 +3543,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       />
       <PaymentReminderModal
         row={selectedReminderRow}
+        rows={collectionRows}
+        initialSettings={savedEmailSettings}
         open={!!selectedReminderRow}
         daysAhead={Math.max(0, Math.min(Number(daysAhead) || 0, 365))}
         canManageSettings={canManageEmailSettings}

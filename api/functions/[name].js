@@ -13,7 +13,22 @@ import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
-import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
+import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderCandidateByAccount, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
+import {
+  completePaymentReminderBatch,
+  completePaymentReminderOperation,
+  mapPaymentReminderBatches,
+  paymentReminderBatchHash,
+  paymentReminderDeliveryUncertain,
+  paymentReminderPreviewSecret,
+  paymentReminderRequestHash,
+  repairPaymentReminderTimelines,
+  reservePaymentReminderBatch,
+  reservePaymentReminderOperation,
+  savePaymentReminderTimeline,
+  signPaymentReminderPreview,
+  verifyPaymentReminderPreview,
+} from '../_paymentReminderOperations.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
@@ -4878,9 +4893,10 @@ async function paymentCollectionsReconcileCron(body, req) {
   requireCronAuthorization(req);
   const client = safeSupabaseAdminClient();
   if (!client) throw appError('Supabase service configuration is required for Payment Collections reconciliation.', 503);
+  const paymentReminderTimelines = await repairPaymentReminderTimelines(client, 50);
   const collections = await reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
   const shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
-  return { ...collections, shipAgentCharges };
+  return { ...collections, paymentReminderTimelines, shipAgentCharges };
 }
 
 function paymentAdviceExtension(fileName) {
@@ -8927,6 +8943,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   }
 
   const fields = ['Id', 'Name'];
+  if (fieldNames.includes('LastModifiedDate')) fields.push('LastModifiedDate');
   for (const field of dueFields) fields.push(field);
   if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
   if (fieldNames.includes('CurrencyIsoCode')) fields.push('CurrencyIsoCode');
@@ -8960,6 +8977,42 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
   const whereParts = [`(${dueCondition})`, ...outstandingConditions];
   if (interofficeCondition) whereParts.push(interofficeCondition);
+
+  const anchorStemId = isSalesforceId(String(body.anchorStemId || '').trim())
+    ? String(body.anchorStemId).trim()
+    : null;
+  const requestedStemIds = [...new Set((Array.isArray(body.requestedStemIds) ? body.requestedStemIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(isSalesforceId))].slice(0, 500);
+  let targetScope = null;
+  if (anchorStemId) {
+    if (!fieldNames.includes('Account__c')) {
+      throw appError('The Salesforce Buyer Account lookup is unavailable. External payment reminders are disabled.', 503);
+    }
+    const anchorRows = await queryRows(`
+      SELECT Id, Account__c, Account__r.Name, Account__r.ParentId, Account__r.Parent.Name${accountFieldNames.includes('Group_Name__c') ? ', Account__r.Group_Name__c' : ''}
+      FROM stem__c
+      WHERE Id = '${escapeSoql(anchorStemId)}'
+      LIMIT 1
+    `, { limit: 1, softFail: false });
+    const anchor = anchorRows[0];
+    if (!anchor?.Account__c) throw appError('The selected invoice no longer has a Buyer Account in Salesforce.', 409);
+    const anchorAccount = anchor.Account__r || {};
+    const groupName = anchorAccount.Group_Name__c || anchorAccount.Parent?.Name || '';
+    const parentAccountId = isFratelliCosulichBuyerGroup(groupName) ? null : anchorAccount.ParentId || null;
+    targetScope = {
+      anchorStemId,
+      buyerAccountId: anchor.Account__c,
+      parentAccountId,
+    };
+    const accountConditions = [`Account__c = '${escapeSoql(anchor.Account__c)}'`];
+    if (parentAccountId) accountConditions.push(`Account__r.ParentId = '${escapeSoql(parentAccountId)}'`);
+    whereParts.push(`(${accountConditions.join(' OR ')})`);
+    if (requestedStemIds.length) {
+      const inList = requestedStemIds.map((id) => `'${escapeSoql(id)}'`).join(',');
+      whereParts.push(`Id IN (${inList})`);
+    }
+  }
 
   const stems = await queryRows(
     `
@@ -9161,6 +9214,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
       return {
         id: stem.Id,
         stemId: stem.Id,
+        lastModifiedAt: stem.LastModifiedDate || null,
         stemName: formatStemName(stem),
         keyStem: stem.KeyStem__c || null,
         buyerAccountId: stem.Account__c || null,
@@ -9205,25 +9259,13 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
     traderEmailByName,
     hasBuyerTraderFilter,
     selectedBuyerTradersInput,
+    targetScope,
   };
 }
 
-async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
-  const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
-  const thresholdCacheKey = paymentCollectionThresholdCacheKey(thresholdState);
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-buyer-invoices',
-    ttlSeconds: 60,
-    payload: { daysAhead, thresholdCacheKey },
-    tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceBuyerInvoicesSnapshot({ daysAhead, _thresholdState: thresholdState }, req, accessContext),
-  });
+async function buyerInvoiceReportFromSnapshot(snapshot, body = {}) {
   const { allRows, today, dueThrough, traderEmailByName, hasBuyerTraderFilter, selectedBuyerTradersInput } = {
-    ...cached.value,
+    ...snapshot,
     hasBuyerTraderFilter: Object.prototype.hasOwnProperty.call(body, 'buyerTraders'),
     selectedBuyerTradersInput: Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders),
   };
@@ -9255,13 +9297,43 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
     rows,
     today,
     dueThrough,
-    daysAhead,
-    paymentThresholds: thresholdState,
+    daysAhead: snapshot.daysAhead,
+    paymentThresholds: snapshot.paymentThresholds,
     buyerTraderOptions,
     selectedBuyerTraders: activeBuyerTraders,
     hasBuyerTraderFilter,
     paymentReminderRulesAvailable: reminderRulesState.available,
+    targetScope: snapshot.targetScope || null,
   };
+}
+
+async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
+  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
+  const thresholdCacheKey = paymentCollectionThresholdCacheKey(thresholdState);
+  const cached = await cachedSalesforceValue({
+    namespace: 'salesforce-buyer-invoices',
+    ttlSeconds: 60,
+    payload: { daysAhead, thresholdCacheKey },
+    tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
+    body,
+    req,
+    accessContext,
+    loader: () => salesforceBuyerInvoicesSnapshot({ daysAhead, _thresholdState: thresholdState }, req, accessContext),
+  });
+  return buyerInvoiceReportFromSnapshot(cached.value, body);
+}
+
+async function salesforceBuyerInvoicesDueTargeted(body, req = null, accessContext = null) {
+  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
+  const snapshot = await salesforceBuyerInvoicesSnapshot({
+    daysAhead,
+    anchorStemId: body.anchorStemId || body.stemId,
+    requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
+    _thresholdState: thresholdState,
+  }, req, accessContext);
+  return buyerInvoiceReportFromSnapshot(snapshot, body);
 }
 
 async function loadIncomingPaymentSettings() {
@@ -12549,27 +12621,8 @@ function buildBuyerInvoiceReportEmail(report, settings) {
   return { subject, html, text: textLines.join('\n'), totals };
 }
 
-function reminderCandidateKey(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-}
-
 function isFratelliCosulichBuyerGroup(value) {
   return /\bfratelli\s+cosulich\b/i.test(String(value || ''));
-}
-
-function isPaymentReminderCandidate(row, selected) {
-  if (!row || !selected) return false;
-  if (row.stemId === selected.stemId) return true;
-  const selectedBuyer = reminderCandidateKey(selected.buyerName);
-  const rowBuyer = reminderCandidateKey(row.buyerName);
-  if (selectedBuyer && rowBuyer && selectedBuyer === rowBuyer) return true;
-  const selectedGroup = reminderCandidateKey(selected.buyerGroupName);
-  if (isFratelliCosulichBuyerGroup(selectedGroup)) return false;
-  const rowGroup = reminderCandidateKey(row.buyerGroupName);
-  return Boolean(selectedGroup && rowGroup && selectedGroup === rowGroup);
 }
 
 function rowBuyerReminderRecipients(row) {
@@ -12804,7 +12857,15 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
 }
 
 async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext = null) {
-  const stored = await loadStoredBuyerInvoiceEmailSettings();
+  const stemId = String(body.stemId || body.stem_id || '').trim();
+  if (!isSalesforceId(stemId)) throw appError('A valid Salesforce STEM is required for a payment reminder.', 400);
+  if (accessContext) await requireInterofficeStemAccess(stemId, accessContext);
+  const [stored, sender] = await Promise.all([
+    loadStoredBuyerInvoiceEmailSettings(),
+    accessContext?.client
+      ? resolveGraphEmailSender(accessContext.client, 'payment_reminders')
+      : Promise.resolve(null),
+  ]);
   if (stored.meta.storageAvailable !== true) {
     throw appError('Buyer Invoice email settings are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
   }
@@ -12812,10 +12873,11 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     ...buyerInvoiceEmailSettings(stored.settings),
     hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
   };
-  const report = await salesforceBuyerInvoicesDue(
+  const report = await salesforceBuyerInvoicesDueTargeted(
     {
       daysAhead: body.daysAhead ?? settings.daysAhead,
-      force: body.forceLive === true,
+      anchorStemId: stemId,
+      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
     },
     null,
     accessContext,
@@ -12823,39 +12885,27 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
   if (report.paymentReminderRulesAvailable !== true) {
     throw appError('Buyer Invoice reminder rules are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
   }
-  const stemId = String(body.stemId || body.stem_id || '').trim();
   const selected = report.rows.find((row) => row.stemId === stemId);
   if (!selected) throw appError('Selected invoice is no longer in the current outstanding invoice window.', 404);
   const candidates = report.rows
-    .filter((row) => isPaymentReminderCandidate(row, selected))
+    .filter((row) => buyerReminderCandidateByAccount(row, selected))
     .sort((a, b) => {
       if (a.buyerInvoiceDueDate !== b.buyerInvoiceDueDate) return a.buyerInvoiceDueDate.localeCompare(b.buyerInvoiceDueDate);
       return String(a.stemName || '').localeCompare(String(b.stemName || ''));
     });
-  return { settings, settingsRevision: Number(stored.meta.revision || 0), report, selected, candidates };
+  return { settings, settingsRevision: Number(stored.meta.revision || 0), report, selected, candidates, sender };
 }
 
-async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
-  if (!accessContext) await requireActiveUser(req);
-  const { settings, settingsRevision, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, accessContext);
-  if (selected.paymentReminderEligible !== true) {
-    throw appError(selected.paymentReminderBlockingReason || 'This invoice is not eligible for an external payment reminder.', 409);
-  }
+function preparePaymentReminderRouting(report, settings, selected, candidates) {
   const eligibleCandidates = candidates.filter((row) => row.paymentReminderEligible === true);
   const routing = paymentReminderRoutingForRows(eligibleCandidates);
-  const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId)) ||
-    routing.groups[0] || {
-      key: 'default',
-      rows: eligibleCandidates,
-      to: [],
-      cc: [],
-      bcc: [],
-      primaryRecipientName: selected.buyerName || 'Customer',
-      mode: 'buyer_only',
-      warnings: [],
+  const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
+    || routing.groups[0]
+    || {
+      key: 'default', rows: eligibleCandidates, to: [], cc: [], bcc: [],
+      primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [],
     };
   const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
-  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
   const preparedGroups = routing.groups.map((group) => {
     const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
     const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, group);
@@ -12870,12 +12920,65 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
       stemIds: group.rows.map((row) => row.stemId),
     };
   });
-  const firstPreparedGroup = preparedGroups.find((group) => group.key === firstGroup.key) ||
-    preparedGroups[0] || {
-      to: firstGroup.to,
-      cc: firstGroup.cc,
-      bcc: firstGroup.bcc,
-    };
+  const firstPreparedGroup = preparedGroups.find((group) => group.key === firstGroup.key)
+    || preparedGroups[0]
+    || { to: firstGroup.to, cc: firstGroup.cc, bcc: firstGroup.bcc };
+  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
+  return { eligibleCandidates, routing, firstGroup, firstPreparedGroup, preparedGroups, email };
+}
+
+function paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision }) {
+  return createHash('sha256').update(JSON.stringify({
+    candidates: candidates.map((row) => ({
+      stemId: row.stemId,
+      lastModifiedAt: row.lastModifiedAt || null,
+      eligible: row.paymentReminderEligible === true,
+      ruleRevision: Number(row.reminderRuleRevision || 0),
+      ruleUpdatedAt: row.reminderRuleUpdatedAt || null,
+    })).sort((left, right) => left.stemId.localeCompare(right.stemId)),
+    groups: preparedGroups.map((group) => ({
+      key: group.key,
+      stemIds: [...group.stemIds].sort(),
+      to: uniqueEmailList(group.to).map((email) => email.toLowerCase()).sort(),
+      cc: uniqueEmailList(group.cc).map((email) => email.toLowerCase()).sort(),
+      bcc: uniqueEmailList(group.bcc).map((email) => email.toLowerCase()).sort(),
+    })).sort((left, right) => left.key.localeCompare(right.key)),
+    settingsRevision,
+  })).digest('hex');
+}
+
+function paymentReminderConflictDetails(candidates = []) {
+  return {
+    candidates: candidates.map((row) => ({
+      stemId: row.stemId,
+      stemName: row.stemName,
+      buyerName: row.buyerName,
+      receivableBalance: row.receivableBalance,
+      buyerInvoiceDueDate: row.buyerInvoiceDueDate,
+      paymentReminderEligible: row.paymentReminderEligible === true,
+      paymentReminderBlockingReason: row.paymentReminderBlockingReason || null,
+      lastModifiedAt: row.lastModifiedAt || null,
+    })),
+  };
+}
+
+async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
+  const startedAt = Date.now();
+  const activeAccess = accessContext || (await requireActiveUser(req));
+  const { settings, settingsRevision, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, activeAccess);
+  if (selected.paymentReminderEligible !== true) {
+    throw appError(selected.paymentReminderBlockingReason || 'This invoice is not eligible for an external payment reminder.', 409);
+  }
+  const { routing, firstPreparedGroup, preparedGroups, email } = preparePaymentReminderRouting(report, settings, selected, candidates);
+  const prepareMs = Date.now() - startedAt;
+  const preparationHash = paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision });
+  const previewToken = signPaymentReminderPreview({
+    anchorStemId: selected.stemId,
+    candidateStemIds: candidates.map((row) => row.stemId).sort(),
+    preparationHash,
+    settingsRevision,
+    prepareMs,
+  }, paymentReminderPreviewSecret());
   return {
     selected,
     candidates,
@@ -12890,6 +12993,9 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
     routingGroups: preparedGroups,
     routingWarnings: routing.warnings,
     settingsRevision,
+    previewToken,
+    preparationHash,
+    timings: { prepareMs },
     settings: {
       paymentReminderToSource: 'Buyer account/trader/payment handler plus buyer broker Account.Email by Invoice Format',
       emailDelivery: serverEmailDeliveryStatus(),
@@ -12904,148 +13010,239 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
   const activeAccess = accessContext || (await requireActiveUser(req));
   const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : []).map((id) => String(id || '').trim()).filter(Boolean));
   if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
+  const idempotencyKey = String(body.idempotencyKey || '').trim();
+  if (idempotencyKey.length < 16 || idempotencyKey.length > 200) throw appError('A valid payment reminder operation ID is required.', 400);
+  const preview = verifyPaymentReminderPreview(body.previewToken, paymentReminderPreviewSecret());
+  const anchorStemId = String(body.stemId || '').trim();
+  if (preview.anchorStemId !== anchorStemId) throw appError('The payment reminder review belongs to another invoice. Reopen it before sending.', 409);
+  if ([...selectedStemIds].some((stemId) => !preview.candidateStemIds?.includes(stemId))) {
+    throw appError('The selected invoice list changed after review. Reopen the payment reminder before sending.', 409);
+  }
+  const validationStartedAt = Date.now();
   await reconcileBuyerInvoiceCollections({
     client: activeAccess.client,
     profile: activeAccess.profile,
     accessContext: activeAccess,
     stemIds: [...selectedStemIds],
   });
-  const { settings, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(
-    {
-      ...body,
-      forceLive: true,
-    },
+  const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
+    { ...body, requestedStemIds: null },
     activeAccess,
   );
+  const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
+  const livePreparationHash = paymentReminderPreparationFingerprint({
+    candidates,
+    preparedGroups: liveRouting.preparedGroups,
+    settingsRevision: liveSettingsRevision,
+  });
+  if (Number(preview.settingsRevision) !== Number(liveSettingsRevision) || preview.preparationHash !== livePreparationHash) {
+    throw appError('Salesforce, reminder rules, recipients, or email settings changed after review. Review the refreshed reminder before sending.', 409, 'PAYMENT_REMINDER_REVIEW_STALE', paymentReminderConflictDetails(candidates));
+  }
   const selection = evaluateBuyerReminderSelection(candidates, [...selectedStemIds]);
   if (selection.unknownStemIds.length) {
-    throw appError('The selected invoice list is stale or does not belong to this buyer reminder. Reopen the preview and review the current invoices.', 409);
+    throw appError('The selected invoice list changed after review. Review the refreshed reminder before sending.', 409, 'PAYMENT_REMINDER_SELECTION_STALE', paymentReminderConflictDetails(candidates));
   }
   if (selection.restrictedRows.length) {
-    throw appError(selection.restrictedRows[0].paymentReminderBlockingReason || 'One or more selected invoices are no longer eligible for an external payment reminder. Reopen the preview.', 409);
+    throw appError(selection.restrictedRows[0].paymentReminderBlockingReason || 'One or more selected invoices are no longer eligible for an external payment reminder.', 409, 'PAYMENT_REMINDER_SELECTION_RESTRICTED', paymentReminderConflictDetails(candidates));
   }
   const rows = selection.rows;
-
   const routing = paymentReminderRoutingForRows(rows);
   if (!routing.groups.length) throw appError('No payment reminder recipient group could be built.', 400);
   if (!Array.isArray(body.recipientBatches)) {
     throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
   }
   const reviewedRecipientBatches = new Map(body.recipientBatches.filter((batch) => batch?.key).map((batch) => [batch.key, batch]));
-  const sendResults = [];
-  const collectionResults = [];
-  const collectionWarnings = [];
-  for (const group of routing.groups) {
+  const outboundBatches = routing.groups.map((group) => {
     const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
     const reviewedBatch = reviewedRecipientBatches.get(group.key);
-    if (!reviewedBatch) {
-      throw appError(`Reviewed recipient fields are missing for ${group.primaryRecipientName || 'recipient group'}. Reopen the preview and confirm recipients before sending.`, 400);
-    }
+    if (!reviewedBatch) throw appError(`Reviewed recipient fields are missing for ${group.primaryRecipientName || 'recipient group'}. Reopen the preview before sending.`, 400);
     const to = uniqueEmailList(reviewedBatch.to || '');
-    const effectiveGroup = { ...group, to };
     const cc = uniqueEmailList(reviewedBatch.cc || '');
     const bcc = uniqueEmailList(reviewedBatch.bcc || '');
     if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
-    const email = buildBuyerInvoicePaymentReminderEmail(
-      report,
-      settings,
-      groupSelected,
-      group.rows,
-      {
-        subject: body.subject,
-        body: body.body,
-      },
-      effectiveGroup,
-    );
-    let result;
+    const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, { subject: body.subject, body: body.body }, { ...group, to });
+    return { group, to, cc, bcc, email };
+  });
+  const validationMs = Date.now() - validationStartedAt;
+  const requestHash = paymentReminderRequestHash({
+    anchorStemId,
+    invoiceStemIds: [...selectedStemIds],
+    recipientBatches: body.recipientBatches,
+    subject: body.subject,
+    body: body.body,
+  });
+  const reservation = await reservePaymentReminderOperation(activeAccess.client, {
+    idempotencyKey,
+    requestHash,
+    anchorStemId,
+    selectedStemIds: [...selectedStemIds],
+    batchCount: outboundBatches.length,
+    actorUserId: activeAccess.profile.id,
+    actorEmail: activeAccess.profile.email,
+  });
+  if (reservation.replay) return { sent: true, idempotencyReplayed: true, ...reservation.result };
+  if (reservation.uncertain) throw appError('A previous delivery attempt has an uncertain Microsoft Graph outcome. Verify Sent Items before retrying.', 409);
+  if (reservation.blocked) throw appError('This payment reminder is already being processed.', 409);
+  const operationId = reservation.operationId;
+  const graphStartedAt = Date.now();
+  const deliveryResults = await mapPaymentReminderBatches(outboundBatches, async (batch) => {
+    const batchKeyHash = createHash('sha256').update(batch.group.key).digest('hex');
+    const batchRequestHash = paymentReminderBatchHash({
+      key: batch.group.key,
+      stemIds: batch.group.rows.map((row) => row.stemId),
+      to: batch.to,
+      cc: batch.cc,
+      bcc: batch.bcc,
+    }, { subject: batch.email.subject, html: batch.email.html });
+    const recipientCount = uniqueEmailList(batch.to, batch.cc, batch.bcc).length;
+    let batchReservation;
     try {
-      result = await sendOperationalMail({
-        to,
-        cc,
-        bcc,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      }, { client: activeAccess.client, purposeKey: 'payment_reminders' });
+      batchReservation = await reservePaymentReminderBatch(activeAccess.client, {
+        operationId,
+        batchKeyHash,
+        requestHash: batchRequestHash,
+        stemIds: batch.group.rows.map((row) => row.stemId),
+        rowCount: batch.group.rows.length,
+        recipientCount,
+      });
     } catch (error) {
+      return { ...batch, status: 'failed', errorCode: 'PAYMENT_REMINDER_BATCH_RESERVE_FAILED', error, graphMs: 0 };
+    }
+    if (batchReservation.replay) return { ...batch, status: 'accepted', replay: true, providerRequestId: batchReservation.providerRequestId, graphMs: 0 };
+    if (batchReservation.uncertain) return { ...batch, status: 'uncertain', errorCode: 'PAYMENT_REMINDER_BATCH_UNCERTAIN', graphMs: 0 };
+    const batchStartedAt = Date.now();
+    try {
+      const result = await sendOperationalMail({
+        to: batch.to, cc: batch.cc, bcc: batch.bcc,
+        subject: batch.email.subject, html: batch.email.html, text: batch.email.text,
+      }, {
+        client: activeAccess.client, purposeKey: 'payment_reminders',
+        mailboxSnapshot: { id: sender.mailboxId, emailAddress: sender.emailAddress },
+      });
+      const graphMs = Date.now() - batchStartedAt;
+      await completePaymentReminderBatch(activeAccess.client, {
+        operationId, batchKeyHash, status: 'accepted',
+        providerRequestId: result.id || result.messageId || null, graphMs,
+      });
+      return { ...batch, status: 'accepted', result, graphMs };
+    } catch (error) {
+      const graphMs = Date.now() - batchStartedAt;
+      const uncertain = paymentReminderDeliveryUncertain(error);
+      try {
+        await completePaymentReminderBatch(activeAccess.client, {
+          operationId, batchKeyHash, status: uncertain ? 'uncertain' : 'failed',
+          graphMs, errorCode: String(error?.code || 'PAYMENT_REMINDER_DELIVERY_FAILED').slice(0, 100),
+        });
+      } catch (ledgerError) {
+        console.error('[payment-reminder] delivery ledger update failed', { requestId: requestIdFrom(req), code: ledgerError?.code || null });
+        return { ...batch, status: 'uncertain', errorCode: 'PAYMENT_REMINDER_LEDGER_UNCERTAIN', error, graphMs };
+      }
       console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
         code: String(error?.code || error?.name || 'provider_error').slice(0, 80),
         provider: operationalMailConfig().deliveryMethod,
-        operationalServerSender: true,
-        toCount: to.length,
-        ccCount: cc.length,
-        bccCount: bcc.length,
-        rows: group.rows.length,
-        routingMode: group.mode,
+        toCount: batch.to.length, ccCount: batch.cc.length, bccCount: batch.bcc.length,
+        rows: batch.group.rows.length, routingMode: batch.group.mode,
       });
-      throw error;
+      return { ...batch, status: uncertain ? 'uncertain' : 'failed', errorCode: error?.code || null, error, graphMs };
     }
-    sendResults.push({
-      result,
-      to,
-      cc,
-      bcc,
-      subject: email.subject,
-      rows: group.rows.length,
-      mode: group.mode,
-    });
+  }, 3);
+  const graphMs = Date.now() - graphStartedAt;
+  const accepted = deliveryResults.filter((item) => item.status === 'accepted');
+  const failed = deliveryResults.filter((item) => item.status === 'failed');
+  const uncertain = deliveryResults.filter((item) => item.status === 'uncertain');
+  const preTimelineStatus = uncertain.length ? 'uncertain' : accepted.length === outboundBatches.length ? 'accepted' : accepted.length ? 'partial' : 'failed';
+  await completePaymentReminderOperation(activeAccess.client, {
+    operationId,
+    status: preTimelineStatus,
+    acceptedBatchCount: accepted.length,
+    failedBatchCount: failed.length,
+    timelineRecorded: false,
+    prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs: 0,
+    errorCode: uncertain[0]?.errorCode || failed[0]?.errorCode || null,
+  });
 
-    const note = [`Payment reminder sent to ${to.join(', ')}${cc.length ? ` (cc ${cc.join(', ')})` : ''}${bcc.length ? ` (bcc ${bcc.join(', ')})` : ''}.`, `Subject: ${email.subject}`, `Routing: ${group.mode}`, `Included invoices: ${group.rows.length}`].join('\n');
-    for (const row of group.rows) {
-      const currentStatus = normalizeCollectionStatus(row.collection?.status);
-      const nextStatus = currentStatus === 'To Contact' ? 'Awaiting Buyer' : currentStatus;
-      const ownerName = row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
-      try {
-        const collectionResult = await persistBuyerInvoiceCollection(
-          {
-            stemId: row.stemId,
-            expectedUpdatedAt: row.collection?.updatedAt || null,
-            updates: {
-              status: nextStatus,
-              ownerName,
-              latestNote: note,
-            },
-            event: {
-              eventType: 'reminder_sent',
-              status: nextStatus,
-              ownerName,
-              note,
-            },
-          },
-          req,
-          null,
-          accessContext,
-        );
-        collectionResults.push(collectionResult);
-      } catch (error) {
-        console.error('[payment-reminder] collection timeline update failed', {
-          requestId: requestIdFrom(req),
-          code: error?.code || null,
-        });
-        collectionWarnings.push({ stemId: row.stemId, error: 'The reminder was sent, but its FCOS collection timeline could not be updated.' });
-      }
+  const collectionWarnings = [];
+  let collectionResults = [];
+  let timelineMs = 0;
+  if (accepted.length) {
+    const timelineStartedAt = Date.now();
+    const timelineRows = accepted.flatMap((item) => {
+      const recipientCount = uniqueEmailList(item.to, item.cc, item.bcc).length;
+      const note = [`Payment reminder accepted by Microsoft Graph.`, `Recipients: ${recipientCount}`, `Routing: ${item.group.mode}`, `Included invoices: ${item.group.rows.length}`].join('\n');
+      const subjectHash = createHash('sha256').update(item.email.subject).digest('hex');
+      return item.group.rows.map((row) => ({
+        stemId: row.stemId,
+        ownerName: row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '',
+        note, recipientCount, subjectHash,
+      }));
+    });
+    try {
+      const saved = await savePaymentReminderTimeline(activeAccess.client, {
+        operationId, rows: timelineRows,
+        actorUserId: activeAccess.profile.id, actorEmail: activeAccess.profile.email,
+      });
+      collectionResults = (Array.isArray(saved) ? saved : []).map((item) => ({
+        item: serializeCollectionItem(item?.item),
+        event: serializeCollectionEvent(item?.event),
+      }));
+    } catch (error) {
+      console.error('[payment-reminder] atomic timeline update failed', { requestId: requestIdFrom(req), code: error?.code || null });
+      collectionWarnings.push({ error: 'The reminder was sent, but FCOS will repair its collection timeline during reconciliation.' });
     }
+    timelineMs = Date.now() - timelineStartedAt;
   }
 
+  const completed = accepted.length === outboundBatches.length && collectionWarnings.length === 0;
+  const finalStatus = completed ? 'completed' : preTimelineStatus;
+  const redactedResult = {
+    operationId,
+    emails: accepted.length,
+    rows: accepted.reduce((sum, item) => sum + item.group.rows.length, 0),
+    recipientCount: accepted.reduce((sum, item) => sum + uniqueEmailList(item.to, item.cc, item.bcc).length, 0),
+    acceptedBatchCount: accepted.length,
+    failedBatchCount: failed.length,
+    uncertainBatchCount: uncertain.length,
+  };
+  await completePaymentReminderOperation(activeAccess.client, {
+    operationId, status: finalStatus,
+    acceptedBatchCount: accepted.length, failedBatchCount: failed.length,
+    timelineRecorded: collectionWarnings.length === 0,
+    prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs,
+    resultSnapshot: redactedResult,
+    errorCode: uncertain[0]?.errorCode || failed[0]?.errorCode || null,
+  });
+
+  if (!accepted.length) {
+    const firstError = uncertain[0]?.error || failed[0]?.error;
+    if (uncertain.length) throw appError('Microsoft Graph delivery could not be confirmed. Verify Sent Items before retrying.', 409);
+    throw firstError || appError('Microsoft Graph rejected every payment reminder batch.', 502);
+  }
+
+  waitUntil(Promise.resolve().then(() => {
+    expireRuntimeCacheTags(['salesforce:buyer-invoices']);
+  }).catch(() => {}));
   return {
-    sent: true,
-    id: sendResults[0]?.result?.id || sendResults[0]?.result?.messageId || null,
-    emails: sendResults.length,
-    batches: sendResults.map((item) => ({
-      to: item.to,
-      cc: item.cc,
-      bcc: item.bcc,
-      subject: item.subject,
-      rows: item.rows,
-      mode: item.mode,
+    sent: completed,
+    partial: !completed,
+    operationId,
+    id: accepted[0]?.result?.id || accepted[0]?.providerRequestId || null,
+    emails: accepted.length,
+    batches: accepted.map((item) => ({
+      to: item.to, cc: item.cc, bcc: item.bcc,
+      subject: item.email.subject, rows: item.group.rows.length, mode: item.group.mode,
     })),
-    to: uniqueEmailList(...sendResults.map((item) => item.to)),
-    cc: uniqueEmailList(...sendResults.map((item) => item.cc)),
-    bcc: uniqueEmailList(...sendResults.map((item) => item.bcc)),
-    subject: sendResults[0]?.subject || null,
-    rows: rows.length,
+    failedBatches: [...failed, ...uncertain].map((item) => ({
+      key: item.group.key, mode: item.group.mode, rows: item.group.rows.length,
+      status: item.status, errorCode: item.errorCode || null,
+    })),
+    to: uniqueEmailList(...accepted.map((item) => item.to)),
+    cc: uniqueEmailList(...accepted.map((item) => item.cc)),
+    bcc: uniqueEmailList(...accepted.map((item) => item.bcc)),
+    subject: accepted[0]?.email.subject || null,
+    rows: accepted.reduce((sum, item) => sum + item.group.rows.length, 0),
     collectionResults,
     collectionWarnings,
+    timings: { prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs },
   };
 }
 
