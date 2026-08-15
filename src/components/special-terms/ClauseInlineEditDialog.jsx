@@ -80,6 +80,8 @@ export default function ClauseInlineEditDialog({
     && form.clauseText.trim().length >= 3
     && form.revisionReason.trim().length >= 3;
   const blockers = review?.blockers || preview?.blockers || [];
+  const affectedTermCount = Number(review?.termCount ?? preview?.termCount ?? 0);
+  const editingDraftBase = preview?.draftVersion?.status === 'Draft';
 
   const finish = (callback, payload) => {
     setSubmitting(false);
@@ -197,7 +199,7 @@ export default function ClauseInlineEditDialog({
         {!loading && preview ? <div className="space-y-4">
           <Alert className={canPublishGlobally ? 'border-amber-300 bg-amber-50 text-amber-950' : ''}>
             {canPublishGlobally ? <ShieldCheck className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-            <AlertDescription>{preview.warning}</AlertDescription>
+            <AlertDescription>{canPublishGlobally ? <>As an authorized approver, you may approve the edited base from this window. {preview.warning}</> : preview.warning}</AlertDescription>
           </Alert>
           {localPublicationBlocked && canPublishGlobally ? <Alert variant="destructive"><AlertDescription>Save or discard the unsaved whole-term or Special Term metadata changes before reviewing a global publication.</AlertDescription></Alert> : null}
           {rowUsesOlderVersion ? <Alert className="border-amber-300 bg-amber-50 text-amber-950"><AlertTriangle className="h-4 w-4" /><AlertDescription>This row displays v{row.revisionNumber}, but the Clause Bank is already at v{preview.latestApprovedVersion?.revisionNumber}. Editing starts from the latest approved wording and publication moves every live version to the new version.</AlertDescription></Alert> : null}
@@ -211,7 +213,7 @@ export default function ClauseInlineEditDialog({
 
           <div className="grid gap-3 md:grid-cols-2">
             <section className="rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">Clicked row</strong><Badge variant="secondary">v{row.revisionNumber}</Badge></div><p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{row.clauseText}</p></section>
-            <section className="rounded-lg border border-primary/30 bg-primary/5 p-3"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">Editing base</strong><Badge>v{preview.draftVersion?.revisionNumber || preview.latestApprovedVersion?.revisionNumber}{preview.draftVersion ? ' Draft' : ' Approved'}</Badge></div><p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{preview.defaults?.clauseText}</p></section>
+            <section className="rounded-lg border border-primary/30 bg-primary/5 p-3"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">Editing base</strong><Badge>v{preview.draftVersion?.revisionNumber || preview.latestApprovedVersion?.revisionNumber}{preview.draftVersion ? ' Draft' : ' Approved'}</Badge>{canPublishGlobally && editingDraftBase ? <Badge variant="outline">Ready for approval review</Badge> : null}</div><p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{preview.defaults?.clauseText}</p>{canPublishGlobally ? <p className="mt-2 text-xs text-muted-foreground">Approval uses the wording, short name, and category currently entered above. The authoritative impact must pass before publication.</p> : null}</section>
           </div>
 
           {canPublishGlobally ? <section className="space-y-3 rounded-lg border border-border p-3">
@@ -226,8 +228,8 @@ export default function ClauseInlineEditDialog({
         <DialogFooter className="gap-2 sm:gap-0">
           <Button type="button" variant="outline" onClick={close} disabled={submitting}>Cancel</Button>
           {!canPublishGlobally ? <Button type="button" onClick={saveDraft} disabled={!preview || !valid || submitting}>{submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}{preview?.draftVersion ? 'Save proposed Draft' : 'Create proposed Draft'}</Button> : null}
-          {canPublishGlobally && !review?.previewToken ? <Button type="button" onClick={reviewGlobalPublication} disabled={!preview || !valid || submitting || localPublicationBlocked}>{submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}Review global update</Button> : null}
-          {canPublishGlobally && review?.previewToken ? <><Button type="button" variant="outline" onClick={() => { setReview(null); setConfirmation(''); }} disabled={submitting}>Back to edit</Button><Button type="button" onClick={publishGlobally} disabled={submitting || blockers.length > 0 || confirmation !== review.confirmationLabel}>{submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}Publish and update all terms</Button></> : null}
+          {canPublishGlobally && !review?.previewToken ? <Button type="button" onClick={reviewGlobalPublication} disabled={!preview || !valid || submitting || localPublicationBlocked}>{submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}Review approval of editing base</Button> : null}
+          {canPublishGlobally && review?.previewToken ? <><Button type="button" variant="outline" onClick={() => { setReview(null); setConfirmation(''); }} disabled={submitting}>Back to edit</Button><Button type="button" onClick={publishGlobally} disabled={submitting || blockers.length > 0 || confirmation !== review.confirmationLabel}>{submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}Approve editing base{affectedTermCount ? ` and update ${affectedTermCount} term${affectedTermCount === 1 ? '' : 's'}` : ''}</Button></> : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

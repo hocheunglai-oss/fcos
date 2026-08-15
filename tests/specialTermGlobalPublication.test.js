@@ -47,7 +47,10 @@ test('inline editing is role-aware across all clause projections, local, and no-
   assert.match(dialog, /This \{projectionLabel\} row references one shared clause identity/);
   assert.doesNotMatch(dialog, /This Terms Text row references/);
   assert.match(dialog, /Saving creates a proposed Draft|proposed Draft/);
-  assert.match(dialog, /Publish and update all terms/);
+  assert.match(dialog, /As an authorized approver, you may approve the edited base from this window/);
+  assert.match(dialog, /Ready for approval review/);
+  assert.match(dialog, /Review approval of editing base/);
+  assert.match(dialog, /Approve editing base/);
   assert.match(dialog, /specialTermClauseEditPreview/);
   assert.match(dialog, /specialTermClauseGlobalPublish/);
   assert.match(dialog, /Type \{review\.confirmationLabel\} exactly to publish/);
