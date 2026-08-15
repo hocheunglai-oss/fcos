@@ -13,7 +13,7 @@ test('whole-term revision payload includes all contractual projections together'
         confirmationRemark: { style: 'Hyphen', assignments: [{ clauseId: 'a03', clauseVersionId: 'a04' }] },
         nominationRemark: { style: 'Hyphen', assignments: [] },
       },
-      rules: [{ id: 'a05', audience: 'Buyer', country: 'CHINA', lastModifiedAt: '2026-08-13T00:00:00.000Z' }],
+      rules: [{ id: 'a05', audience: 'Buyer', accountId: '001-example', accountName: 'Example Buyer', portId: 'a09-port', portName: 'Shanghai', productId: '01t-product', productName: 'VLSFO', country: 'CHINA', lastModifiedAt: '2026-08-13T00:00:00.000Z' }],
     },
   });
   assert.equal(revision.status, 'Draft');
@@ -25,7 +25,7 @@ test('whole-term revision payload includes all contractual projections together'
       { projection: 'confirmationRemark', style: 'Hyphen', versionIds: ['a04'] },
       { projection: 'nominationRemark', style: 'Hyphen', versionIds: [] },
     ],
-    rules: [{ sourceRuleId: 'a05', audience: 'Buyer', accountId: null, portId: null, productId: null, country: 'CHINA', lastModifiedAt: '2026-08-13T00:00:00.000Z' }],
+    rules: [{ sourceRuleId: 'a05', audience: 'Buyer', accountId: '001-example', portId: 'a09-port', productId: '01t-product', country: 'CHINA', lastModifiedAt: '2026-08-13T00:00:00.000Z' }],
   });
 });
 

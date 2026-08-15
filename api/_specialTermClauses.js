@@ -760,13 +760,32 @@ function assignmentFields() {
   return 'Id,Special_Term__c,Projection__c,Clause__c,Clause__r.Name,Clause__r.Category__c,Clause__r.Status__c,Clause__r.Latest_Approved_Version_Number__c,Clause_Version__c,Clause_Version__r.Revision_Number__c,Clause_Version__r.Clause_Text__c,Clause_Version__r.Status__c,Sequence__c,State__c,Migration_Batch_Id__c,LastModifiedDate';
 }
 
+function mapDetailRule(row) {
+  return {
+    id: row.Id,
+    name: row.Name || '',
+    accountId: row.Account__c || null,
+    accountName: row.Account__r?.Name || (row.Account__c ? 'Unavailable account' : ''),
+    accountClKey: row.Account__r?.Company_Code__c || '',
+    portId: row.Port__c || null,
+    portName: row.Port__r?.Name || (row.Port__c ? 'Unavailable port' : ''),
+    portCountry: row.Port__r?.Country__c || '',
+    productId: row.Product__c || null,
+    productName: row.Product__r?.Name || (row.Product__c ? 'Unavailable product' : ''),
+    country: row.Country__c || '',
+    audience: row.Supplier_Buyer__c || '',
+    priority: row.Priority__c == null ? null : Number(row.Priority__c),
+    lastModifiedAt: row.LastModifiedDate || null,
+  };
+}
+
 export async function getSpecialTermDetail(termId, { force = false } = {}) {
   await resolveSpecialTermsSchema({ force });
   const id = salesforceId(termId, 'Special Term');
   const [termResult, assignmentResult, liveRuleResult, revisionHistoryResult] = await Promise.all([
     sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,Approval_Status__c,Current_Revision__c,LastModifiedDate FROM Special_Term__c WHERE Id = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 }),
     sfQuery(`SELECT ${assignmentFields()} FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Projection__c,State__c,Sequence__c,Id LIMIT 500`, { clean: true, limit: 500 }),
-    sfQuery(`SELECT Id,Name,Account__c,Port__c,Product__c,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Priority__c,Name LIMIT 250`, { clean: true, limit: 250 }),
+    sfQuery(`SELECT Id,Name,Account__c,Account__r.Name,Account__r.Company_Code__c,Port__c,Port__r.Name,Port__r.Country__c,Product__c,Product__r.Name,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Priority__c,Name LIMIT 250`, { clean: true, limit: 250 }),
     sfQuery(`SELECT Id,Status__c,Revision_Number__c,Revision_Reason__c,Proposed_By_Email__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Revision_Number__c DESC LIMIT 50`, { clean: true, limit: 50 }),
   ]);
   const term = termResult.records[0];
@@ -887,7 +906,7 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       }])),
       rules: revisionRuleRows.filter((row) => row.Snapshot_Type__c === 'Proposed').map((row) => ({ id: row.Id, sourceRuleId: row.Special_Term_Rule__c || null, audience: row.Audience__c || '', accountId: row.Account__c || null, accountName: row.Account__r?.Name || '', accountClKey: row.Account__r?.Company_Code__c || '', portId: row.Port__c || null, portName: row.Port__r?.Name || '', portCountry: row.Port__r?.Country__c || '', productId: row.Product__c || null, productName: row.Product__r?.Name || '', country: row.Country__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), sequence: Number(row.Sequence__c || 0), state: row.State__c || '', lastModifiedAt: row.LastModifiedDate || null })),
     },
-    rules: liveRuleResult.records.map((row) => ({ id: row.Id, name: row.Name || '', accountId: row.Account__c || null, portId: row.Port__c || null, productId: row.Product__c || null, country: row.Country__c || '', audience: row.Supplier_Buyer__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), lastModifiedAt: row.LastModifiedDate || null })),
+    rules: liveRuleResult.records.map(mapDetailRule),
     revisionHistory: revisionHistoryResult.records.map((row) => ({
       id: row.Id,
       revisionNumber: Number(row.Revision_Number__c || 0),
@@ -2083,6 +2102,7 @@ export const specialTermClauseServiceInternals = Object.freeze({
   cleanClauseText,
   cleanShortName,
   failureFromComposite,
+  mapDetailRule,
   publicationProposalHash,
   relinkProjectionPayload,
   signPublicationPreview,

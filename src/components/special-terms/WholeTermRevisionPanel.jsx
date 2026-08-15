@@ -20,8 +20,8 @@ function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function ruleLookup(id, label, secondary = '') {
-  return id ? { id, label: label || id, secondary } : null;
+function ruleLookup(id, label, secondary = '', unavailableLabel = 'Unavailable record') {
+  return id ? { id, label: label || unavailableLabel, secondary } : null;
 }
 
 function RevisionRuleEditor({ rules, editable, audienceOptions, countryOptions, onChange }) {
@@ -36,9 +36,9 @@ function RevisionRuleEditor({ rules, editable, audienceOptions, countryOptions, 
         <div key={rule.id || rule.sourceRuleId || index} className="grid gap-3 rounded-md border border-border p-3 md:grid-cols-2">
           <div className="space-y-1.5"><Label>Audience</Label><Select disabled={!editable} value={rule.audience || ''} onValueChange={(audience) => update(index, { audience })}><SelectTrigger><SelectValue placeholder="Buyer or Supplier" /></SelectTrigger><SelectContent>{audienceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-1.5"><Label>Country</Label><Select disabled={!editable} value={rule.country || '__any__'} onValueChange={(country) => update(index, { country: country === '__any__' ? '' : country })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{countryOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
-          <SpecialTermLookupField disabled={!editable} label="Account" kind="account" value={ruleLookup(rule.accountId, rule.accountName, rule.accountClKey)} onChange={(account) => update(index, { accountId: account?.id || null, accountName: account?.label || '', accountClKey: account?.secondary || '' })} placeholder="Search Account name or CL Key" />
-          <SpecialTermLookupField disabled={!editable} label="Port" kind="port" value={ruleLookup(rule.portId, rule.portName, rule.portCountry)} onChange={(port) => update(index, { portId: port?.id || null, portName: port?.label || '', portCountry: port?.secondary || '' })} placeholder="Search port name" />
-          <SpecialTermLookupField disabled={!editable} label="Product" kind="product" value={ruleLookup(rule.productId, rule.productName)} onChange={(product) => update(index, { productId: product?.id || null, productName: product?.label || '' })} placeholder="Search active product" />
+          <SpecialTermLookupField disabled={!editable} label="Account" kind="account" value={ruleLookup(rule.accountId, rule.accountName, rule.accountClKey, 'Unavailable account')} onChange={(account) => update(index, { accountId: account?.id || null, accountName: account?.label || '', accountClKey: account?.secondary || '' })} placeholder="Search Account name or CL Key" />
+          <SpecialTermLookupField disabled={!editable} label="Port" kind="port" value={ruleLookup(rule.portId, rule.portName, rule.portCountry, 'Unavailable port')} onChange={(port) => update(index, { portId: port?.id || null, portName: port?.label || '', portCountry: port?.secondary || '' })} placeholder="Search port name" />
+          <SpecialTermLookupField disabled={!editable} label="Product" kind="product" value={ruleLookup(rule.productId, rule.productName, '', 'Unavailable product')} onChange={(product) => update(index, { productId: product?.id || null, productName: product?.label || '' })} placeholder="Search active product" />
           <div className="flex items-end justify-between gap-2"><p className="pb-2 text-xs text-muted-foreground">{rule.priority == null ? 'Priority is recalculated by Salesforce on activation.' : `Current priority: ${rule.priority}`}</p>{editable ? <Button type="button" variant="ghost" size="icon" className="text-destructive" onClick={() => remove(index)} title="Remove rule from revision"><Trash2 className="h-4 w-4" /></Button> : null}</div>
         </div>
       ))}

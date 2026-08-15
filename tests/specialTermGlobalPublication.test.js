@@ -32,14 +32,16 @@ test('global publication preview tokens bind the proposal and expire', () => {
   );
 });
 
-test('inline Terms Text editing is role-aware, local, and no-refresh', () => {
+test('inline editing is role-aware across all clause projections, local, and no-refresh', () => {
   const composer = read('src/components/special-terms/ClauseComposer.jsx');
   const dialog = read('src/components/special-terms/ClauseInlineEditDialog.jsx');
   const projection = read('src/components/special-terms/ClauseProjectionSection.jsx');
   const revision = read('src/components/special-terms/WholeTermRevisionPanel.jsx');
   const page = read('src/pages/SpecialTerms.jsx');
   assert.match(composer, /Edit shared Clause Bank wording/);
-  assert.match(projection, /canEditClause=\{isTermsText && canEditClause\}/);
+  assert.match(projection, /canEditClause=\{canEditClause\}/);
+  assert.match(projection, /canPublishClause=\{canPublishClause\}/);
+  assert.doesNotMatch(projection, /canEditClause=\{isTermsText/);
   assert.match(dialog, /Saving creates a proposed Draft|proposed Draft/);
   assert.match(dialog, /Publish and update all terms/);
   assert.match(dialog, /specialTermClauseEditPreview/);
@@ -47,9 +49,39 @@ test('inline Terms Text editing is role-aware, local, and no-refresh', () => {
   assert.match(dialog, /Type \{review\.confirmationLabel\} exactly to publish/);
   assert.match(dialog, /No live terms change/);
   assert.match(revision, /localPublicationBlocked=\{unsaved \|\| hasUnsavedParentChanges\}/);
+  assert.match(revision, /'Unavailable account'/);
+  assert.match(revision, /'Unavailable port'/);
+  assert.doesNotMatch(revision, /label \|\| id/);
   assert.match(page, /applyInlineClausePublication/);
   const inlineApply = page.match(/const applyInlineClausePublication = [\s\S]*?\n  };/)?.[0] || '';
   assert.doesNotMatch(inlineApply, /load\(|refreshOpenTerm/);
+});
+
+test('whole-term rule details expose relationship names while retaining lookup ids', () => {
+  const mapped = specialTermClauseServiceInternals.mapDetailRule({
+    Id: 'a10000000000001AAA',
+    Name: 'Buyer Singapore rule',
+    Account__c: '001000000000001AAA',
+    Account__r: { Name: 'Example Shipping Limited', Company_Code__c: 'EXAMPLE' },
+    Port__c: 'a20000000000001AAA',
+    Port__r: { Name: 'Singapore', Country__c: 'SINGAPORE' },
+    Product__c: '01t000000000001AAA',
+    Product__r: { Name: 'VLSFO' },
+    Supplier_Buyer__c: 'Buyer',
+    Priority__c: 10,
+  });
+  assert.equal(mapped.accountId, '001000000000001AAA');
+  assert.equal(mapped.accountName, 'Example Shipping Limited');
+  assert.equal(mapped.accountClKey, 'EXAMPLE');
+  assert.equal(mapped.portId, 'a20000000000001AAA');
+  assert.equal(mapped.portName, 'Singapore');
+  assert.equal(mapped.portCountry, 'SINGAPORE');
+  assert.equal(mapped.productName, 'VLSFO');
+
+  const unavailable = specialTermClauseServiceInternals.mapDetailRule({ Account__c: '001000000000002AAA', Port__c: 'a20000000000002AAA' });
+  assert.equal(unavailable.accountName, 'Unavailable account');
+  assert.equal(unavailable.portName, 'Unavailable port');
+  assert.doesNotMatch(`${unavailable.accountName} ${unavailable.portName}`, /001000|a20000/);
 });
 
 test('global publication is fail-closed across API, Salesforce, and Supabase', () => {

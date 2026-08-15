@@ -177,6 +177,8 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(clauseService, /compileClauseList/);
   assert.match(clauseService, /Confirmation Remark/);
   assert.match(clauseService, /Nomination Remark/);
+  assert.match(clauseService, /Account__c,Account__r\.Name,Account__r\.Company_Code__c,Port__c,Port__r\.Name,Port__r\.Country__c,Product__c,Product__r\.Name/);
+  assert.match(clauseService, /rules: liveRuleResult\.records\.map\(mapDetailRule\)/);
   assert.match(clauseService, /allOrNone: true/);
   assert.match(clauseService, /composite\/graph/);
   assert.match(clauseService, /upgradeAvailable/);

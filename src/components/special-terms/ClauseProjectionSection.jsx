@@ -54,8 +54,8 @@ function ClauseProjectionSection({
           onChange={(activeAssignments) => onAssignmentsChange?.(projection, activeAssignments)}
           disabled={!canManage}
           style={projectionDetail.style}
-          canEditClause={isTermsText && canEditClause}
-          canPublishClause={isTermsText && canPublishClause}
+          canEditClause={canEditClause}
+          canPublishClause={canPublishClause}
           localPublicationBlocked={localPublicationBlocked}
           categoryOptions={categoryOptions}
           currentTermId={currentTermId}
