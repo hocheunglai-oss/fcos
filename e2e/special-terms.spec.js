@@ -20,7 +20,7 @@ test.describe('Special Terms term-first workspace', () => {
     await expect(page.getByText('Advanced migration and history tools')).toBeVisible();
 
     const salesforceTermLink = page.locator('a[href*="salesforce.com/a0E"]').first();
-    await expect(salesforceTermLink).toBeVisible({ timeout: 30_000 });
+    await expect(salesforceTermLink).toHaveAttribute('href', /salesforce\.com\/a0E/, { timeout: 30_000 });
     const salesforceHref = await salesforceTermLink.getAttribute('href');
     const termId = salesforceHref?.match(/\/([a-zA-Z0-9]{15,18})(?:\?|$)/)?.[1];
     expect(termId).toBeTruthy();
