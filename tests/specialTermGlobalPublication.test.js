@@ -51,6 +51,10 @@ test('inline editing is role-aware across all clause projections, local, and no-
   assert.match(dialog, /Ready for approval review/);
   assert.match(dialog, /Review approval of editing base/);
   assert.match(dialog, /Approve editing base/);
+  assert.match(dialog, /Approve edited v1 Draft directly/);
+  assert.match(dialog, /specialTermClauseApprove/);
+  assert.match(dialog, /applyDraftEdits: true/);
+  assert.match(dialog, /No live Special Term is changed by this initial approval/);
   assert.match(dialog, /specialTermClauseEditPreview/);
   assert.match(dialog, /specialTermClauseGlobalPublish/);
   assert.match(dialog, /Type \{review\.confirmationLabel\} exactly to publish/);
@@ -98,6 +102,9 @@ test('global publication is fail-closed across API, Salesforce, and Supabase', (
   const apex = read('force-app/main/default/classes/SpecialTermClausePublicationService.cls');
   assert.match(service, /FCOS_SPECIAL_TERMS_PREVIEW_SECRET/);
   assert.match(service, /clause_global_publish/);
+  assert.match(service, /Direct editing-base approval is limited to a Draft-only v1 clause/);
+  assert.match(service, /initialDraftEdit: applyDraftEdits/);
+  assert.match(service, /Content_Hash__c: clauseHash\(approvedText\)/);
   assert.match(service, /expectedImpactHash/);
   assert.match(policies, /specialTermClauseGlobalPublish:[^\n]+special_terms_clause_approve/);
   assert.match(migration, /'clause_global_publish'/);

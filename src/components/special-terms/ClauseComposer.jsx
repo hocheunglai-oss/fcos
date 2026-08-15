@@ -125,8 +125,25 @@ function ClauseComposer({
   };
 
   const clausePublished = (result) => {
+    if (result?.initialApproval && result?.clause?.latestApprovedVersion) {
+      const approved = result.clause.latestApprovedVersion;
+      onChange(assignments.map((row) => row.clauseId === result.clauseId ? {
+        ...row,
+        shortName: result.clause.shortName,
+        category: result.clause.category,
+        clauseStatus: result.clause.status,
+        clauseVersionId: approved.id,
+        revisionNumber: approved.revisionNumber,
+        clauseText: approved.clauseText,
+        versionStatus: approved.status,
+        latestApprovedVersion: approved,
+        upgradeAvailable: false,
+      } : row));
+    }
     onClausePublished?.(result);
-    onStatusMessage?.(`Clause v${result.revisionNumber} was approved and published to ${result.termCount} live Special Term${Number(result.termCount) === 1 ? '' : 's'}.`);
+    onStatusMessage?.(result?.initialApproval
+      ? `Clause v${result.revisionNumber} was approved as the initial Clause Bank wording. No live Special Term changed.`
+      : `Clause v${result.revisionNumber} was approved and published to ${result.termCount} live Special Term${Number(result.termCount) === 1 ? '' : 's'}.`);
     closeInlineEditor();
   };
 

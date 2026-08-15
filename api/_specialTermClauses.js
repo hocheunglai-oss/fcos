@@ -1171,29 +1171,63 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
   const clauseId = salesforceId(body.clauseId, 'Clause');
   const versionId = salesforceId(body.versionId, 'Clause version');
   const reason = requiredReason(body.approvalReason, 'Approval reason');
-  const reservation = await reserveOperation(client, profile, body, 'clause_approve', { id: versionId, clauseId, versionId, approvalReasonHash: clauseHash(reason), expectedClauseLastModifiedAt: body.expectedClauseLastModifiedAt, expectedVersionLastModifiedAt: body.expectedVersionLastModifiedAt });
+  const applyDraftEdits = body.applyDraftEdits === true;
+  const requestedShortName = applyDraftEdits ? cleanShortName(body.shortName) : null;
+  const requestedCategory = applyDraftEdits ? cleanCategory(body.category, schema) : null;
+  const requestedText = applyDraftEdits ? cleanClauseText(body.clauseText) : null;
+  const requestedRevisionReason = applyDraftEdits ? requiredReason(body.revisionReason, 'Revision reason') : null;
+  const reservation = await reserveOperation(client, profile, body, 'clause_approve', {
+    id: versionId,
+    clauseId,
+    versionId,
+    initialDraftEdit: applyDraftEdits,
+    shortNameKey: requestedShortName ? shortNameKey(requestedShortName) : null,
+    category: requestedCategory,
+    contentHash: requestedText ? clauseHash(requestedText) : null,
+    revisionReasonHash: requestedRevisionReason ? clauseHash(requestedRevisionReason) : null,
+    approvalReasonHash: clauseHash(reason),
+    expectedClauseLastModifiedAt: body.expectedClauseLastModifiedAt,
+    expectedVersionLastModifiedAt: body.expectedVersionLastModifiedAt,
+  });
   if (reservation.replay) return { ...reservation.replay, clause: await loadOneClause(clauseId), idempotencyReplayed: true };
   try {
     const [clauseRow, versionRow] = await Promise.all([
       currentRecord(OBJECTS.clause, clauseId, ['Id', 'Name', 'Category__c', 'Status__c', 'LastModifiedDate']),
-      currentRecord(OBJECTS.version, versionId, ['Id', 'Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Proposed_Short_Name__c', 'Proposed_Category__c', 'Status__c', 'LastModifiedDate']),
+      currentRecord(OBJECTS.version, versionId, ['Id', 'Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Revision_Reason__c', 'Proposed_Short_Name__c', 'Proposed_Category__c', 'Status__c', 'LastModifiedDate']),
     ]);
     assertCurrent(clauseRow, body.expectedClauseLastModifiedAt);
     assertCurrent(versionRow, body.expectedVersionLastModifiedAt);
     if (versionRow.Clause__c !== clauseId || versionRow.Status__c !== 'Draft') throw specialTermsError('Only the selected Draft version can be approved.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_IMMUTABLE');
-    const approvedShortName = cleanShortName(versionRow.Proposed_Short_Name__c || clauseRow.Name);
-    const approvedCategory = cleanCategory(versionRow.Proposed_Category__c || clauseRow.Category__c, schema);
-    const approvedText = cleanClauseText(versionRow.Clause_Text__c);
+    const approvedShortName = requestedShortName || cleanShortName(versionRow.Proposed_Short_Name__c || clauseRow.Name);
+    const approvedCategory = requestedCategory || cleanCategory(versionRow.Proposed_Category__c || clauseRow.Category__c, schema);
+    const approvedText = requestedText || cleanClauseText(versionRow.Clause_Text__c);
+    const approvedRevisionReason = requestedRevisionReason || versionRow.Revision_Reason__c;
     await ensureUniqueClause(approvedShortName, canonicalClauseKey(approvedText), clauseId);
     const currentApproved = await sfQuery(`SELECT Id FROM Special_Term_Clause_Version__c WHERE Clause__c = '${soql(clauseId)}' AND Status__c = 'Approved' LIMIT 2`, { clean: true, limit: 2 });
     if (currentApproved.records.length > 1) throw specialTermsError('Clause has multiple approved versions and requires repair.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_CONFLICT');
+    if (applyDraftEdits && (currentApproved.records.length || clauseRow.Status__c !== 'Draft' || Number(versionRow.Revision_Number__c) !== 1)) {
+      throw specialTermsError('Direct editing-base approval is limited to a Draft-only v1 clause. Review the global publication impact for an established shared clause.', 409, 'SPECIAL_TERMS_INITIAL_APPROVAL_REQUIRED');
+    }
     const dependentConsolidations = await sfQuery(`SELECT Id,Status__c FROM ${OBJECTS.consolidation} WHERE Replacement_Clause__c = '${soql(clauseId)}' AND Status__c IN ('Relinking','Ready to Retire') LIMIT 201`, { clean: true, limit: 201 });
     if (dependentConsolidations.records.length > 200) throw specialTermsError('More than 200 active consolidations depend on this clause. Resolve them before approving another version.', 409, 'SPECIAL_TERMS_CONSOLIDATION_LIMIT');
     const now = new Date().toISOString();
     const requests = [];
     if (currentApproved.records[0]) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${currentApproved.records[0].Id}`, referenceId: 'superseded', body: { Status__c: 'Superseded' } });
+    const approvedVersionBody = {
+      Status__c: 'Approved',
+      Approved_By_Email__c: profile.email,
+      Approved_At__c: now,
+      Approval_Reason__c: reason,
+      ...(applyDraftEdits ? {
+        Clause_Text__c: approvedText,
+        Content_Hash__c: clauseHash(approvedText),
+        Revision_Reason__c: approvedRevisionReason,
+        Proposed_Short_Name__c: approvedShortName,
+        Proposed_Category__c: approvedCategory,
+      } : {}),
+    };
     requests.push(
-      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'approved', body: { Status__c: 'Approved', Approved_By_Email__c: profile.email, Approved_At__c: now, Approval_Reason__c: reason } },
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'approved', body: approvedVersionBody },
       { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Name: approvedShortName, Short_Name_Key__c: shortNameKey(approvedShortName), Canonical_Text_Key__c: canonicalClauseKey(approvedText), Category__c: approvedCategory, Status__c: 'Active', Latest_Approved_Version_Number__c: versionRow.Revision_Number__c, Last_Approved_At__c: now, Retirement_Reason__c: null, Replacement_Clause__c: null } },
     );
     if (dependentConsolidations.records.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'pauseConsolidations', body: { allOrNone: true, records: dependentConsolidations.records.map((row) => ({ attributes: { type: OBJECTS.consolidation }, Id: row.Id, Status__c: 'Paused' })) } });
@@ -1204,8 +1238,8 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
     return finishOperation(
       client,
       reservation.operation,
-      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved', clause },
-      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved' },
+      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved', initialApproval: applyDraftEdits, termCount: 0, occurrenceCount: 0, clause },
+      { success: true, clauseId, versionId, revisionNumber: Number(versionRow.Revision_Number__c), operation: 'approved', initialApproval: applyDraftEdits, termCount: 0, occurrenceCount: 0 },
     );
   } catch (error) {
     return failOperation(client, reservation.operation, error);

@@ -318,7 +318,9 @@ export default function SpecialTerms() {
         terms: (current.terms || []).map((term) => term.id === detail.term.id ? { ...term, ...detail.term } : term),
       });
     }
-    setMessage(`Clause v${result?.revisionNumber || ''} was published to ${result?.termCount || 0} live Special Term${Number(result?.termCount || 0) === 1 ? '' : 's'} without reloading the workspace.`);
+    setMessage(result?.initialApproval
+      ? `Clause v${result?.revisionNumber || ''} was approved as the initial Clause Bank wording without changing any live Special Term.`
+      : `Clause v${result?.revisionNumber || ''} was published to ${result?.termCount || 0} live Special Term${Number(result?.termCount || 0) === 1 ? '' : 's'} without reloading the workspace.`);
   };
 
   const openRule = (rule = null) => {
