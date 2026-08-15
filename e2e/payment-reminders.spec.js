@@ -23,7 +23,12 @@ test.describe('Fast verified payment reminders', () => {
       await expect(dialog.getByText('Recipients', { exact: true })).toBeVisible();
       await expect(dialog.getByText('Email preview', { exact: true })).toBeVisible();
       await expect(dialog.getByRole('button', { name: /edit recipients/i })).toBeVisible();
-      await expect(dialog.getByRole('button', { name: /send \d+ invoice/i })).toBeVisible();
+      const sendButton = dialog.getByRole('button', { name: /send \d+ invoice/i });
+      await expect(sendButton).toBeVisible();
+      expect(await sendButton.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top >= 0 && rect.bottom <= window.innerHeight;
+      })).toBe(true);
       await expect(dialog.getByRole('button', { name: /next|back/i })).toHaveCount(0);
       await dialog.getByRole('button', { name: 'Close', exact: true }).click();
       await expect(dialog).toHaveCount(0);

@@ -2021,7 +2021,7 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
     <Dialog open={open && Boolean(row)} onOpenChange={(nextOpen) => {
       if (!nextOpen && !sending) onClose();
     }}>
-      <DialogContent className="payment-reminder-dialog max-h-[94vh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden p-0 text-slate-950">
+      <DialogContent className="payment-reminder-dialog grid h-[94vh] max-h-[94vh] w-[96vw] max-w-[1500px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 text-slate-950">
         <DialogHeader className="border-b border-slate-200 px-5 py-4 text-left">
           <div className="flex flex-wrap items-start justify-between gap-4 pr-8">
             <div className="min-w-0">
@@ -2046,7 +2046,7 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
           </div>
         </DialogHeader>
 
-        <div className="max-h-[calc(94vh-152px)] overflow-auto px-5 py-4">
+        <div className="min-h-0 overflow-auto px-5 py-4">
           {loading && !data && (
             <StateBlock icon={Loader2} title="Preparing reminder..." description="Finding related buyer and buyer group invoices in the current due window." />
           )}
