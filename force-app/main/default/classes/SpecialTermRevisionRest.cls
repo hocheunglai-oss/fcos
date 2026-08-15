@@ -1,6 +1,6 @@
 @RestResource(urlMapping='/fcos/special-term-revisions/*')
 global without sharing class SpecialTermRevisionRest {
-    global class RequestBody { public String termId; public String approverEmail; public String reason; public String expectedLastModifiedAt; }
+    global class RequestBody { public String termId; public String approverEmail; public String reason; public String expectedLastModifiedAt; public Map<String, String> expectedVersionTimestamps; }
     global class ResponseBody { public Boolean success; public String revisionId; public String termId; public String status; public String message; }
 
     private static List<String> pathParts() {
@@ -20,8 +20,9 @@ global without sharing class SpecialTermRevisionRest {
             Special_Term_Revision__c requested = [SELECT Id, Special_Term__c FROM Special_Term_Revision__c WHERE Id = :revisionId];
             if (body.termId != null && body.termId != requested.Special_Term__c) throw new SpecialTermRevisionService.RevisionException('Revision does not belong to the supplied Special Term.');
             if (action == 'activate') SpecialTermRevisionService.activate((Id) revisionId, body.approverEmail, body.reason, body.expectedLastModifiedAt);
+            else if (action == 'approve-publish') SpecialTermRevisionService.approveDraftClausesAndActivate((Id) revisionId, body.approverEmail, body.reason, body.expectedLastModifiedAt, body.expectedVersionTimestamps);
             else if (action == 'rollback') SpecialTermRevisionService.rollback((Id) revisionId, body.reason, body.expectedLastModifiedAt);
-            else throw new SpecialTermRevisionService.RevisionException('Action must be activate or rollback.');
+            else throw new SpecialTermRevisionService.RevisionException('Action must be activate, approve-publish, or rollback.');
             Special_Term_Revision__c revision = [SELECT Id, Special_Term__c, Status__c FROM Special_Term_Revision__c WHERE Id = :revisionId];
             result.success = true; result.revisionId = revision.Id; result.termId = revision.Special_Term__c; result.status = revision.Status__c;
             RestContext.response.statusCode = 200;

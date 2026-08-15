@@ -12,12 +12,117 @@ public without sharing class SpecialTermRevisionService {
             || expected == live.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
     }
 
+    private static String canonicalTextKey(String wording) {
+        String normalized = SpecialTermClauseCompiler.normalizeClauseText(wording).toLowerCase().replaceAll('\\s+', ' ').trim();
+        return SpecialTermClauseCompiler.sha256(normalized);
+    }
+
+    private static Set<String> materialTokens(String wording) {
+        Set<String> tokens = new Set<String>();
+        String normalized = SpecialTermClauseCompiler.normalizeClauseText(wording).toLowerCase().replaceAll('\\s+', ' ').trim();
+        Matcher matcher = Pattern.compile('(?:usd|eur|hkd|sgd|cny|jpy|gbp|\\$|€|£)\\s*[0-9][0-9,.]*|[0-9][0-9,.]*\\s*(?:calendar\\s+days?|business\\s+days?|working\\s+days?|days?|hours?|months?|years?|mt|pmt|%|percent|cents?|dollars?)|\\b\\d+(?:[.,]\\d+)*\\b|\\b(?:china|chinese|russia|russian|hong kong|singapore|england|english|united kingdom|uk|united states|usa|uae|united arab emirates|panama|malaysia|indonesia|philippines|japan|korea|taiwan|india|sri lanka|vietnam|thailand|marpol(?:\\s+annex\\s+[ivx]+)?|bimco|cpc|formosa|petronas|pertamina|ioc|naftal|mops|iso\\s*\\d+(?::\\d+)?|ss\\s*\\d+|tr\\s*\\d+|rmg\\s*\\d+|rmk\\s*\\d+|vlsfo|hsfo|ulsfo|ifo\\s*\\d+|mgo|lsmgo)\\b').matcher(normalized);
+        while (matcher.find()) tokens.add(matcher.group());
+        return tokens;
+    }
+
+    private static Boolean hasMaterialDifference(String priorWording, String proposedWording) {
+        Set<String> priorTokens = materialTokens(priorWording);
+        Set<String> proposedTokens = materialTokens(proposedWording);
+        return priorTokens.size() != proposedTokens.size() || !priorTokens.containsAll(proposedTokens);
+    }
+
+    public static void approveDraftClausesAndActivate(
+        Id revisionId,
+        String approverEmail,
+        String approvalReason,
+        String expectedLastModifiedAt,
+        Map<String, String> expectedVersionTimestamps
+    ) {
+        require(revisionId != null, 'A Special Term revision is required.');
+        require(!String.isBlank(approverEmail) && !String.isBlank(approvalReason), 'Approval identity and reason are required.');
+        Special_Term_Revision__c revision = [
+            SELECT Id, LastModifiedDate, Status__c
+            FROM Special_Term_Revision__c WHERE Id = :revisionId FOR UPDATE
+        ];
+        require(matchesExpectedLastModified(revision.LastModifiedDate, expectedLastModifiedAt), 'This Special Term revision changed after it was opened. Refresh before activating.');
+        require(new Set<String>{ 'In Review', 'Approved' }.contains(revision.Status__c), 'Only an In Review or Approved revision can be activated.');
+
+        Set<Id> versionIds = new Set<Id>();
+        for (Special_Term_Revision_Clause__c row : [
+            SELECT Clause_Version__c FROM Special_Term_Revision_Clause__c WHERE Special_Term_Revision__c = :revisionId
+        ]) versionIds.add(row.Clause_Version__c);
+        List<Special_Term_Clause_Version__c> drafts = versionIds.isEmpty() ? new List<Special_Term_Clause_Version__c>() : [
+            SELECT Id, Clause__c, Revision_Number__c, Clause_Text__c, Status__c, LastModifiedDate
+            FROM Special_Term_Clause_Version__c
+            WHERE Id IN :versionIds AND Status__c = 'Draft'
+            FOR UPDATE
+        ];
+        if (!drafts.isEmpty()) {
+            Set<Id> clauseIds = new Set<Id>();
+            for (Special_Term_Clause_Version__c draft : drafts) clauseIds.add(draft.Clause__c);
+            Map<Id, Special_Term_Clause__c> clauses = new Map<Id, Special_Term_Clause__c>([
+                SELECT Id, Name, Status__c, Latest_Approved_Version_Number__c
+                FROM Special_Term_Clause__c WHERE Id IN :clauseIds FOR UPDATE
+            ]);
+            Map<Id, Special_Term_Clause_Version__c> approvedByClause = new Map<Id, Special_Term_Clause_Version__c>();
+            for (Special_Term_Clause_Version__c approved : [
+                SELECT Id, Clause__c, Revision_Number__c, Clause_Text__c, Status__c
+                FROM Special_Term_Clause_Version__c
+                WHERE Clause__c IN :clauseIds AND Status__c = 'Approved'
+                FOR UPDATE
+            ]) {
+                require(!approvedByClause.containsKey(approved.Clause__c), 'A clause has multiple approved versions and requires repair.');
+                approvedByClause.put(approved.Clause__c, approved);
+            }
+            Set<Id> consolidatingSourceIds = new Set<Id>();
+            for (Special_Term_Clause_Consolidation__c consolidation : [
+                SELECT Source_Clause__c FROM Special_Term_Clause_Consolidation__c
+                WHERE Source_Clause__c IN :clauseIds AND Status__c IN ('Relinking', 'Paused', 'Ready to Retire')
+            ]) consolidatingSourceIds.add(consolidation.Source_Clause__c);
+
+            List<Special_Term_Clause_Version__c> superseded = new List<Special_Term_Clause_Version__c>();
+            List<Special_Term_Clause__c> clauseUpdates = new List<Special_Term_Clause__c>();
+            for (Special_Term_Clause_Version__c draft : drafts) {
+                Special_Term_Clause__c clauseRow = clauses.get(draft.Clause__c);
+                require(clauseRow != null && new Set<String>{ 'Active', 'Draft' }.contains(clauseRow.Status__c), 'Only an active or never-approved Draft clause can be approved with a term.');
+                require(expectedVersionTimestamps != null && matchesExpectedLastModified(draft.LastModifiedDate, expectedVersionTimestamps.get(String.valueOf(draft.Id))), 'A Draft clause changed after the editor opened. Refresh before approving the whole term.');
+                require(!consolidatingSourceIds.contains(draft.Clause__c), 'Cancel the active clause consolidation before approving another source version.');
+                Special_Term_Clause_Version__c currentApproved = approvedByClause.get(draft.Clause__c);
+                if (clauseRow.Status__c == 'Draft') {
+                    require(currentApproved == null && draft.Revision_Number__c == 1, 'A never-approved clause must begin with Draft v1.');
+                } else {
+                    require(currentApproved != null, 'An established clause no longer has one current approved base.');
+                    require(!hasMaterialDifference(currentApproved.Clause_Text__c, draft.Clause_Text__c), 'The proposed wording changes a material qualifier. Create a new Clause Library identity instead.');
+                    currentApproved.Status__c = 'Superseded';
+                    superseded.add(currentApproved);
+                }
+                draft.Status__c = 'Approved';
+                draft.Approved_By_Email__c = approverEmail;
+                draft.Approved_At__c = System.now();
+                draft.Approval_Reason__c = approvalReason;
+                clauseUpdates.add(new Special_Term_Clause__c(
+                    Id = clauseRow.Id,
+                    Status__c = 'Active',
+                    Canonical_Text_Key__c = canonicalTextKey(draft.Clause_Text__c),
+                    Latest_Approved_Version_Number__c = draft.Revision_Number__c,
+                    Last_Approved_At__c = System.now(),
+                    Retirement_Reason__c = null,
+                    Replacement_Clause__c = null
+                ));
+            }
+            if (!superseded.isEmpty()) Database.update(superseded, AccessLevel.SYSTEM_MODE);
+            Database.update(drafts, AccessLevel.SYSTEM_MODE);
+            Database.update(clauseUpdates, AccessLevel.SYSTEM_MODE);
+        }
+        activate(revisionId, approverEmail, approvalReason, expectedLastModifiedAt);
+    }
+
     private static String compile(List<Special_Term_Revision_Clause__c> rows, String style) {
         List<String> values = new List<String>();
         Integer expected = 1;
         for (Special_Term_Revision_Clause__c row : rows) {
             require(row.Sequence__c != null && row.Sequence__c.intValue() == expected, 'Revision clauses must use continuous sequence numbers from 1 within each projection.');
-            require(row.Clause__c == row.Clause_Version__r.Clause__c && row.Clause_Version__r.Status__c == 'Approved' && row.Clause_Version__r.Clause__r.Status__c == 'Active', 'Every activated revision clause must reference an approved version of an active clause.');
+            require(row.Clause__c == row.Clause_Version__r.Clause__c && new Set<String>{ 'Approved', 'Superseded' }.contains(row.Clause_Version__r.Status__c) && row.Clause_Version__r.Clause__r.Status__c == 'Active', 'Every activated revision clause must reference current or historically approved wording from an active clause.');
             String wording = SpecialTermClauseCompiler.normalizeClauseText(row.Clause_Version__r.Clause_Text__c);
             require(!String.isBlank(wording) && !SpecialTermClauseCompiler.hasTopLevelListMarker(wording), 'Revision clause wording is invalid.');
             values.add(style == 'Hyphen' ? '- ' + wording : String.valueOf(expected) + '. ' + wording);

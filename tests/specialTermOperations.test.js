@@ -93,7 +93,14 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(apexService, /SpecialTermRuleRevisionHandler\.allowRevisionUpdate = true/);
   assert.match(service, /specialTermWholeRevision/);
   assert.match(service, /callRevisionApex\(.*'activate'/s);
+  assert.match(service, /callRevisionApex\(revisionId, termId, 'approve-publish'/);
   assert.match(service, /callRevisionApex\(.*'rollback'/s);
+  assert.match(service, /A Draft clause changed after the editor opened/);
+  assert.match(service, /SPECIAL_TERMS_CLAUSE_MATERIAL_DIFFERENCE/);
+  assert.doesNotMatch(service.match(/export async function commitSpecialTermRevision[\s\S]*?export async function rollbackSpecialTermRevision/)?.[0] || '', /approveSpecialTermClause\(/);
+  assert.match(apexService, /approveDraftClausesAndActivate/);
+  assert.match(apexService, /Database\.update\(drafts, AccessLevel\.SYSTEM_MODE\)/);
+  assert.match(apexService, /activate\(revisionId, approverEmail, approvalReason, expectedLastModifiedAt\)/);
   assert.match(service, /A Special Term revision must include Terms Text, Confirmation remark, and Nomination remark/);
   assert.match(service, /store: false/);
   assert.match(service, /const model = DEFAULT_DASHBOARD_AI_MODEL/);
@@ -216,6 +223,10 @@ test('clause bank supports action-first server paging and lightweight governed h
   assert.match(service, /matched\.slice\(safeOffset, safeOffset \+ safeLimit\)/);
   assert.match(service, /hasMore: safeOffset \+ safeLimit < matched\.length/);
   assert.match(service, /exactDuplicateCount/);
-  assert.match(service, /materialDifference: hasMaterialDifference/);
+  assert.match(service, /salesforce-special-term-clause-index/);
+  assert.match(service, /WHERE Status__c = 'Draft'/);
+  assert.match(service, /async function loadClausePage/);
+  assert.match(service, /similarClauses: \[\]/);
+  assert.doesNotMatch(service.match(/export async function listSpecialTermClauseBank[\s\S]*?export async function listSpecialTermClauseConsolidations/)?.[0] || '', /loadClauseRows/);
   assert.match(service, /history: ordered\.map/);
 });

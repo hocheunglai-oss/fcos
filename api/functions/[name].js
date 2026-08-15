@@ -167,20 +167,24 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTerms, previewSpecialTermDeletion, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   activateSpecialTermMigration,
   approveSpecialTermClause,
   getSpecialTermDetail,
   getSpecialTermMigrationInventory,
   listSpecialTermClauseBank,
+  listSpecialTermClauseSimilar,
   previewSpecialTermMigration,
+  previewSpecialTermMigrationAll,
   retireSpecialTermClause,
   rollbackSpecialTermMigration,
   saveSpecialTermClauseDraft,
   saveSpecialTermComposition,
+  saveAllSpecialTermMigrationReview,
   saveSpecialTermMigrationReview,
   saveSpecialTermRevision,
+  commitSpecialTermRevision,
   approveSpecialTermRevision,
   rollbackSpecialTermRevision,
   listSpecialTermMigrationBatches,
@@ -1367,11 +1371,13 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
   specialTermsWorkspace: ['special_terms'],
+  specialTermsSummaryList: ['special_terms'],
   specialTermsPdfExport: ['special_terms'],
   specialTermsDocumentExport: ['special_terms'],
   specialTermsOptions: ['special_terms'],
   specialTermDetail: ['special_terms'],
   specialTermClauseBank: ['special_terms'],
+  specialTermClauseSimilar: ['special_terms'],
   specialTermClauseEditPreview: ['special_terms'],
   specialTermClauseGlobalPublish: ['special_terms'],
   specialTermDeletePreview: ['special_terms'],
@@ -1388,10 +1394,13 @@ const HANDLER_MODULE_ACCESS = {
   specialTermClauseConsolidationComplete: ['special_terms'],
   specialTermCompositionSave: ['special_terms'],
   specialTermMigrationPreview: ['special_terms'],
+  specialTermMigrationPreviewAll: ['special_terms'],
+  specialTermMigrationSaveAll: ['special_terms'],
   specialTermMigrationSave: ['special_terms'],
   specialTermMigrationActivate: ['special_terms'],
   specialTermMigrationRollback: ['special_terms'],
   specialTermRevisionSave: ['special_terms'],
+  specialTermRevisionCommit: ['special_terms'],
   specialTermRevisionApprove: ['special_terms'],
   specialTermRevisionRollback: ['special_terms'],
   specialTermMigrationBatchList: ['special_terms'],
@@ -17072,6 +17081,26 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
   };
 }
 
+async function specialTermsSummaryList(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const [summary, schema, canApproveClauses] = await Promise.all([
+    listSpecialTermSummaries(body),
+    resolveSpecialTermsSchema(),
+    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
+  ]);
+  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
+  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
+  return {
+    ...summary,
+    terms: (summary.terms || []).map((term) => !canApproveRevisions && term.nextAction === 'review_publish' ? { ...term, nextAction: 'continue' } : term),
+    canDraft: true,
+    canApproveClauses: canApproveRevisions,
+    canApproveRevisions,
+    currentUserEmail: context.profile.email || '',
+    clauseCategoryOptions: schema.clauseCategoryOptions,
+  };
+}
+
 async function specialTermsDocumentExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const format = String(body.format || 'pdf').trim().toLowerCase();
@@ -17133,13 +17162,34 @@ async function requireSpecialTermClauseApprover(context) {
 }
 
 async function specialTermDetail(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return getSpecialTermDetail(body.termId, { force: body.force === true });
+  const context = accessContext || (await requireActiveUser(req));
+  const [detail, schema, canApproveClauses] = await Promise.all([
+    getSpecialTermDetail(body.termId, { force: body.force === true }),
+    resolveSpecialTermsSchema(),
+    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
+  ]);
+  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
+  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
+  return {
+    ...detail,
+    canDraft: true,
+    canApproveClauses: canApproveRevisions,
+    canApproveRevisions,
+    currentUserEmail: context.profile.email || '',
+    clauseCategoryOptions: schema.clauseCategoryOptions,
+    audienceOptions: schema.audienceOptions,
+    countryOptions: schema.countryOptions,
+  };
 }
 
 async function specialTermClauseBank(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   return listSpecialTermClauseBank(body);
+}
+
+async function specialTermClauseSimilar(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return listSpecialTermClauseSimilar(body.clauseId, { limit: body.limit });
 }
 
 async function specialTermClauseEditPreview(body = {}, req = null, accessContext = null) {
@@ -17236,9 +17286,19 @@ async function specialTermMigrationSave(body = {}, req = null, accessContext = n
   return saveSpecialTermMigrationReview(context.client, context.profile, body);
 }
 
+async function specialTermMigrationSaveAll(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return saveAllSpecialTermMigrationReview(context.client, context.profile, body);
+}
+
 async function specialTermMigrationActivate(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   throw appError('Projection-level activation is retired. Approve and activate the complete Special Term revision.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
+}
+
+async function specialTermMigrationPreviewAll(body = {}, req = null, accessContext = null) {
+  accessContext || (await requireActiveUser(req));
+  return previewSpecialTermMigrationAll(body.termId);
 }
 
 async function specialTermMigrationRollback(body = {}, req = null, accessContext = null) {
@@ -17249,6 +17309,11 @@ async function specialTermMigrationRollback(body = {}, req = null, accessContext
 async function specialTermRevisionSave(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return saveSpecialTermRevision(context.client, context.profile, body);
+}
+
+async function specialTermRevisionCommit(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return commitSpecialTermRevision(context.client, context.profile, body, { canApprove: await isSpecialTermClauseApprover(context) });
 }
 
 async function specialTermRevisionApprove(body = {}, req = null, accessContext = null) {
@@ -17509,9 +17574,11 @@ const handlers = {
   hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,
   specialTermsWorkspace,
+  specialTermsSummaryList,
   specialTermsOptions,
   specialTermDetail,
   specialTermClauseBank,
+  specialTermClauseSimilar,
   specialTermClauseEditPreview,
   specialTermClauseGlobalPublish,
   specialTermDeletePreview,
@@ -17528,10 +17595,13 @@ const handlers = {
   specialTermClauseConsolidationComplete,
   specialTermCompositionSave,
   specialTermMigrationPreview,
+  specialTermMigrationPreviewAll,
+  specialTermMigrationSaveAll,
   specialTermMigrationSave,
   specialTermMigrationActivate,
   specialTermMigrationRollback,
   specialTermRevisionSave,
+  specialTermRevisionCommit,
   specialTermRevisionApprove,
   specialTermRevisionRollback,
   specialTermMigrationBatchList,

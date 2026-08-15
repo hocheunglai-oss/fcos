@@ -37,20 +37,16 @@ test('inline editing is role-aware across all clause projections, local, and no-
   const dialog = read('src/components/special-terms/ClauseInlineEditDialog.jsx');
   const projection = read('src/components/special-terms/ClauseProjectionSection.jsx');
   const revision = read('src/components/special-terms/WholeTermRevisionPanel.jsx');
-  const page = read('src/pages/SpecialTerms.jsx');
-  assert.match(composer, /Edit shared Clause Bank wording/);
+  const editor = read('src/pages/SpecialTermEditor.jsx');
+  assert.match(composer, /Edit this term's clause wording/);
   assert.match(composer, /projectionLabel=\{projectionLabel\}/);
   assert.match(projection, /canEditClause=\{canEditClause\}/);
   assert.match(projection, /canPublishClause=\{canPublishClause\}/);
   assert.match(projection, /projectionLabel=\{projectionDetail\.label\}/);
   assert.doesNotMatch(projection, /canEditClause=\{isTermsText/);
-  assert.match(dialog, /This \{projectionLabel\} row references one shared clause identity/);
-  assert.doesNotMatch(dialog, /This Terms Text row references/);
-  assert.match(dialog, /Saving creates a proposed Draft|proposed Draft/);
-  assert.match(dialog, /As an authorized approver, you may approve the edited base from this window/);
-  assert.match(dialog, /Ready for approval review/);
-  assert.match(dialog, /Review approval of editing base/);
-  assert.match(dialog, /Approve editing base/);
+  assert.match(dialog, /Create a new version for this \{projectionLabel\} row/);
+  assert.match(dialog, /Other Special Terms stay pinned/);
+  assert.match(dialog, /Saving selects a proposed clause version only in this term’s whole-term draft/);
   assert.match(dialog, /Approve edited v1 Draft directly/);
   assert.match(dialog, /specialTermClauseApprove/);
   assert.match(dialog, /applyDraftEdits: true/);
@@ -63,8 +59,8 @@ test('inline editing is role-aware across all clause projections, local, and no-
   assert.match(revision, /'Unavailable account'/);
   assert.match(revision, /'Unavailable port'/);
   assert.doesNotMatch(revision, /label \|\| id/);
-  assert.match(page, /applyInlineClausePublication/);
-  const inlineApply = page.match(/const applyInlineClausePublication = [\s\S]*?\n  };/)?.[0] || '';
+  assert.match(editor, /applyInlinePublication/);
+  const inlineApply = editor.match(/const applyInlinePublication = [\s\S]*?\n  };/)?.[0] || '';
   assert.doesNotMatch(inlineApply, /load\(|refreshOpenTerm/);
 });
 

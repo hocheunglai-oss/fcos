@@ -119,8 +119,24 @@ function ClauseComposer({
     });
   };
 
-  const clauseDraftSaved = () => {
-    onStatusMessage?.('A proposed clause Draft was saved in the Clause Bank. Live Special Terms remain unchanged.');
+  const clauseDraftSaved = (result) => {
+    const clause = result?.clause;
+    const draftVersion = clause?.draftVersion;
+    if (clause?.id && draftVersion?.id) {
+      onChange(assignments.map((row) => row.clauseId === clause.id && row.clauseVersionId === editingRow?.clauseVersionId ? {
+        ...row,
+        shortName: clause.shortName,
+        category: clause.category,
+        clauseStatus: clause.status,
+        clauseVersionId: draftVersion.id,
+        revisionNumber: draftVersion.revisionNumber,
+        clauseText: draftVersion.clauseText,
+        versionStatus: 'Draft',
+        versionLastModifiedAt: draftVersion.lastModifiedAt,
+        termScopedDraft: true,
+      } : row));
+    }
+    onStatusMessage?.('The proposed wording is selected in this term’s draft. Other Special Terms remain unchanged.');
     closeInlineEditor();
   };
 
@@ -136,6 +152,7 @@ function ClauseComposer({
         revisionNumber: approved.revisionNumber,
         clauseText: approved.clauseText,
         versionStatus: approved.status,
+        versionLastModifiedAt: approved.lastModifiedAt,
         latestApprovedVersion: approved,
         upgradeAvailable: false,
       } : row));
@@ -155,6 +172,7 @@ function ClauseComposer({
       revisionNumber: upgradeTarget.latestApprovedVersion.revisionNumber,
       clauseText: upgradeTarget.latestApprovedVersion.clauseText,
       versionStatus: 'Approved',
+      versionLastModifiedAt: upgradeTarget.latestApprovedVersion.lastModifiedAt,
       upgradeAvailable: false,
     } : row));
     setUpgradeTarget(null);
@@ -168,6 +186,7 @@ function ClauseComposer({
       revisionNumber: row.latestApprovedVersion.revisionNumber,
       clauseText: row.latestApprovedVersion.clauseText,
       versionStatus: 'Approved',
+      versionLastModifiedAt: row.latestApprovedVersion.lastModifiedAt,
       upgradeAvailable: false,
     } : row));
     setSelectedUpgradeIds([]);
@@ -194,7 +213,7 @@ function ClauseComposer({
               {row.consolidation ? <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />This clause is being consolidated into {row.consolidation.replacementShortName}. You may still use it, but the saved whole-term draft will join the relink queue.</p> : null}
             </div>
             <div className="flex items-start justify-end gap-1 sm:flex-col">
-              {canEditClause ? <Button ref={(node) => { const key = `${row.clauseId}:${row.clauseVersionId}`; if (node) editButtons.current.set(key, node); else editButtons.current.delete(key); }} type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openInlineEditor(row)} disabled={editPendingKey === `${row.clauseId}:${row.clauseVersionId}`} title="Edit shared Clause Bank wording" aria-label={`Edit ${row.shortName}`}>{editPendingKey === `${row.clauseId}:${row.clauseVersionId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}</Button> : null}
+              {canEditClause ? <Button ref={(node) => { const key = `${row.clauseId}:${row.clauseVersionId}`; if (node) editButtons.current.set(key, node); else editButtons.current.delete(key); }} type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openInlineEditor(row)} disabled={editPendingKey === `${row.clauseId}:${row.clauseVersionId}`} title="Edit this term's clause wording" aria-label={`Edit ${row.shortName}`}>{editPendingKey === `${row.clauseId}:${row.clauseVersionId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}</Button> : null}
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => move(index, -1)} disabled={disabled || index === 0} title="Move clause up"><ArrowUp className="h-4 w-4" /></Button>
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => move(index, 1)} disabled={disabled || index === assignments.length - 1} title="Move clause down"><ArrowDown className="h-4 w-4" /></Button>
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(index)} disabled={disabled} title="Remove clause from this Special Term"><Trash2 className="h-4 w-4" /></Button>

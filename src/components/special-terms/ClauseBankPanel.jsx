@@ -71,6 +71,9 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
   const [summary, setSummary] = useState({ work: 0, Active: 0, Retired: 0, actionCounts: {} });
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState(null);
+  const [previousCursor, setPreviousCursor] = useState(null);
+  const [nextCursor, setNextCursor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -97,11 +100,12 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
   const [deletionPending, setDeletionPending] = useState(() => new Set());
   const [approvalPending, setApprovalPending] = useState(() => new Set());
   const [draftSavePending, setDraftSavePending] = useState(() => new Set());
+  const [similarPending, setSimilarPending] = useState(() => new Set());
   const approveButtons = useRef(new Map());
   const deleteButtons = useRef(new Map());
   const draftButtons = useRef(new Map());
 
-  const load = useCallback(async (force = false, pageOffset = 0, includeConsolidations = true) => {
+  const load = useCallback(async (force = false, pageCursor = null, includeConsolidations = true) => {
     setLoading(true);
     setError('');
     const requests = [appClient.functions.invoke('specialTermClauseBank', {
@@ -114,7 +118,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
       ownerEmail: mine ? currentUserEmail : '',
       duplicatesOnly,
       query: deferredQuery.trim(),
-      offset: pageOffset,
+      cursor: pageCursor,
       limit: PAGE_SIZE,
     }, { cache: !force })];
     if (includeConsolidations) requests.push(appClient.functions.invoke('specialTermClauseConsolidationList', {}, { cache: false }));
@@ -128,6 +132,9 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
       setSummary(bankResponse.data?.summary || { work: 0, Active: 0, Retired: 0, actionCounts: {} });
       setTotal(Number(bankResponse.data?.total || 0));
       setOffset(Number(bankResponse.data?.offset || 0));
+      setCursor(pageCursor || null);
+      setPreviousCursor(bankResponse.data?.previousCursor || null);
+      setNextCursor(bankResponse.data?.nextCursor || null);
       if (includeConsolidations) setConsolidations(consolidationResponse.data?.consolidations || []);
     }
     setLoading(false);
@@ -171,7 +178,15 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
       setDraft(null);
       setApproval(null);
       setRetirement(null);
-      await load(true);
+      if (response.data?.clause) {
+        const nextClause = response.data.clause;
+        const remainsVisible = rowMatchesCurrentFilters(nextClause);
+        setClauses((current) => remainsVisible
+          ? current.map((clause) => clause.id === nextClause.id ? nextClause : clause)
+          : current.filter((clause) => clause.id !== nextClause.id));
+        if (!remainsVisible) setTotal((current) => Math.max(0, current - 1));
+        setSummary((current) => response.data.operation === 'retired' ? { ...current, Active: Math.max(0, Number(current.Active || 0) - 1), Retired: Number(current.Retired || 0) + 1 } : current);
+      }
       onChanged?.();
     }
     setBusy(false);
@@ -192,6 +207,18 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
     const response = await appClient.functions.invoke('specialTermClauseBank', { view: 'Active', query: search.trim(), limit: 100, offset: 0 }, { cache: true });
     if (!response.data?.error) setReplacementOptions(response.data?.clauses || []);
   }, []);
+
+  const loadSimilarClauses = async (clauseId) => {
+    if (similarPending.has(clauseId)) return;
+    setSimilarPending((current) => new Set(current).add(clauseId));
+    const response = await appClient.functions.invoke('specialTermClauseSimilar', { clauseId, limit: 3 }, { cache: false });
+    setSimilarPending((current) => { const next = new Set(current); next.delete(clauseId); return next; });
+    if (response.data?.error) {
+      setError(response.data.error);
+      return;
+    }
+    setClauses((current) => current.map((clause) => clause.id === clauseId ? { ...clause, similarClauses: response.data?.similarClauses || [], similarLoaded: true } : clause));
+  };
 
   const openConsolidation = (clause) => {
     setReplacementQuery('');
@@ -331,7 +358,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
     }
     setConsolidation(null);
     toast({ title: 'Clause consolidation started', description: 'Affected Special Terms now require governed relinking.' });
-    await load(true, offset, true);
+    await load(true, cursor, true);
   };
 
   const openDeletion = async (clause, entityType) => {
@@ -425,7 +452,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
     <div className="space-y-4">
       <span className="sr-only" aria-live="polite">{message}</span>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-      <ClauseConsolidationQueue consolidations={consolidations} clauses={clauses} canManage={canManage} canApprove={canApprove} onOpenTerm={onOpenTerm} onChanged={() => load(true, offset, true)} onError={setError} />
+      <ClauseConsolidationQueue consolidations={consolidations} clauses={clauses} canManage={canManage} canApprove={canApprove} onOpenTerm={onOpenTerm} onChanged={() => load(true, cursor, true)} onError={setError} />
       <details className="rounded-lg border border-border bg-muted/20 p-3">
         <summary className="cursor-pointer text-sm font-medium"><CircleHelp className="mr-2 inline h-4 w-4" />What do these lifecycle states mean?</summary>
         <div className="mt-3 grid gap-2 text-xs text-muted-foreground md:grid-cols-2 xl:grid-cols-4"><p><strong className="text-foreground">Legacy source</strong><br />Preserved Salesforce wording awaiting a governed mapping decision.</p><p><strong className="text-foreground">Clause Draft</strong><br />A proposed identity or version that cannot be used as approved wording.</p><p><strong className="text-foreground">Whole-term revision</strong><br />Terms Text, both remarks, and rules reviewed and activated atomically.</p><p><strong className="text-foreground">Approved library</strong><br />Published versions available for composition; older versions remain immutable.</p></div>
@@ -435,7 +462,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
           <div className="flex flex-wrap gap-2">{CLAUSE_BANK_VIEWS.map((view) => <Button key={view.value} type="button" size="sm" variant={status === view.value ? 'default' : 'outline'} onClick={() => { setStatus(view.value); setAction('all'); }}>{view.label}<Badge variant="secondary" className="ml-2">{summary[view.value] || 0}</Badge></Button>)}</div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name or wording" className="pl-9 sm:w-72" /></div>
-            <Button variant="outline" onClick={() => load(true, offset, true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
+            <Button variant="outline" onClick={() => load(true, cursor, true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
             {canManage ? <Button ref={(node) => { if (node) draftButtons.current.set('new', node); else draftButtons.current.delete('new'); }} onClick={openNew} disabled={draftSavePending.has('new')}>{draftSavePending.has('new') ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}{draftSavePending.has('new') ? 'Saving…' : 'Propose clause'}</Button> : null}
           </div>
         </div>
@@ -476,6 +503,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
             <details open={rapidReview && index === 0 && Boolean(clause.draftVersion)} className="group rounded-md border border-border bg-muted/10 p-3"><summary className="cursor-pointer text-xs font-medium text-primary">Review wording, duplicate candidates, and history</summary><div className="mt-3 space-y-3"><p className="whitespace-pre-wrap text-sm leading-relaxed">{displayVersion?.clauseText || 'No approved wording yet.'}</p>
               {clause.origin === 'Legacy' && clause.legacyOriginalText && displayVersion?.clauseText !== clause.legacyOriginalText ? <div className="grid gap-3 rounded-md border border-amber-200 bg-amber-50/40 p-3 md:grid-cols-2"><section><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Preserved legacy wording</p><p className="mt-2 whitespace-pre-wrap text-xs">{clause.legacyOriginalText}</p></section><section><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Proposed wording</p><p className="mt-2 whitespace-pre-wrap text-xs">{displayVersion?.clauseText}</p></section></div> : null}
               {clause.draftVersion && clause.latestApprovedVersion ? <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">Draft v{clause.draftVersion.revisionNumber} is awaiting approval. Existing terms remain on approved v{clause.latestApprovedVersion.revisionNumber}.</div> : null}
+              {!clause.similarLoaded ? <Button type="button" size="sm" variant="outline" onClick={() => loadSimilarClauses(clause.id)} disabled={similarPending.has(clause.id)}>{similarPending.has(clause.id) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Combine className="mr-1.5 h-3.5 w-3.5" />}{similarPending.has(clause.id) ? 'Comparing…' : 'Compare similar wording'}</Button> : !clause.similarClauses?.length ? <p className="text-xs text-muted-foreground">No meaningful near match was found.</p> : null}
               {clause.exactDuplicates?.length || clause.similarClauses?.length ? <div className="space-y-2 rounded-md border border-violet-200 bg-violet-50/40 p-3"><p className="text-xs font-semibold text-violet-950"><Combine className="mr-1.5 inline h-3.5 w-3.5" />Duplicate review</p>{clause.exactDuplicates?.length ? <p className="text-xs text-violet-900">Exact normalized wording: {clause.exactDuplicates.map((row) => row.shortName).join(', ')}. Canonical naming and treatment still require approval.</p> : null}{clause.similarClauses?.map((candidate) => <div key={candidate.id} className="grid gap-2 rounded border border-violet-200 bg-background p-2 text-xs md:grid-cols-[180px_1fr]"><div><strong>{candidate.shortName}</strong><br />Similarity {Math.round(candidate.similarity * 100)}%<br /><Badge variant={candidate.materialDifference ? 'destructive' : 'outline'}>{candidate.materialDifference ? 'Material qualifiers differ' : 'No detected material-token difference'}</Badge></div><p className="whitespace-pre-wrap"><HighlightedWording value={candidate.clauseText} /></p></div>)}</div> : null}
               {clause.history?.length ? <div className="rounded-md border border-border p-3"><p className="text-xs font-semibold"><History className="mr-1.5 inline h-3.5 w-3.5" />Governed history</p><ol className="mt-2 space-y-2 border-l border-border pl-4 text-xs text-muted-foreground">{clause.history.map((event) => <li key={event.id}><strong className="text-foreground">v{event.revisionNumber} · {event.status}</strong>{event.draftSource ? ` · ${event.draftSource}` : ''}{event.proposedByEmail ? ` · proposed by ${event.proposedByEmail}` : ''}{event.approvedByEmail ? ` · approved by ${event.approvedByEmail}` : ''}{event.revisionReason ? <span className="block">{event.revisionReason}</span> : null}</li>)}</ol></div> : null}
             </div></details>
@@ -484,7 +512,7 @@ export default function ClauseBankPanel({ canManage, canApprove, currentUserEmai
         );
       })}</div>
       {!filtered.length ? <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">No clauses match this view.</div> : null}
-      {total > PAGE_SIZE ? <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3 text-sm"><span>Showing {offset + 1}–{Math.min(offset + filtered.length, total)} of {total}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={loading || offset === 0} onClick={() => load(false, Math.max(0, offset - PAGE_SIZE), false)}><ChevronLeft className="mr-1 h-3.5 w-3.5" />Previous</Button><Button type="button" size="sm" variant="outline" disabled={loading || offset + PAGE_SIZE >= total} onClick={() => load(false, offset + PAGE_SIZE, false)}>Next<ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></div></div> : null}
+      {total > PAGE_SIZE ? <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3 text-sm"><span>Showing {offset + 1}–{Math.min(offset + filtered.length, total)} of {total}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={loading || !previousCursor} onClick={() => load(false, previousCursor, false)}><ChevronLeft className="mr-1 h-3.5 w-3.5" />Previous</Button><Button type="button" size="sm" variant="outline" disabled={loading || !nextCursor} onClick={() => load(false, nextCursor, false)}>Next<ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></div></div> : null}
 
       <Dialog open={Boolean(draft)} onOpenChange={(open) => !open && setDraft(null)}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">

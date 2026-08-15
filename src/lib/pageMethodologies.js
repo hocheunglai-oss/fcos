@@ -454,11 +454,15 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Clause governance',
-      body: 'Every active FCOS user may propose a Special Term, Draft clause, revision, or matching-rule change. Editing a Terms Text row starts from the latest approved shared clause: ordinary users save an unapproved Clause Bank Draft, while the active General Manager or an Administrator must review the complete signed impact and may publish one all-or-none Salesforce update across every linked structured term. Unsaved term changes, pending revisions, stale records, consolidations, and transaction limits block the entire publication. Approved and historical versions remain immutable.',
+      body: 'Every active FCOS user may update a complete Special Term or propose Clause Library wording. A wording edit in the term editor creates a new version for that term only; other terms stay pinned to their approved versions. The explicit Update shared wording everywhere action remains restricted to the active General Manager or an Administrator and retains its signed impact review. Approved and historical versions remain immutable.',
     },
     {
-      title: 'Readiness and review queues',
-      body: 'The Readiness matrix presents Terms Text, both remarks, the complete rule snapshot, and the overall whole-term state together. The Clause Bank Work Queue groups wording review, approval, assignment blockers, relinking, and retirement by the next required action. Server-backed paging, saved filters, rapid review, local session recovery, duplicate comparisons, and governed history improve review speed without relaxing Salesforce revalidation or approval authority.',
+      title: 'Term-first workflow',
+      body: 'The Special Terms list loads lightweight summaries and presents one status, one next action, and one primary button. Opening a term creates a local working copy immediately. Terms Text, Confirmation, Nomination, Matching Rules, and Preview load only for that term, use one change reason, and finish with Submit for approval or Approve & publish. Successful actions merge their authoritative Salesforce result locally without reloading the workspace.',
+    },
+    {
+      title: 'Clause Library',
+      body: 'The separate Clause Library contains global wording maintenance, Draft administration, consolidation, retirement, and governed history. It uses server-backed paging and loads comparison details only when selected. Administrative migration queues, readiness details, rollback, downloads, and deletion remain available through filters, row actions, or Advanced tools rather than competing with the normal update path.',
     },
     {
       title: 'Equivalent-clause consolidation',
@@ -466,7 +470,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Legacy migration',
-      body: 'Each legacy projection stays live while clause boundaries and exact-equivalence candidates are reviewed in Salesforce. Existing numbered and hyphen remarks are parsed without changing their wording; unmarked or mixed records are flagged for manual segmentation. FCOS prepares controlled batches of up to 20 related terms, preserving original text and mapping lineage. Activation requires every proposed clause version and rule in one whole-term revision to be approved, then atomically writes all three projections, styles, assignments, rules, compilations, and verification hashes. Rollback restores the preserved whole-term state.',
+      body: 'Opening a legacy term automatically prepares one complete working draft across Terms Text, both remarks, and the current rule snapshot. Exact approved matches are reused and unmatched wording becomes a Legacy Draft without changing the live term. Only genuinely ambiguous clause boundaries require manual review. Approve & publish promotes referenced Draft clauses and activates every projection and rule in one Salesforce transaction; a failure rolls back the entire publication.',
     },
     {
       title: 'Rule matching',

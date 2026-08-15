@@ -29,6 +29,7 @@ const MyCommitments = lazy(() => import('@/pages/MyCommitments'));
 const HedgeDesk = lazy(() => import('@/pages/HedgeDesk'));
 const Markets = lazy(() => import('@/pages/Markets'));
 const SpecialTerms = lazy(() => import('@/pages/SpecialTerms'));
+const SpecialTermEditor = lazy(() => import('@/pages/SpecialTermEditor'));
 const EmailRouter = lazy(() => import('@/pages/EmailRouter'));
 
 function RouteLoader() {
@@ -110,6 +111,7 @@ const AuthenticatedApp = () => {
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
             <Route path="/markets" element={<ModuleGate moduleId="markets"><Markets /></ModuleGate>} />
             <Route path="/special-terms" element={<ModuleGate moduleId="special_terms"><SpecialTerms /></ModuleGate>} />
+            <Route path="/special-terms/:termId" element={<ModuleGate moduleId="special_terms"><SpecialTermEditor /></ModuleGate>} />
             <Route path="/hedge-desk" element={<ModuleGate moduleId="hedge_desk"><HedgeDesk /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
             <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />

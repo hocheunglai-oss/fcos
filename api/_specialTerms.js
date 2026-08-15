@@ -42,6 +42,8 @@ const OPERATION_OBJECTS = Object.freeze({
   migration_rollback: OBJECTS.term,
   revision_save: OBJECTS.clauseAssignment,
   revision_approve: OBJECTS.term,
+  revision_submit: OBJECTS.revision,
+  revision_approve_publish: OBJECTS.term,
   revision_rollback: OBJECTS.term,
   migration_batch_review: OBJECTS.clauseAssignment,
   clause_ai_draft: OBJECTS.clause,
@@ -351,6 +353,140 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
   };
 }
 
+function summaryCursorOffset(cursor) {
+  if (!cursor) return 0;
+  try {
+    const decoded = Buffer.from(String(cursor), 'base64url').toString('utf8');
+    const match = /^special-terms:v1:(\d+)$/.exec(decoded);
+    return match ? Number(match[1]) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function summaryCursor(offset) {
+  return Buffer.from(`special-terms:v1:${offset}`, 'utf8').toString('base64url');
+}
+
+function summaryWorkflow(term, pendingRevision) {
+  if (term.relinkRequiredCount > 0) return { status: 'Relink required', nextAction: 'resolve_relink' };
+  if (pendingRevision) return { status: 'Ready for approval', nextAction: 'review_publish' };
+  if (term.revisionStatus === 'Draft') return { status: 'Draft', nextAction: 'continue' };
+  if ([term.clauseStructureStatus, term.confirmationClauseStatus, term.nominationClauseStatus].some((status) => status !== 'Active')) {
+    return { status: 'Legacy', nextAction: 'update' };
+  }
+  return { status: 'Approved', nextAction: 'update' };
+}
+
+/** Lightweight, paginated Special Terms list for the term-first workspace.
+ * Contractual text and complete rules are deliberately excluded; those load only
+ * after a user opens the dedicated editor. */
+export async function listSpecialTermSummaries({ query = '', action = '', status = '', cursor = '', limit = 40, force = false } = {}) {
+  await resolveSpecialTermsSchema({ force });
+  const cached = await getOrLoadRuntimeCache({
+    namespace: 'salesforce-special-terms-summary',
+    version: '1',
+    accessScope: 'global',
+    apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    payload: { view: 'term-first-summary' },
+    ttlSeconds: 5 * 60,
+    tags: ['salesforce:special-terms', 'salesforce:special-terms:summaries'],
+    force,
+    loader: async () => {
+      const [termResult, assignmentResult, ruleResult, revisionResult, consolidationResult] = await Promise.all([
+        sfQuery('SELECT Id,Name,Add_to_Confirmation__c,Add_to_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,LastModifiedDate FROM Special_Term__c ORDER BY Name,Id LIMIT 5000', { clean: true, limit: 5000 }),
+        sfQuery('SELECT Special_Term__c,Projection__c,State__c,Clause__c,Clause__r.Name,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE State__c IN (\'Active\',\'Proposed\') LIMIT 10000', { clean: true, limit: 10000 }),
+        sfQuery('SELECT Special_Term__c termId,COUNT(Id) ruleCount FROM Special_Term_Rule__c GROUP BY Special_Term__c LIMIT 2000', { clean: true, limit: 2000 }),
+        sfQuery("SELECT Id,Special_Term__c,Status__c,Proposed_By_Email__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Status__c IN ('Draft','In Review','Ready for Approval','Changes Requested') ORDER BY LastModifiedDate DESC LIMIT 5000", { clean: true, limit: 5000 }),
+        sfQuery(`SELECT Id,Source_Clause__c,Status__c FROM ${OBJECTS.clauseConsolidation} WHERE Status__c IN ('Relinking','Paused','Ready to Retire') LIMIT 5000`, { clean: true, limit: 5000 }),
+      ]);
+      const results = [termResult, assignmentResult, revisionResult, consolidationResult];
+      if (results.some((result) => result.totalSize > result.records.length)) throw specialTermsError('Special Terms summaries exceed the safe result limit.', 503, 'SPECIAL_TERMS_RESULT_LIMIT');
+
+      const consolidatingClauseIds = new Set(consolidationResult.records.map((row) => row.Source_Clause__c));
+      const counts = new Map();
+      const clauseNames = new Map();
+      for (const assignment of assignmentResult.records) {
+        const termId = assignment.Special_Term__c;
+        const row = counts.get(termId) || { active: 0, proposed: 0, upgrades: 0, relinkClauseIds: new Set() };
+        if (assignment.State__c === 'Active') {
+          row.active += 1;
+          if (Number(assignment.Clause__r?.Latest_Approved_Version_Number__c || 0) > Number(assignment.Clause_Version__r?.Revision_Number__c || 0)) row.upgrades += 1;
+          if (consolidatingClauseIds.has(assignment.Clause__c)) row.relinkClauseIds.add(assignment.Clause__c);
+        } else row.proposed += 1;
+        counts.set(termId, row);
+        if (!clauseNames.has(termId)) clauseNames.set(termId, new Set());
+        if (assignment.Clause__r?.Name) clauseNames.get(termId).add(assignment.Clause__r.Name);
+      }
+      const rulesByTerm = new Map(ruleResult.records.map((row) => [row.termId, Number(row.ruleCount || 0)]));
+      const pendingByTerm = new Map();
+      for (const revision of revisionResult.records) if (!pendingByTerm.has(revision.Special_Term__c)) pendingByTerm.set(revision.Special_Term__c, revision);
+
+      const terms = termResult.records.map((row) => {
+        const termCounts = counts.get(row.Id) || { active: 0, proposed: 0, upgrades: 0, relinkClauseIds: new Set() };
+        const mapped = mapTerm({
+          ...row,
+          activeClauseCount: termCounts.active,
+          proposedClauseCount: termCounts.proposed,
+          upgradeCount: termCounts.upgrades,
+          relinkRequiredCount: termCounts.relinkClauseIds.size,
+        });
+        const pending = pendingByTerm.get(row.Id) || null;
+        return {
+          id: mapped.id,
+          name: mapped.name,
+          revisionId: pending?.Id || mapped.revisionId,
+          revisionStatus: pending?.Status__c || mapped.revisionStatus,
+          proposedByEmail: pending?.Proposed_By_Email__c || null,
+          addToConfirmation: mapped.addToConfirmation,
+          addToNomination: mapped.addToNomination,
+          clauseStructureStatus: mapped.clauseStructureStatus,
+          confirmationClauseStatus: mapped.confirmationClauseStatus,
+          confirmationClauseStyle: mapped.confirmationClauseStyle,
+          nominationClauseStatus: mapped.nominationClauseStatus,
+          nominationClauseStyle: mapped.nominationClauseStyle,
+          activeClauseCount: termCounts.active,
+          proposedClauseCount: termCounts.proposed,
+          upgradeCount: termCounts.upgrades,
+          relinkRequiredCount: termCounts.relinkClauseIds.size,
+          ruleCount: rulesByTerm.get(row.Id) || 0,
+          clauseNames: [...(clauseNames.get(row.Id) || [])],
+          lastModifiedAt: mapped.lastModifiedAt,
+          revisionLastModifiedAt: pending?.LastModifiedDate || null,
+          ...summaryWorkflow(mapped, pending),
+        };
+      });
+      return { terms, fetchedAt: new Date().toISOString(), instanceUrl: getInstanceUrl() };
+    },
+  });
+
+  const normalizedQuery = text(query, 120).toLocaleLowerCase('en');
+  const normalizedAction = ['update', 'continue', 'review_publish', 'resolve_relink'].includes(action) ? action : '';
+  const normalizedStatus = ['Legacy', 'Draft', 'Ready for approval', 'Relink required', 'Approved'].includes(status) ? status : '';
+  const filtered = cached.value.terms.filter((term) => {
+    if (normalizedAction && term.nextAction !== normalizedAction) return false;
+    if (normalizedStatus && term.status !== normalizedStatus) return false;
+    if (!normalizedQuery) return true;
+    return [term.name, ...(term.clauseNames || [])].some((value) => String(value || '').toLocaleLowerCase('en').includes(normalizedQuery));
+  });
+  const safeLimit = Math.min(Math.max(Number(limit) || 40, 10), 100);
+  const offset = Math.min(summaryCursorOffset(cursor), filtered.length);
+  const page = filtered.slice(offset, offset + safeLimit).map((term) => {
+    const row = { ...term };
+    delete row.clauseNames;
+    return row;
+  });
+  const nextOffset = offset + page.length;
+  return {
+    terms: page,
+    total: filtered.length,
+    nextCursor: nextOffset < filtered.length ? summaryCursor(nextOffset) : null,
+    fetchedAt: cached.value.fetchedAt,
+    instanceUrl: cached.value.instanceUrl,
+    cacheStatus: cached.cacheStatus || cached.status || null,
+  };
+}
+
 export async function getSpecialTermForExport(termId, { force = false } = {}) {
   return getSpecialTermDocumentForExport(termId, { force, source: 'live' });
 }
@@ -367,14 +503,14 @@ function assertDocumentCurrent(record, expectedLastModifiedAt, label = 'Special 
   }
 }
 
-export function compiledTermsText(rows, { historical = false } = {}) {
+export function compiledTermsText(rows, { historical = false, allowDraft = false } = {}) {
   const ordered = [...rows].sort((left, right) => Number(left.Sequence__c || 0) - Number(right.Sequence__c || 0) || String(left.Id).localeCompare(String(right.Id)));
   const allowedClauseStatuses = historical ? ['Active', 'Retired'] : ['Active'];
   if (ordered.some((row, index) => Number(row.Sequence__c) !== index + 1
     || !row.Clause__c
     || row.Clause__c !== row.Clause_Version__r?.Clause__c
-    || !allowedClauseStatuses.includes(row.Clause__r?.Status__c)
-    || !['Approved', 'Superseded'].includes(row.Clause_Version__r?.Status__c)
+    || !(allowedClauseStatuses.includes(row.Clause__r?.Status__c) || (allowDraft && row.Clause__r?.Status__c === 'Draft'))
+    || !(['Approved', 'Superseded'].includes(row.Clause_Version__r?.Status__c) || (allowDraft && row.Clause_Version__r?.Status__c === 'Draft'))
     || !row.Clause_Version__r?.Clause_Text__c)) {
     throw specialTermsError('The structured Special Term contains a non-approved clause version and cannot be exported.', 409, 'SPECIAL_TERMS_DOCUMENT_CLAUSE_UNAPPROVED');
   }
@@ -417,7 +553,7 @@ export async function getSpecialTermDocumentForExport(termId, {
   if (!revision || !['Draft', 'In Review'].includes(revision.Status__c)) throw specialTermsError('The saved draft revision is no longer available for preview export.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_STALE');
   assertDocumentCurrent(revision, expectedRevisionLastModifiedAt, 'Special Term draft');
   const revisionClauses = await sfQuery(`SELECT Id,Sequence__c,Clause__c,Clause__r.Status__c,Clause_Version__r.Clause__c,Clause_Version__r.Status__c,Clause_Version__r.Clause_Text__c FROM Special_Term_Revision_Clause__c WHERE Special_Term_Revision__c = '${soql(resolvedRevisionId)}' AND Projection__c = 'Terms Text' AND State__c = 'Proposed' ORDER BY Sequence__c,Id LIMIT 500`, { clean: true, limit: 500 });
-  const compiled = compiledTermsText(revisionClauses.records);
+  const compiled = compiledTermsText(revisionClauses.records, { allowDraft: true });
   return { ...mapTerm(term), source: 'draft', revisionId: revision.Id, revisionLastModifiedAt: revision.LastModifiedDate, termsText: compiled, clauses: revisionClauses.records.map((row) => ({ text: row.Clause_Version__r.Clause_Text__c })) };
 }
 

@@ -125,6 +125,56 @@ private class SpecialTermRevisionServiceTest {
         try { SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Stale test.', '2000-01-01 00:00:00'); System.assert(false, 'Stale activation must fail.'); } catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('changed after it was opened')); }
     }
 
+    @isTest static void approvesDraftClauseAndPublishesTermInOneTransaction() {
+        Special_Term__c term = new Special_Term__c(Name = 'Atomic scoped wording term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c base = approvedVersion('Atomic Scoped Clause', '8888888888888888888888888888888888888888888888888888888888888888', 'Buyer shall submit its claim within 14 days.');
+        Special_Term_Clause_Version__c draft = new Special_Term_Clause_Version__c(Clause__c = base.Clause__c, Revision_Number__c = 2, Clause_Text__c = 'The Buyer shall submit its claim within 14 days.', Status__c = 'Draft', Revision_Reason__c = 'Simplify wording', Draft_Source__c = 'Manual');
+        insert draft;
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Publish scoped wording');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = base.Clause__c, Clause_Version__c = draft.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        draft = [SELECT Id, LastModifiedDate FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id];
+        Map<String, String> expectedVersions = new Map<String, String>{ String.valueOf(draft.Id) => String.valueOfGmt(draft.LastModifiedDate) };
+
+        Test.startTest();
+        SpecialTermRevisionService.approveDraftClausesAndActivate(revision.Id, 'gm@example.com', 'Approve and publish one complete update.', String.valueOfGmt(revision.LastModifiedDate), expectedVersions);
+        Test.stopTest();
+
+        System.assertEquals('Superseded', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :base.Id].Status__c);
+        System.assertEquals('Approved', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id].Status__c);
+        term = [SELECT Approval_Status__c, Terms_Text__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Approved', term.Approval_Status__c);
+        System.assertEquals('1. The Buyer shall submit its claim within 14 days.', term.Terms_Text__c);
+    }
+
+    @isTest static void materialDifferenceRollsBackClauseAndTermPublication() {
+        Special_Term__c term = new Special_Term__c(Name = 'Material qualifier guard term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c base = approvedVersion('Material Guard Clause', '9999999999999999999999999999999999999999999999999999999999999999', 'Buyer shall submit its claim within 14 days.');
+        Special_Term_Clause_Version__c draft = new Special_Term_Clause_Version__c(Clause__c = base.Clause__c, Revision_Number__c = 2, Clause_Text__c = 'Buyer shall submit its claim within 15 days.', Status__c = 'Draft', Revision_Reason__c = 'Change deadline', Draft_Source__c = 'Manual');
+        insert draft;
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Material guard');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = base.Clause__c, Clause_Version__c = draft.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        draft = [SELECT Id, LastModifiedDate FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id];
+        try {
+            SpecialTermRevisionService.approveDraftClausesAndActivate(revision.Id, 'gm@example.com', 'Attempt material change.', String.valueOfGmt(revision.LastModifiedDate), new Map<String, String>{ String.valueOf(draft.Id) => String.valueOfGmt(draft.LastModifiedDate) });
+            System.assert(false, 'A material qualifier change must be rejected.');
+        } catch (SpecialTermRevisionService.RevisionException error) {
+            System.assert(error.getMessage().contains('material qualifier'));
+        }
+        System.assertEquals('Approved', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :base.Id].Status__c);
+        System.assertEquals('Draft', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id].Status__c);
+        System.assertEquals('Legacy', [SELECT Approval_Status__c FROM Special_Term__c WHERE Id = :term.Id].Approval_Status__c);
+    }
+
     @isTest static void deletesOnlyTransientUngovernedTermGraph() {
         Special_Term__c disposable = new Special_Term__c(Name = 'Disposable draft term', Approval_Status__c = 'Draft', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
         insert disposable;

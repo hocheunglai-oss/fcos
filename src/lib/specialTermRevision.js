@@ -14,12 +14,16 @@ export function revisionPayload(revision) {
   return {
     revisionId: revision.id || null,
     expectedLastModifiedAt: revision.termLastModifiedAt || revision.expectedLastModifiedAt || revision.lastModifiedAt || null,
+    expectedRevisionLastModifiedAt: revision.id ? revision.lastModifiedAt || revision.expectedLastModifiedAt || null : null,
     projections: SPECIAL_TERM_REVISION_PROJECTIONS.map((key) => {
       const projection = revision.projections?.[key] || {};
       return {
         projection: key,
         style: projection.style,
         versionIds: (projection.assignments || projection.draftAssignments || projection.rows || projection.activeAssignments || []).map((row) => row.clauseVersionId),
+        versionTimestamps: Object.fromEntries((projection.assignments || projection.draftAssignments || projection.rows || projection.activeAssignments || [])
+          .filter((row) => row.clauseVersionId && row.versionLastModifiedAt)
+          .map((row) => [row.clauseVersionId, row.versionLastModifiedAt])),
       };
     }),
     rules: (revision.rules || []).map((rule) => ({
