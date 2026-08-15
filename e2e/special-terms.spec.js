@@ -5,39 +5,39 @@ const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
 const hasRenewableAuth = Boolean(process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD);
 const hasAuthenticatedCoverage = Boolean(authState) && (existsSync(authState) || hasRenewableAuth);
 
-test.describe('Special Terms whole-term revision workspace', () => {
+test.describe('Special Terms term-first workspace', () => {
   test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable test credentials.');
   test.use({ storageState: authState });
 
-  test('shows governed clause-bank and migration queue surfaces without browser errors', async ({ page }) => {
+  test('shows the lightweight term list, dedicated editor, and paged Clause Library without browser errors', async ({ page }) => {
     const failures = [];
     page.on('pageerror', (error) => failures.push(error.message));
     await page.goto('/special-terms');
     await expect(page.getByText('Special Terms', { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole('tab', { name: /readiness/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /clause bank/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /migration queue/i })).toBeVisible();
-    await page.getByRole('tab', { name: /migration queue/i }).click();
-    await expect(page.getByText('Controlled migration batches')).toBeVisible();
-    await page.getByRole('tab', { name: /clause bank/i }).click();
-    await expect(page.getByRole('button', { name: /work queue/i })).toBeVisible();
-    await expect(page.getByText(/filters are saved on this device/i)).toBeVisible();
-    await page.getByRole('tab', { name: /readiness/i }).click();
-    await expect(page.getByText('Whole-term readiness')).toBeVisible();
-    await page.getByRole('tab', { name: /^terms/i }).click();
-    const editTerm = page.getByTitle('Edit Special Term').first();
-    if (await editTerm.count()) {
-      await editTerm.click();
-      const editor = page.getByRole('dialog').filter({ hasText: 'Edit Special Term' });
-      await expect(editor).toBeVisible();
-      const governedRevision = editor.getByText('Whole-term revision', { exact: true });
-      const legacyReview = editor.getByText('Legacy term — whole-term review required', { exact: true });
-      await expect(governedRevision.or(legacyReview).first()).toBeVisible({ timeout: 20_000 });
-      if (await governedRevision.isVisible()) {
-        await expect(editor.getByRole('button', { name: /live document/i })).toBeVisible();
-        await expect(editor.getByRole('button', { name: /^preview$/i })).toBeVisible({ timeout: 10_000 }).catch(() => {});
-      }
+    await expect(page.getByRole('tab', { name: /^Special Terms/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Clause Library', exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder('Search term or clause name')).toBeVisible();
+    await expect(page.getByText('Advanced migration and history tools')).toBeVisible();
+
+    const salesforceTermLink = page.locator('a[href*="salesforce.com/a0E"]').first();
+    await expect(salesforceTermLink).toBeVisible({ timeout: 30_000 });
+    const salesforceHref = await salesforceTermLink.getAttribute('href');
+    const termId = salesforceHref?.match(/\/([a-zA-Z0-9]{15,18})(?:\?|$)/)?.[1];
+    expect(termId).toBeTruthy();
+
+    await page.goto(`/special-terms/${termId}`);
+    await expect(page.getByText('Complete Special Term update')).toBeVisible({ timeout: 30_000 });
+    for (const section of ['Terms Text', 'Confirmation', 'Nomination', 'Matching Rules', 'Preview']) {
+      await expect(page.getByRole('tab', { name: section, exact: true })).toBeVisible();
     }
+    await page.getByRole('tab', { name: 'Preview', exact: true }).click();
+    await expect(page.getByText('A4 document preview')).toBeVisible();
+
+    await page.goto('/special-terms');
+    await page.getByRole('tab', { name: 'Clause Library', exact: true }).click();
+    await expect(page.getByPlaceholder('Search name or wording')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/matching clauses · filters are saved on this device/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /next/i })).toBeVisible();
     expect(failures).toEqual([]);
   });
 });
