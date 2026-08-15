@@ -618,7 +618,11 @@ export async function currentRecord(objectName, id, fields) {
 }
 
 export function assertCurrent(record, expectedLastModifiedAt) {
-  if (!expectedLastModifiedAt || record.LastModifiedDate !== expectedLastModifiedAt) throw specialTermsError('This Salesforce record changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_STALE', { currentLastModifiedAt: record.LastModifiedDate });
+  const currentTimestamp = Date.parse(String(record?.LastModifiedDate || ''));
+  const expectedTimestamp = Date.parse(String(expectedLastModifiedAt || ''));
+  if (!Number.isFinite(currentTimestamp) || !Number.isFinite(expectedTimestamp) || currentTimestamp !== expectedTimestamp) {
+    throw specialTermsError('This Salesforce record changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_STALE', { currentLastModifiedAt: record?.LastModifiedDate || null });
+  }
 }
 
 export function termMetadataPayload(body, { create = false } = {}) {

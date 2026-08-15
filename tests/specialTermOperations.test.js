@@ -42,8 +42,10 @@ function operationClient() {
 
 test('stale Salesforce timestamps fail closed', () => {
   assert.doesNotThrow(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:00.000Z' }, '2026-08-10T00:00:00.000Z'));
+  assert.doesNotThrow(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:00.000+0000' }, '2026-08-10T00:00:00.000Z'));
   assert.throws(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:01.000Z' }, '2026-08-10T00:00:00.000Z'), /changed after it was opened/i);
   assert.throws(() => assertCurrent({ LastModifiedDate: '2026-08-10T00:00:00.000Z' }, null), /Refresh before saving/i);
+  assert.throws(() => assertCurrent({ LastModifiedDate: 'not-a-timestamp' }, '2026-08-10T00:00:00.000Z'), /Refresh before saving/i);
 });
 
 test('safe deletion authorization normalizes creator email and preserves protected history', () => {
