@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import ClauseInlineEditDialog from '@/components/special-terms/ClauseInlineEditDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -20,7 +21,19 @@ function AddClauseButton({ onClick, disabled, compact = false }) {
   );
 }
 
-function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, style = 'Numbered' }) {
+function ClauseComposer({
+  assignments = EMPTY_ROWS,
+  onChange,
+  disabled = false,
+  style = 'Numbered',
+  canEditClause = false,
+  canPublishClause = false,
+  localPublicationBlocked = false,
+  categoryOptions = EMPTY_ROWS,
+  currentTermId = null,
+  onClausePublished,
+  onStatusMessage,
+}) {
   const [picker, setPicker] = useState(null);
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState([]);
@@ -28,6 +41,10 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
   const [pickerError, setPickerError] = useState('');
   const [upgradeTarget, setUpgradeTarget] = useState(null);
   const [selectedUpgradeIds, setSelectedUpgradeIds] = useState([]);
+  const [editingRow, setEditingRow] = useState(null);
+  const [editPendingKey, setEditPendingKey] = useState(null);
+  const editButtons = useRef(new Map());
+  const editViewport = useRef(null);
   const usedClauseIds = useMemo(() => new Set(assignments.map((row) => row.clauseId)), [assignments]);
   const availableUpgradeIds = useMemo(() => new Set(assignments.filter((row) => row.upgradeAvailable).map((row) => row.clauseId)), [assignments]);
 
@@ -87,6 +104,31 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
 
   const remove = (index) => onChange(assignments.filter((_, rowIndex) => rowIndex !== index));
 
+  const openInlineEditor = (row) => {
+    editViewport.current = { top: window.scrollY, left: window.scrollX, key: `${row.clauseId}:${row.clauseVersionId}` };
+    setEditingRow(row);
+  };
+
+  const closeInlineEditor = () => {
+    const viewport = editViewport.current;
+    setEditingRow(null);
+    window.requestAnimationFrame(() => {
+      if (viewport) window.scrollTo({ top: viewport.top, left: viewport.left, behavior: 'auto' });
+      editButtons.current.get(viewport?.key)?.focus({ preventScroll: true });
+    });
+  };
+
+  const clauseDraftSaved = () => {
+    onStatusMessage?.('A proposed clause Draft was saved in the Clause Bank. Live Special Terms remain unchanged.');
+    closeInlineEditor();
+  };
+
+  const clausePublished = (result) => {
+    onClausePublished?.(result);
+    onStatusMessage?.(`Clause v${result.revisionNumber} was approved and published to ${result.termCount} live Special Term${Number(result.termCount) === 1 ? '' : 's'}.`);
+    closeInlineEditor();
+  };
+
   const applyUpgrade = () => {
     if (!upgradeTarget?.latestApprovedVersion) return;
     onChange(assignments.map((row) => row.clauseId === upgradeTarget.clauseId ? {
@@ -134,6 +176,7 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
               {row.consolidation ? <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />This clause is being consolidated into {row.consolidation.replacementShortName}. You may still use it, but the saved whole-term draft will join the relink queue.</p> : null}
             </div>
             <div className="flex items-start justify-end gap-1 sm:flex-col">
+              {canEditClause ? <Button ref={(node) => { const key = `${row.clauseId}:${row.clauseVersionId}`; if (node) editButtons.current.set(key, node); else editButtons.current.delete(key); }} type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openInlineEditor(row)} disabled={editPendingKey === `${row.clauseId}:${row.clauseVersionId}`} title="Edit shared Clause Bank wording" aria-label={`Edit ${row.shortName}`}>{editPendingKey === `${row.clauseId}:${row.clauseVersionId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}</Button> : null}
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => move(index, -1)} disabled={disabled || index === 0} title="Move clause up"><ArrowUp className="h-4 w-4" /></Button>
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => move(index, 1)} disabled={disabled || index === assignments.length - 1} title="Move clause down"><ArrowDown className="h-4 w-4" /></Button>
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(index)} disabled={disabled} title="Remove clause from this Special Term"><Trash2 className="h-4 w-4" /></Button>
@@ -169,6 +212,19 @@ function ClauseComposer({ assignments = EMPTY_ROWS, onChange, disabled = false, 
           <DialogFooter><Button variant="outline" onClick={() => setUpgradeTarget(null)}>Keep current version</Button><Button onClick={applyUpgrade}>Use approved revision</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ClauseInlineEditDialog
+        row={editingRow}
+        open={Boolean(editingRow)}
+        canPublishGlobally={canPublishClause}
+        localPublicationBlocked={localPublicationBlocked}
+        categoryOptions={categoryOptions}
+        currentTermId={currentTermId}
+        onClose={closeInlineEditor}
+        onPendingChange={(key, pending) => setEditPendingKey(pending ? key : null)}
+        onDraftSaved={clauseDraftSaved}
+        onPublished={clausePublished}
+      />
     </div>
   );
 }

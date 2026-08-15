@@ -104,6 +104,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   specialTermsOptions: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   specialTermDetail: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   specialTermClauseBank: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  specialTermClauseEditPreview: readPolicy({"cache":"none","externalAction":false,"capability":null}),
+  specialTermClauseGlobalPublish: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_clause_approve"}),
   specialTermDeletePreview: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   specialTermMigrationInventory: readPolicy({"cache":"none","externalAction":false,"capability":"special_terms_clause_approve"}),
   specialTermClauseDraftSave: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),

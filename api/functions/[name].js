@@ -179,6 +179,8 @@ import {
   deleteSpecialTermClause,
   discardSpecialTermClauseDraft,
   previewSpecialTermClauseDeletion,
+  getSpecialTermClauseEditPreview,
+  publishSpecialTermClauseGlobally,
 } from '../_specialTermClauses.js';
 import {
   emailRouterActionHandler as nativeEmailRouterAction,
@@ -1355,6 +1357,8 @@ const HANDLER_MODULE_ACCESS = {
   specialTermsOptions: ['special_terms'],
   specialTermDetail: ['special_terms'],
   specialTermClauseBank: ['special_terms'],
+  specialTermClauseEditPreview: ['special_terms'],
+  specialTermClauseGlobalPublish: ['special_terms'],
   specialTermDeletePreview: ['special_terms'],
   specialTermMigrationInventory: ['special_terms'],
   specialTermClauseDraftSave: ['special_terms'],
@@ -16861,7 +16865,14 @@ async function specialTermsWorkspace(body = {}, req = null, accessContext = null
   ]);
   const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
   const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
-  return { ...workspace, canManage: true, canDraft: true, canApproveClauses: canApproveRevisions, canApproveRevisions };
+  return {
+    ...workspace,
+    canManage: true,
+    canDraft: true,
+    canApproveClauses: canApproveRevisions,
+    canApproveRevisions,
+    currentUserEmail: context.profile.email || '',
+  };
 }
 
 async function specialTermsDocumentExport(body = {}, req, res, accessContext = null) {
@@ -16932,6 +16943,17 @@ async function specialTermDetail(body = {}, req = null, accessContext = null) {
 async function specialTermClauseBank(body = {}, req = null, accessContext = null) {
   accessContext || (await requireActiveUser(req));
   return listSpecialTermClauseBank(body);
+}
+
+async function specialTermClauseEditPreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return getSpecialTermClauseEditPreview(body, { canPublish: await isSpecialTermClauseApprover(context) });
+}
+
+async function specialTermClauseGlobalPublish(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return publishSpecialTermClauseGlobally(context.client, context.profile, body);
 }
 
 async function specialTermDeletePreview(body = {}, req = null, accessContext = null) {
@@ -17293,6 +17315,8 @@ const handlers = {
   specialTermsOptions,
   specialTermDetail,
   specialTermClauseBank,
+  specialTermClauseEditPreview,
+  specialTermClauseGlobalPublish,
   specialTermDeletePreview,
   specialTermMigrationInventory,
   specialTermClauseDraftSave,

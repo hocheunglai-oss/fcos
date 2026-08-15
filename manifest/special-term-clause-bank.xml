@@ -5,6 +5,9 @@
         <members>SpecialTermClauseCompiler</members>
         <members>SpecialTermClauseCompilerTest</members>
         <members>SpecialTermClauseHandler</members>
+        <members>SpecialTermClausePublicationRest</members>
+        <members>SpecialTermClausePublicationService</members>
+        <members>SpecialTermClausePublicationServiceTest</members>
         <members>SpecialTermConsolidationHandler</members>
         <members>SpecialTermConsolidationTest</members>
         <members>SpecialTermRevisionClauseHandler</members>
@@ -40,6 +43,8 @@
         <members>Special_Term_Clause_Version__c.AI_Response_Id__c</members>
         <members>Special_Term_Clause_Version__c.Draft_Source__c</members>
         <members>Special_Term_Clause_Version__c.Legacy_Source_Key__c</members>
+        <members>Special_Term_Clause_Version__c.Proposed_Short_Name__c</members>
+        <members>Special_Term_Clause_Version__c.Proposed_Category__c</members>
         <members>Special_Term__c.Approval_Status__c</members>
         <members>Special_Term__c.Current_Revision__c</members>
         <members>Special_Term__c.Clause_Compiled_Hash__c</members>

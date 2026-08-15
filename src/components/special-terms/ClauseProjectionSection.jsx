@@ -14,6 +14,12 @@ function ClauseProjectionSection({
   onChanged,
   onError,
   wholeTermRevision = false,
+  canEditClause = false,
+  canPublishClause = false,
+  localPublicationBlocked = false,
+  currentTermId = null,
+  onClausePublished,
+  onStatusMessage,
 }) {
   const sourceProjection = detail?.projections?.[projection];
   const projectionDetail = sourceProjection ? {
@@ -48,6 +54,13 @@ function ClauseProjectionSection({
           onChange={(activeAssignments) => onAssignmentsChange?.(projection, activeAssignments)}
           disabled={!canManage}
           style={projectionDetail.style}
+          canEditClause={isTermsText && canEditClause}
+          canPublishClause={isTermsText && canPublishClause}
+          localPublicationBlocked={localPublicationBlocked}
+          categoryOptions={categoryOptions}
+          currentTermId={currentTermId}
+          onClausePublished={onClausePublished}
+          onStatusMessage={onStatusMessage}
         />
       ) : (
         <div className="space-y-2">

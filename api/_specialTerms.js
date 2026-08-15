@@ -31,6 +31,7 @@ const OPERATION_OBJECTS = Object.freeze({
   clause_draft_delete: OBJECTS.clause,
   clause_version_discard: OBJECTS.clauseVersion,
   clause_approve: OBJECTS.clauseVersion,
+  clause_global_publish: OBJECTS.clauseVersion,
   clause_retire: OBJECTS.clause,
   clause_consolidation_start: OBJECTS.clauseConsolidation,
   clause_consolidation_relink: OBJECTS.clauseConsolidation,
@@ -165,7 +166,7 @@ async function loadSpecialTermsSchema({ force = false, write = false } = {}) {
     for (const name of names) requiredField(map, objectName, name);
   }
   for (const name of ['Name', 'Short_Name_Key__c', 'Canonical_Text_Key__c', 'Category__c', 'Status__c', 'Origin__c', 'Legacy_Original_Text__c', 'Latest_Approved_Version_Number__c', 'Last_Approved_At__c', 'Replacement_Clause__c', 'Retirement_Reason__c']) requiredField(fields.clause, OBJECTS.clause, name, { ...(write ? { createable: name !== 'LastModifiedDate', updateable: true } : {}) });
-  for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c', 'Draft_Source__c', 'AI_Model__c', 'AI_Response_Id__c', 'Legacy_Source_Key__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, ...(name === 'Clause__c' ? {} : { updateable: true }) } : {}) });
+  for (const name of ['Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Content_Hash__c', 'Version_Key__c', 'Status__c', 'Revision_Reason__c', 'Proposed_By_Email__c', 'Proposed_Short_Name__c', 'Proposed_Category__c', 'Approved_By_Email__c', 'Approved_At__c', 'Approval_Reason__c', 'Draft_Source__c', 'AI_Model__c', 'AI_Response_Id__c', 'Legacy_Source_Key__c']) requiredField(fields.clauseVersion, OBJECTS.clauseVersion, name, { ...(write ? { createable: true, ...(name === 'Clause__c' ? {} : { updateable: true }) } : {}) });
   requiredField(fields.clauseVersion, OBJECTS.clauseVersion, 'Clause__c', { referenceTo: OBJECTS.clause, ...(write ? { createable: true } : {}) });
   for (const name of ['Projection__c', 'Sequence__c', 'State__c', 'Assignment_Key__c', 'Clause_Use_Key__c', 'Migration_Batch_Id__c']) requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, name, { ...(write ? { createable: true, updateable: true } : {}) });
   requiredField(fields.clauseAssignment, OBJECTS.clauseAssignment, 'Special_Term__c', { referenceTo: OBJECTS.term, ...(write ? { createable: true } : {}) });

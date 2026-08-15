@@ -37,6 +37,14 @@ test('closed shared pull requests cannot be silently reused for later Salesforce
   assert.doesNotMatch(source, /remoteBranchHead\(PUBLICATION\.activeBranch\).*PUBLICATION\.activeBranch/s);
 });
 
+test('existing shared publication branches are resumed without corrupting the JSON promotion contract', async () => {
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  assert.match(source, /MODE === 'publish' && !existsRemotely \? PUBLICATION\.defaultBranch : branch/);
+  assert.match(source, /MODE === 'publish' && !existsRemotely\) run\('git', \['switch', '-c', branch\]/);
+  assert.match(source, /run\('git', pushArgs, \{ cwd: checkout \}\)/);
+  assert.doesNotMatch(source, /run\('git', pushArgs, \{ cwd: checkout, inherit: true \}\)/);
+});
+
 test('shared Salesforce commits are permanently attributed to the approved GitHub identity', async () => {
   const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;

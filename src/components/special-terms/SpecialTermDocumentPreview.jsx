@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { paginateDocumentText, specialTermDocumentModel } from '@/lib/specialTermDocumentPreview';
 import { SPECIAL_TERMS_DOCUMENT_TOKENS } from '@/lib/specialTermsDocumentTokens';
+import { exportReadiness } from '@/lib/specialTermsWorkflow';
 
 const LETTERHEAD_CONTACT = 'UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK';
 const PAGE = SPECIAL_TERMS_DOCUMENT_TOKENS.page;
@@ -95,6 +96,7 @@ export default function SpecialTermDocumentPreview({ term, detail, revision, uns
   const [zoom, setZoom] = useState('fit');
   const model = useMemo(() => specialTermDocumentModel({ term, detail, revision, mode }), [detail, mode, revision, term]);
   const pages = useMemo(() => paginateDocumentText(model.termsText, { title: model.title }), [model.termsText, model.title]);
+  const liveReadiness = useMemo(() => exportReadiness(term), [term]);
   const draftExportAllowed = Boolean(revision?.id) && !unsaved;
   return (
     <section className="min-w-0 space-y-3 rounded-lg border border-border bg-muted/20 p-3 sm:p-4">
@@ -108,6 +110,7 @@ export default function SpecialTermDocumentPreview({ term, detail, revision, uns
         {model.isDraft && unsaved ? <span className="text-xs text-amber-800">Save this revision before exporting its PDF.</span> : null}
         {mode === 'live' ? <span className="text-xs text-muted-foreground">Word is editable; Salesforce remains authoritative. Attachments are PDF-only.</span> : <span className="text-xs text-amber-800">A saved draft may be exported as PDF only; it is not an attachment or issued document.</span>}
       </div>
+      {mode === 'live' ? <div className={`rounded-md border p-2 text-xs ${liveReadiness.state === 'verified' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : liveReadiness.state === 'legacy' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-900'}`}><strong>{liveReadiness.label}.</strong> {liveReadiness.reason}</div> : null}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>{pages.length} {pages.length === 1 ? 'page' : 'pages'} · local preview</span>
         <div className="flex gap-1"><Button type="button" size="sm" variant={zoom === 'fit' ? 'secondary' : 'ghost'} onClick={() => setZoom('fit')}>Fit width</Button><Button type="button" size="sm" variant={zoom === '100' ? 'secondary' : 'ghost'} onClick={() => setZoom('100')}>100%</Button></div>

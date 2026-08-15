@@ -13,6 +13,7 @@ public class SpecialTermVersionHandler {
             if (String.isBlank(version.Revision_Reason__c)) version.addError('Revision reason is required.');
             if (version.Approved_At__c != null || !String.isBlank(version.Approved_By_Email__c) || !String.isBlank(version.Approval_Reason__c)) version.addError('Draft versions cannot contain approval metadata.');
             version.Clause_Text__c = normalizedText;
+            if (!String.isBlank(version.Proposed_Short_Name__c)) version.Proposed_Short_Name__c = version.Proposed_Short_Name__c.trim().replaceAll('\\s+', ' ');
             version.Content_Hash__c = SpecialTermClauseCompiler.sha256(normalizedText);
             if (version.Clause__c != null && version.Revision_Number__c != null) {
                 version.Version_Key__c = String.valueOf(version.Clause__c) + ':' + String.valueOf(version.Revision_Number__c.intValue());
@@ -47,6 +48,8 @@ public class SpecialTermVersionHandler {
                     && !changed(version.Content_Hash__c, oldVersion.Content_Hash__c)
                     && !changed(version.Revision_Reason__c, oldVersion.Revision_Reason__c)
                     && !changed(version.Proposed_By_Email__c, oldVersion.Proposed_By_Email__c)
+                    && !changed(version.Proposed_Short_Name__c, oldVersion.Proposed_Short_Name__c)
+                    && !changed(version.Proposed_Category__c, oldVersion.Proposed_Category__c)
                     && !changed(version.Approved_By_Email__c, oldVersion.Approved_By_Email__c)
                     && !changed(version.Approved_At__c, oldVersion.Approved_At__c)
                     && !changed(version.Approval_Reason__c, oldVersion.Approval_Reason__c);
@@ -69,6 +72,7 @@ public class SpecialTermVersionHandler {
                 version.addError('Draft versions may only remain Draft or become Approved.');
             }
             version.Clause_Text__c = normalizedText;
+            if (!String.isBlank(version.Proposed_Short_Name__c)) version.Proposed_Short_Name__c = version.Proposed_Short_Name__c.trim().replaceAll('\\s+', ' ');
             version.Content_Hash__c = SpecialTermClauseCompiler.sha256(normalizedText);
             version.Version_Key__c = String.valueOf(version.Clause__c) + ':' + String.valueOf(version.Revision_Number__c.intValue());
         }

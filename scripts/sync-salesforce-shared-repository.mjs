@@ -176,10 +176,10 @@ function publicationBranch() {
 
 function cloneBranch(destination, branch, existsRemotely) {
   const cloneArgs = ['repo', 'clone', PUBLICATION.repository, destination, '--'];
-  const cloneSourceBranch = MODE === 'publish' ? PUBLICATION.defaultBranch : branch;
+  const cloneSourceBranch = MODE === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
   cloneArgs.push('--branch', cloneSourceBranch, '--single-branch');
   run('gh', cloneArgs, { env: ghEnvironment });
-  if (MODE === 'publish') run('git', ['switch', '-c', branch], { cwd: destination });
+  if (MODE === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
 }
 
 function readOwnedFiles(checkout) {
@@ -269,7 +269,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest) {
   const pushArgs = ['push', '--set-upstream'];
   if (expectedRemoteHead) pushArgs.push(`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`);
   pushArgs.push('origin', `HEAD:${branch}`);
-  run('git', pushArgs, { cwd: checkout, inherit: true });
+  run('git', pushArgs, { cwd: checkout });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
   assertCommitAttribution(commit);
   if (!pullRequest) {

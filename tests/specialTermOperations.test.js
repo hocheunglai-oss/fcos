@@ -206,3 +206,14 @@ test('consolidation is Salesforce-owned and Supabase records identifiers only', 
   const versionGuard = read('force-app/main/default/classes/SpecialTermVersionHandler.cls');
   assert.match(versionGuard, /Status__c = 'Paused'/);
 });
+
+test('clause bank supports action-first server paging and lightweight governed history', () => {
+  const service = read('api/_specialTermClauses.js');
+  assert.match(service, /function clauseWorkAction/);
+  assert.match(service, /validView = \['work', 'Active', 'Retired'\]/);
+  assert.match(service, /matched\.slice\(safeOffset, safeOffset \+ safeLimit\)/);
+  assert.match(service, /hasMore: safeOffset \+ safeLimit < matched\.length/);
+  assert.match(service, /exactDuplicateCount/);
+  assert.match(service, /materialDifference: hasMaterialDifference/);
+  assert.match(service, /history: ordered\.map/);
+});

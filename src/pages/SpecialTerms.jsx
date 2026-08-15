@@ -12,6 +12,7 @@ import WorkflowValidationSummary from '@/components/common/WorkflowValidationSum
 import ClauseBankPanel from '@/components/special-terms/ClauseBankPanel';
 import MigrationInventoryPanel from '@/components/special-terms/MigrationInventoryPanel';
 import MigrationBatchPanel from '@/components/special-terms/MigrationBatchPanel';
+import SpecialTermReadinessPanel from '@/components/special-terms/SpecialTermReadinessPanel';
 import WholeTermRevisionPanel from '@/components/special-terms/WholeTermRevisionPanel';
 import SpecialTermLookupField from '@/components/special-terms/SpecialTermLookupField';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -27,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
 import { richTextToCopyText, richTextToPlain, specialTermFilenameKey } from '@/lib/specialTermsText';
 import { specialTermIssues, specialTermRuleIssues } from '@/lib/workflowValidation';
+import { exportReadiness } from '@/lib/specialTermsWorkflow';
 
 const EMPTY_TERM = { id: null, name: '', termsText: '', clauseStructureStatus: 'Active', addToConfirmation: true, addToNomination: false, confirmationRemark: '', confirmationClauseStatus: 'Legacy', confirmationClauseStyle: 'Hyphen', nominationRemark: '', nominationClauseStatus: 'Legacy', nominationClauseStyle: 'Hyphen', expectedLastModifiedAt: null };
 const EMPTY_RULE = { id: null, specialTermId: '', audience: 'Buyer', account: null, port: null, product: null, country: '__any__', expectedLastModifiedAt: null };
@@ -87,7 +89,7 @@ export default function SpecialTerms() {
   const { request: requestSpecialTerms } = useNavigationAwareRequest('reference');
   const [searchParams] = useSearchParams();
   const [workspace, setWorkspace] = useState(null);
-  const [activeTab, setActiveTab] = useState('terms');
+  const [activeTab, setActiveTab] = useState('readiness');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -286,7 +288,7 @@ export default function SpecialTerms() {
     const routeKey = `${requestedTab || ''}:${requestedTermId || ''}`;
     if (routeKey === ':' || appliedRoute.current === routeKey) return;
     appliedRoute.current = routeKey;
-    if (['terms', 'rules', 'clauses', 'migration', 'inventory'].includes(requestedTab)) setActiveTab(requestedTab);
+    if (['readiness', 'terms', 'rules', 'clauses', 'migration', 'inventory'].includes(requestedTab)) setActiveTab(requestedTab);
     if (requestedTermId) {
       const term = (workspace.terms || []).find((row) => row.id === requestedTermId);
       if (term) void openTerm(term);
@@ -304,6 +306,19 @@ export default function SpecialTerms() {
     setTermForm((current) => ({ ...EMPTY_TERM, ...detail.term, expectedLastModifiedAt: detail.term.lastModifiedAt, name: current?.name || detail.term.name }));
     if (successMessage) setMessage(successMessage);
     await load(true);
+  };
+
+  const applyInlineClausePublication = (result) => {
+    const detail = result?.currentTermDetail;
+    if (detail?.term) {
+      setTermDetail(detail);
+      setTermForm((current) => ({ ...current, ...detail.term, expectedLastModifiedAt: detail.term.lastModifiedAt }));
+      setWorkspace((current) => !current ? current : {
+        ...current,
+        terms: (current.terms || []).map((term) => term.id === detail.term.id ? { ...term, ...detail.term } : term),
+      });
+    }
+    setMessage(`Clause v${result?.revisionNumber || ''} was published to ${result?.termCount || 0} live Special Term${Number(result?.termCount || 0) === 1 ? '' : 's'} without reloading the workspace.`);
   };
 
   const openRule = (rule = null) => {
@@ -445,6 +460,7 @@ export default function SpecialTerms() {
 
       <WorkspaceViewBar
         views={[
+          { id: 'readiness', label: 'Readiness', count: (workspace?.terms || []).filter((term) => !['Approved', 'Retired'].includes(term.revisionStatus) || term.relinkRequiredCount).length },
           { id: 'terms', label: 'Terms', count: workspace?.terms?.length || 0 },
           { id: 'rules', label: 'Rules', count: workspace?.rules?.length || 0 },
           { id: 'clauses', label: 'Clause Bank' },
@@ -478,6 +494,8 @@ export default function SpecialTerms() {
 
       {loading && !workspace ? <StateBlock title="Loading Special Terms" description="Reading authoritative Salesforce definitions and rules." icon={Loader2} /> : null}
 
+      {!loading && workspace && activeTab === 'readiness' ? <SpecialTermReadinessPanel terms={workspace.terms || []} rulesByTerm={rulesByTerm} canApprove={workspace.canApproveRevisions} onOpenTerm={openTerm} /> : null}
+
       {!loading && workspace && activeTab === 'terms' && (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[1080px]">
@@ -502,6 +520,7 @@ export default function SpecialTerms() {
             </TableHeader>
             <TableBody>{filteredTerms.map((term) => {
               const termRules = rulesByTerm.get(term.id) || [];
+              const documentStatus = exportReadiness(term);
               const confirmationText = richTextToPlain(term.confirmationRemark);
               const nominationText = richTextToPlain(term.nominationRemark);
               const confirmationCopyKey = `confirmation:${term.id}`;
@@ -522,7 +541,7 @@ export default function SpecialTerms() {
                     </a>
                   </TableCell>
                   <TableCell className="max-w-md">
-                    <div className="mb-1 flex flex-wrap items-center gap-1.5"><Badge variant={term.clauseStructureStatus === 'Active' ? 'default' : 'outline'}>{term.clauseStructureStatus}</Badge><span className="text-xs text-muted-foreground">{term.activeClauseCount || 0} active · {term.proposedClauseCount || 0} proposed</span>{term.upgradeCount ? <Badge className="bg-amber-600">{term.upgradeCount} upgrade{term.upgradeCount === 1 ? '' : 's'}</Badge> : null}{term.relinkRequiredCount ? <Badge variant="destructive">Relink {term.relinkRequiredCount} clause{term.relinkRequiredCount === 1 ? '' : 's'}</Badge> : null}</div>
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5"><Badge variant={term.clauseStructureStatus === 'Active' ? 'default' : 'outline'}>{term.clauseStructureStatus}</Badge><Badge variant={documentStatus.state === 'verified' ? 'secondary' : 'outline'} title={documentStatus.reason}>{documentStatus.label}</Badge><span className="text-xs text-muted-foreground">{term.activeClauseCount || 0} active · {term.proposedClauseCount || 0} proposed</span>{term.upgradeCount ? <Badge className="bg-amber-600">{term.upgradeCount} upgrade{term.upgradeCount === 1 ? '' : 's'}</Badge> : null}{term.relinkRequiredCount ? <Badge variant="destructive">Relink {term.relinkRequiredCount} clause{term.relinkRequiredCount === 1 ? '' : 's'}</Badge> : null}</div>
                     <p className="line-clamp-3 whitespace-pre-wrap text-sm">{richTextToCopyText(term.termsText) || 'No clauses'}</p>
                   </TableCell>
                   <TableCell>
@@ -593,6 +612,7 @@ export default function SpecialTerms() {
         <ClauseBankPanel
           canManage={workspace.canDraft ?? workspace.canManage}
           canApprove={workspace.canApproveClauses}
+          currentUserEmail={workspace.currentUserEmail}
           categoryOptions={workspace.clauseCategoryOptions || []}
           onChanged={() => load(true)}
           onOpenTerm={openTerm}
@@ -621,8 +641,15 @@ export default function SpecialTerms() {
                     categoryOptions={workspace?.clauseCategoryOptions || []}
                     audienceOptions={workspace?.audienceOptions || []}
                     countryOptions={workspace?.countryOptions || []}
+                    hasUnsavedParentChanges={Boolean(termDetail?.term && (
+                      termForm.name !== termDetail.term.name
+                      || termForm.addToConfirmation !== termDetail.term.addToConfirmation
+                      || termForm.addToNomination !== termDetail.term.addToNomination
+                    ))}
                     onError={setError}
                     onChanged={(successMessage) => refreshOpenTerm(termForm.id, successMessage)}
+                    onInlinePublished={applyInlineClausePublication}
+                    onStatusMessage={setMessage}
                   />
                 </div>
               ) : <Alert><AlertDescription>Save the Special Term first, then reopen it to review legacy wording and add approved clauses to each projection.</AlertDescription></Alert>}

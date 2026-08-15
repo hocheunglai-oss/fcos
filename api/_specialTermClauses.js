@@ -1,3 +1,4 @@
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
 import {
@@ -28,6 +29,7 @@ import {
   compileClauseList,
   hasMaterialDifference,
   hasTopLevelListMarker,
+  normalizeClauseEquivalence,
   normalizeClauseText,
   parseLegacyClauses,
   shortNameKey,
@@ -160,6 +162,8 @@ function mapVersion(row) {
     status: row.Status__c || '',
     revisionReason: row.Revision_Reason__c || '',
     proposedByEmail: row.Proposed_By_Email__c || '',
+    proposedShortName: row.Proposed_Short_Name__c || '',
+    proposedCategory: row.Proposed_Category__c || '',
     approvedByEmail: row.Approved_By_Email__c || '',
     approvedAt: row.Approved_At__c || null,
     approvalReason: row.Approval_Reason__c || '',
@@ -191,12 +195,23 @@ function mapClause(row, { versions = [], usageCount = 0 } = {}) {
     usageCount: Number(usageCount || 0),
     lastApprovedAt: row.Last_Approved_At__c || null,
     lastModifiedAt: row.LastModifiedDate || null,
+    history: ordered.map((version) => ({
+      id: version.Id,
+      revisionNumber: Number(version.Revision_Number__c || 0),
+      status: version.Status__c || '',
+      draftSource: version.Draft_Source__c || '',
+      proposedByEmail: version.Proposed_By_Email__c || '',
+      approvedByEmail: version.Approved_By_Email__c || '',
+      approvedAt: version.Approved_At__c || null,
+      revisionReason: version.Revision_Reason__c || '',
+      lastModifiedAt: version.LastModifiedDate || null,
+    })),
     _versions: ordered.map(mapVersion),
   };
 }
 
 const CLAUSE_SELECT = 'Id,Name,Short_Name_Key__c,Canonical_Text_Key__c,Category__c,Status__c,Origin__c,Legacy_Original_Text__c,Latest_Approved_Version_Number__c,Last_Approved_At__c,Replacement_Clause__c,Retirement_Reason__c,LastModifiedDate';
-const VERSION_SELECT = 'Id,Clause__c,Revision_Number__c,Clause_Text__c,Content_Hash__c,Status__c,Revision_Reason__c,Proposed_By_Email__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,Draft_Source__c,AI_Model__c,AI_Response_Id__c,Legacy_Source_Key__c,LastModifiedDate';
+const VERSION_SELECT = 'Id,Clause__c,Revision_Number__c,Clause_Text__c,Content_Hash__c,Status__c,Revision_Reason__c,Proposed_By_Email__c,Proposed_Short_Name__c,Proposed_Category__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,Draft_Source__c,AI_Model__c,AI_Response_Id__c,Legacy_Source_Key__c,LastModifiedDate';
 
 async function expireSpecialTermClauseCaches(termIds = []) {
   await expireRuntimeCacheTags([
@@ -476,21 +491,103 @@ async function loadClauseRows({ force = false } = {}) {
   return { ...cached.value, cacheStatus: cached.cacheStatus || cached.status || null };
 }
 
-export async function listSpecialTermClauseBank({ query = '', status = '', force = false, limit = 200 } = {}) {
+function preferredClauseText(clause) {
+  return clause.draftVersion?.clauseText || clause.latestApprovedVersion?.clauseText || clause.legacyOriginalText || '';
+}
+
+function clauseWorkAction(clause) {
+  if (clause.consolidation?.status === 'Ready to Retire') return 'ready_retire';
+  if (clause.consolidation) return 'relink_required';
+  if (clause.status === 'Draft' && clause.usageCount > 0) return 'blocked_assignment';
+  if (clause.draftVersion && (clause.draftVersion.draftSource === 'Legacy Migration' || String(clause.origin).toLowerCase() === 'legacy')) return 'needs_review';
+  if (clause.draftVersion) return 'ready_approval';
+  return '';
+}
+
+function clauseBankSummary(clauses) {
+  const summary = { work: 0, Active: 0, Retired: 0, actionCounts: {} };
+  for (const clause of clauses) {
+    const action = clauseWorkAction(clause);
+    if (action) {
+      summary.work += 1;
+      summary.actionCounts[action] = Number(summary.actionCounts[action] || 0) + 1;
+    }
+    if (clause.status === 'Active') summary.Active += 1;
+    if (clause.status === 'Retired') summary.Retired += 1;
+  }
+  return summary;
+}
+
+export async function listSpecialTermClauseBank({ query = '', status = '', view = '', action = '', category = '', origin = '', usage = '', ownerEmail = '', duplicatesOnly = false, offset = 0, force = false, limit = 50 } = {}) {
   const bank = await loadClauseRows({ force });
   const search = text(query, 100).toLocaleLowerCase('en');
   const validStatus = ['Draft', 'Active', 'Retired', 'Legacy'].includes(status) ? status : '';
-  const clauses = [];
+  const validView = ['work', 'Active', 'Retired'].includes(view) ? view : '';
+  const validAction = ['needs_review', 'ready_approval', 'blocked_assignment', 'relink_required', 'ready_retire'].includes(action) ? action : '';
+  const validUsage = ['used', 'unused'].includes(usage) ? usage : '';
+  const normalizedOwner = normalizedEmail(ownerEmail);
+  const duplicateGroups = new Map();
+  for (const clause of bank.clauses) {
+    const key = normalizeClauseEquivalence(preferredClauseText(clause));
+    if (!key) continue;
+    if (!duplicateGroups.has(key)) duplicateGroups.set(key, []);
+    duplicateGroups.get(key).push(clause);
+  }
+  const matched = [];
   for (const clause of bank.clauses) {
     if (validStatus === 'Legacy' ? clause.origin !== 'Legacy' : validStatus && clause.status !== validStatus) continue;
-    const haystack = [clause.shortName, clause.category, clause.latestApprovedVersion?.clauseText, clause.draftVersion?.clauseText].filter(Boolean).join(' ').toLocaleLowerCase('en');
+    const workAction = clauseWorkAction(clause);
+    if (validView === 'work' ? !workAction : validView && clause.status !== validView) continue;
+    if (validAction && workAction !== validAction) continue;
+    if (category && category !== 'all' && clause.category !== category) continue;
+    if (origin && origin !== 'all' && clause.origin !== origin) continue;
+    if (validUsage === 'used' && clause.usageCount < 1) continue;
+    if (validUsage === 'unused' && clause.usageCount > 0) continue;
+    if (normalizedOwner && normalizedEmail(clause.draftVersion?.proposedByEmail) !== normalizedOwner) continue;
+    const haystack = [clause.shortName, clause.category, clause.origin, clause.latestApprovedVersion?.clauseText, clause.draftVersion?.clauseText, clause.legacyOriginalText].filter(Boolean).join(' ').toLocaleLowerCase('en');
     if (search && !haystack.includes(search)) continue;
+    const exactGroup = duplicateGroups.get(normalizeClauseEquivalence(preferredClauseText(clause))) || [];
+    if (duplicatesOnly === true && exactGroup.length < 2) continue;
     const { _versions, ...publicClause } = clause;
     void _versions;
-    clauses.push(publicClause);
-    if (clauses.length >= Math.min(Math.max(Number(limit) || 200, 1), 500)) break;
+    matched.push({
+      ...publicClause,
+      workAction: workAction || null,
+      exactDuplicateCount: Math.max(0, exactGroup.length - 1),
+      exactDuplicates: exactGroup.filter((candidate) => candidate.id !== clause.id).slice(0, 10).map((candidate) => ({ id: candidate.id, shortName: candidate.shortName, status: candidate.status })),
+    });
   }
-  return { clauses, fetchedAt: bank.fetchedAt, cacheStatus: bank.cacheStatus };
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const includeReviewMatches = Boolean(validView || duplicatesOnly === true);
+  const clauses = matched.slice(safeOffset, safeOffset + safeLimit).map((clause) => ({
+    ...clause,
+    similarClauses: includeReviewMatches ? bank.clauses
+      .filter((candidate) => candidate.id !== clause.id && preferredClauseText(candidate))
+      .map((candidate) => ({ candidate, similarity: clauseSimilarity(preferredClauseText(clause), preferredClauseText(candidate)) }))
+      .filter((candidate) => candidate.similarity >= 0.72)
+      .sort((left, right) => right.similarity - left.similarity || left.candidate.shortName.localeCompare(right.candidate.shortName))
+      .slice(0, 3)
+      .map(({ candidate, similarity }) => ({
+        id: candidate.id,
+        shortName: candidate.shortName,
+        status: candidate.status,
+        revisionNumber: candidate.draftVersion?.revisionNumber || candidate.latestApprovedVersion?.revisionNumber || 0,
+        clauseText: preferredClauseText(candidate),
+        similarity: Number(similarity.toFixed(3)),
+        materialDifference: hasMaterialDifference(preferredClauseText(clause), preferredClauseText(candidate)),
+      })) : [],
+  }));
+  return {
+    clauses,
+    total: matched.length,
+    offset: safeOffset,
+    limit: safeLimit,
+    hasMore: safeOffset + safeLimit < matched.length,
+    summary: clauseBankSummary(bank.clauses),
+    fetchedAt: bank.fetchedAt,
+    cacheStatus: bank.cacheStatus,
+  };
 }
 
 export async function listSpecialTermClauseConsolidations({ includeClosed = false } = {}) {
@@ -666,10 +763,11 @@ function assignmentFields() {
 export async function getSpecialTermDetail(termId, { force = false } = {}) {
   await resolveSpecialTermsSchema({ force });
   const id = salesforceId(termId, 'Special Term');
-  const [termResult, assignmentResult, liveRuleResult] = await Promise.all([
+  const [termResult, assignmentResult, liveRuleResult, revisionHistoryResult] = await Promise.all([
     sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,Approval_Status__c,Current_Revision__c,LastModifiedDate FROM Special_Term__c WHERE Id = '${soql(id)}' LIMIT 1`, { clean: true, limit: 1 }),
     sfQuery(`SELECT ${assignmentFields()} FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Projection__c,State__c,Sequence__c,Id LIMIT 500`, { clean: true, limit: 500 }),
     sfQuery(`SELECT Id,Name,Account__c,Port__c,Product__c,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Priority__c,Name LIMIT 250`, { clean: true, limit: 250 }),
+    sfQuery(`SELECT Id,Status__c,Revision_Number__c,Revision_Reason__c,Proposed_By_Email__c,Approved_By_Email__c,Approved_At__c,Approval_Reason__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(id)}' ORDER BY Revision_Number__c DESC LIMIT 50`, { clean: true, limit: 50 }),
   ]);
   const term = termResult.records[0];
   if (!term) throw specialTermsError('The selected Special Term is no longer available.', 409, 'SPECIAL_TERMS_STALE');
@@ -766,6 +864,8 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       nominationCompiledHash: term.Nomination_Compiled_Hash__c || null,
       originalNominationRemark: term.Original_Nomination_Remark__c || '',
       nominationMigrationBatchId: term.Nomination_Migration_Batch_Id__c || null,
+      revisionStatus: term.Approval_Status__c || (PROJECTION_LIST.every((config) => (term[config.statusField] || 'Legacy') === 'Active') ? 'Approved' : 'Legacy'),
+      currentRevision: term.Current_Revision__c || null,
       lastModifiedAt: term.LastModifiedDate || null,
     },
     activeAssignments: projectionDetails.termsText.activeAssignments,
@@ -788,6 +888,17 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
       rules: revisionRuleRows.filter((row) => row.Snapshot_Type__c === 'Proposed').map((row) => ({ id: row.Id, sourceRuleId: row.Special_Term_Rule__c || null, audience: row.Audience__c || '', accountId: row.Account__c || null, accountName: row.Account__r?.Name || '', accountClKey: row.Account__r?.Company_Code__c || '', portId: row.Port__c || null, portName: row.Port__r?.Name || '', portCountry: row.Port__r?.Country__c || '', productId: row.Product__c || null, productName: row.Product__r?.Name || '', country: row.Country__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), sequence: Number(row.Sequence__c || 0), state: row.State__c || '', lastModifiedAt: row.LastModifiedDate || null })),
     },
     rules: liveRuleResult.records.map((row) => ({ id: row.Id, name: row.Name || '', accountId: row.Account__c || null, portId: row.Port__c || null, productId: row.Product__c || null, country: row.Country__c || '', audience: row.Supplier_Buyer__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), lastModifiedAt: row.LastModifiedDate || null })),
+    revisionHistory: revisionHistoryResult.records.map((row) => ({
+      id: row.Id,
+      revisionNumber: Number(row.Revision_Number__c || 0),
+      status: row.Status__c || '',
+      revisionReason: row.Revision_Reason__c || '',
+      proposedByEmail: row.Proposed_By_Email__c || '',
+      approvedByEmail: row.Approved_By_Email__c || '',
+      approvedAt: row.Approved_At__c || null,
+      approvalReason: row.Approval_Reason__c || '',
+      lastModifiedAt: row.LastModifiedDate || null,
+    })),
     consolidationPrompts,
     instanceUrl: getInstanceUrl(),
   };
@@ -806,6 +917,169 @@ async function ensureUniqueClause(shortName, canonicalKey, ignoreClauseId = null
 async function finishClauseDraftOperation(client, operation, result) {
   const clause = await loadOneClause(result.clauseId);
   return finishOperation(client, operation, { ...result, clause }, result);
+}
+
+const GLOBAL_PUBLICATION_PREVIEW_TTL_MS = 5 * 60 * 1000;
+
+function globalPublicationSecret(explicitSecret = null) {
+  const secret = String(explicitSecret || process.env.FCOS_SPECIAL_TERMS_PREVIEW_SECRET || '').trim();
+  if (secret.length < 32) throw specialTermsError('Global clause publication is unavailable because its preview-signing key is not configured.', 503, 'SPECIAL_TERMS_PUBLICATION_SECRET_MISSING');
+  return secret;
+}
+
+function publicationProposalHash({ shortName, category, clauseText, reason }) {
+  return createHash('sha256').update(JSON.stringify([
+    shortNameKey(shortName),
+    category,
+    clauseHash(clauseText),
+    clauseHash(reason),
+  ])).digest('hex');
+}
+
+function signPublicationPreview(payload, secret) {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', secret).update(`special-term-clause-publication-v1:${encoded}`).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyPublicationPreview(token, secret, now = Date.now()) {
+  const [encoded, suppliedSignature, ...rest] = String(token || '').split('.');
+  if (!encoded || !suppliedSignature || rest.length) throw specialTermsError('The global publication preview is invalid. Review the impact again.', 409, 'SPECIAL_TERMS_PUBLICATION_PREVIEW_INVALID');
+  const expectedSignature = createHmac('sha256', secret).update(`special-term-clause-publication-v1:${encoded}`).digest('base64url');
+  const supplied = Buffer.from(suppliedSignature);
+  const expected = Buffer.from(expectedSignature);
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw specialTermsError('The global publication preview is invalid. Review the impact again.', 409, 'SPECIAL_TERMS_PUBLICATION_PREVIEW_INVALID');
+  let payload;
+  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { throw specialTermsError('The global publication preview is invalid. Review the impact again.', 409, 'SPECIAL_TERMS_PUBLICATION_PREVIEW_INVALID'); }
+  if (!Number.isFinite(payload?.expiresAt) || payload.expiresAt <= now) throw specialTermsError('The global publication preview expired. Review the impact again.', 409, 'SPECIAL_TERMS_PUBLICATION_PREVIEW_EXPIRED');
+  return payload;
+}
+
+async function callClausePublicationApex(clauseId, action, body = {}) {
+  const result = await sfRequest(`/apexrest/fcos/special-term-clauses/${encodeURIComponent(clauseId)}/${action}`, { method: 'POST', body });
+  if (result?.success !== true) throw specialTermsError(result?.message || 'Salesforce rejected the global clause publication action.', 409, result?.code || 'SPECIAL_TERMS_GLOBAL_PUBLICATION_REJECTED');
+  return result;
+}
+
+export async function getSpecialTermClauseEditPreview(body = {}, { canPublish = false, previewSecret = null, now = Date.now() } = {}) {
+  const clauseId = salesforceId(body.clauseId, 'Clause');
+  const preview = await callClausePublicationApex(clauseId, 'publication-preview');
+  const draft = preview.draftVersion || null;
+  const latest = preview.latestApprovedVersion || null;
+  const defaults = {
+    shortName: draft?.proposedShortName || preview.shortName || '',
+    category: draft?.proposedCategory || preview.category || 'Other',
+    clauseText: draft?.clauseText || latest?.clauseText || '',
+    revisionReason: draft ? '' : '',
+  };
+  const response = {
+    ...preview,
+    canPublishGlobally: canPublish === true,
+    mode: canPublish ? 'global_publish' : 'draft_proposal',
+    defaults,
+    confirmationLabel: null,
+    previewToken: null,
+    expiresAt: null,
+    warning: canPublish
+      ? `Publishing creates an approved clause version and immediately updates ${preview.termCount || 0} live structured Special Term${Number(preview.termCount) === 1 ? '' : 's'} across every linked projection. The transaction is all-or-none.`
+      : 'Saving creates a proposed Draft in the Clause Bank. No live Special Term changes until an authorized approver publishes reviewed wording.',
+  };
+  if (canPublish && body.review === true) {
+    const schema = await resolveSpecialTermsSchema({ force: true, write: true });
+    const shortName = cleanShortName(body.shortName);
+    const category = cleanCategory(body.category, schema);
+    const clauseText = cleanClauseText(body.clauseText);
+    const reason = requiredReason(body.revisionReason, 'Revision reason');
+    await ensureUniqueClause(shortName, canonicalClauseKey(clauseText), clauseId);
+    const expiresAt = now + GLOBAL_PUBLICATION_PREVIEW_TTL_MS;
+    const proposedHash = publicationProposalHash({ shortName, category, clauseText, reason });
+    const tokenPayload = {
+      version: 1,
+      clauseId,
+      baseVersionId: latest?.id || null,
+      draftVersionId: draft?.id || null,
+      impactHash: preview.impactHash,
+      proposedHash,
+      clauseLastModifiedAt: preview.clauseLastModifiedAt,
+      baseVersionLastModifiedAt: latest?.lastModifiedAt || null,
+      draftVersionLastModifiedAt: draft?.lastModifiedAt || null,
+      expiresAt,
+    };
+    response.confirmationLabel = shortName;
+    response.previewToken = signPublicationPreview(tokenPayload, globalPublicationSecret(previewSecret));
+    response.expiresAt = new Date(expiresAt).toISOString();
+  }
+  return response;
+}
+
+export async function publishSpecialTermClauseGlobally(client, profile, body = {}, { previewSecret = null, now = Date.now() } = {}) {
+  const schema = await resolveSpecialTermsSchema({ force: true, write: true });
+  const clauseId = salesforceId(body.clauseId, 'Clause');
+  const shortName = cleanShortName(body.shortName);
+  const category = cleanCategory(body.category, schema);
+  const clauseText = cleanClauseText(body.clauseText);
+  const reason = requiredReason(body.revisionReason, 'Revision reason');
+  if (text(body.confirmationLabel, 80) !== shortName) throw specialTermsError(`Type ${shortName} exactly to confirm global publication.`, 400, 'SPECIAL_TERMS_PUBLICATION_CONFIRMATION_MISMATCH');
+  const tokenPayload = verifyPublicationPreview(body.previewToken, globalPublicationSecret(previewSecret), now);
+  if (tokenPayload.clauseId !== clauseId || tokenPayload.proposedHash !== publicationProposalHash({ shortName, category, clauseText, reason })) {
+    throw specialTermsError('The proposed clause changed after impact review. Review the global publication again.', 409, 'SPECIAL_TERMS_PUBLICATION_PREVIEW_STALE');
+  }
+  const reservation = await reserveOperation(client, profile, body, 'clause_global_publish', {
+    id: clauseId,
+    baseVersionId: tokenPayload.baseVersionId,
+    draftVersionId: tokenPayload.draftVersionId,
+    shortNameKey: shortNameKey(shortName),
+    category,
+    contentHash: clauseHash(clauseText),
+    reasonHash: clauseHash(reason),
+    impactHash: tokenPayload.impactHash,
+  });
+  if (reservation.replay) return { ...reservation.replay, clause: await loadOneClause(clauseId), idempotencyReplayed: true };
+  try {
+    const action = await callClausePublicationApex(clauseId, 'publish-everywhere', {
+      baseVersionId: tokenPayload.baseVersionId,
+      draftVersionId: tokenPayload.draftVersionId,
+      shortName,
+      category,
+      clauseText,
+      reason,
+      approverEmail: profile.email,
+      expectedImpactHash: tokenPayload.impactHash,
+      expectedClauseLastModifiedAt: tokenPayload.clauseLastModifiedAt,
+      expectedBaseVersionLastModifiedAt: tokenPayload.baseVersionLastModifiedAt,
+      expectedDraftVersionLastModifiedAt: tokenPayload.draftVersionLastModifiedAt,
+    });
+    const termIds = (action.termIds || []).filter(isId);
+    await expireSpecialTermClauseCaches(termIds);
+    const clause = await loadOneClause(clauseId);
+    const currentTermId = body.currentTermId && termIds.includes(body.currentTermId) ? body.currentTermId : null;
+    const currentTermDetail = currentTermId ? await getSpecialTermDetail(currentTermId, { force: true }) : null;
+    const result = {
+      success: true,
+      operation: 'globally_published',
+      clauseId,
+      versionId: action.versionId,
+      revisionNumber: Number(action.revisionNumber || 0),
+      status: action.status || 'Approved',
+      termCount: Number(action.termCount || 0),
+      occurrenceCount: Number(action.occurrenceCount || 0),
+      termIds,
+      clause,
+      currentTermDetail,
+    };
+    return finishOperation(client, reservation.operation, result, {
+      success: true,
+      operation: 'globally_published',
+      clauseId,
+      versionId: action.versionId,
+      revisionNumber: Number(action.revisionNumber || 0),
+      termCount: Number(action.termCount || 0),
+      occurrenceCount: Number(action.occurrenceCount || 0),
+      termIds,
+    });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
 }
 
 export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
@@ -835,7 +1109,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
       assertCurrent(versionRow, body.expectedLastModifiedAt);
       if (clauseRow.Status__c === 'Draft') assertCurrent(clauseRow, body.expectedClauseLastModifiedAt);
       if (versionRow.Clause__c !== clauseId || versionRow.Status__c !== 'Draft') throw specialTermsError('Only the selected Draft version can be edited.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_IMMUTABLE');
-      const requests = [{ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'version', body: { Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, ...provenance } }];
+      const requests = [{ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'version', body: { Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, Proposed_Short_Name__c: shortName, Proposed_Category__c: category, ...provenance } }];
       if (clauseRow.Status__c === 'Draft') requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Name: shortName, Short_Name_Key__c: shortNameKey(shortName), Canonical_Text_Key__c: canonicalKey, Category__c: category } });
       const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
       assertComposite(result, 'Salesforce rejected the Draft clause edit.');
@@ -849,7 +1123,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
       const versions = await sfQuery(`SELECT Id,Revision_Number__c,Status__c FROM Special_Term_Clause_Version__c WHERE Clause__c = '${soql(clauseId)}' ORDER BY Revision_Number__c DESC LIMIT 100`, { clean: true, limit: 100 });
       if (versions.records.some((row) => row.Status__c === 'Draft')) throw specialTermsError('This clause already has a Draft revision.', 409, 'SPECIAL_TERMS_CLAUSE_DRAFT_EXISTS');
       const revisionNumber = Number(versions.records[0]?.Revision_Number__c || 0) + 1;
-      const created = await sfRequest(`/sobjects/${OBJECTS.version}`, { method: 'POST', body: { Clause__c: clauseId, Revision_Number__c: revisionNumber, Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Status__c: 'Draft', Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, ...provenance } });
+      const created = await sfRequest(`/sobjects/${OBJECTS.version}`, { method: 'POST', body: { Clause__c: clauseId, Revision_Number__c: revisionNumber, Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Status__c: 'Draft', Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, Proposed_Short_Name__c: shortName, Proposed_Category__c: category, ...provenance } });
       const createdVersionId = salesforceId(created?.id, 'Created clause version');
       return finishClauseDraftOperation(client, reservation.operation, { success: true, clauseId, versionId: createdVersionId, revisionNumber, operation: 'revision_proposed' });
     }
@@ -860,7 +1134,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
         allOrNone: true,
         compositeRequest: [
           { method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}`, referenceId: 'clause', body: { Name: shortName, Short_Name_Key__c: shortNameKey(shortName), Canonical_Text_Key__c: canonicalKey, Category__c: category, Status__c: 'Draft', Origin__c: provenance.Draft_Source__c === 'Legacy Migration' ? 'Legacy' : provenance.Draft_Source__c, Legacy_Original_Text__c: provenance.Draft_Source__c === 'Legacy Migration' ? clauseText : null, Latest_Approved_Version_Number__c: 0 } },
-          { method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}`, referenceId: 'version', body: { Clause__c: '@{clause.id}', Revision_Number__c: 1, Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Status__c: 'Draft', Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, ...provenance } },
+          { method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}`, referenceId: 'version', body: { Clause__c: '@{clause.id}', Revision_Number__c: 1, Clause_Text__c: clauseText, Content_Hash__c: clauseHash(clauseText), Status__c: 'Draft', Revision_Reason__c: reason, Proposed_By_Email__c: profile.email, Proposed_Short_Name__c: shortName, Proposed_Category__c: category, ...provenance } },
         ],
       },
     });
@@ -874,7 +1148,7 @@ export async function saveSpecialTermClauseDraft(client, profile, body = {}) {
 }
 
 export async function approveSpecialTermClause(client, profile, body = {}) {
-  await resolveSpecialTermsSchema({ force: true, write: true });
+  const schema = await resolveSpecialTermsSchema({ force: true, write: true });
   const clauseId = salesforceId(body.clauseId, 'Clause');
   const versionId = salesforceId(body.versionId, 'Clause version');
   const reason = requiredReason(body.approvalReason, 'Approval reason');
@@ -882,14 +1156,16 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
   if (reservation.replay) return { ...reservation.replay, clause: await loadOneClause(clauseId), idempotencyReplayed: true };
   try {
     const [clauseRow, versionRow] = await Promise.all([
-      currentRecord(OBJECTS.clause, clauseId, ['Id', 'Status__c', 'LastModifiedDate']),
-      currentRecord(OBJECTS.version, versionId, ['Id', 'Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Status__c', 'LastModifiedDate']),
+      currentRecord(OBJECTS.clause, clauseId, ['Id', 'Name', 'Category__c', 'Status__c', 'LastModifiedDate']),
+      currentRecord(OBJECTS.version, versionId, ['Id', 'Clause__c', 'Revision_Number__c', 'Clause_Text__c', 'Proposed_Short_Name__c', 'Proposed_Category__c', 'Status__c', 'LastModifiedDate']),
     ]);
     assertCurrent(clauseRow, body.expectedClauseLastModifiedAt);
     assertCurrent(versionRow, body.expectedVersionLastModifiedAt);
     if (versionRow.Clause__c !== clauseId || versionRow.Status__c !== 'Draft') throw specialTermsError('Only the selected Draft version can be approved.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_IMMUTABLE');
-    cleanShortName((await currentRecord(OBJECTS.clause, clauseId, ['Id', 'Name'])).Name);
-    cleanClauseText(versionRow.Clause_Text__c);
+    const approvedShortName = cleanShortName(versionRow.Proposed_Short_Name__c || clauseRow.Name);
+    const approvedCategory = cleanCategory(versionRow.Proposed_Category__c || clauseRow.Category__c, schema);
+    const approvedText = cleanClauseText(versionRow.Clause_Text__c);
+    await ensureUniqueClause(approvedShortName, canonicalClauseKey(approvedText), clauseId);
     const currentApproved = await sfQuery(`SELECT Id FROM Special_Term_Clause_Version__c WHERE Clause__c = '${soql(clauseId)}' AND Status__c = 'Approved' LIMIT 2`, { clean: true, limit: 2 });
     if (currentApproved.records.length > 1) throw specialTermsError('Clause has multiple approved versions and requires repair.', 409, 'SPECIAL_TERMS_CLAUSE_VERSION_CONFLICT');
     const dependentConsolidations = await sfQuery(`SELECT Id,Status__c FROM ${OBJECTS.consolidation} WHERE Replacement_Clause__c = '${soql(clauseId)}' AND Status__c IN ('Relinking','Ready to Retire') LIMIT 201`, { clean: true, limit: 201 });
@@ -899,7 +1175,7 @@ export async function approveSpecialTermClause(client, profile, body = {}) {
     if (currentApproved.records[0]) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${currentApproved.records[0].Id}`, referenceId: 'superseded', body: { Status__c: 'Superseded' } });
     requests.push(
       { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.version}/${versionId}`, referenceId: 'approved', body: { Status__c: 'Approved', Approved_By_Email__c: profile.email, Approved_At__c: now, Approval_Reason__c: reason } },
-      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Status__c: 'Active', Latest_Approved_Version_Number__c: versionRow.Revision_Number__c, Last_Approved_At__c: now, Retirement_Reason__c: null, Replacement_Clause__c: null } },
+      { method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.clause}/${clauseId}`, referenceId: 'clause', body: { Name: approvedShortName, Short_Name_Key__c: shortNameKey(approvedShortName), Canonical_Text_Key__c: canonicalClauseKey(approvedText), Category__c: approvedCategory, Status__c: 'Active', Latest_Approved_Version_Number__c: versionRow.Revision_Number__c, Last_Approved_At__c: now, Retirement_Reason__c: null, Replacement_Clause__c: null } },
     );
     if (dependentConsolidations.records.length) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'pauseConsolidations', body: { allOrNone: true, records: dependentConsolidations.records.map((row) => ({ attributes: { type: OBJECTS.consolidation }, Id: row.Id, Status__c: 'Paused' })) } });
     const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
@@ -1800,4 +2076,15 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
   } catch (error) { return failOperation(client, operation.operation, error); }
 }
 
-export const specialTermClauseServiceInternals = Object.freeze({ CLAUSE_CATEGORIES, assertCompositeGraph, cleanClauseText, cleanShortName, failureFromComposite, relinkProjectionPayload });
+export const specialTermClauseServiceInternals = Object.freeze({
+  CLAUSE_CATEGORIES,
+  GLOBAL_PUBLICATION_PREVIEW_TTL_MS,
+  assertCompositeGraph,
+  cleanClauseText,
+  cleanShortName,
+  failureFromComposite,
+  publicationProposalHash,
+  relinkProjectionPayload,
+  signPublicationPreview,
+  verifyPublicationPreview,
+});

@@ -454,7 +454,11 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Clause governance',
-      body: 'Every active FCOS user may propose a Special Term, Draft clause, revision, or matching-rule change. Only the active General Manager or an Administrator may approve, activate, retire, or roll back contractual wording. Approved versions are immutable; a new approval never silently changes an existing active term.',
+      body: 'Every active FCOS user may propose a Special Term, Draft clause, revision, or matching-rule change. Editing a Terms Text row starts from the latest approved shared clause: ordinary users save an unapproved Clause Bank Draft, while the active General Manager or an Administrator must review the complete signed impact and may publish one all-or-none Salesforce update across every linked structured term. Unsaved term changes, pending revisions, stale records, consolidations, and transaction limits block the entire publication. Approved and historical versions remain immutable.',
+    },
+    {
+      title: 'Readiness and review queues',
+      body: 'The Readiness matrix presents Terms Text, both remarks, the complete rule snapshot, and the overall whole-term state together. The Clause Bank Work Queue groups wording review, approval, assignment blockers, relinking, and retirement by the next required action. Server-backed paging, saved filters, rapid review, local session recovery, duplicate comparisons, and governed history improve review speed without relaxing Salesforce revalidation or approval authority.',
     },
     {
       title: 'Equivalent-clause consolidation',

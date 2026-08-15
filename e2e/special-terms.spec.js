@@ -14,10 +14,16 @@ test.describe('Special Terms whole-term revision workspace', () => {
     page.on('pageerror', (error) => failures.push(error.message));
     await page.goto('/special-terms');
     await expect(page.getByText('Special Terms', { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('tab', { name: /readiness/i })).toBeVisible();
     await expect(page.getByRole('tab', { name: /clause bank/i })).toBeVisible();
     await expect(page.getByRole('tab', { name: /migration queue/i })).toBeVisible();
     await page.getByRole('tab', { name: /migration queue/i }).click();
     await expect(page.getByText('Controlled migration batches')).toBeVisible();
+    await page.getByRole('tab', { name: /clause bank/i }).click();
+    await expect(page.getByRole('button', { name: /work queue/i })).toBeVisible();
+    await expect(page.getByText(/filters are saved on this device/i)).toBeVisible();
+    await page.getByRole('tab', { name: /readiness/i }).click();
+    await expect(page.getByText('Whole-term readiness')).toBeVisible();
     await page.getByRole('tab', { name: /^terms/i }).click();
     const editTerm = page.getByTitle('Edit Special Term').first();
     if (await editTerm.count()) {
