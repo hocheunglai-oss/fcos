@@ -31,6 +31,7 @@ function ClauseComposer({
   localPublicationBlocked = false,
   categoryOptions = EMPTY_ROWS,
   currentTermId = null,
+  projectionLabel = 'Clause',
   onClausePublished,
   onStatusMessage,
 }) {
@@ -220,6 +221,7 @@ function ClauseComposer({
         localPublicationBlocked={localPublicationBlocked}
         categoryOptions={categoryOptions}
         currentTermId={currentTermId}
+        projectionLabel={projectionLabel}
         onClose={closeInlineEditor}
         onPendingChange={(key, pending) => setEditPendingKey(pending ? key : null)}
         onDraftSaved={clauseDraftSaved}

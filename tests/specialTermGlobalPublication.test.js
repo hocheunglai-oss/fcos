@@ -39,9 +39,13 @@ test('inline editing is role-aware across all clause projections, local, and no-
   const revision = read('src/components/special-terms/WholeTermRevisionPanel.jsx');
   const page = read('src/pages/SpecialTerms.jsx');
   assert.match(composer, /Edit shared Clause Bank wording/);
+  assert.match(composer, /projectionLabel=\{projectionLabel\}/);
   assert.match(projection, /canEditClause=\{canEditClause\}/);
   assert.match(projection, /canPublishClause=\{canPublishClause\}/);
+  assert.match(projection, /projectionLabel=\{projectionDetail\.label\}/);
   assert.doesNotMatch(projection, /canEditClause=\{isTermsText/);
+  assert.match(dialog, /This \{projectionLabel\} row references one shared clause identity/);
+  assert.doesNotMatch(dialog, /This Terms Text row references/);
   assert.match(dialog, /Saving creates a proposed Draft|proposed Draft/);
   assert.match(dialog, /Publish and update all terms/);
   assert.match(dialog, /specialTermClauseEditPreview/);

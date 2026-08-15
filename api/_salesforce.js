@@ -35,6 +35,13 @@ export function getApiVersion() {
   return process.env.SALESFORCE_API_VERSION || DEFAULT_API_VERSION;
 }
 
+export function salesforceServiceUrl(path, instanceUrl = getInstanceUrl(), apiVersion = getApiVersion()) {
+  const normalizedPath = String(path || '');
+  return normalizedPath.startsWith('/apexrest/')
+    ? `${instanceUrl}/services${normalizedPath}`
+    : `${instanceUrl}/services/data/${apiVersion}${normalizedPath}`;
+}
+
 async function refreshAccessToken() {
   const clientId = process.env.SALESFORCE_CLIENT_ID;
   const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
@@ -235,7 +242,7 @@ export async function sfRequest(path, {
   if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
   const startedAt = Date.now();
   const accessToken = await getAccessToken();
-  const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
+  const url = salesforceServiceUrl(path);
   let res;
   let data = {};
   let limit = null;

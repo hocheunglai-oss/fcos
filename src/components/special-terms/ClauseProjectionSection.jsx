@@ -59,6 +59,7 @@ function ClauseProjectionSection({
           localPublicationBlocked={localPublicationBlocked}
           categoryOptions={categoryOptions}
           currentTermId={currentTermId}
+          projectionLabel={projectionDetail.label}
           onClausePublished={onClausePublished}
           onStatusMessage={onStatusMessage}
         />

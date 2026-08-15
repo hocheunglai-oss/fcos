@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { salesforceAuthMode, salesforceConfiguredAuthModes } from '../api/_salesforce.js';
+import { salesforceAuthMode, salesforceConfiguredAuthModes, salesforceServiceUrl } from '../api/_salesforce.js';
 
 const AUTH_ENV_NAMES = [
   'SALESFORCE_ACCESS_TOKEN',
@@ -81,4 +81,16 @@ test('Salesforce health can identify every complete redundant authentication mod
     assert.equal(salesforceAuthMode(), 'jwt');
     assert.deepEqual(salesforceConfiguredAuthModes(), ['jwt', 'refresh_token', 'access_token']);
   });
+});
+
+test('Salesforce REST routes use the correct versioned and Apex service roots', () => {
+  const instanceUrl = 'https://example.my.salesforce.com';
+  assert.equal(
+    salesforceServiceUrl('/query/?q=SELECT+Id+FROM+Account', instanceUrl, 'v67.0'),
+    'https://example.my.salesforce.com/services/data/v67.0/query/?q=SELECT+Id+FROM+Account',
+  );
+  assert.equal(
+    salesforceServiceUrl('/apexrest/fcos/special-term-clauses/a01/publication-preview', instanceUrl, 'v67.0'),
+    'https://example.my.salesforce.com/services/apexrest/fcos/special-term-clauses/a01/publication-preview',
+  );
 });
