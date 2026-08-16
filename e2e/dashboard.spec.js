@@ -33,6 +33,16 @@ test.describe('Fast, currency-safe decision dashboard', () => {
 
     await page.getByRole('tab', { name: 'Accounts', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toHaveAttribute('data-state', 'active');
+    await expect(page.getByRole('heading', { name: 'Account Statements' })).toBeVisible();
+    const statementSearch = page.getByRole('search').getByLabel('Search Account Statements');
+    await statementSearch.fill('FORTUNE RISE');
+    await page.getByRole('search').getByRole('button', { name: 'Search' }).click();
+    await expect(page.getByText('FORTUNE RISE SHIPPING CO LTD').first()).toBeVisible();
+    await page.getByRole('button', { name: /^(Open statement|Statement)$/ }).first().click();
+    await expect(page.getByRole('tab', { name: 'Credit Statement' })).toHaveAttribute('data-state', 'active');
+    await expect(page.getByTestId('account-credit-statement')).toBeVisible();
+    await expect(page.getByText('Buyer-leg Credit Statement')).toBeVisible();
+    await expect(page.getByText(/Individual: (Reconciled|Projection hidden)/)).toBeVisible();
     expect(failures).toEqual([]);
   });
 });

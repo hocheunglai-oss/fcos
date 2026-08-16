@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { AlertTriangle, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -17,6 +17,7 @@ const PERIODS = [
 ];
 
 const ROLE_LABELS = { buyer: 'Buyer', supplier: 'Supplier', group: 'GROUP' };
+const AccountCreditStatement = lazy(() => import('@/components/dashboard/AccountCreditStatement'));
 
 function number(value) {
   if (value == null || value === '') return null;
@@ -126,7 +127,7 @@ function Comparison({ value, suffix = '%' }) {
 export default function AccountInsightModal({ account, open, onClose, selectedYears, selectedMonths }) {
   const [periodMode, setPeriodMode] = useState('dashboard_period');
   const [role, setRole] = useState(account?.role || 'buyer');
-  const [data, setData] = useState(null);
+  const [accountInsight, setData] = useState(null);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -180,17 +181,17 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     setPeriodMode('dashboard_period');
     requestSequence.current += 1;
     setRole(account.role || 'buyer');
-    setActiveTab('overview');
+    setActiveTab(account.initialTab === 'credit' ? 'credit' : 'overview');
     setData(null);
     setError(null);
     setSelectedStemId(null);
     setReadySelection(selectionKey);
-  }, [account?.accountId, account?.role, open, selectionKey]);
+  }, [account?.accountId, account?.initialTab, account?.role, open, selectionKey]);
 
   useEffect(() => {
     if (!open || !account?.accountId || readySelection !== selectionKey) return;
-    load();
-  }, [open, payload, readySelection, selectionKey]);
+    if (activeTab !== 'credit' && !accountInsight) load();
+  }, [accountInsight, activeTab, open, payload, readySelection, selectionKey]);
 
   const download = async (formatType) => {
     setExporting(formatType);
@@ -212,7 +213,20 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     }
   };
 
-  const identity = data?.identity || account || {};
+  const data = accountInsight || {
+    activeRole: role,
+    availableRoles: [role],
+    identity: account || {},
+    kpis: {},
+    payments: {},
+    risk: {},
+    collection: {},
+    relationship: {},
+    stems: { rows: [] },
+    children: [],
+    warnings: [],
+  };
+  const identity = data.identity || account || {};
   const kpis = data?.kpis || {};
   const trend = kpis.trend || [];
   const buyerPayments = data?.payments?.buyer;
@@ -245,10 +259,10 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
             <div className="flex flex-wrap items-center gap-2">
               {(data?.availableRoles || [role]).length > 1 ? (
                 <div className="flex rounded-md border border-border bg-muted/30 p-1">
-                  {data.availableRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setData(null); setRole(availableRole); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
+                  {data.availableRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setData(null); setRole(availableRole); if (availableRole === 'supplier') setActiveTab('overview'); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
                 </div>
               ) : null}
-              <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
+              {activeTab !== 'credit' ? <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button> : null}
               <Button type="button" variant="outline" size="sm" onClick={() => download('csv')} disabled={Boolean(exporting)}>{exporting === 'csv' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}CSV</Button>
               <Button type="button" size="sm" onClick={() => download('pdf')} disabled={Boolean(exporting)}>{exporting === 'pdf' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}PDF</Button>
             </div>
@@ -260,8 +274,8 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
 
         <div className="min-h-0 flex-1 overflow-y-auto bg-muted/15">
           {error ? <div className="m-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
-          {loading && !data ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
-          {data ? (
+          {loading && !accountInsight && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
+          {accountInsight || activeTab === 'credit' ? (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-full">
               <div className="sticky top-0 z-20 overflow-x-auto border-b border-border bg-background/95 px-5 py-2 backdrop-blur sm:px-6">
                 <TabsList className="h-10 w-max">
@@ -270,12 +284,15 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                   <TabsTrigger value="payments">Payments</TabsTrigger>
                   <TabsTrigger value="risk">Risk & Workflow</TabsTrigger>
                   <TabsTrigger value="stems">STEMs</TabsTrigger>
-                  {data.activeRole === 'group' ? <TabsTrigger value="children">Children</TabsTrigger> : null}
+                  {(data?.activeRole || role) !== 'supplier' ? <TabsTrigger value="credit">Credit Statement</TabsTrigger> : null}
+                  {data?.activeRole === 'group' ? <TabsTrigger value="children">Children</TabsTrigger> : null}
                 </TabsList>
               </div>
 
               <div className="mx-auto max-w-[1440px] p-5 sm:p-6">
-                {data.warnings?.length ? <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data warnings</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{data.warnings.slice(0, 6).map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}
+                {data?.warnings?.length && activeTab !== 'credit' ? <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data warnings</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{data.warnings.slice(0, 6).map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}
+
+                <TabsContent value="credit" className="mt-0"><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}><AccountCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} onStemClick={setSelectedStemId} /></Suspense></TabsContent>
 
                 <TabsContent value="overview" className="mt-0 space-y-5">
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">

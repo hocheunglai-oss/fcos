@@ -175,6 +175,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   dashboardStemList: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAnalytics: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountInsight: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  dashboardAccountCreditDirectory: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  dashboardAccountCreditStatement: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountInsightExport: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   salesforceTopBuyers: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   salesforceStemDetail: readPolicy({"cache":"server","externalAction":false,"capability":null}),

@@ -155,7 +155,11 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Completeness and navigation',
-      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters. The STEMs tab is server-paginated and sorted; Accounts rankings load only when needed and open the existing Account Insight detail.',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters. The STEMs tab is server-paginated and sorted. Accounts adds a searchable buyer Account Statement directory alongside period rankings, and both load only when needed.',
+    },
+    {
+      title: 'Buyer-leg credit statements',
+      body: 'Credit Statements include only STEMs whose Salesforce Account lookup is the selected Account; supplier line items, extra costs, and brokers never widen membership. Current QLIK receivable balances reconcile independently to individual and ultimate-GROUP used-credit fields within one currency unit. Actual payments and Cashflow or invoice evidence forecast releases, while incomplete, mismatched, mixed-currency, or overdue-unknown scopes suppress the affected projected balance instead of inventing a release.',
     },
     {
       title: 'AI Search',

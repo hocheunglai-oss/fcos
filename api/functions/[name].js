@@ -12,6 +12,7 @@ import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } 
 import { dashboardCurrency, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
+import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderCandidateByAccount, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
@@ -1448,6 +1449,8 @@ const HANDLER_MODULE_ACCESS = {
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
+  dashboardAccountCreditDirectory: ['dashboard'],
+  dashboardAccountCreditStatement: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
@@ -9281,6 +9284,24 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
 async function dashboardAccountInsight(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return loadDashboardAccountInsight({
+    body,
+    accessContext: context,
+    force: requestForcesRefresh(body, req),
+  });
+}
+
+async function dashboardAccountCreditDirectory(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadDashboardAccountCreditDirectory({
+    body,
+    accessContext: context,
+    force: requestForcesRefresh(body, req),
+  });
+}
+
+async function dashboardAccountCreditStatement(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadDashboardAccountCreditStatement({
     body,
     accessContext: context,
     force: requestForcesRefresh(body, req),
@@ -18243,6 +18264,8 @@ const handlers = {
   dashboardStemList,
   dashboardAnalytics,
   dashboardAccountInsight,
+  dashboardAccountCreditDirectory,
+  dashboardAccountCreditStatement,
   dashboardAiSearch,
   dashboardAiSettingsGet,
   dashboardAiSettingsSave,
