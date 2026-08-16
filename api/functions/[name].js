@@ -8612,14 +8612,6 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     }
     return result;
   }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.family.localeCompare(right.family));
-  const aggregateMonthlyTrend = (rows) => Object.values(rows.reduce((result, row) => {
-    const month = String(row.deliveryDate || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month)) return result;
-    const key = `${month}\u001f${row.currency}`;
-    if (!result[key]) result[key] = { month, currency: row.currency, netPnl: 0 };
-    result[key].netPnl += Number(row.netPnl || 0);
-    return result;
-  }, {}));
   const aggregateMonthlyVolume = (rows) => Object.values(rows.reduce((result, row) => {
     const month = String(row.deliveryDate || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) return result;
@@ -8633,7 +8625,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
   }, {}));
   const yearOverYearComplete = current.completeness.complete && priorYear.completeness.complete;
   const monthlyYearOverYear = yearOverYearComplete
-    ? dashboardMonthlyYearOverYear(monthlyTrend, aggregateMonthlyTrend(priorYear.rows), { valueField: 'netPnl', dimensions: ['currency'] })
+    ? dashboardMonthlyYearOverYear(monthlyTrend, dashboardMonthlyFinancialTrend(priorYear.rows), { valueField: 'grossMarginPct', dimensions: ['currency'] })
     : [];
   const monthlyVolumeYearOverYear = yearOverYearComplete
     ? dashboardMonthlyYearOverYear(aggregateMonthlyVolume(current.rows), aggregateMonthlyVolume(priorYear.rows), { valueField: 'quantity', dimensions: ['unitOfMeasure'] })
@@ -8678,7 +8670,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
     namespace: handler === 'stems'
       ? 'decision-dashboard-v3-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v2-analytics'
+        ? 'decision-dashboard-v3-analytics'
         : `decision-dashboard-${handler}`,
     ttlSeconds,
     payload: cachePayload,

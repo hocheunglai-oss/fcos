@@ -9,8 +9,9 @@ test('gross-profit legend inherits the same blue series color as positive bars',
   assert.match(component, /COLORS = \['#2563eb'/);
 });
 
-test('chart labels state monthly margin and same-calendar-month YoY semantics', () => {
+test('chart labels state current and prior-year actual monthly margin semantics', () => {
   assert.match(component, /name=\{`\$\{currency\} monthly gross margin`\}/);
-  assert.match(component, /name=\{`\$\{currency\} YoY vs same month`\}/);
-  assert.match(component, /that month’s gross profit divided by that month’s turnover/);
+  assert.match(component, /name=\{`\$\{currency\} prior-year monthly margin`\}/);
+  assert.match(component, /the actual margin from the same calendar month last year/);
+  assert.match(component, /row\.priorValue == null \? null : Number\(row\.priorValue\)/);
 });

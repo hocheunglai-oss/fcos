@@ -28,7 +28,7 @@ function monthlyChartModel(trendRows, volumeRows, yearOverYear) {
   }
   for (const row of yearOverYear?.monthly || []) {
     const item = byMonth.get(row.month) || { month: row.month };
-    item[`yoyProfit:${row.currency || 'USD'}`] = row.differencePct == null ? null : Number(row.differencePct);
+    item[`priorMargin:${row.currency || 'USD'}`] = row.priorValue == null ? null : Number(row.priorValue);
     byMonth.set(row.month, item);
   }
   for (const row of yearOverYear?.monthlyVolume || []) {
@@ -48,7 +48,7 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 className="text-sm font-semibold">{volumeMode ? 'Monthly volume' : 'Monthly gross profit and margin'}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars with the same-calendar-month YoY difference as a dashed line.' : 'Each gross-margin point uses that month’s gross profit divided by that month’s turnover; each YoY point compares with the same calendar month one year earlier.'}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars with the same-calendar-month YoY difference as a dashed line.' : 'Each solid point is that month’s gross profit divided by that month’s turnover; the dashed line is the actual margin from the same calendar month last year.'}</p>
       </div>
       <div className="flex rounded-md border border-border bg-muted/30 p-1">
         <button type="button" onClick={() => setMode('profit')} className={`rounded px-2.5 py-1 text-xs font-semibold ${!volumeMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Gross profit</button>
@@ -70,7 +70,7 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
           ? <Line yAxisId="margin" type="monotone" dataKey="yoyVolume" name="Volume YoY difference" stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="6 4" dot={{ r: 3 }} connectNulls={false} />
           : <>
               {model.currencies.map((currency, index) => <Line key={`margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`margin:${currency}`} name={`${currency} monthly gross margin`} stroke={COLORS[(index + 3) % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} connectNulls={false} />)}
-              {model.currencies.map((currency, index) => <Line key={`yoy:${currency}`} yAxisId="margin" type="monotone" dataKey={`yoyProfit:${currency}`} name={`${currency} YoY vs same month`} stroke={COLORS[(index + 1) % COLORS.length]} strokeWidth={2.25} strokeDasharray="6 4" dot={{ r: 2.5 }} connectNulls={false} />)}
+              {model.currencies.map((currency, index) => <Line key={`prior-margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`priorMargin:${currency}`} name={`${currency} prior-year monthly margin`} stroke={COLORS[(index + 1) % COLORS.length]} strokeWidth={2.25} strokeDasharray="6 4" dot={{ r: 2.5 }} connectNulls={false} />)}
             </>}
       </ComposedChart>
     </ResponsiveContainer>
