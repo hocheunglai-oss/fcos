@@ -34,6 +34,45 @@ export function normalizeDecisionDashboardFilters(input = {}) {
   };
 }
 
+function dashboardChildRowOrder(left, right) {
+  return String(left?.createdDate || '').localeCompare(String(right?.createdDate || ''))
+    || String(left?.sourceId || '').localeCompare(String(right?.sourceId || ''));
+}
+
+export function dashboardSupplierProductRows({ lineItems = [], extraCosts = [] } = {}) {
+  const activeLines = (Array.isArray(lineItems) ? lineItems : [])
+    .filter((item) => item?.cancelled !== true)
+    .map((item) => ({
+      sourceType: 'line_item',
+      sourceId: item?.sourceId || null,
+      createdDate: item?.createdDate || null,
+      supplierAccount: item?.supplierAccountId
+        ? { id: item.supplierAccountId, name: String(item?.supplierName || '').trim() || null }
+        : null,
+      itemName: String(item?.itemName || '').trim() || 'Product unavailable',
+      quantityLabel: String(item?.quantityLabel || '').trim() || null,
+      unitOfMeasure: String(item?.unitOfMeasure || '').trim() || null,
+    }))
+    .sort(dashboardChildRowOrder);
+  const productSupplierIds = new Set(activeLines.map((item) => item.supplierAccount?.id).filter(Boolean));
+  const visibleExtraCosts = (Array.isArray(extraCosts) ? extraCosts : [])
+    .filter((item) => item?.cancelled !== true)
+    .filter((item) => !item?.supplierAccountId || !productSupplierIds.has(item.supplierAccountId))
+    .map((item) => ({
+      sourceType: 'extra_cost',
+      sourceId: item?.sourceId || null,
+      createdDate: item?.createdDate || null,
+      supplierAccount: item?.supplierAccountId
+        ? { id: item.supplierAccountId, name: String(item?.supplierName || '').trim() || null }
+        : null,
+      itemName: String(item?.chargeProductName || item?.description || item?.recordName || '').trim() || 'Extra cost unavailable',
+      quantityLabel: null,
+      unitOfMeasure: null,
+    }))
+    .sort(dashboardChildRowOrder);
+  return [...activeLines, ...visibleExtraCosts].map(({ createdDate, ...item }) => item);
+}
+
 export function priorEquivalentDateWindows(dateWindows = []) {
   const windows = (Array.isArray(dateWindows) ? dateWindows : [])
     .map((window) => ({ startDate: window?.startDate || window?.start, endDate: window?.endDate || window?.end }))

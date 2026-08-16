@@ -45,7 +45,7 @@ test.describe('Dashboard', () => {
     await expect(page.getByRole('textbox', { name: 'Search STEMs' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Columns/i })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Supplier' })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Products / quantity' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Product / extra cost · quantity' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: /Delivery \/ expected date/i })).toBeVisible();
     await page.getByRole('button', { name: 'P&L table', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Filtered STEMs P&L' })).toBeVisible();

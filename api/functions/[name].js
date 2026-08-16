@@ -9,7 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyYearOverYear, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
@@ -8252,7 +8252,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const stemIds = pageStems.map((stem) => stem.Id);
   const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
-  const lineSelect = ['STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
+  const lineSelect = ['Id', 'CreatedDate', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
   if (lineSupplier.valid) lineSelect.push(lineSupplier.fieldName);
   if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Name`);
   if (lineItemUomField) lineSelect.push(lineItemUomField);
@@ -8260,7 +8260,9 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     lineSelect.push('Product__r.Name', 'Product__r.Family');
     if (productUomField) lineSelect.push(`Product__r.${productUomField}`);
   }
-  const extraSelect = ['STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Unit_Price__c', 'Unit_Cost__c'].filter((field) => extraFields.has(field));
+  const extraProductLookup = (extraCostDescribe.fields || []).find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
+  const extraSelect = ['Id', 'CreatedDate', 'Name', 'Description__c', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Unit_Price__c', 'Unit_Cost__c'].filter((field) => extraFields.has(field));
+  if (extraProductLookup) extraSelect.push(`${extraProductLookup.relationshipName}.Name`);
   if (extraSupplier.valid) extraSelect.push(extraSupplier.fieldName);
   if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Name`);
   const [lineItems, extraCosts, buyerBrokers] = stemIds.length ? await Promise.all([
@@ -8382,6 +8384,35 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       ...lines.map((item) => [item[lineSupplier.fieldName], item[lineSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
       ...extras.map((item) => [item[extraSupplier.fieldName], item[extraSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
     ].filter(([id]) => id).map(([id, name]) => [id, { id, name: String(name || '').trim() || null }])).values()].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')) || left.id.localeCompare(right.id));
+    const supplierProductRows = dashboardSupplierProductRows({
+      lineItems: lines.map((item) => {
+        const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered, lineItemUomField });
+        const volume = dashboardLineItemVolume(item, delivered, {
+          lineItemUomField,
+          productUomField,
+          fallbackQuantity: nativeQuantity.quantity,
+          productFamily: dashboardProductFamily(item),
+        });
+        return {
+          sourceId: item.Id,
+          createdDate: item.CreatedDate,
+          supplierAccountId: lineSupplier.valid ? item[lineSupplier.fieldName] : null,
+          supplierName: item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
+          itemName: item.Product__r?.Name || 'Product unavailable',
+          quantityLabel: dashboardVolumeLabel(volume),
+          unitOfMeasure: volume.unitOfMeasure || 'MT',
+        };
+      }),
+      extraCosts: extras.map((item) => ({
+        sourceId: item.Id,
+        createdDate: item.CreatedDate,
+        supplierAccountId: extraSupplier.valid ? item[extraSupplier.fieldName] : null,
+        supplierName: item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
+        chargeProductName: extraProductLookup ? item[extraProductLookup.relationshipName]?.Name : null,
+        description: item.Description__c,
+        recordName: item.Name,
+      })),
+    });
     return {
       id: stem.Id,
       name: stem.Name,
@@ -8396,6 +8427,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
       supplierNames,
       supplierAccounts,
+      supplierProductRows,
       currency: dashboardCurrency(stem.CurrencyIsoCode), buyer, supplier, costs, brokerCommissions,
       netPnl,
       supplierAllocations,
@@ -8650,7 +8682,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
-    namespace: `decision-dashboard-${handler}`,
+    namespace: handler === 'stems' ? 'decision-dashboard-v2-stems' : `decision-dashboard-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

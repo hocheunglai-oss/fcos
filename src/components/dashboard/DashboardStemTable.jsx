@@ -14,7 +14,7 @@ const COLUMN_LABELS = {
   vessel: 'Vessel',
   buyer: 'Buyer',
   supplier: 'Supplier',
-  productQuantity: 'Products / quantity',
+  productQuantity: 'Product / extra cost · quantity',
   port: 'Port / country',
   turnover: 'Turnover',
   grossProfit: 'Gross profit',
@@ -35,6 +35,21 @@ function productQuantities(row) {
   if (Array.isArray(row.productQuantities)) return row.productQuantities;
   if (Array.isArray(row._Product_Quantity_List)) return row._Product_Quantity_List;
   return String(row._Product_Quantities || '').split(',').map((label) => label.trim()).filter(Boolean).map((label) => ({ productName: label, quantityLabel: '' }));
+}
+
+function supplierProductRows(row) {
+  if (Array.isArray(row.supplierProductRows)) return row.supplierProductRows;
+  const legacySupplier = row.supplierNames?.join(', ') ?? row.supplierName ?? row._Supplier_Names ?? row.supplier ?? null;
+  const legacyProducts = productQuantities(row);
+  if (!legacySupplier && !legacyProducts.length) return [];
+  return [{
+    sourceType: 'legacy',
+    sourceId: null,
+    supplierAccount: null,
+    supplierLabel: legacySupplier,
+    itemName: legacyProducts.map((item) => [item.productName, item.quantityLabel].filter(Boolean).join(' ')).join(', ') || 'Product unavailable',
+    quantityLabel: null,
+  }];
 }
 
 function valueFor(row, column) {
@@ -69,6 +84,22 @@ function ProductQuantityValue({ row }) {
   const items = productQuantities(row);
   if (!items.length) return '—';
   return <span className="flex min-w-64 flex-wrap gap-1">{items.map((item, index) => <span key={`${item.productName}:${item.quantityLabel}:${index}`} className="rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-[11px]"><strong>{item.productName}</strong>{item.quantityLabel ? <span className="ml-1 text-muted-foreground">{item.quantityLabel}</span> : null}</span>)}</span>;
+}
+
+function SupplierProductSupplier({ item, onAccountClick }) {
+  const account = item?.supplierAccount;
+  const label = account?.name || item?.supplierLabel || 'Supplier unavailable';
+  if (account?.id && onAccountClick) return <button type="button" className="max-w-full text-left text-primary hover:underline" onClick={(event) => { event.stopPropagation(); onAccountClick({ accountId: account.id, name: label, role: 'supplier' }); }}>{label}</button>;
+  return <span className={account?.name || item?.supplierLabel ? '' : 'text-muted-foreground'}>{label}</span>;
+}
+
+function SupplierProductItem({ item }) {
+  if (!item) return <span className="text-muted-foreground">Product unavailable</span>;
+  return <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+    {item.sourceType === 'extra_cost' ? <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-800">Extra cost</span> : null}
+    <strong>{item.itemName || (item.sourceType === 'extra_cost' ? 'Extra cost unavailable' : 'Product unavailable')}</strong>
+    {item.quantityLabel ? <span className="text-muted-foreground">{item.quantityLabel}</span> : null}
+  </span>;
 }
 
 function renderValue(row, column, onAccountClick) {
@@ -137,11 +168,25 @@ export default function DashboardStemTable({ result, loading, search = '', onSea
   if (view === 'pnl') return <TableShell title="Filtered STEMs P&L" meta={meta} actions={actions} className="flex h-[calc(100vh-10rem)] min-h-[560px] flex-col" bodyClassName="min-h-0 flex-1 p-2"><PnlTable records={pnlRows} counterpartyMode={counterpartyMode} showAllCounterparties scrollClassName="h-full min-h-0" onStemClick={(id) => onStemClick?.({ id })} onAccountClick={onAccountClick} /><Pagination loading={loading} hasPrevious={hasPrevious} hasNext={hasNext} page={page} onPrevious={onPrevious} onNext={onNext} /></TableShell>;
 
   return <TableShell title="STEMs" meta={meta} bodyClassName="p-0" actions={actions}>
-    <div className="divide-y divide-border md:hidden">{rows.map((row, index) => <div role="button" tabIndex={0} key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onStemClick?.(row); }} className="block w-full cursor-pointer px-4 py-3 text-left hover:bg-muted/30"><div className="flex items-start justify-between gap-3"><span className="font-semibold">{renderValue(row, 'stem', onAccountClick)}</span>{renderValue(row, 'deliveryDate', onAccountClick)}</div><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="truncate">{renderValue(row, 'buyer', onAccountClick)}</span><span className="truncate">{renderValue(row, 'supplier', onAccountClick)}</span><span className="col-span-2">{renderValue(row, 'productQuantity', onAccountClick)}</span><span>{renderValue(row, 'port', onAccountClick)}</span><span className="text-right font-semibold text-foreground">{renderValue(row, 'grossProfit', onAccountClick)}</span></div></div>)}{!rows.length && !loading ? <div className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</div> : null}</div>
+    <div className="divide-y divide-border md:hidden">{rows.map((row, index) => {
+      const childRows = supplierProductRows(row);
+      return <div role="button" tabIndex={0} key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} onKeyDown={(event) => { if (event.currentTarget === event.target && (event.key === 'Enter' || event.key === ' ')) onStemClick?.(row); }} className="block w-full cursor-pointer px-4 py-3 text-left hover:bg-muted/30"><div className="flex items-start justify-between gap-3"><span className="font-semibold">{renderValue(row, 'stem', onAccountClick)}</span>{renderValue(row, 'deliveryDate', onAccountClick)}</div><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="truncate">{renderValue(row, 'buyer', onAccountClick)}</span><span className="text-right font-semibold text-foreground">{renderValue(row, 'grossProfit', onAccountClick)}</span><div className="col-span-2 mt-1 divide-y divide-border/60 rounded-md border border-border bg-background/60">{childRows.length ? childRows.map((item, childIndex) => <div key={`${item.sourceType}:${item.sourceId || childIndex}`} data-source-type={item.sourceType} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)] gap-2 px-2 py-1.5"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /><SupplierProductItem item={item} /></div>) : <div className="px-2 py-1.5 text-muted-foreground">No product or extra-cost rows</div>}</div><span>{renderValue(row, 'port', onAccountClick)}</span></div></div>;
+    })}{!rows.length && !loading ? <div className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</div> : null}</div>
     <div className="relative hidden overflow-x-auto md:block">
       <table className="w-full min-w-[1180px] text-sm">
         <thead className="border-b border-border bg-muted/30"><tr>{displayColumns.map((column) => <th key={column} className={`whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground ${MONEY_COLUMNS.has(column) ? 'text-right' : ''}`}>{SORT_FIELDS[column] ? <button type="button" onClick={() => applySort(column)} className="hover:text-foreground">{COLUMN_LABELS[column]} {sort.field === SORT_FIELDS[column] ? (sort.direction === 'asc' ? '↑' : '↓') : ''}</button> : COLUMN_LABELS[column]}</th>)}</tr></thead>
-        <tbody className={loading && rows.length ? 'opacity-55' : ''}>{rows.map((row, index) => <tr key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} className={`border-b border-border/60 last:border-0 hover:bg-muted/30 ${onStemClick ? 'cursor-pointer' : ''}`}>{displayColumns.map((column) => <td key={column} className={`max-w-72 px-3 py-3 align-top ${column !== 'productQuantity' ? 'truncate' : ''} ${MONEY_COLUMNS.has(column) ? 'text-right tabular-nums' : ''}`} title={typeof valueFor(row, column) === 'string' ? valueFor(row, column) : undefined}>{renderValue(row, column, onAccountClick)}</td>)}</tr>)}
+        <tbody className={loading && rows.length ? 'opacity-55' : ''}>{rows.flatMap((row, index) => {
+          const stemKey = row.id ?? row.Id ?? index;
+          const showsChildColumns = displayColumns.includes('supplier') || displayColumns.includes('productQuantity');
+          const children = showsChildColumns ? supplierProductRows(row) : [];
+          const physicalRows = children.length ? children : [null];
+          return physicalRows.map((item, childIndex) => <tr key={`${stemKey}:${item?.sourceType || 'stem'}:${item?.sourceId || childIndex}`} data-stem-group={stemKey} data-source-type={item?.sourceType || undefined} onClick={() => onStemClick?.(row)} className={`${childIndex === physicalRows.length - 1 ? 'border-b border-border/60' : 'border-b border-border/30'} hover:bg-muted/30 ${onStemClick ? 'cursor-pointer' : ''}`}>{displayColumns.map((column) => {
+            if (column === 'supplier') return <td key={column} className="max-w-72 px-3 py-2.5 align-top"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /></td>;
+            if (column === 'productQuantity') return <td key={column} className="max-w-96 px-3 py-2.5 align-top"><SupplierProductItem item={item} /></td>;
+            if (childIndex > 0) return null;
+            return <td key={column} rowSpan={physicalRows.length} className={`max-w-72 px-3 py-3 align-top ${MONEY_COLUMNS.has(column) ? 'text-right tabular-nums' : 'truncate'}`} title={typeof valueFor(row, column) === 'string' ? valueFor(row, column) : undefined}>{renderValue(row, column, onAccountClick)}</td>;
+          })}</tr>);
+        })}
           {!rows.length && !loading ? <tr><td colSpan={displayColumns.length} className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</td></tr> : null}
         </tbody>
       </table>

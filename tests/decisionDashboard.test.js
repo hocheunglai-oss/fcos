@@ -5,6 +5,7 @@ import {
   dashboardFinancialBuckets,
   dashboardMonthlyCounterpartySeries,
   dashboardMonthlyYearOverYear,
+  dashboardSupplierProductRows,
   dashboardCurrency,
   decodeDashboardCursor,
   decisionDashboardSummary,
@@ -13,6 +14,44 @@ import {
   priorEquivalentDateWindows,
   yearOverYearDateWindows,
 } from '../api/_decisionDashboard.js';
+
+test('keeps product suppliers aligned and shows only extra-cost-only suppliers', () => {
+  const rows = dashboardSupplierProductRows({
+    lineItems: [
+      { sourceId: 'line-b', createdDate: '2026-08-02T00:00:00Z', supplierAccountId: 'supplier-a', supplierName: 'Supplier A', itemName: 'LSMGO', quantityLabel: '50 MT' },
+      { sourceId: 'line-a', createdDate: '2026-08-01T00:00:00Z', supplierAccountId: 'supplier-a', supplierName: 'Supplier A', itemName: 'VLSFO', quantityLabel: '100 MT' },
+      { sourceId: 'line-c', createdDate: '2026-08-03T00:00:00Z', supplierAccountId: 'supplier-b', supplierName: 'Same Supplier Name', itemName: 'HSFO', quantityLabel: '75 MT' },
+      { sourceId: 'line-cancelled', supplierAccountId: 'supplier-c', itemName: 'Cancelled product', cancelled: true },
+    ],
+    extraCosts: [
+      { sourceId: 'extra-hidden', supplierAccountId: 'supplier-a', supplierName: 'Supplier A', chargeProductName: 'Transport (Barge Included)' },
+      { sourceId: 'extra-visible', createdDate: '2026-08-04T00:00:00Z', supplierAccountId: 'supplier-d', supplierName: 'Same Supplier Name', chargeProductName: 'Agency Fee' },
+      { sourceId: 'extra-description', createdDate: '2026-08-05T00:00:00Z', description: 'Customs handling' },
+      { sourceId: 'extra-cancelled', supplierAccountId: 'supplier-e', chargeProductName: 'Cancelled charge', cancelled: true },
+    ],
+  });
+
+  assert.deepEqual(rows.map((row) => [row.sourceType, row.sourceId, row.supplierAccount?.id || null, row.itemName, row.quantityLabel]), [
+    ['line_item', 'line-a', 'supplier-a', 'VLSFO', '100 MT'],
+    ['line_item', 'line-b', 'supplier-a', 'LSMGO', '50 MT'],
+    ['line_item', 'line-c', 'supplier-b', 'HSFO', '75 MT'],
+    ['extra_cost', 'extra-visible', 'supplier-d', 'Agency Fee', null],
+    ['extra_cost', 'extra-description', null, 'Customs handling', null],
+  ]);
+});
+
+test('falls back to the Salesforce extra-cost record number only after product and description', () => {
+  assert.deepEqual(dashboardSupplierProductRows({
+    extraCosts: [{ sourceId: 'extra-1', recordName: 'E-24678' }],
+  })[0], {
+    sourceType: 'extra_cost',
+    sourceId: 'extra-1',
+    supplierAccount: null,
+    itemName: 'E-24678',
+    quantityLabel: null,
+    unitOfMeasure: null,
+  });
+});
 
 test('single-currency Salesforce records use the confirmed USD corporate currency', () => {
   assert.equal(dashboardCurrency(null), 'USD');
