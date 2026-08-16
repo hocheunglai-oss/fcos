@@ -4,20 +4,31 @@ import { dashboardFilterPayload, normalizeDashboardFilters, presetDashboardPerio
 
 test('decision dashboard filter payload uses exact account identifiers and never text matching for a buyer', () => {
   const payload = dashboardFilterPayload(normalizeDashboardFilters({
-    selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'buyer', company: 'Similar Name', companyId: '001123456789012AAA', portCountry: 'Singapore', portCountryId: 'a0P123456789012AAA',
+    selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'buyer', company: 'Similar Name', companyId: '001123456789012AAA', port: 'Singapore', portId: 'a0P123456789012AAA', country: 'Singapore', countryCode: 'Singapore',
   }));
   assert.deepEqual(payload.filters.accountIds, ['001123456789012AAA']);
   assert.deepEqual(payload.filters.supplierIds, []);
   assert.deepEqual(payload.filters.portIds, ['a0P123456789012AAA']);
+  assert.deepEqual(payload.filters.countryCodes, ['SINGAPORE']);
   assert.equal('companyKeyword' in payload, false);
 });
 
 test('supplier filters require exact Account IDs and country values retain canonical non-ID values', () => {
-  const payload = dashboardFilterPayload({ selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'supplier', company: 'Exact Supplier', companyId: '001123456789012AAA', portCountry: 'Country · South Korea', portCountryId: 'country:South Korea' });
+  const payload = dashboardFilterPayload({ selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'supplier', company: 'Exact Supplier', companyId: '001123456789012AAA', country: 'South Korea', countryCode: 'South Korea' });
   assert.deepEqual(payload.filters.supplierIds, ['001123456789012AAA']);
   assert.equal('supplierNames' in payload.filters, false);
   assert.deepEqual(payload.filters.countryCodes, ['SOUTH KOREA']);
   assert.deepEqual(payload.filters.portIds, []);
+});
+
+test('buyer GROUP selection expands to exact buyer Account IDs without name matching', () => {
+  const payload = dashboardFilterPayload({
+    selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'buyer',
+    group: 'GROUP - TEST', groupId: '001123456789099AAA',
+    groupAccountIds: ['001123456789012AAA', '001123456789013AAA'],
+  });
+  assert.deepEqual(payload.filters.accountIds, ['001123456789012AAA', '001123456789013AAA']);
+  assert.equal('group' in payload.filters, false);
 });
 
 test('date presets produce a bounded custom date window', () => {

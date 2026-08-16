@@ -214,6 +214,43 @@ test('keeps currencies separate and does not publish a cross-currency Gross Prof
   assert.ok(result.warnings.some((warning) => warning.includes('does not net currencies')));
 });
 
+test('uses live BDN quantities before the STEM delivery date and matches STAR FLAME QLIK profit', () => {
+  const starStem = stem(STEM_A, {
+    Name: 'HK2627258T - STAR FLAME - HONG KONG',
+    Delivery_Date__c: null,
+    Expected_Delivery_Date__c: '2026-08-12',
+    Total_Invoice_Amount__c: 0,
+    Total_Invoiced_Amount_From_Suppliers__c: 100_940,
+    QLIK_STEM_Line_Item_Total_Cost__c: 588_940,
+    QLIK_Costs_Total_Cost__c: 0.5,
+    QLIK_Total_Profit__c: 5_608.5,
+  });
+  const result = buildDashboardAccountInsight(dataset({
+    stems: [starStem],
+    lineItems: [
+      line('a02000000000020AAA', STEM_A, SUPPLIER_A, null, 430_150, 427_000, {
+        Quantity__c: 700, Quantity_Max__c: 900, Quantity_Delivered_Per_BDN__c: null,
+        Is_Quantity_Range__c: true, Unit_Sell_At__c: 614.5, Unit_Buy_At__c: 610,
+        Supplier_Invoice__c: null,
+      }),
+      line('a02000000000021AAA', STEM_A, SUPPLIER_B, 98, 102_949, 100_940, {
+        Quantity__c: 50, Quantity_Max__c: 100, Is_Quantity_Range__c: true,
+        Unit_Sell_At__c: 1_050.5, Unit_Buy_At__c: 1_030,
+      }),
+    ],
+    extraCosts: [{
+      Id: 'a03000000000020AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_B,
+      Supplier__r: { Name: 'Same Supplier Name' }, Quantity__c: 1,
+      Quantity_Delivered_Per_BDN__c: 1, Line_Total__c: 0, Line_Total_Buy__c: 0.5,
+      Supplier_Invoice__c: null, Cancelled__c: false,
+    }],
+  }), { today: '2026-08-16' });
+
+  assert.equal(result.stems.rows[0].grossProfit, 5_608.5);
+  assert.equal(result.stems.rows[0].currency, 'USD');
+  assert.equal(result.stems.rows[0].volumeMt, 898);
+});
+
 test('supplier role includes only the exact Account ID and its direct volume', () => {
   const supplierData = dataset({
     identity: { accountId: SUPPLIER_A, name: 'Same Supplier Name', clKey: 'SUP-A', inactive: false, recordType: 'Supplier' },

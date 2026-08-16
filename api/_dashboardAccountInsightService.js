@@ -466,7 +466,7 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         stemId: invoice.STEM__c,
         supplierAccountId: accountField ? invoice[accountField] : accountId,
         supplierName: relationship ? invoice[relationship]?.Name : invoice.Supplier_Name__c || null,
-        currency: invoice.CurrencyIsoCode || 'Currency not set',
+        currency: invoice.CurrencyIsoCode || 'USD',
         invoiceAmount,
         payableBalance,
         dueDate: schema.supplierSettlement.invoiceDueDateFields.map((field) => invoice[field]).find(Boolean) || null,

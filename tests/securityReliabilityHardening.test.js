@@ -17,7 +17,7 @@ test('Dashboard has no browser-accessible raw SOQL endpoint', async () => {
   assert.doesNotMatch(source, /^\s*salesforceQuery:\s*\[/m);
   const filterOptions = functionSource(source, 'dashboardFilterOptions', 'salesforceDescribeChildren');
   assert.match(filterOptions, /optionType === 'ports'/);
-  assert.match(filterOptions, /\['ports', 'companies'\]\.includes\(optionType\)/);
+  assert.match(filterOptions, /\['ports', 'companies', 'groups'\]\.includes\(optionType\)/);
   assert.doesNotMatch(filterOptions, /body\.(?:soql|query)/);
   assert.doesNotMatch(source, /body\.where/);
   assert.doesNotMatch(await readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8'), /\bwhere\s*[,}]/);

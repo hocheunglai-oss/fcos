@@ -60,6 +60,18 @@ export function financialQuantityValue(item, stemHasDelivery = false, maxField =
   return nativeFinancialQuantity(item, { stemHasDelivery, maxField }).quantity;
 }
 
+// Financial pricing follows the most authoritative quantity available on the
+// child row. A BDN quantity can be populated before the parent STEM delivery
+// date is completed, so parent delivery status must not force pricing back to
+// the ordered range in that case.
+export function pricingFinancialQuantityValue(item, stemHasDelivery = false, maxField = 'Quantity_Max__c') {
+  const hasDeliveredQuantity = finiteNumber(item?.Quantity_Delivered_Per_BDN__c) != null;
+  return nativeFinancialQuantity(item, {
+    stemHasDelivery: stemHasDelivery || hasDeliveredQuantity,
+    maxField,
+  }).quantity;
+}
+
 export function financialQuantityLabel(item, stemHasDelivery = false, maxField = 'Quantity_Max__c', options = {}) {
   const result = nativeFinancialQuantity(item, { stemHasDelivery, maxField, ...options });
   const format = (value) => Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 3 });

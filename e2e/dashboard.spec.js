@@ -21,6 +21,17 @@ test.describe('Fast, currency-safe decision dashboard', () => {
     await expect(page.getByRole('tab', { name: 'STEMs', exact: true })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Dashboard filters' })).toBeVisible();
+    await expect(page.getByLabel('Exact buyer group')).toBeVisible();
+    await expect(page.getByLabel('Exact port')).toBeVisible();
+    await expect(page.getByLabel('Exact country')).toBeVisible();
+    for (const removedAction of ['Open P&L workspace', 'Review disputes', 'Payment collections', 'Cashflow forecast']) {
+      await expect(page.getByRole('button', { name: removedAction, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByRole('heading', { name: 'Monthly gross profit and margin' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Top 10 accounts by gross profit' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /STEMs by (status|type)/i })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Monthly volume', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Monthly volume' })).toBeVisible();
 
     const company = page.getByLabel('Exact company');
     await company.fill('not an exact Salesforce account');

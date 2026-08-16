@@ -18,7 +18,7 @@ function numeric(value) {
 function money(value, currency) {
   const amount = numeric(value);
   if (amount == null) return 'Unavailable';
-  return `${currency || 'Salesforce corporate currency'} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  return `${currency || 'USD'} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
 function displayDate(value) {

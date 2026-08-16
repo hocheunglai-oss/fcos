@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   financialQuantityValue,
   nativeFinancialQuantity,
+  pricingFinancialQuantityValue,
 } from '../api/_financialQuantity.js';
 
 test('financial quantity uses native ordered and delivered values without MT fallback', () => {
@@ -31,6 +32,17 @@ test('financial quantity uses native range midpoint and never density conversion
   assert.equal(result.minimum, 1_000);
   assert.equal(result.maximum, 1_200);
   assert.equal(result.unitOfMeasure, 'KL');
+});
+
+test('pricing uses a populated BDN quantity before the parent STEM delivery date is completed', () => {
+  const line = {
+    Quantity__c: 50,
+    Quantity_Max__c: 100,
+    Quantity_Delivered_Per_BDN__c: 98,
+    Is_Quantity_Range__c: true,
+  };
+  assert.equal(financialQuantityValue(line, false), 75);
+  assert.equal(pricingFinancialQuantityValue(line, false), 98);
 });
 
 test('missing UOM warns but does not infer a converted quantity', () => {

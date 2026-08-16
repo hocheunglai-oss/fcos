@@ -9,7 +9,7 @@ const PAGE_SIZE = 25;
 function money(value, currency) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return 'Unavailable';
-  const label = currency || 'Salesforce corporate currency';
+  const label = currency || 'USD';
   return `${label} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 

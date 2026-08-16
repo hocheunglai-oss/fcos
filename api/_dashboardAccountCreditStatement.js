@@ -2,6 +2,8 @@ const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ONE_DAY_MS = 86_400_000;
 
+import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+
 export const CREDIT_RECONCILIATION_TOLERANCE = 1;
 
 function text(value) {
@@ -90,7 +92,7 @@ export function accountCreditSnapshot(account = {}, currency = null) {
     : null;
   const snapshot = {
     category,
-    currency: text(currency || account.CurrencyIsoCode) || 'Salesforce corporate currency',
+    currency: text(currency || account.CurrencyIsoCode) || SALESFORCE_CORPORATE_CURRENCY,
     legacyLimit: number(account.Credit_Limit__c),
     individualLimit: number(account.CL_Individual__c),
     specialIndividualLimit: number(account.CL_Special__c),
@@ -242,7 +244,7 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     stemName: stem.Name || stem.Id,
     accountId: stem.Account__c || accountId || null,
     accountName: stem.Account__r?.Name || null,
-    currency: text(stem.CurrencyIsoCode) || 'Salesforce corporate currency',
+    currency: text(stem.CurrencyIsoCode) || SALESFORCE_CORPORATE_CURRENCY,
     currentExposure: exposure,
     actualReleases,
     forecastEvents,

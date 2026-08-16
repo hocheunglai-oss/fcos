@@ -166,7 +166,7 @@ import { generateHedgeInvoicePdf, saveHedgeInvoicePdf, sendHedgeInvoiceEmailIdem
 import { approveAndSendHedgeSfsReport, getHedgeSfsFile, getHedgeSfsMonthReport, hedgeSfsHealth } from '../_hedgeSfsService.js';
 import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js';
 import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce } from '../_hedgeSalesforce.js';
-import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
+import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity, pricingFinancialQuantityValue as pricingFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
@@ -5388,7 +5388,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
 
 async function dashboardFilterOptions(body = {}, req = null, accessContext = null) {
   const optionType = String(body.optionType || '').trim().toLowerCase();
-  if (!['ports', 'companies'].includes(optionType)) {
+  if (!['ports', 'companies', 'groups'].includes(optionType)) {
     throw appError('Dashboard filter option type is invalid.', 400, 'DASHBOARD_FILTER_OPTION_INVALID');
   }
   const mode = body.counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
@@ -5428,6 +5428,53 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
               label: `Country · ${countryCode}`,
             })),
           ],
+        };
+      }
+
+      if (optionType === 'groups') {
+        const [accountDescribe, stemDescribe] = await Promise.all([
+          salesforceObjectFields({ objectName: 'Account' }),
+          salesforceObjectFields({ objectName: 'stem__c' }),
+        ]);
+        const accountFields = fieldNameSetFrom(accountDescribe.fields || []);
+        const stemFields = fieldNameSetFrom(stemDescribe.fields || []);
+        if (!accountFields.has('ParentId') || !stemFields.has('Account__c')) {
+          throw appError('Dashboard GROUP filtering requires the Salesforce Account hierarchy and STEM buyer Account lookup.', 503, 'DASHBOARD_GROUP_SCHEMA', undefined, true);
+        }
+        const accountSelect = ['Id', 'Name', 'ParentId', accountFields.has('Company_Code__c') ? 'Company_Code__c' : null, 'RecordType.Name'].filter(Boolean);
+        const [accounts, stems] = await Promise.all([
+          decisionDashboardQueryAll(`SELECT ${accountSelect.join(',')} FROM Account ORDER BY Name,Id`),
+          decisionDashboardQueryAll('SELECT Account__c FROM stem__c WHERE Account__c != null'),
+        ]);
+        const accountsById = new Map(accounts.map((account) => [account.Id, account]));
+        const groupBuyerIds = new Map();
+        const interoffice = isInterofficeAccess(accessContext);
+        for (const buyerId of new Set(stems.map((stem) => stem.Account__c).filter(Boolean))) {
+          const chain = [];
+          const seen = new Set();
+          let current = accountsById.get(buyerId);
+          while (current && chain.length < 20) {
+            if (seen.has(current.Id)) throw appError('Salesforce Account hierarchy contains a cycle.', 503, 'DASHBOARD_GROUP_HIERARCHY', undefined, true);
+            seen.add(current.Id);
+            chain.push(current);
+            current = current.ParentId ? accountsById.get(current.ParentId) : null;
+          }
+          if (current) throw appError('Salesforce Account hierarchy exceeds 20 levels.', 503, 'DASHBOARD_GROUP_HIERARCHY', undefined, true);
+          if (interoffice && chain.some((account) => String(account.Name || '').trim().toUpperCase() === INTEROFFICE_EXCLUDED_BUYER_GROUP)) continue;
+          for (const account of chain) {
+            const isGroup = /^GROUP\b/i.test(String(account.Name || '').trim()) || /group/i.test(String(account.RecordType?.Name || ''));
+            if (!isGroup) continue;
+            if (!groupBuyerIds.has(account.Id)) groupBuyerIds.set(account.Id, new Set());
+            groupBuyerIds.get(account.Id).add(buyerId);
+          }
+        }
+        return {
+          options: [...groupBuyerIds.entries()].map(([id, buyerIds]) => {
+            const account = accountsById.get(id) || {};
+            const name = account.Name || 'GROUP name unavailable';
+            const clKey = account.Company_Code__c || null;
+            return { kind: 'group', id, value: id, name, clKey, accountIds: [...buyerIds].sort(), label: [name, clKey].filter(Boolean).join(' · ') };
+          }).sort((left, right) => left.label.localeCompare(right.label)),
         };
       }
 
@@ -7117,37 +7164,37 @@ function lineItemQuantityLabel(item, stemHasDelivery) {
 function lineSellAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return item.Total_Price__c ?? 0;
   const unit = firstNumber(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item['Offer_Line_Item__r']?.UnitPrice);
-  const qty = financialQuantity(item, false);
+  const qty = pricingFinancialQuantity(item, false);
   return unit != null ? unit * qty : (item.Total_Price__c ?? 0);
 }
 
 function lineBuyAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return item.Total_Cost__c ?? 0;
   const unit = firstNumber(item.Cost_Per_Unit__c, item.Unit_Buy_At__c, item.Unit_Cost__c, item['Offer_Line_Item__r']?.Supplier_Unit_Price__c);
-  const qty = financialQuantity(item, false);
+  const qty = pricingFinancialQuantity(item, false);
   return unit != null ? unit * qty : (item.Total_Cost__c ?? 0);
 }
 
 function extraSellAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return item.Line_Total__c ?? 0;
   const unit = firstNumber(item.Unit_Price__c);
-  const qty = financialQuantity(item, false, 'Quantity_Range_Max__c');
+  const qty = pricingFinancialQuantity(item, false, 'Quantity_Range_Max__c');
   return unit != null ? unit * qty : (item.Line_Total__c ?? 0);
 }
 
 function extraBuyAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return item.Line_Total_Buy__c ?? 0;
   const unit = firstNumber(item.Unit_Cost__c);
-  const qty = financialQuantity(item, false, 'Quantity_Range_Max__c');
+  const qty = pricingFinancialQuantity(item, false, 'Quantity_Range_Max__c');
   return unit != null ? unit * qty : (item.Line_Total_Buy__c ?? 0);
 }
 
 function supplierBrokerCommission(item, stemHasDelivery) {
-  return (item.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * financialQuantity(item, stemHasDelivery);
+  return (item.Suppliers_Brokers_Commission_Per_Unit__c ?? 0) * pricingFinancialQuantity(item, stemHasDelivery);
 }
 
 function buyerBrokerCommission(item, stemHasDelivery) {
-  const qty = financialQuantity(item, stemHasDelivery);
+  const qty = pricingFinancialQuantity(item, stemHasDelivery);
   const buyerPerUnitTotal = (item.Buyers_Brokers_Commission_Per_Unit__c ?? 0) * qty;
   const suppBrokerPerUnit = item.Suppliers_Brokers_Commission_Per_Unit__c ?? 0;
   if (suppBrokerPerUnit !== 0 || item.Buyers_Brokers_Commission_Per_Unit__c != null) return buyerPerUnitTotal;
@@ -8099,7 +8146,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const conditions = [dateWhere, interofficeWhere, additionalWhere].filter(Boolean);
   if (filters.accountIds.length) {
     if (!accountField) throw appError('Account filtering is unavailable because Salesforce Account metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
-    conditions.push(`${accountField} IN (${decisionDashboardValues(filters.accountIds)})`);
+    const accountChunks = chunkIds(filters.accountIds);
+    conditions.push(`(${accountChunks.map((ids) => `${accountField} IN (${decisionDashboardValues(ids)})`).join(' OR ')})`);
   }
   if (filters.portIds.length) {
     if (!portField) throw appError('Port filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
@@ -8236,7 +8284,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     const extras = extraByStem.get(stem.Id) || [];
     const lineTotals = lines.reduce((total, item) => {
       const amounts = { sell: lineSellAmount(item, delivered), buy: lineBuyAmount(item, delivered) };
-      const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered, lineItemUomField });
+      const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered || item.Quantity_Delivered_Per_BDN__c != null, lineItemUomField });
       if (nativeQuantity.warning) uomWarningCount += 1;
       const volume = dashboardLineItemVolume(item, delivered, {
         lineItemUomField,
@@ -8244,6 +8292,14 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         fallbackQuantity: nativeQuantity.quantity,
         productFamily: dashboardProductFamily(item),
       });
+      const productFamily = dashboardProductFamily(item);
+      const productKey = `${productFamily}\u001f${volume.unitOfMeasure || 'MT'}`;
+      const productVolumes = { ...total.productVolumes };
+      productVolumes[productKey] = {
+        family: productFamily,
+        unitOfMeasure: volume.unitOfMeasure || 'MT',
+        quantity: Number(productVolumes[productKey]?.quantity || 0) + Number(volume.quantity || 0),
+      };
       return {
         sell: total.sell + amounts.sell,
         buy: total.buy + amounts.buy,
@@ -8252,8 +8308,9 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         buyerComm: total.buyerComm + buyerBrokerCommission(item, delivered),
         supplierComm: total.supplierComm + supplierBrokerCommission(item, delivered),
         volumeMt: total.volumeMt + Number(volume.quantity || 0),
+        productVolumes,
       };
-    }, { sell: 0, buy: 0, uninvoicedBuy: 0, hasSupplierInvoice: false, buyerComm: 0, supplierComm: 0, volumeMt: 0 });
+    }, { sell: 0, buy: 0, uninvoicedBuy: 0, hasSupplierInvoice: false, buyerComm: 0, supplierComm: 0, volumeMt: 0, productVolumes: {} });
     const extraTotals = extras.reduce((total, item) => {
       const amounts = { sell: extraSellAmount(item, delivered), buy: extraBuyAmount(item, delivered) };
       return {
@@ -8337,6 +8394,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       netPnl,
       supplierAllocations,
       volumeMt: lineTotals.volumeMt,
+      productVolumes: Object.values(lineTotals.productVolumes),
       _cursorRecord: stem,
     };
   });
@@ -8368,6 +8426,19 @@ function publicDecisionDashboardRows(rows) {
 function decisionDashboardOverviewMetrics(scope, body = {}) {
   const buyerAccounts = new Set(scope.rows.map((row) => row.account?.id).filter(Boolean));
   const supplierAccounts = new Set(scope.rows.flatMap((row) => (row.supplierAccounts || []).map((account) => account.id)).filter(Boolean));
+  const productVolumeByKey = new Map();
+  for (const product of scope.rows.flatMap((row) => row.productVolumes || [])) {
+    const key = `${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
+    const current = productVolumeByKey.get(key) || { family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
+    current.quantity += Number(product.quantity || 0);
+    productVolumeByKey.set(key, current);
+  }
+  const breakdown = [...productVolumeByKey.values()].sort((left, right) => {
+    const order = ['HSFO', 'VLSFO', 'LSMGO'];
+    const leftRank = order.indexOf(String(left.family || '').toUpperCase());
+    const rightRank = order.indexOf(String(right.family || '').toUpperCase());
+    return (leftRank < 0 ? order.length : leftRank) - (rightRank < 0 ? order.length : rightRank) || String(left.family).localeCompare(String(right.family));
+  });
   return {
     stemCount: scope.completeness.matchingCount,
     disputedCount: scope.rows.filter((row) => row.dispute).length,
@@ -8377,6 +8448,7 @@ function decisionDashboardOverviewMetrics(scope, body = {}) {
     productVolume: {
       quantity: scope.rows.reduce((sum, row) => sum + Number(row.volumeMt || 0), 0),
       unitOfMeasure: 'MT',
+      breakdown,
     },
   };
 }
@@ -8449,7 +8521,20 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     for (const field of ['buyer', 'supplier', 'brokerCommissions', 'netPnl']) result[key][field] += row[field];
     result[key].stemCount += 1;
     return result;
-  }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+  }, {})).map((row) => ({
+    ...row,
+    grossMarginPct: Number(row.buyer) === 0 ? null : (Number(row.netPnl) / Number(row.buyer)) * 100,
+  })).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+  const monthlyVolume = Object.values(current.rows.reduce((result, row) => {
+    const month = String(row.deliveryDate || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) return result;
+    for (const product of row.productVolumes || []) {
+      const key = `${month}\u001f${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
+      if (!result[key]) result[key] = { month, family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
+      result[key].quantity += Number(product.quantity || 0);
+    }
+    return result;
+  }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.family.localeCompare(right.family));
   const currentSummary = decisionDashboardSummary(current.rows.filter((row) => row.buyer != null), current.completeness);
   const priorSummary = decisionDashboardSummary(prior.rows.filter((row) => row.buyer != null), prior.completeness);
   return {
@@ -8461,6 +8546,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
       previous: priorSummary,
       previousDateWindows,
       monthly: monthlyTrend,
+      monthlyVolume,
     },
     comparisonByCurrency: currentSummary.complete && priorSummary.complete
       ? decisionDashboardCurrencyComparison(currentSummary.financials, priorSummary.financials)

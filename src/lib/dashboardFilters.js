@@ -78,6 +78,8 @@ export function presetDashboardPeriod(preset, currentDate = new Date()) {
 export function normalizeDashboardFilters(input = {}) {
   const years = [...new Set((input.selectedYears || [THIS_YEAR]).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
   const months = [...new Set((input.selectedMonths || [THIS_MONTH]).map(Number).filter((month) => month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const legacyLocationId = String(input.portCountryId ?? '').trim();
+  const legacyCountry = legacyLocationId.toLowerCase().startsWith('country:');
   return {
     datePreset: DASHBOARD_DATE_PRESETS.some((item) => item.value === input.datePreset) ? input.datePreset : 'this_month',
     selectedYears: years.length ? years : [THIS_YEAR],
@@ -86,20 +88,24 @@ export function normalizeDashboardFilters(input = {}) {
     counterpartyMode: input.counterpartyMode === 'supplier' ? 'supplier' : 'buyer',
     company: String(input.company ?? input.companyKeyword ?? '').trim(),
     companyId: String(input.companyId ?? '').trim(),
-    portCountry: String(input.portCountry ?? '').trim(),
-    portCountryId: String(input.portCountryId ?? '').trim(),
+    group: String(input.group ?? '').trim(),
+    groupId: String(input.groupId ?? '').trim(),
+    groupAccountIds: [...new Set((Array.isArray(input.groupAccountIds) ? input.groupAccountIds : []).map((value) => String(value || '').trim()).filter(Boolean))],
+    port: String(input.port ?? (legacyCountry ? '' : input.portCountry ?? '')).trim(),
+    portId: String(input.portId ?? (legacyCountry ? '' : legacyLocationId)).trim(),
+    country: String(input.country ?? (legacyCountry ? input.portCountry ?? '' : '')).trim(),
+    countryCode: String(input.countryCode ?? (legacyCountry ? legacyLocationId.slice('country:'.length) : '')).trim().toUpperCase(),
   };
 }
 
 export function dashboardFilterPayload(input = {}) {
   const filters = normalizeDashboardFilters(input);
-  const accountIds = filters.counterpartyMode === 'buyer' && filters.companyId ? [filters.companyId] : [];
-  const supplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
-  const countryPrefix = 'country:';
-  const countryCodes = filters.portCountryId.toLowerCase().startsWith(countryPrefix)
-    ? [filters.portCountryId.slice(countryPrefix.length).trim().toUpperCase()].filter(Boolean)
+  const accountIds = filters.counterpartyMode === 'buyer'
+    ? filters.groupAccountIds.length ? filters.groupAccountIds : filters.companyId ? [filters.companyId] : []
     : [];
-  const portIds = filters.portCountryId && !countryCodes.length ? [filters.portCountryId] : [];
+  const supplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
+  const countryCodes = filters.countryCode ? [filters.countryCode] : [];
+  const portIds = filters.portId ? [filters.portId] : [];
   return {
     dateWindows: buildDashboardDateWindows(filters.selectedYears, filters.selectedMonths),
     disputeOnly: filters.disputeOnly,

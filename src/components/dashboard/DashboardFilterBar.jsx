@@ -42,12 +42,14 @@ function FilterChip({ children, onRemove }) {
   return <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-900">{children}<button type="button" onClick={onRemove} aria-label={`Remove ${children}`} className="rounded-full text-sky-800 hover:text-sky-950"><X className="h-3 w-3" /></button></span>;
 }
 
-export default function DashboardFilterBar({ filters, years, portOptions, companyOptions, loading, onChange, onReset, onAiSearch }) {
+export default function DashboardFilterBar({ filters, years, portOptions = [], groupOptions = [], companyOptions = [], loading, onChange, onReset, onAiSearch }) {
   const [showCustom, setShowCustom] = useState(filters.datePreset === 'custom');
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const selectedMonthLabel = filters.selectedMonths.length === 12 ? 'All months' : filters.selectedMonths.map((month) => MONTHS.find((item) => item.value === month)?.label).join(', ');
-  const hasFilters = filters.disputeOnly || filters.company || filters.portCountry || filters.datePreset !== 'this_month';
+  const exactPortOptions = useMemo(() => portOptions.filter((option) => option?.kind === 'port'), [portOptions]);
+  const countryOptions = useMemo(() => portOptions.filter((option) => option?.kind === 'country'), [portOptions]);
+  const hasFilters = filters.disputeOnly || filters.company || filters.group || filters.port || filters.country || filters.datePreset !== 'this_month';
   const set = (patch) => onChange({ ...filters, ...patch });
   const setPreset = (datePreset) => { setShowCustom(datePreset === 'custom'); set({ datePreset }); };
   const submitAi = (event) => { event.preventDefault(); if (aiPrompt.trim().length >= 3) onAiSearch?.(aiPrompt.trim()); };
@@ -70,17 +72,21 @@ export default function DashboardFilterBar({ filters, years, portOptions, compan
         <div className="flex flex-wrap gap-1">{MONTHS.map((month) => <button type="button" key={month.value} onClick={() => set({ datePreset: 'custom', selectedMonths: filters.selectedMonths.includes(month.value) ? (filters.selectedMonths.length > 1 ? filters.selectedMonths.filter((value) => value !== month.value) : filters.selectedMonths) : [...filters.selectedMonths, month.value] })} className={`rounded border px-2 py-1 text-xs ${filters.selectedMonths.includes(month.value) ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground'}`}>{month.label}</button>)}</div>
       </div> : null}
 
-      <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-[auto_minmax(10rem,1fr)_minmax(10rem,1fr)] xl:items-center">
-        <div className="flex rounded-md border border-border p-0.5"><button type="button" onClick={() => set({ counterpartyMode: 'buyer', company: '', companyId: '' })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'buyer' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Buyer</button><button type="button" onClick={() => set({ counterpartyMode: 'supplier', company: '', companyId: '' })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'supplier' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Supplier</button></div>
-        <Picker id="dashboard-company" label="Exact company" value={filters.company} onCommit={(option) => set({ company: optionLabel(option), companyId: option?.id || optionValue(option) })} options={companyOptions} placeholder={`Exact ${filters.counterpartyMode} company`} />
-        <Picker id="dashboard-port-country" label="Port or country" value={filters.portCountry} onCommit={(option) => set({ portCountry: optionLabel(option), portCountryId: option?.kind === 'country' ? `country:${option.countryCode}` : option?.id || optionValue(option) })} options={portOptions} placeholder="Port or country" />
+      <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-5 xl:items-start">
+        <div className="flex rounded-md border border-border p-0.5"><button type="button" onClick={() => set({ counterpartyMode: 'buyer', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'buyer' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Buyer</button><button type="button" onClick={() => set({ counterpartyMode: 'supplier', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'supplier' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Supplier</button></div>
+        <Picker id="dashboard-company" label="Exact company" value={filters.company} onCommit={(option) => set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyOptions} placeholder={`Exact ${filters.counterpartyMode} company`} />
+        {filters.counterpartyMode === 'buyer' ? <Picker id="dashboard-group" label="Exact buyer group" value={filters.group} onCommit={(option) => set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })} options={groupOptions} placeholder="Exact buyer GROUP" /> : <div className="hidden xl:block" />}
+        <Picker id="dashboard-port" label="Exact port" value={filters.port} onCommit={(option) => set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option) })} options={exactPortOptions} placeholder="Exact port" />
+        <Picker id="dashboard-country" label="Exact country" value={filters.country} onCommit={(option) => set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option) })} options={countryOptions} placeholder="Exact country" />
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5" aria-live="polite">
         <FilterChip onRemove={() => set({ datePreset: 'this_month' })}>{selectedMonthLabel} {filters.selectedYears.join(', ')}</FilterChip>
         {filters.disputeOnly ? <FilterChip onRemove={() => set({ disputeOnly: false })}>Disputed</FilterChip> : null}
         {filters.company ? <FilterChip onRemove={() => set({ company: '', companyId: '' })}>{filters.counterpartyMode}: {filters.company}</FilterChip> : null}
-        {filters.portCountry ? <FilterChip onRemove={() => set({ portCountry: '', portCountryId: '' })}>Port: {filters.portCountry}</FilterChip> : null}
+        {filters.group ? <FilterChip onRemove={() => set({ group: '', groupId: '', groupAccountIds: [] })}>GROUP: {filters.group}</FilterChip> : null}
+        {filters.port ? <FilterChip onRemove={() => set({ port: '', portId: '' })}>Port: {filters.port}</FilterChip> : null}
+        {filters.country ? <FilterChip onRemove={() => set({ country: '', countryCode: '' })}>Country: {filters.country}</FilterChip> : null}
       </div>
 
       {aiOpen ? <form onSubmit={submitAi} className="mt-3 flex gap-2 border-t border-border pt-3"><Label htmlFor="dashboard-ai-search" className="sr-only">AI search</Label><Input id="dashboard-ai-search" value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} placeholder="Ask a precise dashboard question (optional)" className="h-9 text-sm" maxLength={500} /><Button type="submit" size="sm" disabled={aiPrompt.trim().length < 3 || loading}><SlidersHorizontal className="mr-1 h-3.5 w-3.5" />Apply</Button></form> : null}

@@ -132,9 +132,13 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   }
 
   const deliveredQuantity = finiteNumber(item?.Quantity_Delivered_Per_BDN__c);
-  const orderedNativeQuantities = stemHasDelivery
-    ? [deliveredQuantity, finiteNumber(item?.Quantity__c)]
-    : [finiteNumber(item?.Quantity__c), deliveredQuantity];
+  // A line-level BDN is authoritative even while the parent STEM delivery
+  // date is still awaiting completion. Otherwise use the ordered quantity and
+  // its range midpoint for an undelivered line.
+  const hasDeliveredQuantity = deliveredQuantity != null;
+  const orderedNativeQuantities = hasDeliveredQuantity
+    ? [deliveredQuantity]
+    : [finiteNumber(item?.Quantity__c)];
   const minimumSource = orderedNativeQuantities.find((value) => value != null);
   if (minimumSource == null) {
     const metricTonQuantity = finiteNumber(item?.Quantity_in_MT__c) ?? finiteNumber(fallbackQuantity) ?? 0;
@@ -146,7 +150,7 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
       isRange: false,
     };
   }
-  const maximumSource = !stemHasDelivery && item?.Is_Quantity_Range__c
+  const maximumSource = !stemHasDelivery && !hasDeliveredQuantity && item?.Is_Quantity_Range__c
     ? finiteNumber(item?.Quantity_Max__c)
     : null;
   const minimum = normalizeDashboardVolume(minimumSource, explicitUom, { productFamily });

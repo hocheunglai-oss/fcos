@@ -7,13 +7,15 @@ function finite(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+export const SALESFORCE_CORPORATE_CURRENCY = 'USD';
+
 export function isDecisionDashboardSalesforceId(value) {
   return /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/.test(String(value || ''));
 }
 
 export function dashboardCurrency(value) {
   const currency = String(value || '').trim().toUpperCase();
-  return currency || 'UNSPECIFIED';
+  return currency || SALESFORCE_CORPORATE_CURRENCY;
 }
 
 export function normalizeDecisionDashboardFilters(input = {}) {

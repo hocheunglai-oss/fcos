@@ -1,5 +1,6 @@
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
+import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import {
   buildAccountCreditStatement,
   decodeAccountCreditCursor,
@@ -245,7 +246,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
             openExposure: exposure.openExposure,
             hasOpenCredit: Math.abs(Number(exposure.openExposure || 0)) > 0.01,
             availableCredit: number(account.CL_Available_Credit__c),
-            currency: account.CurrencyIsoCode || 'Salesforce corporate currency',
+            currency: account.CurrencyIsoCode || SALESFORCE_CORPORATE_CURRENCY,
           };
         }),
         nextCursor: hasMore && accounts.length ? encodeAccountCreditCursor({ kind: 'directory', name: accounts.at(-1).Name, id: accounts.at(-1).Id }) : null,

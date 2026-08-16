@@ -3,12 +3,18 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   dashboardFinancialBuckets,
+  dashboardCurrency,
   decodeDashboardCursor,
   decisionDashboardSummary,
   encodeDashboardCursor,
   normalizeDecisionDashboardFilters,
   priorEquivalentDateWindows,
 } from '../api/_decisionDashboard.js';
+
+test('single-currency Salesforce records use the confirmed USD corporate currency', () => {
+  assert.equal(dashboardCurrency(null), 'USD');
+  assert.equal(dashboardCurrency('usd'), 'USD');
+});
 
 test('decision dashboard keeps financial totals in separate ISO currency buckets', () => {
   assert.deepEqual(dashboardFinancialBuckets([
@@ -85,11 +91,16 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   }
   assert.match(api, /FROM STEM_Line_Item__c WHERE Cancelled__c = false/);
   assert.match(api, /FROM STEM_Extra_Cost__c WHERE Cancelled__c = false/);
+  assert.match(api, /optionType === 'groups'/);
+  assert.match(api, /accountIds: \[\.\.\.buyerIds\]\.sort\(\)/);
   const loader = api.slice(api.indexOf('async function loadDecisionDashboardScope'), api.indexOf('async function salesforceDashboardFilteredUncached'));
   assert.doesNotMatch(loader, /LIMIT 3000/);
   assert.match(loader, /limit: pageOnly \? pageSize \+ 1 : null/);
   assert.match(loader, /SELECT COUNT\(Id\) total FROM stem__c/);
   assert.match(loader, /decisionDashboardBuyerBrokerCommissionField\(buyerBrokerDescribe\.fields/);
   assert.match(loader, /buyerBrokerCommissionField\s*\?\s*decisionDashboardRowsForStemIds/);
+  assert.match(api, /pricingFinancialQuantity/);
+  assert.match(loader, /productVolumes/);
+  assert.match(loader, /monthlyVolume/);
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
 });
