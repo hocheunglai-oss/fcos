@@ -265,4 +265,7 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /Open \+ 12 months settled/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
+  assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
+  assert.match(statement, /\{result\.group \? <button type="button" aria-pressed=\{series\.group\}/);
+  assert.match(statement, /\{result\.group \? <ReconciliationBadge label="GROUP"/);
 });
