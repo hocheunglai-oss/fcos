@@ -8490,10 +8490,13 @@ async function decisionDashboardInternalAccountIdentity(body = {}, req = null, a
       const describe = await salesforceObjectFields({ objectName: 'Account' });
       const fields = fieldNameSetFrom(describe.fields || []);
       if (!fields.has('ParentId')) throw appError('Dashboard rankings require the Salesforce Account hierarchy.', 503, 'DASHBOARD_RANKING_ACCOUNT_HIERARCHY', undefined, true);
-      const accounts = await decisionDashboardQueryAll('SELECT Id,Name,ParentId FROM Account ORDER BY Id');
+      const groupNameField = fields.has('Group_Name__c') ? 'Group_Name__c' : null;
+      const accounts = await decisionDashboardQueryAll(`SELECT ${['Id', 'Name', 'ParentId', groupNameField].filter(Boolean).join(',')} FROM Account ORDER BY Id`);
       const byId = new Map(accounts.map((account) => [account.Id, account]));
-      const rootIds = new Set(accounts.filter((account) => String(account.Name || '').trim().toUpperCase() === INTEROFFICE_EXCLUDED_BUYER_GROUP).map((account) => account.Id));
+      const normalizedGroupIdentity = (value) => String(value || '').trim().toUpperCase().replace(/^GROUP\s*(?:-|–|—|:)\s*/, '');
+      const rootIds = new Set(accounts.filter((account) => normalizedGroupIdentity(account.Name) === INTEROFFICE_EXCLUDED_BUYER_GROUP).map((account) => account.Id));
       const internal = accounts.filter((account) => {
+        if (groupNameField && normalizedGroupIdentity(account[groupNameField]) === INTEROFFICE_EXCLUDED_BUYER_GROUP) return true;
         const seen = new Set();
         let current = account;
         while (current) {

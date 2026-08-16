@@ -146,7 +146,8 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /monthlyCounterparties/);
   assert.match(loader, /monthlyVolumeYearOverYear/);
   assert.match(loader, /decisionDashboardInternalAccountIdentity/);
-  assert.match(loader, /SELECT Id,Name,ParentId FROM Account/);
+  assert.match(loader, /normalizedGroupIdentity/);
+  assert.match(loader, /Group_Name__c/);
   assert.match(loader, /internalAccountIds\.has\(entity\.id\)/);
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
 });
