@@ -33,7 +33,7 @@ function monthlyChartModel(trendRows, volumeRows, yearOverYear) {
   }
   for (const row of yearOverYear?.monthlyVolume || []) {
     const item = byMonth.get(row.month) || { month: row.month };
-    item.yoyVolume = row.differencePct == null ? null : Number(row.differencePct);
+    if (row.priorValue != null) item.priorVolume = Number(item.priorVolume || 0) + Number(row.priorValue);
     byMonth.set(row.month, item);
   }
   return { rows: [...byMonth.values()].sort((left, right) => left.month.localeCompare(right.month)), currencies, families };
@@ -48,7 +48,7 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 className="text-sm font-semibold">{volumeMode ? 'Monthly volume' : 'Monthly gross profit and margin'}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars with the same-calendar-month YoY difference as a dashed line.' : 'Each solid point is that month’s gross profit divided by that month’s turnover; the dashed line is the actual margin from the same calendar month last year.'}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars show the selected months; the dashed line is the actual volume from the same calendar month last year.' : 'Each solid point is that month’s gross profit divided by that month’s turnover; the dashed line is the actual margin from the same calendar month last year.'}</p>
       </div>
       <div className="flex rounded-md border border-border bg-muted/30 p-1">
         <button type="button" onClick={() => setMode('profit')} className={`rounded px-2.5 py-1 text-xs font-semibold ${!volumeMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Gross profit</button>
@@ -60,14 +60,14 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
       <ComposedChart data={model.rows} margin={{ right: 12 }}>
         <XAxis dataKey="month" tick={{ fontSize: 11 }} />
         <YAxis yAxisId="value" tick={{ fontSize: 11 }} tickFormatter={(value) => volumeMode ? Number(value).toLocaleString() : `${Math.round(Number(value) / 1000)}k`} />
-        <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(value) => `${Number(value).toFixed(1)}%`} width={52} />
+        {!volumeMode ? <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(value) => `${Number(value).toFixed(1)}%`} width={52} /> : null}
         <Tooltip formatter={(value, name) => name.includes('margin') || name.includes('YoY') ? [`${Number(value).toFixed(1)}%`, name] : [Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 }), name]} />
         <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
         {volumeMode
           ? model.families.map((family, index) => <Bar key={family} yAxisId="value" dataKey={`volume:${family}`} name={`${family} volume`} stackId="volume" fill={PRODUCT_COLORS[String(family).toUpperCase()] || COLORS[index % COLORS.length]} radius={index === model.families.length - 1 ? [4, 4, 0, 0] : undefined} />)
           : model.currencies.map((currency, index) => <Bar key={currency} yAxisId="value" dataKey={`profit:${currency}`} name={`${currency} gross profit`} fill={COLORS[index % COLORS.length]} radius={[4, 4, 0, 0]}>{model.rows.map((row) => <Cell key={`${currency}:${row.month}`} fill={Number(row[`profit:${currency}`] || 0) >= 0 ? COLORS[index % COLORS.length] : '#dc2626'} />)}</Bar>)}
         {volumeMode
-          ? <Line yAxisId="margin" type="monotone" dataKey="yoyVolume" name="Volume YoY difference" stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="6 4" dot={{ r: 3 }} connectNulls={false} />
+          ? <Line yAxisId="value" type="monotone" dataKey="priorVolume" name="Prior-year actual volume" stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="6 4" dot={{ r: 3 }} connectNulls={false} />
           : <>
               {model.currencies.map((currency, index) => <Line key={`margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`margin:${currency}`} name={`${currency} monthly gross margin`} stroke={COLORS[(index + 3) % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} connectNulls={false} />)}
               {model.currencies.map((currency, index) => <Line key={`prior-margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`priorMargin:${currency}`} name={`${currency} prior-year monthly margin`} stroke={COLORS[(index + 1) % COLORS.length]} strokeWidth={2.25} strokeDasharray="6 4" dot={{ r: 2.5 }} connectNulls={false} />)}

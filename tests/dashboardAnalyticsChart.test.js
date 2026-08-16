@@ -15,3 +15,10 @@ test('chart labels state current and prior-year actual monthly margin semantics'
   assert.match(component, /the actual margin from the same calendar month last year/);
   assert.match(component, /row\.priorValue == null \? null : Number\(row\.priorValue\)/);
 });
+
+test('monthly volume plots prior-year actual volume on the volume axis', () => {
+  assert.match(component, /row\.priorValue != null\) item\.priorVolume/);
+  assert.match(component, /dataKey="priorVolume" name="Prior-year actual volume"/);
+  assert.match(component, /Product-volume bars show the selected months/);
+  assert.doesNotMatch(component, /Volume YoY difference/);
+});
