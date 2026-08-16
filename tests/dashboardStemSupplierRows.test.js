@@ -33,5 +33,5 @@ test('STEM API loads charge names, builds paired rows, and uses the versioned ca
   assert.match(api, /extraProductLookup/);
   assert.match(api, /dashboardSupplierProductRows\(\{/);
   assert.match(api, /supplierProductRows,/);
-  assert.match(api, /namespace: handler === 'stems' \? 'decision-dashboard-v3-stems'/);
+  assert.match(api, /namespace: handler === 'stems'[\s\S]{0,80}'decision-dashboard-v3-stems'/);
 });

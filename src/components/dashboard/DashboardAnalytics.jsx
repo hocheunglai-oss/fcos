@@ -48,7 +48,7 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 className="text-sm font-semibold">{volumeMode ? 'Monthly volume' : 'Monthly gross profit and margin'}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars with the same-calendar-month YoY difference as a dashed line.' : 'Gross-profit bars, gross-margin lines, and same-calendar-month YoY difference remain currency-safe.'}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{volumeMode ? 'Product-volume bars with the same-calendar-month YoY difference as a dashed line.' : 'Each gross-margin point uses that month’s gross profit divided by that month’s turnover; each YoY point compares with the same calendar month one year earlier.'}</p>
       </div>
       <div className="flex rounded-md border border-border bg-muted/30 p-1">
         <button type="button" onClick={() => setMode('profit')} className={`rounded px-2.5 py-1 text-xs font-semibold ${!volumeMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Gross profit</button>
@@ -65,12 +65,12 @@ function MonthlyPerformanceChart({ trendRows, volumeRows, yearOverYear }) {
         <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
         {volumeMode
           ? model.families.map((family, index) => <Bar key={family} yAxisId="value" dataKey={`volume:${family}`} name={`${family} volume`} stackId="volume" fill={PRODUCT_COLORS[String(family).toUpperCase()] || COLORS[index % COLORS.length]} radius={index === model.families.length - 1 ? [4, 4, 0, 0] : undefined} />)
-          : model.currencies.map((currency, index) => <Bar key={currency} yAxisId="value" dataKey={`profit:${currency}`} name={`${currency} gross profit`} radius={[4, 4, 0, 0]}>{model.rows.map((row) => <Cell key={`${currency}:${row.month}`} fill={Number(row[`profit:${currency}`] || 0) >= 0 ? COLORS[index % COLORS.length] : '#dc2626'} />)}</Bar>)}
+          : model.currencies.map((currency, index) => <Bar key={currency} yAxisId="value" dataKey={`profit:${currency}`} name={`${currency} gross profit`} fill={COLORS[index % COLORS.length]} radius={[4, 4, 0, 0]}>{model.rows.map((row) => <Cell key={`${currency}:${row.month}`} fill={Number(row[`profit:${currency}`] || 0) >= 0 ? COLORS[index % COLORS.length] : '#dc2626'} />)}</Bar>)}
         {volumeMode
           ? <Line yAxisId="margin" type="monotone" dataKey="yoyVolume" name="Volume YoY difference" stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="6 4" dot={{ r: 3 }} connectNulls={false} />
           : <>
-              {model.currencies.map((currency, index) => <Line key={`margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`margin:${currency}`} name={`${currency} gross margin`} stroke={COLORS[(index + 3) % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} connectNulls={false} />)}
-              {model.currencies.map((currency, index) => <Line key={`yoy:${currency}`} yAxisId="margin" type="monotone" dataKey={`yoyProfit:${currency}`} name={`${currency} YoY difference`} stroke={COLORS[(index + 1) % COLORS.length]} strokeWidth={2.25} strokeDasharray="6 4" dot={{ r: 2.5 }} connectNulls={false} />)}
+              {model.currencies.map((currency, index) => <Line key={`margin:${currency}`} yAxisId="margin" type="monotone" dataKey={`margin:${currency}`} name={`${currency} monthly gross margin`} stroke={COLORS[(index + 3) % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} connectNulls={false} />)}
+              {model.currencies.map((currency, index) => <Line key={`yoy:${currency}`} yAxisId="margin" type="monotone" dataKey={`yoyProfit:${currency}`} name={`${currency} YoY vs same month`} stroke={COLORS[(index + 1) % COLORS.length]} strokeWidth={2.25} strokeDasharray="6 4" dot={{ r: 2.5 }} connectNulls={false} />)}
             </>}
       </ComposedChart>
     </ResponsiveContainer>

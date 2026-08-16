@@ -9,7 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
@@ -8601,18 +8601,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     result[label] = (result[label] || 0) + 1;
     return result;
   }, {})).map(([label, count]) => ({ label, count })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
-  const monthlyTrend = Object.values(current.rows.reduce((result, row) => {
-    const month = String(row.deliveryDate || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month)) return result;
-    const key = `${month}\u001f${row.currency}`;
-    if (!result[key]) result[key] = { month, currency: row.currency, buyer: 0, supplier: 0, brokerCommissions: 0, netPnl: 0, stemCount: 0 };
-    for (const field of ['buyer', 'supplier', 'brokerCommissions', 'netPnl']) result[key][field] += row[field];
-    result[key].stemCount += 1;
-    return result;
-  }, {})).map((row) => ({
-    ...row,
-    grossMarginPct: Number(row.buyer) === 0 ? null : (Number(row.netPnl) / Number(row.buyer)) * 100,
-  })).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+  const monthlyTrend = dashboardMonthlyFinancialTrend(current.rows);
   const monthlyVolume = Object.values(current.rows.reduce((result, row) => {
     const month = String(row.deliveryDate || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) return result;
@@ -8686,7 +8675,11 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
-    namespace: handler === 'stems' ? 'decision-dashboard-v3-stems' : `decision-dashboard-${handler}`,
+    namespace: handler === 'stems'
+      ? 'decision-dashboard-v3-stems'
+      : handler === 'analytics'
+        ? 'decision-dashboard-v2-analytics'
+        : `decision-dashboard-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

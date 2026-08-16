@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   dashboardFinancialBuckets,
   dashboardMonthlyCounterpartySeries,
+  dashboardMonthlyFinancialTrend,
   dashboardMonthlyYearOverYear,
   dashboardSupplierProductRows,
   dashboardCurrency,
@@ -163,8 +164,19 @@ test('calculates monthly YoY difference against the same calendar month', () => 
     { month: '2025-07', currency: 'USD', netPnl: 100 },
     { month: '2025-08', currency: 'USD', netPnl: 0 },
   ]), [
-    { month: '2026-07', currency: 'USD', currentValue: 150, priorValue: 100, difference: 50, differencePct: 50 },
-    { month: '2026-08', currency: 'USD', currentValue: 75, priorValue: 0, difference: 75, differencePct: null },
+    { month: '2026-07', priorMonth: '2025-07', comparisonBasis: 'same_calendar_month', currency: 'USD', currentValue: 150, priorValue: 100, difference: 50, differencePct: 50 },
+    { month: '2026-08', priorMonth: '2025-08', comparisonBasis: 'same_calendar_month', currency: 'USD', currentValue: 75, priorValue: 0, difference: 75, differencePct: null },
+  ]);
+});
+
+test('calculates each monthly gross margin from that month totals rather than a selected-period average', () => {
+  assert.deepEqual(dashboardMonthlyFinancialTrend([
+    { deliveryDate: '2026-07-10', currency: 'USD', buyer: 600, supplier: 530, brokerCommissions: 10, netPnl: 60 },
+    { deliveryDate: '2026-07-20', currency: 'USD', buyer: 400, supplier: 350, brokerCommissions: 10, netPnl: 40 },
+    { deliveryDate: '2026-08-10', currency: 'USD', buyer: 100, supplier: 40, brokerCommissions: 10, netPnl: 50 },
+  ]), [
+    { month: '2026-07', currency: 'USD', buyer: 1000, supplier: 880, brokerCommissions: 20, netPnl: 100, stemCount: 2, grossMarginPct: 10 },
+    { month: '2026-08', currency: 'USD', buyer: 100, supplier: 40, brokerCommissions: 10, netPnl: 50, stemCount: 1, grossMarginPct: 50 },
   ]);
 });
 

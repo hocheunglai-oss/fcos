@@ -99,6 +99,34 @@ export function decisionDashboardSupplierAmount({
     : rawSupplier;
 }
 
+export function dashboardMonthlyFinancialTrend(rows = []) {
+  const byMonth = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const month = String(row?.deliveryDate || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    const currency = dashboardCurrency(row?.currency);
+    const key = `${month}\u001f${currency}`;
+    const current = byMonth.get(key) || {
+      month,
+      currency,
+      buyer: 0,
+      supplier: 0,
+      brokerCommissions: 0,
+      netPnl: 0,
+      stemCount: 0,
+    };
+    for (const field of ['buyer', 'supplier', 'brokerCommissions', 'netPnl']) current[field] += finite(row?.[field]);
+    current.stemCount += 1;
+    byMonth.set(key, current);
+  }
+  return [...byMonth.values()].map((row) => ({
+    ...row,
+    // Margin is derived from this calendar month's aggregate profit and
+    // turnover. It is never an average of STEM margins or of the selected period.
+    grossMarginPct: row.buyer === 0 ? null : (row.netPnl / row.buyer) * 100,
+  })).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+}
+
 export function priorEquivalentDateWindows(dateWindows = []) {
   const windows = (Array.isArray(dateWindows) ? dateWindows : [])
     .map((window) => ({ startDate: window?.startDate || window?.start, endDate: window?.endDate || window?.end }))
@@ -151,17 +179,22 @@ export function dashboardMonthlyYearOverYear(currentRows = [], priorYearRows = [
     const value = Number(row?.[valueField]);
     if (!alignedMonth || !Number.isFinite(value)) continue;
     const alignedKey = key(row, alignedMonth);
-    priorByCurrentMonth.set(alignedKey, (priorByCurrentMonth.get(alignedKey) || 0) + value);
+    const current = priorByCurrentMonth.get(alignedKey) || { value: 0, priorMonth: row.month };
+    current.value += value;
+    priorByCurrentMonth.set(alignedKey, current);
   }
   return (currentRows || []).flatMap((row) => {
     const currentValue = Number(row?.[valueField]);
     if (!/^\d{4}-\d{2}$/.test(String(row?.month || '')) || !Number.isFinite(currentValue)) return [];
     const priorKey = key(row);
     const hasPrior = priorByCurrentMonth.has(priorKey);
-    const priorValue = hasPrior ? priorByCurrentMonth.get(priorKey) : null;
+    const prior = hasPrior ? priorByCurrentMonth.get(priorKey) : null;
+    const priorValue = prior?.value ?? null;
     const difference = hasPrior ? currentValue - priorValue : null;
     return [{
       month: row.month,
+      priorMonth: prior?.priorMonth || shiftMonthYear(row.month, -1),
+      comparisonBasis: 'same_calendar_month',
       ...Object.fromEntries(dimensionNames.map((field) => [field, row?.[field] ?? null])),
       currentValue,
       priorValue,
