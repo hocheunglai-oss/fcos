@@ -139,27 +139,31 @@ export const MY_COMMITMENTS_METHODOLOGY = {
 
 export const DASHBOARD_METHODOLOGY = {
   title: 'Dashboard',
-  description: 'How record scope, financial KPIs, volume, filters, and AI Search are calculated.',
+  description: 'How FCOS builds a complete, currency-safe decision view from Salesforce.',
   sections: [
     {
       title: 'Record period',
-      body: 'The selected year and month use actual Delivery Date when present and Expected Delivery Date otherwise. Country, buyer or supplier, dispute, and table filters narrow the same underlying Salesforce result set.',
+      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. Company and port filters retain exact Salesforce Account and Port identifiers; supplier scope includes both line-item and extra-cost suppliers. Country and dispute filters narrow the same authoritative result set.',
     },
     {
-      title: 'Financial calculations',
-      body: 'After delivery, buyer turnover uses the Salesforce buyer invoiced total. Before delivery, FCOS uses calculated line-item and extra-cost selling values when available. Supplier cost combines current supplier invoicing with eligible uninvoiced line-item and extra-cost costs. Gross profit deducts buyer and supplier broker commissions, and gross margin is gross profit divided by turnover when turnover is usable.',
+      title: 'Currency-safe financial calculations',
+      body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. After delivery, turnover uses the buyer invoiced total; before delivery, it uses eligible line-item and extra-cost selling values. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions.',
     },
     {
       title: 'Volume statistics',
       body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices.',
     },
     {
+      title: 'Completeness and navigation',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters. The STEMs tab is server-paginated and sorted; Accounts rankings load only when needed and open the existing Account Insight detail.',
+    },
+    {
       title: 'AI Search',
-      body: 'An active AI Search replaces normal non-date filters and recalculates the Dashboard from a server-validated search interpretation. The selected period remains effective unless the request explicitly specifies another date range. Cancelled child records are excluded unless requested.',
+      body: 'AI Search is optional. Its server-validated interpretation feeds the same exact Dashboard filters and complete calculation path; it does not use a separate truncated report. The selected period remains effective unless the request explicitly specifies another date range. Cancelled child records remain excluded.',
     },
     {
       title: 'Caching and refresh',
-      body: 'Normal loads may reuse a short Salesforce cache. Refresh bypasses browser and server caches. Detailed STEM data remains available on demand and consequential workflows revalidate live Salesforce data separately.',
+      body: 'The shell, summary, first STEM page, analytics, and account rankings load independently. Normal loads may reuse short targeted caches while preserving visible results during refresh. Refresh bypasses Dashboard browser and server caches only; consequential workflows continue to revalidate live Salesforce data separately.',
     },
   ],
 };

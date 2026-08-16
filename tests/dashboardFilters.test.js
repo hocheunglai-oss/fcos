@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { dashboardFilterPayload, normalizeDashboardFilters, presetDashboardPeriod } from '../src/lib/dashboardFilters.js';
+
+test('decision dashboard filter payload uses exact account identifiers and never text matching for a buyer', () => {
+  const payload = dashboardFilterPayload(normalizeDashboardFilters({
+    selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'buyer', company: 'Similar Name', companyId: '001123456789012AAA', portCountry: 'Singapore', portCountryId: 'a0P123456789012AAA',
+  }));
+  assert.deepEqual(payload.filters.accountIds, ['001123456789012AAA']);
+  assert.deepEqual(payload.filters.supplierIds, []);
+  assert.deepEqual(payload.filters.portIds, ['a0P123456789012AAA']);
+  assert.equal('companyKeyword' in payload, false);
+});
+
+test('supplier filters require exact Account IDs and country values retain canonical non-ID values', () => {
+  const payload = dashboardFilterPayload({ selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'supplier', company: 'Exact Supplier', companyId: '001123456789012AAA', portCountry: 'Country · South Korea', portCountryId: 'country:South Korea' });
+  assert.deepEqual(payload.filters.supplierIds, ['001123456789012AAA']);
+  assert.equal('supplierNames' in payload.filters, false);
+  assert.deepEqual(payload.filters.countryCodes, ['SOUTH KOREA']);
+  assert.deepEqual(payload.filters.portIds, []);
+});
+
+test('date presets produce a bounded custom date window', () => {
+  const period = presetDashboardPeriod('this_quarter', new Date('2026-08-16T00:00:00Z'));
+  assert.deepEqual(period, { selectedYears: [2026], selectedMonths: [7, 8, 9] });
+  assert.deepEqual(dashboardFilterPayload(period).dateWindows, [{ startDate: '2026-07-01', endDate: '2026-07-31' }, { startDate: '2026-08-01', endDate: '2026-08-31' }, { startDate: '2026-09-01', endDate: '2026-09-30' }]);
+});

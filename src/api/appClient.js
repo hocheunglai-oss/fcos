@@ -154,8 +154,23 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      signal: options.signal,
     });
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      return {
+        data: { cancelled: true },
+        meta: {
+          cached: false,
+          cacheLayer: 'network',
+          cacheStatus: 'CANCELLED',
+          cachedAt: null,
+          requestId: null,
+          salesforceCalls: null,
+          cancelled: true,
+        },
+      };
+    }
     return {
       data: { error: error?.message || 'Network request failed. Check your connection and try again.' },
       meta: {
@@ -248,7 +263,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
 }
 
 function startFunctionRequest(name, payload, options, cacheKey, authContext) {
-  const requestKey = !options.force && cacheKey ? cacheKey : null;
+  // A caller-owned AbortSignal must never share an in-flight request: aborting
+  // that request would otherwise cancel work belonging to another consumer.
+  const requestKey = !options.force && !options.signal && cacheKey ? cacheKey : null;
   if (requestKey && inFlightFunctionRequests.has(requestKey)) return inFlightFunctionRequests.get(requestKey);
   const cacheGeneration = functionCacheGeneration;
   const request = requestFunction(name, payload, options, cacheKey, authContext, cacheGeneration);

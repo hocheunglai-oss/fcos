@@ -51,6 +51,9 @@ test('the shared client isolates users, deduplicates requests, bounds memory, an
   assert.match(client, /scope: data\?\.session\?\.user\?\.id \|\| 'anonymous'/);
   assert.match(client, /const cacheKey = rawCacheKey \? `\$\{authContext\.scope\}:\$\{rawCacheKey\}` : null/);
   assert.match(client, /inFlightFunctionRequests/);
+  assert.match(client, /signal: options\.signal/);
+  assert.match(client, /error\?\.name === 'AbortError'/);
+  assert.match(client, /!options\.signal && cacheKey/);
   assert.match(client, /MAX_FUNCTION_CACHE_ENTRIES = 24/);
   assert.match(client, /functionCacheGeneration/);
   assert.match(client, /x-fcos-cache-bypass/);
@@ -59,6 +62,14 @@ test('the shared client isolates users, deduplicates requests, bounds memory, an
   assert.match(client, /const mutationHeader = responseHeader\('x-fcos-handler-mutation'\)/);
   assert.match(client, /mutationHeader === '1'/);
   assert.doesNotMatch(client, /isMutationHandler\(name\)/);
+});
+
+test('navigation-aware requests can cancel obsolete filter loads without applying late responses', () => {
+  const hook = read('src/hooks/useNavigationAwareRequest.js');
+  assert.match(hook, /cancelPrevious = false/);
+  assert.match(hook, /activeControllerRef\.current\?\.abort\(\)/);
+  assert.match(hook, /signal: controller\?\.signal/);
+  assert.match(hook, /requestSequenceRef\.current !== requestId/);
 });
 
 test('page loaders use navigation policies while live workflows and mutations retain force behavior', () => {

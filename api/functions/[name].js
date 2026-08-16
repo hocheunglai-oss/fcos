@@ -9,6 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
+import { dashboardCurrency, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
@@ -1443,6 +1444,9 @@ const HANDLER_MODULE_ACCESS = {
   growthCoachingDailyCron: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
+  dashboardSummary: ['dashboard'],
+  dashboardStemList: ['dashboard'],
+  dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
@@ -5353,22 +5357,18 @@ async function dashboardAiSearch(body, req, accessContext = null) {
     }).catch(() => ({ fields: [] })),
   ]);
   const where = compileDashboardAiWhere(interpretation, { stem, account, lineItem, extraCost, product, port }, { selectedYears, selectedMonths });
-  const dashboard = await salesforceDashboardFilteredFull(
-    {
-      mode: 'dashboard',
-      trendYear: dashboardAiTrendYear(interpretation, selectedYears),
-      disputeOnly: false,
-      portCountry: null,
-      companyFilterMode: 'buyer',
-      companyKeyword: null,
-      force,
-    },
-    req,
-    context,
-    { serverWhere: where },
-  );
-  const matchedCount = Number(dashboard.stemTotal || 0);
-  const loadedCount = dashboard.recentStems?.length || 0;
+  // AI results intentionally use the same paginated, access-filtered scope as
+  // the dashboard APIs.  The old 3,000-record dashboard path is not safe for
+  // AI because it can turn a complete natural-language result into a subset.
+  const aiScope = await loadDecisionDashboardScope({ force }, req, context, { additionalWhere: where });
+  const dashboard = {
+    ...decisionDashboardSummary(aiScope.rows, aiScope.completeness),
+    recentStems: publicDecisionDashboardRows(aiScope.rows),
+    timing: aiScope.timing,
+    dataWarnings: aiScope.dataWarnings,
+  };
+  const matchedCount = Number(aiScope.completeness.matchingCount || 0);
+  const loadedCount = aiScope.rows.length;
   return {
     ...dashboard,
     aiSearch: {
@@ -5376,8 +5376,8 @@ async function dashboardAiSearch(body, req, accessContext = null) {
       status: 'ready',
       matchedCount,
       loadedCount,
-      resultLimit: 3000,
-      truncated: matchedCount > loadedCount,
+      resultLimit: null,
+      truncated: false,
       nextCursor: null,
     },
   };
@@ -5404,11 +5404,27 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
         if (!fields.has('Name')) {
           throw appError('Dashboard port filtering requires Port__c.Name.', 503, 'DASHBOARD_PORT_SCHEMA', undefined, true);
         }
-        const selected = ['Name', fields.has('Country__c') ? 'Country__c' : null].filter(Boolean);
+        const selected = ['Id', 'Name', fields.has('Country__c') ? 'Country__c' : null].filter(Boolean);
         const where = fields.has('Country__c') ? 'WHERE Country__c != null OR Name != null' : 'WHERE Name != null';
-        const result = await sfQuery(`SELECT ${selected.join(',')} FROM Port__c ${where} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
+        const result = await sfQuery(`SELECT ${selected.join(',')} FROM Port__c ${where} ORDER BY Name`, { clean: true, limit: Number.MAX_SAFE_INTEGER });
+        const countries = uniqueTextList((result.records || []).map((row) => row.Country__c)).sort((left, right) => left.localeCompare(right));
         return {
-          options: uniqueTextList((result.records || []).flatMap((row) => [row.Country__c, row.Name])).sort((left, right) => left.localeCompare(right)),
+          options: [
+            ...(result.records || []).filter((row) => row.Id && row.Name).map((row) => ({
+              kind: 'port',
+              id: row.Id,
+              value: row.Id,
+              name: row.Name,
+              countryCode: row.Country__c || null,
+              label: [row.Name, row.Country__c].filter(Boolean).join(' · '),
+            })),
+            ...countries.map((countryCode) => ({
+              kind: 'country',
+              value: `country:${countryCode}`,
+              countryCode,
+              label: `Country · ${countryCode}`,
+            })),
+          ],
         };
       }
 
@@ -5419,16 +5435,50 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
       const stemFields = fieldNameSetFrom(stemDescribe.fields || []);
       const accountFields = fieldNameSetFrom(accountDescribe.fields || []);
       if (mode === 'supplier') {
-        const lineDescribe = await salesforceObjectFields({ objectName: 'STEM_Line_Item__c' });
+        const [lineDescribe, extraDescribe] = await Promise.all([
+          salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }),
+          salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }),
+        ]);
         const lineFields = fieldNameSetFrom(lineDescribe.fields || []);
-        if (!lineFields.has('Supplier_Name__c') || !lineFields.has('STEM__c')) {
-          throw appError('Dashboard supplier filtering requires STEM line supplier and STEM relationship fields.', 503, 'DASHBOARD_SUPPLIER_SCHEMA', undefined, true);
-        }
+        const extraFields = fieldNameSetFrom(extraDescribe.fields || []);
+        const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields || []);
+        const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields || []);
+        if (!lineLookup.valid && !extraLookup.valid) throw appError('Dashboard supplier filtering requires supplier Account lookups.', 503, 'DASHBOARD_SUPPLIER_SCHEMA', undefined, true);
         const scope = await interofficeStemAccessCondition(accessContext, stemFields, accountFields, 'STEM__r.');
-        const where = combineWhereConditions(['Supplier_Name__c != null', scope]);
-        const result = await sfQuery(`SELECT Supplier_Name__c FROM STEM_Line_Item__c WHERE ${where} GROUP BY Supplier_Name__c ORDER BY Supplier_Name__c LIMIT 2000`, { clean: true, limit: 2000 });
+        const supplierRows = await Promise.all([
+          lineLookup.valid ? decisionDashboardQueryAll(`SELECT ${[
+            lineLookup.fieldName,
+            `${lineLookup.relationshipName}.Name`,
+            accountFields.has('Company_Code__c') ? `${lineLookup.relationshipName}.Company_Code__c` : null,
+          ].filter(Boolean).join(', ')} FROM STEM_Line_Item__c WHERE ${combineWhereConditions([
+            `${lineLookup.fieldName} != null`,
+            lineFields.has('Cancelled__c') ? 'Cancelled__c = false' : '',
+            scope,
+          ])}`) : [],
+          extraLookup.valid ? decisionDashboardQueryAll(`SELECT ${[
+            extraLookup.fieldName,
+            `${extraLookup.relationshipName}.Name`,
+            accountFields.has('Company_Code__c') ? `${extraLookup.relationshipName}.Company_Code__c` : null,
+          ].filter(Boolean).join(', ')} FROM STEM_Extra_Cost__c WHERE ${combineWhereConditions([
+            `${extraLookup.fieldName} != null`,
+            extraFields.has('Cancelled__c') ? 'Cancelled__c = false' : '',
+            scope,
+          ])}`) : [],
+        ]);
+        const optionsById = new Map();
+        for (const [rows, lookup] of [[supplierRows[0], lineLookup], [supplierRows[1], extraLookup]]) {
+          if (!lookup.valid) continue;
+          for (const row of rows) {
+            const id = row[lookup.fieldName];
+            const account = row[lookup.relationshipName] || {};
+            if (!id || optionsById.has(id)) continue;
+            const name = account.Name || 'Supplier name unavailable';
+            const clKey = account.Company_Code__c || null;
+            optionsById.set(id, { kind: 'account', id, value: id, name, clKey, label: [name, clKey].filter(Boolean).join(' · ') });
+          }
+        }
         return {
-          options: uniqueTextList((result.records || []).map((row) => row.Supplier_Name__c)).sort((left, right) => left.localeCompare(right)),
+          options: [...optionsById.values()].sort((left, right) => left.label.localeCompare(right.label)),
         };
       }
 
@@ -5436,15 +5486,21 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
         throw appError('Dashboard buyer filtering requires STEM__c.Account__c.', 503, 'DASHBOARD_BUYER_SCHEMA', undefined, true);
       }
       const selected = [
-        stemFields.has('Buyer_Name__c') ? 'Buyer_Name__c' : null,
+        'Account__c',
         'Account__r.Name',
-        accountFields.has('Group_Name__c') ? 'Account__r.Group_Name__c' : null,
-        accountFields.has('ParentId') ? 'Account__r.Parent.Name' : null,
+        accountFields.has('Company_Code__c') ? 'Account__r.Company_Code__c' : null,
       ].filter(Boolean);
       const scope = await interofficeStemAccessCondition(accessContext, stemFields, accountFields);
-      const result = await sfQuery(`SELECT ${selected.join(',')} FROM stem__c${scope ? ` WHERE ${scope}` : ''} ORDER BY Delivery_Date__c DESC NULLS LAST LIMIT 5000`, { clean: true, limit: 5000 });
+      const result = await sfQuery(`SELECT ${selected.join(',')} FROM stem__c${scope ? ` WHERE ${scope}` : ''}`, { clean: true, limit: Number.MAX_SAFE_INTEGER });
+      const optionsById = new Map();
+      for (const row of result.records || []) {
+        if (!row.Account__c || optionsById.has(row.Account__c)) continue;
+        const name = row.Account__r?.Name || 'Buyer name unavailable';
+        const clKey = row.Account__r?.Company_Code__c || null;
+        optionsById.set(row.Account__c, { kind: 'account', id: row.Account__c, value: row.Account__c, name, clKey, label: [name, clKey].filter(Boolean).join(' · ') });
+      }
       return {
-        options: uniqueTextList((result.records || []).flatMap((row) => [row.Buyer_Name__c, row.Account__r?.Name, row.Account__r?.Group_Name__c, row.Account__r?.Parent?.Name])).sort((left, right) => left.localeCompare(right)),
+        options: [...optionsById.values()].sort((left, right) => left.label.localeCompare(right.label)),
       };
     },
   });
@@ -7911,6 +7967,527 @@ async function salesforceDocumentDownload(req, res) {
   res.setHeader('content-type', documentContentType(filename, file.contentType));
   res.setHeader('content-disposition', `inline; filename="${asciiFilename.replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.end(file.buffer);
+}
+
+function decisionDashboardValues(values) {
+  return values.map((value) => `'${escapeSoql(value)}'`).join(', ');
+}
+
+function decisionDashboardNumber(...values) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) return Number(value);
+  }
+  return 0;
+}
+
+function decisionDashboardNullable(value) {
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function decisionDashboardCancelled(stem) {
+  return /cancel/i.test(String(stem.Status__c || stem.Status || ''));
+}
+
+async function decisionDashboardQueryAll(soql) {
+  // sfQuery follows Salesforce nextRecordsUrl pages.  Do not introduce a
+  // presentation-sized limit here: summary correctness must not depend on it.
+  const result = await sfQuery(soql, { clean: true, limit: Number.MAX_SAFE_INTEGER });
+  return result.records || [];
+}
+
+async function decisionDashboardRowsForStemIds(objectName, fields, stemIds) {
+  const rows = [];
+  for (const ids of chunkIds(stemIds)) {
+    rows.push(...await decisionDashboardQueryAll(`SELECT ${fields.join(', ')} FROM ${objectName} WHERE STEM__c IN (${decisionDashboardValues(ids)})`));
+  }
+  return rows;
+}
+
+function decisionDashboardSort(body = {}, stemFields = new Set()) {
+  const requested = String(body.sort?.field || body.sortField || 'createdDate');
+  const field = requested === 'stem' ? 'name' : requested;
+  if (!['createdDate', 'deliveryDate', 'name'].includes(field)) {
+    throw appError('Dashboard STEMs can be sorted by STEM, delivery date, or creation date.', 400, 'DASHBOARD_SORT_INVALID');
+  }
+  if (field === 'deliveryDate' && !stemFields.has('Delivery_Date__c')) {
+    return { field: 'createdDate', direction: 'desc' };
+  }
+  return {
+    field,
+    direction: String(body.sort?.direction || body.sortDirection || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc',
+  };
+}
+
+function decisionDashboardOrderBy(sort) {
+  const direction = sort.direction.toUpperCase();
+  if (sort.field === 'name') return `Name ${direction}, Id ${direction}`;
+  if (sort.field === 'deliveryDate') return `Delivery_Date__c ${direction} NULLS LAST, Id ${direction}`;
+  return `CreatedDate ${direction}, Id ${direction}`;
+}
+
+function decisionDashboardCursorWhere(cursor, sort) {
+  if (!cursor) return '';
+  if (cursor.field !== sort.field || cursor.direction !== sort.direction) {
+    throw appError('Dashboard cursor does not match the selected sort.', 400, 'DASHBOARD_CURSOR_SORT_INVALID');
+  }
+  const operator = sort.direction === 'asc' ? '>' : '<';
+  const idCondition = `Id ${operator} '${escapeSoql(cursor.id)}'`;
+  if (sort.field === 'name') {
+    const value = `'${escapeSoql(cursor.value)}'`;
+    return `(Name ${operator} ${value} OR (Name = ${value} AND ${idCondition}))`;
+  }
+  if (sort.field === 'deliveryDate') {
+    if (cursor.value == null) return `(Delivery_Date__c = null AND ${idCondition})`;
+    const value = String(cursor.value);
+    return `(Delivery_Date__c ${operator} ${value} OR (Delivery_Date__c = ${value} AND ${idCondition}) OR Delivery_Date__c = null)`;
+  }
+  return `(CreatedDate ${operator} ${cursor.value} OR (CreatedDate = ${cursor.value} AND ${idCondition}))`;
+}
+
+function decisionDashboardCompareStems(left, right, sort) {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  const leftValue = sort.field === 'name' ? left.Name : sort.field === 'deliveryDate' ? left.Delivery_Date__c : left.CreatedDate;
+  const rightValue = sort.field === 'name' ? right.Name : sort.field === 'deliveryDate' ? right.Delivery_Date__c : right.CreatedDate;
+  if (leftValue == null && rightValue != null) return 1;
+  if (leftValue != null && rightValue == null) return -1;
+  const primary = String(leftValue || '').localeCompare(String(rightValue || '')) * direction;
+  return primary || String(left.Id).localeCompare(String(right.Id)) * direction;
+}
+
+async function loadDecisionDashboardScope(body = {}, req = null, accessContext = null, { additionalWhere = '', pageOnly = false } = {}) {
+  const startedAt = Date.now();
+  const force = requestForcesRefresh(body, req);
+  let filters;
+  try {
+    filters = normalizeDecisionDashboardFilters(body.filters || body);
+  } catch (error) {
+    throw appError(error.message, 400, 'DASHBOARD_FILTER_INVALID');
+  }
+  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
+    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
+    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }),
+    salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
+  ]);
+  const stemFields = new Set((stemDescribe.fields || []).map((field) => field.name));
+  const lineFields = new Set((lineItemDescribe.fields || []).map((field) => field.name));
+  const extraFields = new Set((extraCostDescribe.fields || []).map((field) => field.name));
+  const accountField = stemFields.has('Account__c') ? 'Account__c' : stemFields.has('AccountId') ? 'AccountId' : null;
+  const portField = stemFields.has('Port__c') ? 'Port__c' : null;
+  const dateWhere = Array.isArray(body.dateWindows) && body.dateWindows.length
+    ? buildDashboardDateScopeWhere(body.dateWindows, [...stemFields])
+    : additionalWhere
+      ? ''
+      : (() => { throw appError('Select a valid dashboard date range.', 400, 'INVALID_DASHBOARD_DATE_SCOPE'); })();
+  const interofficeWhere = await interofficeStemAccessCondition(accessContext, [...stemFields]);
+  const conditions = [dateWhere, interofficeWhere, additionalWhere].filter(Boolean);
+  if (filters.accountIds.length) {
+    if (!accountField) throw appError('Account filtering is unavailable because Salesforce Account metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+    conditions.push(`${accountField} IN (${decisionDashboardValues(filters.accountIds)})`);
+  }
+  if (filters.portIds.length) {
+    if (!portField) throw appError('Port filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+    conditions.push(`${portField} IN (${decisionDashboardValues(filters.portIds)})`);
+  }
+  if (filters.countryCodes.length) {
+    if (!portField) throw appError('Country filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+    conditions.push(`Port__r.Country__c IN (${decisionDashboardValues(filters.countryCodes)})`);
+  }
+  if (!filters.includeCancelled && stemFields.has('Status__c')) {
+    const statusField = (stemDescribe.fields || []).find((field) => field.name === 'Status__c');
+    const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
+    if (cancelledStatuses.length) conditions.push(`(Status__c = null OR Status__c NOT IN (${decisionDashboardValues(cancelledStatuses)}))`);
+  }
+  if (body.disputeOnly === true) {
+    if (stemFields.has('Dispute_Status__c')) conditions.push("Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null");
+    else if (stemFields.has('Dispute__c')) conditions.push('Dispute__c = true');
+  }
+  const search = String(body.search || '').trim().slice(0, 100);
+  if (search) {
+    const like = `%${escapeSoql(search)}%`;
+    const searchFields = [
+      `Name LIKE '${like}'`,
+      accountField ? `Account__r.Name LIKE '${like}'` : '',
+      portField ? `Port__r.Name LIKE '${like}'` : '',
+      stemFields.has('Vessel__c') ? `Vessel__r.Name LIKE '${like}'` : '',
+    ].filter(Boolean);
+    conditions.push(`(${searchFields.join(' OR ')})`);
+  }
+  const cursor = decodeDashboardCursor(body.cursor);
+  if (pageOnly && body.cursor && !cursor) throw appError('Dashboard cursor is invalid.', 400, 'DASHBOARD_CURSOR_INVALID');
+  const parentSelect = ['Id', 'Name', 'CreatedDate'];
+  for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
+  if (accountField) parentSelect.push(accountField, 'Account__r.Name');
+  if (portField) parentSelect.push(portField, 'Port__r.Name', 'Port__r.Country__c');
+  if (stemFields.has('Vessel__c')) parentSelect.push('Vessel__c', 'Vessel__r.Name');
+  const pageSize = Math.min(Math.max(Number(body.pageSize) || 50, 1), 200);
+  const sort = decisionDashboardSort(body, stemFields);
+  const cursorWhere = decisionDashboardCursorWhere(cursor, sort);
+  const orderBy = decisionDashboardOrderBy(sort);
+
+  const supplierConditions = [];
+  const lineSupplier = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
+  const extraSupplier = resolveExtraCostSupplierLookup(extraCostDescribe.fields || []);
+  if (filters.supplierIds.length) {
+    if (lineSupplier.valid) supplierConditions.push(`${lineSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)})`);
+  }
+  const extraSupplierConditions = [];
+  if (filters.supplierIds.length && extraSupplier.valid) extraSupplierConditions.push(`${extraSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)})`);
+  if (filters.supplierIds.length && !supplierConditions.length && !extraSupplierConditions.length) {
+    throw appError('Supplier filtering is unavailable because Salesforce supplier metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+  }
+  let matchingSupplierStemIds = null;
+  if (supplierConditions.length || extraSupplierConditions.length) {
+    const [lineMatches, extraMatches] = await Promise.all([
+      supplierConditions.length ? decisionDashboardQueryAll(`SELECT STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false AND (${supplierConditions.join(' OR ')})`) : [],
+      extraSupplierConditions.length ? decisionDashboardQueryAll(`SELECT STEM__c FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND (${extraSupplierConditions.join(' OR ')})`) : [],
+    ]);
+    matchingSupplierStemIds = [...new Set([...lineMatches, ...extraMatches].map((row) => row.STEM__c).filter(Boolean))];
+  }
+
+  const selectedParentFields = [...new Set(parentSelect)].join(', ');
+  const loadParentRows = async (idChunk = null, { countOnly = false, applyCursor = false, limit = null } = {}) => {
+    const scopedConditions = [...conditions];
+    if (idChunk) scopedConditions.push(`Id IN (${decisionDashboardValues(idChunk)})`);
+    if (applyCursor && cursorWhere) scopedConditions.push(cursorWhere);
+    const where = combineWhereConditions(scopedConditions);
+    if (countOnly) {
+      const result = await sfQuery(`SELECT COUNT(Id) total FROM stem__c WHERE ${where}`, { clean: true });
+      return Number(result.records?.[0]?.total || 0);
+    }
+    const limitClause = limit ? ` LIMIT ${limit}` : '';
+    return decisionDashboardQueryAll(`SELECT ${selectedParentFields} FROM stem__c WHERE ${where} ORDER BY ${orderBy}${limitClause}`);
+  };
+
+  let matchingCount = 0;
+  let stems = [];
+  if (matchingSupplierStemIds) {
+    const idChunks = chunkIds(matchingSupplierStemIds);
+    if (idChunks.length) {
+      const [counts, pages] = await Promise.all([
+        Promise.all(idChunks.map((ids) => loadParentRows(ids, { countOnly: true }))),
+        Promise.all(idChunks.map((ids) => loadParentRows(ids, { applyCursor: pageOnly, limit: pageOnly ? pageSize + 1 : null }))),
+      ]);
+      matchingCount = counts.reduce((sum, value) => sum + value, 0);
+      stems = pages.flat().sort((left, right) => decisionDashboardCompareStems(left, right, sort));
+    }
+  } else if (pageOnly) {
+    [matchingCount, stems] = await Promise.all([
+      loadParentRows(null, { countOnly: true }),
+      loadParentRows(null, { applyCursor: true, limit: pageSize + 1 }),
+    ]);
+  } else {
+    stems = await loadParentRows();
+    matchingCount = stems.length;
+  }
+  // The status condition is derived from live picklist metadata when possible;
+  // retain this defensive check for non-picklist/custom cancellation values.
+  if (!filters.includeCancelled) stems = stems.filter((stem) => !decisionDashboardCancelled(stem));
+  const hasMore = pageOnly && stems.length > pageSize;
+  const pageStems = pageOnly ? stems.slice(0, pageSize) : stems;
+  const stemIds = pageStems.map((stem) => stem.Id);
+  const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
+  const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
+  const lineSelect = ['STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
+  if (lineSupplier.valid) lineSelect.push(lineSupplier.fieldName);
+  if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Name`);
+  if (lineItemUomField) lineSelect.push(lineItemUomField);
+  if (lineFields.has('Product__c')) {
+    lineSelect.push('Product__r.Name', 'Product__r.Family');
+    if (productUomField) lineSelect.push(`Product__r.${productUomField}`);
+  }
+  const extraSelect = ['STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Unit_Price__c', 'Unit_Cost__c'].filter((field) => extraFields.has(field));
+  if (extraSupplier.valid) extraSelect.push(extraSupplier.fieldName);
+  if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Name`);
+  const [lineItems, extraCosts, buyerBrokers] = stemIds.length ? await Promise.all([
+    decisionDashboardRowsForStemIds('STEM_Line_Item__c', [...new Set(lineSelect)], stemIds),
+    decisionDashboardRowsForStemIds('STEM_Extra_Cost__c', [...new Set(extraSelect)], stemIds),
+    decisionDashboardRowsForStemIds('STEM_Buyer_Broker__c', ['STEM__c', 'Commission_Lumpsum__c'], stemIds),
+  ]) : [[], [], []];
+  const salesforceCompletedAt = Date.now();
+  const lineByStem = new Map();
+  const extraByStem = new Map();
+  const buyerBrokerByStem = new Map();
+  for (const item of lineItems) if (!item.Cancelled__c) lineByStem.set(item.STEM__c, [...(lineByStem.get(item.STEM__c) || []), item]);
+  for (const item of extraCosts) if (!item.Cancelled__c) extraByStem.set(item.STEM__c, [...(extraByStem.get(item.STEM__c) || []), item]);
+  for (const item of buyerBrokers) buyerBrokerByStem.set(item.STEM__c, (buyerBrokerByStem.get(item.STEM__c) || 0) + decisionDashboardNumber(item.Commission_Lumpsum__c));
+  let uomWarningCount = 0;
+  const rows = pageStems.map((stem) => {
+    const delivered = Boolean(stem.Delivery_Date__c);
+    const lines = lineByStem.get(stem.Id) || [];
+    const extras = extraByStem.get(stem.Id) || [];
+    const lineTotals = lines.reduce((total, item) => {
+      const amounts = { sell: lineSellAmount(item, delivered), buy: lineBuyAmount(item, delivered) };
+      const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered, lineItemUomField });
+      if (nativeQuantity.warning) uomWarningCount += 1;
+      const volume = dashboardLineItemVolume(item, delivered, {
+        lineItemUomField,
+        productUomField,
+        fallbackQuantity: nativeQuantity.quantity,
+        productFamily: dashboardProductFamily(item),
+      });
+      return {
+        sell: total.sell + amounts.sell,
+        buy: total.buy + amounts.buy,
+        uninvoicedBuy: total.uninvoicedBuy + (item.Supplier_Invoice__c ? 0 : amounts.buy),
+        hasSupplierInvoice: total.hasSupplierInvoice || Boolean(item.Supplier_Invoice__c),
+        buyerComm: total.buyerComm + buyerBrokerCommission(item, delivered),
+        supplierComm: total.supplierComm + supplierBrokerCommission(item, delivered),
+        volumeMt: total.volumeMt + Number(volume.quantity || 0),
+      };
+    }, { sell: 0, buy: 0, uninvoicedBuy: 0, hasSupplierInvoice: false, buyerComm: 0, supplierComm: 0, volumeMt: 0 });
+    const extraTotals = extras.reduce((total, item) => {
+      const amounts = { sell: extraSellAmount(item, delivered), buy: extraBuyAmount(item, delivered) };
+      return {
+        sell: total.sell + amounts.sell,
+        buy: total.buy + amounts.buy,
+        invoicedBuy: total.invoicedBuy + (item.Supplier_Invoice__c ? amounts.buy : 0),
+        sellOnly: total.sellOnly + (amounts.buy === 0 && amounts.sell > 0 ? amounts.sell : 0),
+      };
+    }, { sell: 0, buy: 0, invoicedBuy: 0, sellOnly: 0 });
+    const calculatedBuyer = lineTotals.sell + extraTotals.sell;
+    const buyer = !delivered && calculatedBuyer > 0 ? calculatedBuyer : decisionDashboardNullable(stem.Total_Invoice_Amount__c);
+    const invoicedSupplier = decisionDashboardNumber(stem.Total_Invoiced_Amount_From_Suppliers__c);
+    const supplierBase = invoicedSupplier + (lineTotals.hasSupplierInvoice ? lineTotals.uninvoicedBuy : lineTotals.buy);
+    const rawSupplier = supplierBase + extraTotals.buy;
+    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
+      ? decisionDashboardNumber(stem.QLIK_STEM_Line_Item_Total_Cost__c) + decisionDashboardNumber(stem.QLIK_Costs_Total_Cost__c)
+      : null;
+    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
+    const unmatchedSellOnly = lineTotals.hasSupplierInvoice ? Math.max(0, extraTotals.sellOnly - extraTotals.invoicedBuy) : 0;
+    const supplier = unmatchedSellOnly > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnly + 0.05 ? qlikSupplierCost : rawSupplier;
+    // Costs_Total__c participates in the supplier calculation only in the
+    // legacy source when represented by a child extra cost.  Do not subtract
+    // it again from P&L.
+    const costs = decisionDashboardNumber(stem.Costs_Total__c);
+    const brokerCommissions = lineTotals.buyerComm + lineTotals.supplierComm + (buyerBrokerByStem.get(stem.Id) || 0);
+    const netPnl = buyer == null ? null : buyer - supplier - brokerCommissions;
+    const supplierWeights = new Map();
+    const addSupplierWeight = (id, name, weight) => {
+      const normalizedName = String(name || '').trim();
+      if (!id && !normalizedName) return;
+      const key = id || `name:${normalizedName.toLowerCase()}`;
+      const current = supplierWeights.get(key) || { id: id || null, name: normalizedName || 'Supplier name unavailable', weight: 0 };
+      current.weight += Math.max(Number(weight) || 0, 0);
+      supplierWeights.set(key, current);
+    };
+    for (const item of lines) {
+      addSupplierWeight(
+        lineSupplier.valid ? item[lineSupplier.fieldName] : null,
+        item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
+        lineBuyAmount(item, delivered),
+      );
+    }
+    for (const item of extras) {
+      addSupplierWeight(
+        extraSupplier.valid ? item[extraSupplier.fieldName] : null,
+        item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
+        extraBuyAmount(item, delivered),
+      );
+    }
+    const weightedSuppliers = [...supplierWeights.values()];
+    const totalSupplierWeight = weightedSuppliers.reduce((sum, item) => sum + item.weight, 0);
+    const supplierAllocations = weightedSuppliers.map((item) => ({
+      id: item.id,
+      name: item.name,
+      netPnl: netPnl == null
+        ? null
+        : totalSupplierWeight > 0
+          ? netPnl * (item.weight / totalSupplierWeight)
+          : netPnl / Math.max(weightedSuppliers.length, 1),
+    }));
+    const supplierNames = [...new Set(weightedSuppliers.map((item) => item.name).filter(Boolean))].sort();
+    const supplierAccounts = [...new Map([
+      ...lines.map((item) => [item[lineSupplier.fieldName], item[lineSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
+      ...extras.map((item) => [item[extraSupplier.fieldName], item[extraSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
+    ].filter(([id]) => id).map(([id, name]) => [id, { id, name: String(name || '').trim() || null }])).values()].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')) || left.id.localeCompare(right.id));
+    return {
+      id: stem.Id,
+      name: stem.Name,
+      createdDate: stem.CreatedDate,
+      deliveryDate: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
+      deliveryDateSource: stem.Delivery_Date__c ? 'delivery' : stem.Expected_Delivery_Date__c ? 'expected' : null,
+      status: stem.Status__c || null,
+      type: stem.Type__c || null,
+      dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
+      account: accountField && stem[accountField] ? { id: stem[accountField], name: stem.Account__r?.Name || null } : null,
+      port: portField && stem[portField] ? { id: stem[portField], name: stem.Port__r?.Name || null, countryCode: stem.Port__r?.Country__c || null } : null,
+      vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
+      supplierNames,
+      supplierAccounts,
+      currency: dashboardCurrency(stem.CurrencyIsoCode), buyer, supplier, costs, brokerCommissions,
+      netPnl,
+      supplierAllocations,
+      volumeMt: lineTotals.volumeMt,
+      _cursorRecord: stem,
+    };
+  });
+  const completeness = decisionDashboardCompleteness({ matchingCount, processedCount: rows.length, failed: false });
+  return {
+    filters,
+    rows,
+    completeness,
+    nextCursor: hasMore && rows.length ? encodeDashboardCursor(rows[rows.length - 1]._cursorRecord, sort) : null,
+    sort,
+    // Timing is operational metadata only.  No record values, currencies, or
+    // financial totals are retained in timing/cache diagnostics.
+    timing: {
+      redacted: true,
+      elapsedMs: Date.now() - startedAt,
+      salesforceMs: salesforceCompletedAt - startedAt,
+      computeMs: Date.now() - salesforceCompletedAt,
+      processedCount: rows.length,
+      cache: force ? 'bypassed' : 'live',
+    },
+    dataWarnings: uomWarningCount ? [`${uomWarningCount} financial line${uomWarningCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`] : [],
+  };
+}
+
+function publicDecisionDashboardRows(rows) {
+  return rows.map(({ _cursorRecord, ...row }) => row);
+}
+
+function decisionDashboardOverviewMetrics(scope, body = {}) {
+  const buyerAccounts = new Set(scope.rows.map((row) => row.account?.id).filter(Boolean));
+  const supplierAccounts = new Set(scope.rows.flatMap((row) => (row.supplierAccounts || []).map((account) => account.id)).filter(Boolean));
+  return {
+    stemCount: scope.completeness.matchingCount,
+    disputedCount: scope.rows.filter((row) => row.dispute).length,
+    buyerAccountCount: buyerAccounts.size,
+    supplierAccountCount: supplierAccounts.size,
+    accountCount: body.counterpartyMode === 'supplier' ? supplierAccounts.size : buyerAccounts.size,
+    productVolume: {
+      quantity: scope.rows.reduce((sum, row) => sum + Number(row.volumeMt || 0), 0),
+      unitOfMeasure: 'MT',
+    },
+  };
+}
+
+function decisionDashboardCurrencyComparison(currentFinancials = [], priorFinancials = []) {
+  const priorByCurrency = new Map((priorFinancials || []).map((row) => [row.currency, row]));
+  const percentage = (current, prior) => Number(prior) === 0 ? null : ((Number(current) - Number(prior)) / Math.abs(Number(prior))) * 100;
+  return (currentFinancials || []).map((row) => {
+    const prior = priorByCurrency.get(row.currency) || {};
+    return {
+      currency: row.currency,
+      currentNetPnl: row.netPnl,
+      priorNetPnl: Number(prior.netPnl || 0),
+      netPnlChangePct: percentage(row.netPnl, prior.netPnl),
+      currentBuyer: row.buyer,
+      priorBuyer: Number(prior.buyer || 0),
+      buyerChangePct: percentage(row.buyer, prior.buyer),
+    };
+  });
+}
+
+async function dashboardSummaryUncached(body = {}, req = null, accessContext = null) {
+  const scope = await loadDecisionDashboardScope(body, req, accessContext);
+  return {
+    ...decisionDashboardSummary(scope.rows.filter((row) => row.buyer != null), scope.completeness),
+    ...decisionDashboardOverviewMetrics(scope, body),
+    filters: scope.filters,
+    timing: scope.timing,
+    dataWarnings: scope.dataWarnings,
+  };
+}
+
+async function dashboardStemListUncached(body = {}, req = null, accessContext = null) {
+  const scope = await loadDecisionDashboardScope(body, req, accessContext, { pageOnly: true });
+  return { ...scope.completeness, filters: scope.filters, stems: publicDecisionDashboardRows(scope.rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
+}
+
+async function dashboardAnalyticsUncached(body = {}, req = null, accessContext = null) {
+  const previousDateWindows = body.previousDateWindows || priorEquivalentDateWindows(body.dateWindows);
+  const [current, prior] = await Promise.all([
+    loadDecisionDashboardScope(body, req, accessContext),
+    loadDecisionDashboardScope({ ...body, dateWindows: previousDateWindows }, req, accessContext),
+  ]);
+  const ranking = (rows, field) => Object.entries(rows.reduce((result, row) => {
+    const entities = field === 'account'
+      ? row.account ? [{ id: row.account.id, name: row.account.name, value: row.netPnl, role: 'buyer' }] : []
+      : field === 'port'
+        ? row.port ? [{ id: row.port.id, name: row.port.name, value: row.netPnl, role: 'port' }] : []
+        : (row.supplierAllocations || []).map((item) => ({ id: item.id, name: item.name, value: item.netPnl, role: 'supplier' }));
+    for (const entity of entities) {
+      if (!entity.name || entity.value == null) continue;
+      const key = `${row.currency}\u001f${entity.id || ''}\u001f${entity.name}\u001f${entity.role}`;
+      result[key] = (result[key] || 0) + entity.value;
+    }
+    return result;
+  }, {})).map(([key, netPnl]) => {
+    const [currency, accountId, name, role] = key.split('\u001f');
+    return { currency, accountId: accountId || null, name, role, netPnl, grossProfit: netPnl };
+  }).sort((left, right) => right.netPnl - left.netPnl || left.name.localeCompare(right.name)).slice(0, 10);
+  const distribution = (rows, field) => Object.entries(rows.reduce((result, row) => {
+    const label = String(row[field] || 'Unknown');
+    result[label] = (result[label] || 0) + 1;
+    return result;
+  }, {})).map(([label, count]) => ({ label, count })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+  const monthlyTrend = Object.values(current.rows.reduce((result, row) => {
+    const month = String(row.deliveryDate || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) return result;
+    const key = `${month}\u001f${row.currency}`;
+    if (!result[key]) result[key] = { month, currency: row.currency, buyer: 0, supplier: 0, brokerCommissions: 0, netPnl: 0, stemCount: 0 };
+    for (const field of ['buyer', 'supplier', 'brokerCommissions', 'netPnl']) result[key][field] += row[field];
+    result[key].stemCount += 1;
+    return result;
+  }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+  const currentSummary = decisionDashboardSummary(current.rows.filter((row) => row.buyer != null), current.completeness);
+  const priorSummary = decisionDashboardSummary(prior.rows.filter((row) => row.buyer != null), prior.completeness);
+  return {
+    ...currentSummary,
+    ...decisionDashboardOverviewMetrics(current, body),
+    filters: current.filters,
+    trend: {
+      current: currentSummary,
+      previous: priorSummary,
+      previousDateWindows,
+      monthly: monthlyTrend,
+    },
+    comparisonByCurrency: currentSummary.complete && priorSummary.complete
+      ? decisionDashboardCurrencyComparison(currentSummary.financials, priorSummary.financials)
+      : null,
+    priorPeriod: { stemCount: prior.completeness.matchingCount },
+    distributions: { status: distribution(current.rows, 'status'), type: distribution(current.rows, 'type') },
+    rankings: { accountsByNetPnl: ranking(current.rows, 'account'), portsByNetPnl: ranking(current.rows, 'port'), suppliersByNetPnl: ranking(current.rows, 'supplier') },
+    timing: current.timing,
+    dataWarnings: current.dataWarnings,
+  };
+}
+
+async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader) {
+  const cachePayload = { ...body };
+  delete cachePayload.force;
+  delete cachePayload.forceRefresh;
+  delete cachePayload.refresh;
+  const cached = await cachedSalesforceValue({
+    namespace: `decision-dashboard-${handler}`,
+    ttlSeconds,
+    payload: cachePayload,
+    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
+    body,
+    req,
+    accessContext,
+    loader,
+  });
+  return cached.value;
+}
+
+async function dashboardSummary(body = {}, req = null, accessContext = null) {
+  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext));
+}
+
+async function dashboardStemList(body = {}, req = null, accessContext = null) {
+  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext));
+}
+
+async function dashboardAnalytics(body = {}, req = null, accessContext = null) {
+  return cachedDecisionDashboard('analytics', body, req, accessContext, 60, () => dashboardAnalyticsUncached(body, req, accessContext));
+}
+
+async function salesforceDashboardFilteredCompatibility(body = {}, req = null, accessContext = null, internalOptions = {}) {
+  if (body?.contract === 'decision-dashboard') return dashboardSummary(body, req, accessContext);
+  return salesforceDashboardFilteredFull(body, req, accessContext, internalOptions);
 }
 
 async function salesforceDashboardFilteredUncached(body, req = null, accessContext = null, internalOptions = {}) {
@@ -17646,7 +18223,10 @@ const handlers = {
   dashboardFilterOptions,
   salesforceFullSchema,
   salesforceDashboard,
-  salesforceDashboardFiltered: salesforceDashboardFilteredFull,
+  salesforceDashboardFiltered: salesforceDashboardFilteredCompatibility,
+  dashboardSummary,
+  dashboardStemList,
+  dashboardAnalytics,
   dashboardAccountInsight,
   dashboardAiSearch,
   dashboardAiSettingsGet,

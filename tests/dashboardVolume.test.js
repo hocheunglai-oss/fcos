@@ -174,7 +174,7 @@ test('dashboard integration reads Salesforce UOM and normalizes KPI volume to MT
   assert.match(apiSource, /findDashboardUomField/);
   assert.match(apiSource, /dashboardLineItemVolume/);
   assert.match(apiSource, /productFamily: dashboardFamily/);
-  assert.equal(apiSource.match(/dashboardLineItemVolume\(/g)?.length, 1);
+  assert.ok((apiSource.match(/dashboardLineItemVolume\(/g)?.length || 0) >= 2);
   assert.match(apiSource, /monthlyProductVolumeSeries/);
   assert.doesNotMatch(apiSource, /productFamilyQuantityByName\\[family\\].*financialQuantity/);
   assert.match(dashboardSource, /productVolumeKpi\.unitOfMeasure/);
