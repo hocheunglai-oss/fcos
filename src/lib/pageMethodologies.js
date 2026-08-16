@@ -147,11 +147,11 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Currency-safe financial calculations',
-      body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. The pre-redesign Dashboard rule is preserved: until the parent STEM has an actual Delivery Date, financial prices and commissions use ordered quantity or the ordered-range midpoint; after delivery they use the delivered totals and BDN quantity. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions. Monthly gross profit shows the percentage difference from the same calendar month one year earlier.',
+      body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. The pre-redesign Dashboard rule is preserved: until the parent STEM has an actual Delivery Date, financial prices and commissions use ordered quantity or the ordered-range midpoint; after delivery they use the delivered totals and BDN quantity. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions. The unified monthly chart pairs actual current and prior-year gross profit, MT volume, and independently calculated monthly gross margin for the same calendar month.',
     },
     {
       title: 'Volume statistics',
-      body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices. The monthly volume chart compares the complete current total with the same calendar month one year earlier.',
+      body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices. Current and prior-year actual MT totals share the unified monthly chart, with product-family detail retained in its tooltip.',
     },
     {
       title: 'Completeness and navigation',
@@ -159,7 +159,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Buyer-leg credit statements',
-      body: 'Credit Statements include only STEMs whose Salesforce Account lookup is the selected Account; supplier line items, extra costs, and brokers never widen membership. Current QLIK receivable balances reconcile independently to individual and ultimate-GROUP used-credit fields within one currency unit. Actual payments and Cashflow or invoice evidence forecast releases, while incomplete, mismatched, mixed-currency, or overdue-unknown scopes suppress the affected projected balance instead of inventing a release.',
+      body: 'Credit Statements include only STEMs whose Salesforce Account lookup is the selected Account; supplier line items, extra costs, and brokers never widen membership. Current signed QLIK receivable balances reconcile independently to individual and ultimate-GROUP used-credit fields within one currency unit. If the selected Account credit fields conflict, FCOS may use exactly one compatible, uniquely reconciling same-name credit snapshot from a window beginning on that record’s Created Date and displays the fallback CL Key. Square step lines show remaining individual and GROUP exposure after each evidenced release. Exposure without a reliable date remains visible as the final residual plateau instead of receiving an invented release date.',
     },
     {
       title: 'AI Search',

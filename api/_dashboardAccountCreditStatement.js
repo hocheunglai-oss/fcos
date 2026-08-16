@@ -20,6 +20,11 @@ function value(value) {
   return number(value) ?? 0;
 }
 
+function currencyAmount(input) {
+  const amount = number(input);
+  return amount == null ? null : Math.round((amount + Number.EPSILON) * 100) / 100;
+}
+
 function idKey(id) {
   const normalized = text(id);
   return SALESFORCE_ID.test(normalized) ? normalized.slice(0, 15) : '';
@@ -28,6 +33,12 @@ function idKey(id) {
 function dateOnly(input) {
   const normalized = text(input).slice(0, 10);
   return ISO_DATE.test(normalized) ? normalized : null;
+}
+
+function dateTime(input) {
+  const normalized = text(input);
+  const parsed = Date.parse(normalized);
+  return normalized && Number.isFinite(parsed) ? parsed : null;
 }
 
 function addDays(date, days) {
@@ -103,6 +114,72 @@ export function accountCreditSnapshot(account = {}, currency = null) {
     salesforceAvailable: number(account.CL_Available_Credit__c),
   };
   return { ...snapshot, ...accountCreditBalances(snapshot) };
+}
+
+export function normalizeCreditAccountName(name) {
+  return text(name).replace(/\s+/g, ' ').toUpperCase();
+}
+
+function compatibleCreditValue(left, right, tolerance = CREDIT_RECONCILIATION_TOLERANCE) {
+  const first = number(left);
+  const second = number(right);
+  if (first == null || second == null) return first == null && second == null;
+  return Math.abs(first - second) <= tolerance;
+}
+
+function compatibleCreditSnapshot(selectedAccount = {}, candidate = {}) {
+  if (text(selectedAccount.CL_Category__c) !== text(candidate.CL_Category__c)) return false;
+  return [
+    'CL_Individual__c',
+    'CL_Special__c',
+    'CL_Group__c',
+    'CL_Special_Group__c',
+  ].every((field) => compatibleCreditValue(selectedAccount[field], candidate[field]));
+}
+
+function accountGroupKey(group) {
+  return idKey(group?.Id || group?.id);
+}
+
+export function resolveCreditSnapshotCandidate({
+  selectedAccount,
+  selectedGroup = null,
+  candidates = [],
+  candidateGroupsById = {},
+  openStems = [],
+  complete = true,
+} = {}) {
+  const selectedId = idKey(selectedAccount?.Id);
+  const selectedName = normalizeCreditAccountName(selectedAccount?.Name);
+  const selectedGroupId = accountGroupKey(selectedGroup);
+  if (!selectedId || !selectedName || !complete) return { status: 'unresolved', matches: [] };
+  const matches = [];
+  for (const candidate of candidates || []) {
+    if (!idKey(candidate?.Id) || idKey(candidate.Id) === selectedId) continue;
+    if (normalizeCreditAccountName(candidate.Name) !== selectedName) continue;
+    if (!compatibleCreditSnapshot(selectedAccount, candidate)) continue;
+    const candidateGroup = candidateGroupsById[idKey(candidate.Id)] || null;
+    if (accountGroupKey(candidateGroup) !== selectedGroupId) continue;
+    const windowStart = dateTime(candidate.CreatedDate);
+    if (windowStart == null) continue;
+    const windowStems = (openStems || []).filter((stem) => {
+      const created = dateTime(stem?.CreatedDate);
+      return created != null && created >= windowStart;
+    });
+    const individualExposure = windowStems
+      .filter((stem) => idKey(stem.Account__c) === selectedId)
+      .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+    const groupExposure = windowStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+    const snapshot = accountCreditSnapshot(candidate);
+    const individual = reconcileCreditExposure(snapshot.usedCustomer, individualExposure, { complete });
+    const group = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete });
+    if (individual.matches && group.matches) {
+      matches.push({ candidate, candidateGroup, windowStart: String(candidate.CreatedDate).slice(0, 10), windowStems, individual, group });
+    }
+  }
+  return matches.length === 1
+    ? { status: 'resolved', ...matches[0], matches: matches.map((match) => match.candidate.Id) }
+    : { status: matches.length ? 'ambiguous' : 'unresolved', matches: matches.map((match) => match.candidate.Id) };
 }
 
 export function accountCreditBalances(snapshot = {}, overrides = {}) {
@@ -273,14 +350,24 @@ function chartGranularity(events) {
   return span <= 365 ? 'week' : 'month';
 }
 
-export function buildCreditReleaseChart({ releases = [], selectedAccountId, snapshot = {}, individualProjection = true, groupProjection = true, today }) {
-  const future = releases.flatMap((release) => release.forecastEvents.map((event) => ({
+export function buildCreditReleaseChart({
+  releases = [],
+  selectedAccountId,
+  openingIndividualExposure = null,
+  openingGroupExposure = null,
+  individualProjection = true,
+  groupProjection = true,
+  today,
+}) {
+  const forecast = releases.flatMap((release) => release.forecastEvents.map((event) => ({
     ...event,
     stemId: release.stemId,
     stemName: release.stemName,
     accountId: release.accountId,
     accountName: release.accountName,
-  }))).filter((event) => event.date && event.date >= today);
+  })));
+  const future = forecast.filter((event) => event.date && event.date >= today);
+  const undated = forecast.filter((event) => !event.date);
   const granularity = chartGranularity(future);
   const bucketDate = granularity === 'month' ? monthStart : granularity === 'week' ? startOfWeek : (date) => date;
   const buckets = new Map();
@@ -292,30 +379,65 @@ export function buildCreditReleaseChart({ releases = [], selectedAccountId, snap
     current.events.push(event);
     buckets.set(date, current);
   }
-  let individualBalance = number(snapshot.individualBalance);
-  let groupBalance = number(snapshot.groupBalance);
+  let individualExposure = currencyAmount(openingIndividualExposure);
+  let groupExposure = currencyAmount(openingGroupExposure);
   const points = [{
     date: today,
     accountRelease: 0,
     otherGroupRelease: 0,
-    individualBalance: individualProjection ? individualBalance : null,
-    groupBalance: groupProjection ? groupBalance : null,
+    individualExposure: individualProjection ? individualExposure : null,
+    groupExposure: groupProjection ? groupExposure : null,
     events: [],
   }];
   for (const bucket of [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date))) {
-    if (individualBalance != null) individualBalance += bucket.accountRelease;
-    if (groupBalance != null) groupBalance += bucket.accountRelease + bucket.otherGroupRelease;
+    if (individualExposure != null) individualExposure = currencyAmount(individualExposure - bucket.accountRelease);
+    if (groupExposure != null) groupExposure = currencyAmount(groupExposure - bucket.accountRelease - bucket.otherGroupRelease);
     points.push({
       ...bucket,
-      individualBalance: individualProjection ? individualBalance : null,
-      groupBalance: groupProjection ? groupBalance : null,
+      individualExposure: individualProjection ? individualExposure : null,
+      groupExposure: groupProjection ? groupExposure : null,
     });
   }
-  return { granularity, points, exactEventCount: future.length };
+  if (individualProjection || groupProjection) {
+    const lastDate = points.at(-1)?.date || today;
+    const plateauDays = granularity === 'month' ? 31 : granularity === 'week' ? 7 : 14;
+    points.push({
+      date: addDays(lastDate, plateauDays),
+      accountRelease: 0,
+      otherGroupRelease: 0,
+      individualExposure: individualProjection ? individualExposure : null,
+      groupExposure: groupProjection ? groupExposure : null,
+      events: [],
+      residualPlateau: true,
+    });
+  }
+  const undatedStems = [...new Map(undated.map((event) => [idKey(event.stemId), {
+    stemId: event.stemId,
+    stemName: event.stemName,
+    accountId: event.accountId,
+    accountName: event.accountName,
+    amount: event.amount,
+    source: event.source,
+    sourceLabel: event.sourceLabel,
+    missedReleaseDate: event.missedDate || null,
+  }])).values()];
+  return {
+    granularity,
+    points,
+    exactEventCount: future.length,
+    undatedExposure: {
+      individual: currencyAmount(undated.filter((event) => idKey(event.accountId) === idKey(selectedAccountId)).reduce((sum, event) => sum + value(event.amount), 0)),
+      group: currencyAmount(undated.reduce((sum, event) => sum + value(event.amount), 0)),
+    },
+    undatedStemCount: undatedStems.length,
+    undatedStems,
+  };
 }
 
 export function buildAccountCreditStatement({
   account,
+  creditAccount = account,
+  creditResolution = null,
   group,
   groupMembers = [],
   openStems = [],
@@ -327,7 +449,7 @@ export function buildAccountCreditStatement({
   warnings = [],
 } = {}) {
   const selectedAccountId = account?.Id;
-  const snapshot = accountCreditSnapshot(account);
+  const snapshot = accountCreditSnapshot(creditAccount);
   const currencyLabels = [...new Set([...openStems, ...statementStems]
     .map((stem) => text(stem.CurrencyIsoCode))
     .filter(Boolean))].sort();
@@ -359,7 +481,8 @@ export function buildAccountCreditStatement({
   const chart = buildCreditReleaseChart({
     releases: projectionComplete ? releases : [],
     selectedAccountId,
-    snapshot,
+    openingIndividualExposure: accountExposure,
+    openingGroupExposure: groupExposure,
     individualProjection: individualReconciliation.matches,
     groupProjection: Boolean(group && groupReconciliation.matches),
     today,
@@ -402,7 +525,7 @@ export function buildAccountCreditStatement({
     ...(group && !groupReconciliation.matches ? ['Group used credit does not reconcile to current buyer-leg STEM exposure across the Salesforce GROUP hierarchy. The group projection is hidden.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
     ...(currencyConflict ? [`Buyer-leg STEM exposure spans multiple currencies (${currencyLabels.join(', ')}). Values remain separated by row and projected balances are hidden.`] : []),
-    ...(releases.some((release) => release.forecastEvents.some((event) => !event.date)) ? ['One or more open STEMs have no reliable future release date. Their credit remains in current exposure and is not projected as released.'] : []),
+    ...(releases.some((release) => release.forecastEvents.some((event) => !event.date)) ? ['One or more open STEMs have no reliable future release date. Their exposure remains visible in the final forecast plateau until reliable evidence is available.'] : []),
   ];
   return {
     identity: {
@@ -412,6 +535,13 @@ export function buildAccountCreditStatement({
       inactive: account?.Inactive_Suspended__c === true,
     },
     group: group ? { accountId: group.Id, name: group.Name, memberCount: groupMembers.length } : null,
+    creditResolution: creditResolution || {
+      mode: 'selected_account',
+      accountId: account?.Id || null,
+      clKey: account?.Company_Code__c || null,
+      reconciliationWindowStart: null,
+      notice: null,
+    },
     credit: snapshot,
     reconciliation: { individual: individualReconciliation, group: groupReconciliation },
     exposureByCurrency,

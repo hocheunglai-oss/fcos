@@ -9,7 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { dashboardCurrency, dashboardMonthlyComparison, dashboardMonthlyCounterpartySeries, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
@@ -8606,8 +8606,9 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     const month = String(row.deliveryDate || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) return result;
     for (const product of row.productVolumes || []) {
-      const key = `${month}\u001f${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
-      if (!result[key]) result[key] = { month, family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
+      const currency = dashboardCurrency(row.currency);
+      const key = `${month}\u001f${currency}\u001f${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
+      if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
       result[key].quantity += Number(product.quantity || 0);
     }
     return result;
@@ -8616,9 +8617,10 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     const month = String(row.deliveryDate || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) return result;
     for (const product of row.productVolumes || []) {
+      const currency = dashboardCurrency(row.currency);
       const unitOfMeasure = product.unitOfMeasure || 'MT';
-      const key = `${month}\u001f${unitOfMeasure}`;
-      if (!result[key]) result[key] = { month, unitOfMeasure, quantity: 0 };
+      const key = `${month}\u001f${currency}\u001f${unitOfMeasure}`;
+      if (!result[key]) result[key] = { month, currency, unitOfMeasure, quantity: 0 };
       result[key].quantity += Number(product.quantity || 0);
     }
     return result;
@@ -8628,8 +8630,28 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     ? dashboardMonthlyYearOverYear(monthlyTrend, dashboardMonthlyFinancialTrend(priorYear.rows), { valueField: 'grossMarginPct', dimensions: ['currency'] })
     : [];
   const monthlyVolumeYearOverYear = yearOverYearComplete
-    ? dashboardMonthlyYearOverYear(aggregateMonthlyVolume(current.rows), aggregateMonthlyVolume(priorYear.rows), { valueField: 'quantity', dimensions: ['unitOfMeasure'] })
+    ? dashboardMonthlyYearOverYear(aggregateMonthlyVolume(current.rows), aggregateMonthlyVolume(priorYear.rows), { valueField: 'quantity', dimensions: ['currency', 'unitOfMeasure'] })
     : [];
+  const priorMonthlyTrend = dashboardMonthlyFinancialTrend(priorYear.rows);
+  const priorMonthlyVolume = Object.values(priorYear.rows.reduce((result, row) => {
+    const month = String(row.deliveryDate || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) return result;
+    for (const product of row.productVolumes || []) {
+      const currency = dashboardCurrency(row.currency);
+      const unitOfMeasure = product.unitOfMeasure || 'MT';
+      const key = `${month}\u001f${currency}\u001f${product.family}\u001f${unitOfMeasure}`;
+      if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure, quantity: 0 };
+      result[key].quantity += Number(product.quantity || 0);
+    }
+    return result;
+  }, {}));
+  const monthlyComparison = dashboardMonthlyComparison({
+    currentFinancial: monthlyTrend,
+    priorFinancial: priorMonthlyTrend,
+    currentVolume: monthlyVolume,
+    priorVolume: priorMonthlyVolume,
+    priorComplete: yearOverYearComplete,
+  });
   const currentSummary = decisionDashboardSummary(current.rows.filter((row) => row.buyer != null), current.completeness);
   const priorSummary = decisionDashboardSummary(prior.rows.filter((row) => row.buyer != null), prior.completeness);
   return {
@@ -8642,6 +8664,11 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
       previousDateWindows,
       monthly: monthlyTrend,
       monthlyVolume,
+      monthlyComparison: {
+        complete: yearOverYearComplete,
+        dateWindows: yearOverYearWindows,
+        rows: monthlyComparison,
+      },
       yearOverYear: {
         complete: yearOverYearComplete,
         dateWindows: yearOverYearWindows,
@@ -8668,10 +8695,10 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v3-stems'
+      ? 'decision-dashboard-v4-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v3-analytics'
-        : `decision-dashboard-${handler}`,
+        ? 'decision-dashboard-v4-analytics'
+        : `decision-dashboard-v4-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

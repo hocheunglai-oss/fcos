@@ -8,6 +8,7 @@ import {
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
   reconcileCreditExposure,
+  resolveCreditSnapshotCandidate,
   selectUltimateCreditGroup,
 } from '../api/_dashboardAccountCreditStatement.js';
 
@@ -88,8 +89,8 @@ test('signed negative receivables remain signed in exposure and projected balanc
     openStems: [{ Id: 'a01000000000004AAA', Account__c: accountId, QLIK_Receivable_Balance__c: -25, Invoice_Due_Date__c: '2026-09-01' }],
   });
   assert.equal(statement.reconciliation.individual.matches, true);
-  assert.equal(statement.chart.points[0].individualBalance, 125);
-  assert.equal(statement.chart.points.at(-1).individualBalance, 100);
+  assert.equal(statement.chart.points[0].individualExposure, -25);
+  assert.equal(statement.chart.points.at(-1).individualExposure, 0);
   assert.equal(statement.releases[0].forecastEvents[0].amount, -25);
 });
 
@@ -111,15 +112,102 @@ test('statement separates selected-account and other-group releases and independ
   });
   assert.equal(statement.reconciliation.individual.matches, true);
   assert.equal(statement.reconciliation.group.matches, true);
-  assert.equal(statement.chart.points.at(-1).individualBalance, 200);
-  assert.equal(statement.chart.points.at(-1).groupBalance, 499);
+  assert.equal(statement.chart.points[0].individualExposure, 100);
+  assert.equal(statement.chart.points[0].groupExposure, 250);
+  assert.equal(statement.chart.points.at(-1).individualExposure, 0);
+  assert.equal(statement.chart.points.at(-1).groupExposure, 0);
 
   const mismatched = buildAccountCreditStatement({
     today: '2026-08-16', account: { Id: accountId, Name: 'BUYER A', CL_Category__c: 'Individual', CL_Individual__c: 200, CL_Used_Customer__c: 90 },
     openStems: [{ Id: 'a01000000000001AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 100, Invoice_Due_Date__c: '2026-09-01' }],
   });
   assert.equal(mismatched.reconciliation.individual.matches, false);
-  assert.equal(mismatched.chart.points[0].individualBalance, null);
+  assert.equal(mismatched.chart.points[0].individualExposure, null);
+});
+
+test('Achieve Bunker unique same-name snapshot produces the confirmed five-step exposure forecast', () => {
+  const selected = {
+    Id: accountId,
+    Name: 'Achieve  Bunker Ltd',
+    CreatedDate: '2021-04-06T00:00:00.000Z',
+    Company_Code__c: 'HKACHIEVE BUNKER',
+    CL_Category__c: 'Individual',
+    CL_Individual__c: 500_000,
+    CL_Group__c: null,
+    CL_Special__c: null,
+    CL_Special_Group__c: null,
+    CL_Used_Customer__c: 39_600,
+    CL_Used_Group__c: 39_600,
+  };
+  const creditRecord = {
+    Id: '001000000000005AAA',
+    Name: 'ACHIEVE BUNKER LTD',
+    CreatedDate: '2026-01-07T00:00:00.000Z',
+    Company_Code__c: 'HKACHIEVE BUNKER LTD',
+    CL_Category__c: 'Individual',
+    CL_Individual__c: 500_000,
+    CL_Group__c: null,
+    CL_Special__c: null,
+    CL_Special_Group__c: null,
+    CL_Used_Customer__c: 1_348_401.87,
+    CL_Used_Group__c: 1_348_401.87,
+  };
+  const openStems = [
+    { Id: 'a01000000000011AAA', Name: 'AUG RELEASE', CreatedDate: '2026-02-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 231_441.19, Invoice_Due_Date__c: '2026-08-20' },
+    { Id: 'a01000000000012AAA', Name: 'SEP 10 RELEASE', CreatedDate: '2026-03-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 256_800, Invoice_Due_Date__c: '2026-09-10' },
+    { Id: 'a01000000000013AAA', Name: 'SEP 11 RELEASE', CreatedDate: '2026-04-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 214_125, Invoice_Due_Date__c: '2026-09-11' },
+    { Id: 'a01000000000014AAA', Name: 'SEP 22 RELEASE', CreatedDate: '2026-05-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 641_980, Invoice_Due_Date__c: '2026-09-22' },
+    { Id: 'a01000000000015AAA', Name: 'HELGOLAND', CreatedDate: '2026-06-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 4_055.68, Invoice_Due_Date__c: '2026-08-01' },
+    { Id: 'a01000000000016AAA', Name: 'LEGACY WINDOW', CreatedDate: '2025-12-01T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 3_314_331.79, Invoice_Due_Date__c: '2026-09-30' },
+  ];
+  const resolution = resolveCreditSnapshotCandidate({
+    selectedAccount: selected,
+    candidates: [
+      creditRecord,
+      { ...creditRecord, Id: '001000000000006AAA', Company_Code__c: 'INCOMPATIBLE', CL_Individual__c: 300_000 },
+    ],
+    openStems,
+  });
+  assert.equal(resolution.status, 'resolved');
+  assert.equal(resolution.candidate.Id, creditRecord.Id);
+  assert.equal(resolution.windowStart, '2026-01-07');
+  assert.equal(resolution.windowStems.length, 5);
+
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: selected,
+    creditAccount: creditRecord,
+    creditResolution: { mode: 'same_name_fallback', accountId: creditRecord.Id, clKey: creditRecord.Company_Code__c, reconciliationWindowStart: resolution.windowStart },
+    openStems: resolution.windowStems,
+    statementStems: resolution.windowStems,
+  });
+  const exposureByDate = Object.fromEntries(statement.chart.points
+    .filter((point) => !point.residualPlateau)
+    .map((point) => [point.date, point.individualExposure]));
+  assert.deepEqual(exposureByDate, {
+    '2026-08-17': 1_348_401.87,
+    '2026-08-20': 1_116_960.68,
+    '2026-09-10': 860_160.68,
+    '2026-09-11': 646_035.68,
+    '2026-09-22': 4_055.68,
+  });
+  assert.equal(statement.chart.points.at(-1).individualExposure, 4_055.68);
+  assert.equal(statement.chart.undatedExposure.individual, 4_055.68);
+  assert.equal(statement.chart.undatedStemCount, 1);
+  assert.equal(statement.chart.undatedStems[0].stemName, 'HELGOLAND');
+});
+
+test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
+  const selected = { Id: accountId, Name: 'Buyer A', CL_Category__c: 'Individual', CL_Individual__c: 100 };
+  const openStems = [{ Id: 'a01000000000021AAA', CreatedDate: '2026-01-10T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 50 }];
+  const candidate = { Name: ' buyer   a ', CreatedDate: '2026-01-01T00:00:00Z', CL_Category__c: 'Individual', CL_Individual__c: 100, CL_Used_Customer__c: 50, CL_Used_Group__c: 50 };
+  const resolution = resolveCreditSnapshotCandidate({
+    selectedAccount: selected,
+    candidates: [{ ...candidate, Id: '001000000000007AAA' }, { ...candidate, Id: '001000000000008AAA' }],
+    openStems,
+  });
+  assert.equal(resolution.status, 'ambiguous');
+  assert.equal(resolution.matches.length, 2);
 });
 
 test('mixed currencies stay separate by row and suppress all combined projections', () => {

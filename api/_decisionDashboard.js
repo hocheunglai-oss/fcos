@@ -167,6 +167,59 @@ function shiftMonthYear(value, offset) {
   return match ? `${Number(match[1]) + Number(offset || 0)}-${match[2]}` : null;
 }
 
+export function dashboardMonthlyComparison({
+  currentFinancial = [],
+  priorFinancial = [],
+  currentVolume = [],
+  priorVolume = [],
+  priorComplete = true,
+} = {}) {
+  const financialKey = (row, month = row?.month) => `${month}\u001f${dashboardCurrency(row?.currency)}`;
+  const priorFinancialByCurrentMonth = new Map((priorFinancial || []).flatMap((row) => {
+    const month = shiftMonthYear(row?.month, 1);
+    return month ? [[financialKey(row, month), row]] : [];
+  }));
+  const volumeFor = (rows, month, currency) => {
+    const byFamily = new Map();
+    let found = false;
+    for (const row of rows || []) {
+      if (row?.month !== month || dashboardCurrency(row?.currency) !== currency || String(row?.unitOfMeasure || 'MT').toUpperCase() !== 'MT') continue;
+      found = true;
+      const family = String(row?.family || 'Other').trim() || 'Other';
+      byFamily.set(family, finite(byFamily.get(family)) + finite(row?.quantity));
+    }
+    const productVolumes = [...byFamily.entries()]
+      .map(([family, quantity]) => ({ family, quantity, unitOfMeasure: 'MT' }))
+      .sort((left, right) => left.family.localeCompare(right.family));
+    return { found, total: productVolumes.reduce((sum, row) => sum + row.quantity, 0), productVolumes };
+  };
+  return (currentFinancial || []).flatMap((current) => {
+    const month = String(current?.month || '');
+    if (!/^\d{4}-\d{2}$/.test(month)) return [];
+    const currency = dashboardCurrency(current.currency);
+    const priorMonth = shiftMonthYear(month, -1);
+    const prior = priorComplete ? priorFinancialByCurrentMonth.get(financialKey(current)) || null : null;
+    const currentVolumes = volumeFor(currentVolume, month, currency);
+    const priorVolumes = priorComplete ? volumeFor(priorVolume, priorMonth, currency) : { found: false, total: 0, productVolumes: [] };
+    return [{
+      month,
+      priorMonth,
+      currency,
+      unitOfMeasure: 'MT',
+      currentGrossProfit: finite(current.netPnl),
+      priorGrossProfit: prior ? finite(prior.netPnl) : null,
+      currentGrossMarginPct: current.grossMarginPct == null ? null : finite(current.grossMarginPct),
+      priorGrossMarginPct: prior?.grossMarginPct == null ? null : finite(prior.grossMarginPct),
+      currentVolume: currentVolumes.found ? currentVolumes.total : 0,
+      priorVolume: priorVolumes.found ? priorVolumes.total : null,
+      currentProductVolumes: currentVolumes.productVolumes,
+      priorProductVolumes: priorVolumes.productVolumes,
+      priorComplete,
+      priorAvailable: Boolean(prior),
+    }];
+  }).sort((left, right) => left.month.localeCompare(right.month) || left.currency.localeCompare(right.currency));
+}
+
 export function dashboardMonthlyYearOverYear(currentRows = [], priorYearRows = [], {
   valueField = 'netPnl',
   dimensions = ['currency'],

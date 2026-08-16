@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   dashboardFinancialBuckets,
   dashboardMonthlyCounterpartySeries,
+  dashboardMonthlyComparison,
   dashboardMonthlyFinancialTrend,
   dashboardMonthlyYearOverYear,
   dashboardSupplierProductRows,
@@ -193,6 +194,57 @@ test('calculates each monthly gross margin from that month totals rather than a 
   ]);
 });
 
+test('combines actual current and prior-year gross profit, margin, and MT volume by currency and month', () => {
+  const rows = dashboardMonthlyComparison({
+    currentFinancial: [
+      { month: '2026-07', currency: 'USD', netPnl: 100, grossMarginPct: 10 },
+      { month: '2026-08', currency: 'USD', netPnl: -20, grossMarginPct: -4 },
+      { month: '2026-07', currency: 'EUR', netPnl: 30, grossMarginPct: 6 },
+    ],
+    priorFinancial: [
+      { month: '2025-07', currency: 'USD', netPnl: 80, grossMarginPct: 8 },
+      { month: '2025-07', currency: 'EUR', netPnl: 25, grossMarginPct: 5 },
+    ],
+    currentVolume: [
+      { month: '2026-07', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 100 },
+      { month: '2026-07', currency: 'USD', family: 'LSMGO', unitOfMeasure: 'MT', quantity: 25 },
+      { month: '2026-07', currency: 'USD', family: 'Other', unitOfMeasure: 'M3', quantity: 999 },
+      { month: '2026-07', currency: 'EUR', family: 'HSFO', unitOfMeasure: 'MT', quantity: 50 },
+    ],
+    priorVolume: [
+      { month: '2025-07', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 90 },
+      { month: '2025-07', currency: 'EUR', family: 'HSFO', unitOfMeasure: 'MT', quantity: 40 },
+    ],
+  });
+  assert.deepEqual(rows[0], {
+    month: '2026-07', priorMonth: '2025-07', currency: 'EUR', unitOfMeasure: 'MT',
+    currentGrossProfit: 30, priorGrossProfit: 25, currentGrossMarginPct: 6, priorGrossMarginPct: 5,
+    currentVolume: 50, priorVolume: 40,
+    currentProductVolumes: [{ family: 'HSFO', quantity: 50, unitOfMeasure: 'MT' }],
+    priorProductVolumes: [{ family: 'HSFO', quantity: 40, unitOfMeasure: 'MT' }],
+    priorComplete: true, priorAvailable: true,
+  });
+  assert.equal(rows.find((row) => row.month === '2026-07' && row.currency === 'USD').currentVolume, 125);
+  assert.equal(rows.find((row) => row.month === '2026-08').currentGrossProfit, -20);
+  assert.equal(rows.find((row) => row.month === '2026-08').priorGrossProfit, null);
+});
+
+test('incomplete prior-year scope leaves gaps without suppressing current monthly values', () => {
+  assert.deepEqual(dashboardMonthlyComparison({
+    currentFinancial: [{ month: '2026-08', currency: 'USD', netPnl: 50, grossMarginPct: 5 }],
+    priorFinancial: [{ month: '2025-08', currency: 'USD', netPnl: 999, grossMarginPct: 99 }],
+    currentVolume: [{ month: '2026-08', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 100 }],
+    priorVolume: [{ month: '2025-08', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 999 }],
+    priorComplete: false,
+  })[0], {
+    month: '2026-08', priorMonth: '2025-08', currency: 'USD', unitOfMeasure: 'MT',
+    currentGrossProfit: 50, priorGrossProfit: null, currentGrossMarginPct: 5, priorGrossMarginPct: null,
+    currentVolume: 100, priorVolume: null,
+    currentProductVolumes: [{ family: 'VLSFO', quantity: 100, unitOfMeasure: 'MT' }],
+    priorProductVolumes: [], priorComplete: false, priorAvailable: false,
+  });
+});
+
 test('builds a currency-safe monthly top-10 counterparty series', () => {
   const series = dashboardMonthlyCounterpartySeries([
     { deliveryDate: '2026-07-10', currency: 'USD', netPnl: 10, account: { id: '001000000000001AAA', name: 'Buyer A' } },
@@ -233,6 +285,7 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /monthlyVolume/);
   assert.match(loader, /monthlyCounterparties/);
   assert.match(loader, /monthlyVolumeYearOverYear/);
+  assert.match(loader, /monthlyComparison/);
   assert.match(loader, /decisionDashboardInternalAccountIdentity/);
   assert.match(loader, /normalizedGroupIdentity/);
   assert.match(loader, /Group_Name__c/);

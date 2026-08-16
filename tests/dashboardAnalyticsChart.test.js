@@ -4,21 +4,26 @@ import test from 'node:test';
 
 const component = await readFile(new URL('../src/components/dashboard/DashboardAnalytics.jsx', import.meta.url), 'utf8');
 
-test('gross-profit legend inherits the same blue series color as positive bars', () => {
-  assert.match(component, /name=\{`\$\{currency\} gross profit`\} fill=\{COLORS\[index % COLORS\.length\]\}/);
-  assert.match(component, /COLORS = \['#2563eb'/);
+test('unified chart uses paired actual bars and a blue gross-profit legend', () => {
+  assert.match(component, /dataKey="currentGrossProfit" name="Current gross profit" fill="#2563eb"/);
+  assert.match(component, /dataKey="priorGrossProfit" name="Prior-year gross profit" fill="#93c5fd"/);
+  assert.match(component, /dataKey="currentVolume" name="Current volume" fill="#0f766e"/);
+  assert.match(component, /dataKey="priorVolume" name="Prior-year volume" fill="#99f6e4"/);
+  assert.doesNotMatch(component, /setMode\(|Monthly volume<\/button>/);
 });
 
-test('chart labels state current and prior-year actual monthly margin semantics', () => {
-  assert.match(component, /name=\{`\$\{currency\} monthly gross margin`\}/);
-  assert.match(component, /name=\{`\$\{currency\} prior-year monthly margin`\}/);
-  assert.match(component, /the actual margin from the same calendar month last year/);
-  assert.match(component, /row\.priorValue == null \? null : Number\(row\.priorValue\)/);
+test('chart assigns profit, volume, and monthly margin to three color-coded axes', () => {
+  assert.match(component, /yAxisId="profit"/);
+  assert.match(component, /yAxisId="volume" orientation="right"/);
+  assert.match(component, /yAxisId="margin" orientation="right"/);
+  assert.match(component, /dataKey="currentGrossMarginPct" name="Current gross margin" stroke="#7c3aed"/);
+  assert.match(component, /dataKey="priorGrossMarginPct" name="Prior-year gross margin" stroke="#a78bfa"[^>]+strokeDasharray="6 4"/);
 });
 
-test('monthly volume plots prior-year actual volume on the volume axis', () => {
-  assert.match(component, /row\.priorValue != null\) item\.priorVolume/);
-  assert.match(component, /dataKey="priorVolume" name="Prior-year actual volume"/);
-  assert.match(component, /Product-volume bars show the selected months/);
-  assert.doesNotMatch(component, /Volume YoY difference/);
+test('month labels and tooltip pair current/prior actuals and retain product detail', () => {
+  assert.match(component, /<MonthComparisonTick rowsByMonth=\{rowsByMonth\}/);
+  assert.match(component, /monthLabel\(row\?\.priorMonth\)/);
+  assert.match(component, /Current products/);
+  assert.match(component, /Prior-year products/);
+  assert.match(component, /prior-year series are shown as gaps/);
 });

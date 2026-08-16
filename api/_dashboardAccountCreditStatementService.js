@@ -2,10 +2,14 @@ import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import {
+  accountCreditSnapshot,
   buildAccountCreditStatement,
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
   normalizeAccountCreditScope,
+  normalizeCreditAccountName,
+  reconcileCreditExposure,
+  resolveCreditSnapshotCandidate,
   selectUltimateCreditGroup,
 } from './_dashboardAccountCreditStatement.js';
 
@@ -129,7 +133,7 @@ function ensureInterofficeAccountAccess(account, chain, interoffice) {
 
 function accountSelectFields(fields) {
   const names = [
-    'Id', 'Name', 'ParentId', 'Company_Code__c', 'Inactive_Suspended__c', 'Group_Name__c', 'CurrencyIsoCode',
+    'Id', 'Name', 'ParentId', 'CreatedDate', 'LastModifiedDate', 'Company_Code__c', 'Inactive_Suspended__c', 'Group_Name__c', 'CurrencyIsoCode',
     'Credit_Limit__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c',
     'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c',
   ];
@@ -187,7 +191,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-directory',
-    version: '1',
+    version: '2',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { query, limit, cursor },
@@ -308,6 +312,39 @@ async function loadGroupMembers(group, fields) {
   }
   if (parentIds.length) throw serviceError('The Salesforce GROUP hierarchy exceeds 20 levels.', 503, 'ACCOUNT_CREDIT_GROUP_DEPTH');
   return members;
+}
+
+async function loadSameNameCreditCandidates(account, accountFields, interoffice) {
+  const normalizedName = normalizeCreditAccountName(account?.Name);
+  const namePattern = text(account?.Name).split(/\s+/).filter(Boolean).map((token) => token.replace(/[%_]/g, '\\$&')).join('%');
+  if (!normalizedName || !namePattern) return { candidates: [], groupsByAccountId: {} };
+  const result = await queryAll(`SELECT ${accountSelectFields(accountFields).join(',')} FROM Account WHERE Name LIKE '${soql(namePattern)}' ORDER BY CreatedDate,Id LIMIT 201`, 201);
+  if (result.records.length > 200) throw serviceError('Same-name credit snapshot resolution is too broad to complete safely.', 503, 'ACCOUNT_CREDIT_DUPLICATE_SCOPE');
+  const candidates = result.records.filter((candidate) => normalizeCreditAccountName(candidate.Name) === normalizedName);
+  const chains = await loadDirectoryAccountChains(candidates, accountFields);
+  const groupsByAccountId = {};
+  for (const candidate of candidates) {
+    const chain = chains.get(idKey(candidate.Id)) || [];
+    ensureInterofficeAccountAccess(candidate, chain, interoffice);
+    groupsByAccountId[idKey(candidate.Id)] = selectUltimateCreditGroup(chain);
+  }
+  return { candidates, groupsByAccountId };
+}
+
+function creditScopeReconciles({ account, group, openStems, complete }) {
+  const snapshot = accountCreditSnapshot(account);
+  const selectedId = idKey(account?.Id);
+  const accountExposure = openStems
+    .filter((stem) => idKey(stem.Account__c) === selectedId)
+    .reduce((sum, stem) => sum + Number(stem.QLIK_Receivable_Balance__c || 0), 0);
+  const groupExposure = openStems.reduce((sum, stem) => sum + Number(stem.QLIK_Receivable_Balance__c || 0), 0);
+  const currencies = new Set(openStems.map((stem) => text(stem.CurrencyIsoCode)).filter(Boolean));
+  const projectionComplete = complete && currencies.size <= 1;
+  const individual = reconcileCreditExposure(snapshot.usedCustomer, accountExposure, { complete: projectionComplete });
+  const groupResult = group
+    ? reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete: projectionComplete })
+    : { matches: true, notApplicable: true };
+  return { matches: individual.matches && groupResult.matches, individual, group: groupResult };
 }
 
 function stemSelectFields(fields) {
@@ -507,6 +544,40 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const openStemsRaw = await queryStemsForAccountIds(groupAccountIds, stemFields, 'QLIK_Receivable_Balance__c != 0');
   const openStemScopeComplete = openStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
   const openStems = openStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS);
+  let creditAccount = account;
+  let creditOpenStems = openStems;
+  let creditResolution = null;
+  const selectedReconciliation = creditScopeReconciles({ account, group, openStems, complete: openStemScopeComplete });
+  if (!selectedReconciliation.matches) {
+    const duplicateScope = await loadSameNameCreditCandidates(account, accountFields, interoffice);
+    const resolution = resolveCreditSnapshotCandidate({
+      selectedAccount: account,
+      selectedGroup: group,
+      candidates: duplicateScope.candidates,
+      candidateGroupsById: duplicateScope.groupsByAccountId,
+      openStems,
+      complete: openStemScopeComplete,
+    });
+    if (resolution.status === 'resolved') {
+      creditAccount = resolution.candidate;
+      creditOpenStems = resolution.windowStems;
+      creditResolution = {
+        mode: 'same_name_fallback',
+        accountId: resolution.candidate.Id,
+        clKey: resolution.candidate.Company_Code__c || null,
+        reconciliationWindowStart: resolution.windowStart,
+        notice: `Salesforce credit fields were reconciled from the unique same-name Account snapshot ${resolution.candidate.Company_Code__c || 'without a CL Key'}, effective ${resolution.windowStart}. Buyer-leg STEM membership remains restricted to the selected Account ID.`,
+      };
+    } else {
+      creditResolution = {
+        mode: resolution.status === 'ambiguous' ? 'ambiguous' : 'unresolved',
+        accountId: account.Id,
+        clKey: account.Company_Code__c || null,
+        reconciliationWindowStart: null,
+        notice: null,
+      };
+    }
+  }
   const recentPayments = scope === 'open_recent'
     ? await queryRecentPaymentStemIds(accountId, oneYearBefore(today), paymentFields, paymentConfig)
     : { rows: [], complete: true };
@@ -524,9 +595,11 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   timings.releaseEvidenceMs = Date.now() - stageStartedAt;
   const model = buildAccountCreditStatement({
     account,
+    creditAccount,
+    creditResolution,
     group,
     groupMembers,
-    openStems,
+    openStems: creditOpenStems,
     statementStems: statement.rows,
     paymentsByStem,
     cashflowsByStem,
@@ -562,7 +635,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '1',
+    version: '2',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },
