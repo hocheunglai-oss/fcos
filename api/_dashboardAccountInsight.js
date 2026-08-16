@@ -2,7 +2,7 @@ import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVo
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
-import { financialQuantityValue as financialQuantity, nativeFinancialQuantity, pricingFinancialQuantityValue as pricingFinancialQuantity } from './_financialQuantity.js';
+import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 
 const DAY_MS = 86_400_000;
 const ZERO_TOLERANCE = 0.005;
@@ -102,35 +102,35 @@ function firstNumber(...values) {
 function lineSellAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return valueOrZero(item.Total_Price__c);
   const unit = firstNumber(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item.Offer_Line_Item__r?.UnitPrice);
-  return unit == null ? valueOrZero(item.Total_Price__c) : unit * pricingFinancialQuantity(item, false);
+  return unit == null ? valueOrZero(item.Total_Price__c) : unit * financialQuantity(item, false);
 }
 
 function lineBuyAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return valueOrZero(item.Total_Cost__c);
   const unit = firstNumber(item.Cost_Per_Unit__c, item.Unit_Buy_At__c, item.Unit_Cost__c, item.Offer_Line_Item__r?.Supplier_Unit_Price__c);
-  return unit == null ? valueOrZero(item.Total_Cost__c) : unit * pricingFinancialQuantity(item, false);
+  return unit == null ? valueOrZero(item.Total_Cost__c) : unit * financialQuantity(item, false);
 }
 
 function extraSellAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return valueOrZero(item.Line_Total__c);
   const unit = firstNumber(item.Unit_Price__c);
-  return unit == null ? valueOrZero(item.Line_Total__c) : unit * pricingFinancialQuantity(item, false, 'Quantity_Range_Max__c');
+  return unit == null ? valueOrZero(item.Line_Total__c) : unit * financialQuantity(item, false, 'Quantity_Range_Max__c');
 }
 
 function extraBuyAmount(item, stemHasDelivery) {
   if (stemHasDelivery) return valueOrZero(item.Line_Total_Buy__c);
   const unit = firstNumber(item.Unit_Cost__c);
-  return unit == null ? valueOrZero(item.Line_Total_Buy__c) : unit * pricingFinancialQuantity(item, false, 'Quantity_Range_Max__c');
+  return unit == null ? valueOrZero(item.Line_Total_Buy__c) : unit * financialQuantity(item, false, 'Quantity_Range_Max__c');
 }
 
 function supplierBrokerCommission(item, stemHasDelivery) {
-  return valueOrZero(item.Suppliers_Brokers_Commission_Per_Unit__c) * pricingFinancialQuantity(item, stemHasDelivery);
+  return valueOrZero(item.Suppliers_Brokers_Commission_Per_Unit__c) * financialQuantity(item, stemHasDelivery);
 }
 
 function buyerBrokerCommission(item, stemHasDelivery) {
   const buyerPerUnit = number(item.Buyers_Brokers_Commission_Per_Unit__c);
   const supplierPerUnit = number(item.Suppliers_Brokers_Commission_Per_Unit__c);
-  const calculated = valueOrZero(buyerPerUnit) * pricingFinancialQuantity(item, stemHasDelivery);
+  const calculated = valueOrZero(buyerPerUnit) * financialQuantity(item, stemHasDelivery);
   if (supplierPerUnit !== 0 || buyerPerUnit != null) return calculated;
   return number(item.Commission_Cost__c) ?? calculated;
 }
@@ -808,7 +808,7 @@ function buildStemFinancialRow(stem, context) {
     const volume = dashboardLineItemVolume(item, stemHasDelivery, {
       lineItemUomField: context.lineItemUomField,
       productUomField: context.productUomField,
-      fallbackQuantity: pricingFinancialQuantity(item, stemHasDelivery),
+      fallbackQuantity: financialQuantity(item, stemHasDelivery),
       productFamily: family,
     });
     volumeMt += valueOrZero(volume.quantity);
@@ -833,7 +833,7 @@ function buildStemFinancialRow(stem, context) {
       volumeMt: valueOrZero(volume.quantity),
       unitOfMeasure: volume.unitOfMeasure,
       originalUom: resolveDashboardItemUom(item, { lineItemUomField: context.lineItemUomField, productUomField: context.productUomField }) || 'UOM not set',
-      nativeQuantity: pricingFinancialQuantity(item, stemHasDelivery),
+      nativeQuantity: financialQuantity(item, stemHasDelivery),
       sellPrice: firstNumber(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item.Offer_Line_Item__r?.UnitPrice),
       buyPrice: firstNumber(item.Cost_Per_Unit__c, item.Unit_Buy_At__c, item.Unit_Cost__c, item.Offer_Line_Item__r?.Supplier_Unit_Price__c),
     });

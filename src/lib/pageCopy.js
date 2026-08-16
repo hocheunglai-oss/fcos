@@ -10,9 +10,9 @@ const PAGE_COPY = {
     description: 'Plan shared work, assign accountability, and keep progress, discussion, and files together.',
   },
   Dashboard: {
-    eyebrow: 'Review',
+    eyebrow: '',
     title: 'Dashboard',
-    description: 'Filter STEMs, review KPIs, and inspect records.',
+    description: '',
   },
   'Outstanding Buyer Invoices': {
     eyebrow: 'Collection',

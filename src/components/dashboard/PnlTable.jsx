@@ -166,22 +166,24 @@ function AccountInsightButton({ account, role, fallback, onOpen, className = '',
   );
 }
 
-export default function PnlTable({ records = [], onStemClick, onAccountClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
+export default function PnlTable({ records = [], onStemClick, onAccountClick, counterpartyMode = 'buyer', showAllCounterparties = false, scrollClassName = 'max-h-[520px]' }) {
   const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
   const [sortDir, setSortDir] = useState(-1);
   const firstRecord = records[0] || {};
   const hiddenCols = useMemo(() => {
     const cols = new Set(BASE_HIDDEN_COLS);
-    if (counterpartyMode === 'supplier') {
-      cols.add('Buyer_Name__c');
-      cols.add('_Buyer_Group');
-      cols.add(BUYER_FIELD);
-    } else {
-      cols.add('_Supplier_Names');
-      cols.add(SUPPLIER_FIELD);
+    if (!showAllCounterparties) {
+      if (counterpartyMode === 'supplier') {
+        cols.add('Buyer_Name__c');
+        cols.add('_Buyer_Group');
+        cols.add(BUYER_FIELD);
+      } else {
+        cols.add('_Supplier_Names');
+        cols.add(SUPPLIER_FIELD);
+      }
     }
     return cols;
-  }, [counterpartyMode]);
+  }, [counterpartyMode, showAllCounterparties]);
   const rawCols = Object.keys(firstRecord).filter(k => k !== 'Id' && !hiddenCols.has(k));
   const hasBuyer = Object.prototype.hasOwnProperty.call(firstRecord, BUYER_FIELD);
   const hasSupplier = Object.prototype.hasOwnProperty.call(firstRecord, SUPPLIER_FIELD);
@@ -238,8 +240,6 @@ export default function PnlTable({ records = [], onStemClick, onAccountClick, co
         </thead>
         <tbody>
           {sortedRecords.map((row, i) => {
-            const buyer = row[BUYER_FIELD] ?? null;
-            const supplier = row[SUPPLIER_FIELD] ?? null;
             const pnl = showPnl ? getPnl(row) : null;
             const pnlPositive = pnl != null && pnl >= 0;
 

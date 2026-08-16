@@ -3,12 +3,15 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   dashboardFinancialBuckets,
+  dashboardMonthlyCounterpartySeries,
+  dashboardMonthlyYearOverYear,
   dashboardCurrency,
   decodeDashboardCursor,
   decisionDashboardSummary,
   encodeDashboardCursor,
   normalizeDecisionDashboardFilters,
   priorEquivalentDateWindows,
+  yearOverYearDateWindows,
 } from '../api/_decisionDashboard.js';
 
 test('single-currency Salesforce records use the confirmed USD corporate currency', () => {
@@ -79,6 +82,43 @@ test('prior trend period has the same inclusive duration as selected scope', () 
   assert.deepEqual(priorEquivalentDateWindows([{ startDate: '2026-08-01', endDate: '2026-08-31' }]), [{ startDate: '2026-07-01', endDate: '2026-07-31' }]);
 });
 
+test('year-over-year windows retain calendar dates and safely clamp leap day', () => {
+  assert.deepEqual(yearOverYearDateWindows([
+    { startDate: '2024-02-29', endDate: '2024-03-31' },
+    { startDate: '2026-08-01', endDate: '2026-08-31' },
+  ]), [
+    { startDate: '2023-02-28', endDate: '2023-03-31' },
+    { startDate: '2025-08-01', endDate: '2025-08-31' },
+  ]);
+});
+
+test('calculates monthly YoY difference against the same calendar month', () => {
+  assert.deepEqual(dashboardMonthlyYearOverYear([
+    { month: '2026-07', currency: 'USD', netPnl: 150 },
+    { month: '2026-08', currency: 'USD', netPnl: 75 },
+  ], [
+    { month: '2025-07', currency: 'USD', netPnl: 100 },
+    { month: '2025-08', currency: 'USD', netPnl: 0 },
+  ]), [
+    { month: '2026-07', currency: 'USD', currentValue: 150, priorValue: 100, difference: 50, differencePct: 50 },
+    { month: '2026-08', currency: 'USD', currentValue: 75, priorValue: 0, difference: 75, differencePct: null },
+  ]);
+});
+
+test('builds a currency-safe monthly top-10 counterparty series', () => {
+  const series = dashboardMonthlyCounterpartySeries([
+    { deliveryDate: '2026-07-10', currency: 'USD', netPnl: 10, account: { id: '001000000000001AAA', name: 'Buyer A' } },
+    { deliveryDate: '2026-08-10', currency: 'USD', netPnl: 20, account: { id: '001000000000001AAA', name: 'Buyer A' } },
+    { deliveryDate: '2026-08-11', currency: 'USD', netPnl: 5, account: { id: '001000000000002AAA', name: 'Buyer B' } },
+  ], 'buyer');
+  assert.deepEqual(series.series.map((item) => [item.name, item.grossProfit]), [['Buyer A', 30], ['Buyer B', 5]]);
+  assert.deepEqual(series.points, [
+    { month: '2026-07', seriesKey: 'counterparty:0', grossProfit: 10 },
+    { month: '2026-08', seriesKey: 'counterparty:0', grossProfit: 20 },
+    { month: '2026-08', seriesKey: 'counterparty:1', grossProfit: 5 },
+  ]);
+});
+
 test('new dashboard handlers are authenticated, live-only, and supplier matching checks both child objects', async () => {
   const [api, policies] = await Promise.all([
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
@@ -99,8 +139,14 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /SELECT COUNT\(Id\) total FROM stem__c/);
   assert.match(loader, /decisionDashboardBuyerBrokerCommissionField\(buyerBrokerDescribe\.fields/);
   assert.match(loader, /buyerBrokerCommissionField\s*\?\s*decisionDashboardRowsForStemIds/);
-  assert.match(api, /pricingFinancialQuantity/);
+  assert.doesNotMatch(api, /pricingFinancialQuantity/);
   assert.match(loader, /productVolumes/);
+  assert.match(loader, /productQuantities/);
   assert.match(loader, /monthlyVolume/);
+  assert.match(loader, /monthlyCounterparties/);
+  assert.match(loader, /monthlyVolumeYearOverYear/);
+  assert.match(loader, /decisionDashboardInternalAccountIdentity/);
+  assert.match(loader, /SELECT Id,Name,ParentId FROM Account/);
+  assert.match(loader, /internalAccountIds\.has\(entity\.id\)/);
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
 });

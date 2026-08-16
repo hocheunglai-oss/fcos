@@ -18,12 +18,13 @@ function Picker({ id, label, value, onCommit, options, placeholder, disabled = f
     const normalized = draft.trim().toLowerCase();
     const exact = options.find((option) => [optionLabel(option), option?.name, option?.countryCode, option?.clKey]
       .some((candidate) => String(candidate || '').trim().toLowerCase() === normalized));
-    if (!exact) {
+    const selected = exact || matches[0];
+    if (!selected) {
       setInvalid(Boolean(normalized));
       return;
     }
     setInvalid(false);
-    onCommit(exact);
+    onCommit(selected);
     setOpen(false);
   };
   return (
@@ -33,7 +34,7 @@ function Picker({ id, label, value, onCommit, options, placeholder, disabled = f
       {open && matches.length > 0 ? <div className="absolute top-full z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-popover py-1 shadow-lg">
         {matches.map((option) => <button type="button" key={`${optionValue(option)}:${optionLabel(option)}`} onMouseDown={(event) => { event.preventDefault(); setInvalid(false); onCommit(option); setOpen(false); }} className="block w-full px-3 py-2 text-left text-xs hover:bg-muted">{optionLabel(option)}</button>)}
       </div> : null}
-      {invalid ? <p className="mt-1 text-[11px] text-destructive">Select an exact Salesforce option.</p> : null}
+      {invalid ? <p className="mt-1 text-[11px] text-destructive">No Salesforce suggestion matches.</p> : null}
     </div>
   );
 }
@@ -47,8 +48,9 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const selectedMonthLabel = filters.selectedMonths.length === 12 ? 'All months' : filters.selectedMonths.map((month) => MONTHS.find((item) => item.value === month)?.label).join(', ');
-  const exactPortOptions = useMemo(() => portOptions.filter((option) => option?.kind === 'port'), [portOptions]);
-  const countryOptions = useMemo(() => portOptions.filter((option) => option?.kind === 'country'), [portOptions]);
+  const companyGroupOptions = useMemo(() => filters.counterpartyMode === 'buyer'
+    ? [...companyOptions, ...groupOptions]
+    : companyOptions, [companyOptions, filters.counterpartyMode, groupOptions]);
   const hasFilters = filters.disputeOnly || filters.company || filters.group || filters.port || filters.country || filters.datePreset !== 'this_month';
   const set = (patch) => onChange({ ...filters, ...patch });
   const setPreset = (datePreset) => { setShowCustom(datePreset === 'custom'); set({ datePreset }); };
@@ -72,12 +74,14 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
         <div className="flex flex-wrap gap-1">{MONTHS.map((month) => <button type="button" key={month.value} onClick={() => set({ datePreset: 'custom', selectedMonths: filters.selectedMonths.includes(month.value) ? (filters.selectedMonths.length > 1 ? filters.selectedMonths.filter((value) => value !== month.value) : filters.selectedMonths) : [...filters.selectedMonths, month.value] })} className={`rounded border px-2 py-1 text-xs ${filters.selectedMonths.includes(month.value) ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground'}`}>{month.label}</button>)}</div>
       </div> : null}
 
-      <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-5 xl:items-start">
+      <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-3 xl:items-start">
         <div className="flex rounded-md border border-border p-0.5"><button type="button" onClick={() => set({ counterpartyMode: 'buyer', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'buyer' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Buyer</button><button type="button" onClick={() => set({ counterpartyMode: 'supplier', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'supplier' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Supplier</button></div>
-        <Picker id="dashboard-company" label="Exact company" value={filters.company} onCommit={(option) => set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyOptions} placeholder={`Exact ${filters.counterpartyMode} company`} />
-        {filters.counterpartyMode === 'buyer' ? <Picker id="dashboard-group" label="Exact buyer group" value={filters.group} onCommit={(option) => set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })} options={groupOptions} placeholder="Exact buyer GROUP" /> : <div className="hidden xl:block" />}
-        <Picker id="dashboard-port" label="Exact port" value={filters.port} onCommit={(option) => set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option) })} options={exactPortOptions} placeholder="Exact port" />
-        <Picker id="dashboard-country" label="Exact country" value={filters.country} onCommit={(option) => set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option) })} options={countryOptions} placeholder="Exact country" />
+        <Picker id="dashboard-counterparty" label="Company or GROUP" value={filters.group || filters.company} onCommit={(option) => option?.kind === 'group'
+          ? set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })
+          : set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyGroupOptions} placeholder={filters.counterpartyMode === 'buyer' ? 'Company or GROUP' : 'Supplier company'} />
+        <Picker id="dashboard-location" label="Port or country" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
+          ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '' })
+          : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or country" />
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5" aria-live="polite">

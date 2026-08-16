@@ -214,7 +214,7 @@ test('keeps currencies separate and does not publish a cross-currency Gross Prof
   assert.ok(result.warnings.some((warning) => warning.includes('does not net currencies')));
 });
 
-test('uses live BDN quantities before the STEM delivery date and matches STAR FLAME QLIK profit', () => {
+test('preserves the pre-redesign parent-delivery quantity rule for STAR FLAME', () => {
   const starStem = stem(STEM_A, {
     Name: 'HK2627258T - STAR FLAME - HONG KONG',
     Delivery_Date__c: null,
@@ -246,9 +246,9 @@ test('uses live BDN quantities before the STEM delivery date and matches STAR FL
     }],
   }), { today: '2026-08-16' });
 
-  assert.equal(result.stems.rows[0].grossProfit, 5_608.5);
+  assert.equal(result.stems.rows[0].grossProfit, -18_553);
   assert.equal(result.stems.rows[0].currency, 'USD');
-  assert.equal(result.stems.rows[0].volumeMt, 898);
+  assert.equal(result.stems.rows[0].volumeMt, 875);
 });
 
 test('supplier role includes only the exact Account ID and its direct volume', () => {

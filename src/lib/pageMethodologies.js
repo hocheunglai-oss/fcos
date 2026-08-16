@@ -143,19 +143,19 @@ export const DASHBOARD_METHODOLOGY = {
   sections: [
     {
       title: 'Record period',
-      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. Company and port filters retain exact Salesforce Account and Port identifiers; supplier scope includes both line-item and extra-cost suppliers. Country and dispute filters narrow the same authoritative result set.',
+      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. The combined Company or GROUP and Port or country keyword searches display friendly suggestions while retaining exact Salesforce Account and Port identifiers or canonical country values. Supplier scope includes both line-item and extra-cost suppliers.',
     },
     {
       title: 'Currency-safe financial calculations',
-      body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. After delivery, turnover uses the buyer invoiced total; before delivery, it uses eligible line-item and extra-cost selling values. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions.',
+      body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. The pre-redesign Dashboard rule is preserved: until the parent STEM has an actual Delivery Date, financial prices and commissions use ordered quantity or the ordered-range midpoint; after delivery they use the delivered totals and BDN quantity. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions. Monthly gross profit shows the percentage difference from the same calendar month one year earlier.',
     },
     {
       title: 'Volume statistics',
-      body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices.',
+      body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices. The monthly volume chart compares the complete current total with the same calendar month one year earlier.',
     },
     {
       title: 'Completeness and navigation',
-      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters. The STEMs tab is server-paginated and sorted. Accounts adds a searchable buyer Account Statement directory alongside period rankings, and both load only when needed.',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs tab is server-paginated and sorted. Accounts adds a searchable buyer Account Statement directory alongside period rankings, and both load only when needed. Top-10 rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
     },
     {
       title: 'Buyer-leg credit statements',

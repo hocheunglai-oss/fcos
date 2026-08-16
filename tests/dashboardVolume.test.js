@@ -120,7 +120,7 @@ test('converts both litre boundaries to MT before averaging a range', () => {
   assert.equal(dashboardVolumeLabel(volume), '0.85-1.7 MT');
 });
 
-test('uses a populated BDN quantity before the parent STEM delivery date is completed', () => {
+test('uses the ordered range until the parent STEM delivery date is completed', () => {
   const volume = dashboardLineItemVolume({
     Quantity__c: 50,
     Quantity_Max__c: 100,
@@ -128,8 +128,8 @@ test('uses a populated BDN quantity before the parent STEM delivery date is comp
     Is_Quantity_Range__c: true,
     UOM__c: 'MT',
   }, false, { lineItemUomField: 'UOM__c', productFamily: 'LSMGO' });
-  assert.equal(volume.quantity, 98);
-  assert.equal(volume.isRange, false);
+  assert.equal(volume.quantity, 75);
+  assert.equal(volume.isRange, true);
 });
 
 test('retains the existing MT fallback when Salesforce has no explicit UOM', () => {

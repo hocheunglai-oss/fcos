@@ -51,6 +51,61 @@ export function priorEquivalentDateWindows(dateWindows = []) {
   return [{ startDate: iso(previousStart), endDate: iso(previousEnd) }];
 }
 
+function shiftIsoDateYear(value, offset) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  if (!match) return null;
+  const year = Number(match[1]) + Number(offset || 0);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+}
+
+export function yearOverYearDateWindows(dateWindows = []) {
+  return (Array.isArray(dateWindows) ? dateWindows : []).flatMap((window) => {
+    const startDate = shiftIsoDateYear(window?.startDate || window?.start, -1);
+    const endDate = shiftIsoDateYear(window?.endDate || window?.end, -1);
+    return startDate && endDate ? [{ startDate, endDate }] : [];
+  });
+}
+
+function shiftMonthYear(value, offset) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value || ''));
+  return match ? `${Number(match[1]) + Number(offset || 0)}-${match[2]}` : null;
+}
+
+export function dashboardMonthlyYearOverYear(currentRows = [], priorYearRows = [], {
+  valueField = 'netPnl',
+  dimensions = ['currency'],
+} = {}) {
+  const dimensionNames = (Array.isArray(dimensions) ? dimensions : []).map(String);
+  const key = (row, month = row?.month) => [month, ...dimensionNames.map((field) => String(row?.[field] ?? ''))].join('\u001f');
+  const priorByCurrentMonth = new Map();
+  for (const row of priorYearRows || []) {
+    const alignedMonth = shiftMonthYear(row?.month, 1);
+    const value = Number(row?.[valueField]);
+    if (!alignedMonth || !Number.isFinite(value)) continue;
+    const alignedKey = key(row, alignedMonth);
+    priorByCurrentMonth.set(alignedKey, (priorByCurrentMonth.get(alignedKey) || 0) + value);
+  }
+  return (currentRows || []).flatMap((row) => {
+    const currentValue = Number(row?.[valueField]);
+    if (!/^\d{4}-\d{2}$/.test(String(row?.month || '')) || !Number.isFinite(currentValue)) return [];
+    const priorKey = key(row);
+    const hasPrior = priorByCurrentMonth.has(priorKey);
+    const priorValue = hasPrior ? priorByCurrentMonth.get(priorKey) : null;
+    const difference = hasPrior ? currentValue - priorValue : null;
+    return [{
+      month: row.month,
+      ...Object.fromEntries(dimensionNames.map((field) => [field, row?.[field] ?? null])),
+      currentValue,
+      priorValue,
+      difference,
+      differencePct: hasPrior && priorValue !== 0 ? (difference / Math.abs(priorValue)) * 100 : null,
+    }];
+  });
+}
+
 const DASHBOARD_CURSOR_FIELDS = new Set(['createdDate', 'deliveryDate', 'name']);
 
 export function encodeDashboardCursor(record, sort = {}) {
@@ -115,5 +170,59 @@ export function decisionDashboardSummary(rows = [], completeness = {}) {
   return {
     ...scope,
     financials: scope.complete ? dashboardFinancialBuckets(rows) : null,
+  };
+}
+
+export function dashboardMonthlyCounterpartySeries(rows = [], counterpartyMode = 'buyer', limit = 10) {
+  const mode = counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
+  const totals = new Map();
+  const monthly = new Map();
+  const identities = new Map();
+
+  for (const row of rows) {
+    const month = String(row?.deliveryDate || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    const currency = dashboardCurrency(row?.currency);
+    const entities = mode === 'supplier'
+      ? (row?.supplierAllocations || []).map((item) => ({
+          accountId: item?.id || null,
+          name: String(item?.name || '').trim(),
+          grossProfit: item?.netPnl,
+        }))
+      : row?.account
+        ? [{ accountId: row.account.id || null, name: String(row.account.name || '').trim(), grossProfit: row.netPnl }]
+        : [];
+    for (const entity of entities) {
+      if (!entity.name || !Number.isFinite(Number(entity.grossProfit))) continue;
+      const identityKey = `${currency}\u001f${entity.accountId || ''}\u001f${entity.name}\u001f${mode}`;
+      identities.set(identityKey, { accountId: entity.accountId, name: entity.name, currency, role: mode });
+      totals.set(identityKey, (totals.get(identityKey) || 0) + Number(entity.grossProfit));
+      const monthlyKey = `${month}\u001e${identityKey}`;
+      monthly.set(monthlyKey, (monthly.get(monthlyKey) || 0) + Number(entity.grossProfit));
+    }
+  }
+
+  const selected = [...totals.entries()]
+    .sort((left, right) => right[1] - left[1] || identities.get(left[0]).name.localeCompare(identities.get(right[0]).name))
+    .slice(0, Math.max(1, Math.min(Number(limit) || 10, 10)));
+  const series = selected.map(([identityKey, grossProfit], index) => ({
+    ...identities.get(identityKey),
+    identityKey,
+    seriesKey: `counterparty:${index}`,
+    grossProfit,
+  }));
+  const seriesByIdentity = new Map(series.map((item) => [item.identityKey, item.seriesKey]));
+  const points = [...monthly.entries()].flatMap(([key, grossProfit]) => {
+    const separator = key.indexOf('\u001e');
+    const month = key.slice(0, separator);
+    const identityKey = key.slice(separator + 1);
+    const seriesKey = seriesByIdentity.get(identityKey);
+    return seriesKey ? [{ month, seriesKey, grossProfit }] : [];
+  }).sort((left, right) => left.month.localeCompare(right.month) || left.seriesKey.localeCompare(right.seriesKey));
+
+  return {
+    counterpartyMode: mode,
+    series: series.map(({ identityKey, ...item }) => item),
+    points,
   };
 }
