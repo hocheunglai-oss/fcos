@@ -8481,7 +8481,7 @@ async function decisionDashboardInternalAccountIdentity(body = {}, req = null, a
   const cached = await cachedSalesforceValue({
     namespace: 'decision-dashboard-internal-accounts',
     ttlSeconds: 10 * 60,
-    payload: { group: INTEROFFICE_EXCLUDED_BUYER_GROUP },
+    payload: { group: INTEROFFICE_EXCLUDED_BUYER_GROUP, resolverVersion: 2 },
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:reference'],
     body,
     req,
