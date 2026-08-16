@@ -89,4 +89,7 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.doesNotMatch(loader, /LIMIT 3000/);
   assert.match(loader, /limit: pageOnly \? pageSize \+ 1 : null/);
   assert.match(loader, /SELECT COUNT\(Id\) total FROM stem__c/);
+  assert.match(loader, /decisionDashboardBuyerBrokerCommissionField\(buyerBrokerDescribe\.fields/);
+  assert.match(loader, /buyerBrokerCommissionField\s*\?\s*decisionDashboardRowsForStemIds/);
+  assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
 });

@@ -7988,6 +7988,17 @@ function decisionDashboardCancelled(stem) {
   return /cancel/i.test(String(stem.Status__c || stem.Status || ''));
 }
 
+function decisionDashboardBuyerBrokerCommissionField(fields = []) {
+  const names = new Set(fields.map((field) => field.name));
+  return [
+    'Commission_Lumpsum__c',
+    'Buyers_Brokers_Commission_Lumpsum__c',
+    'Buyer_Broker_Commission_Lumpsum__c',
+    'Lumpsum_Commission__c',
+    'Commission_Amount__c',
+  ].find((name) => names.has(name)) || null;
+}
+
 async function decisionDashboardQueryAll(soql) {
   // sfQuery follows Salesforce nextRecordsUrl pages.  Do not introduce a
   // presentation-sized limit here: summary correctness must not depend on it.
@@ -8063,15 +8074,17 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   } catch (error) {
     throw appError(error.message, 400, 'DASHBOARD_FILTER_INVALID');
   }
-  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe] = await Promise.all([
+  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Buyer_Broker__c', forceRefresh: force }).catch(() => ({ fields: [] })),
   ]);
   const stemFields = new Set((stemDescribe.fields || []).map((field) => field.name));
   const lineFields = new Set((lineItemDescribe.fields || []).map((field) => field.name));
   const extraFields = new Set((extraCostDescribe.fields || []).map((field) => field.name));
+  const buyerBrokerCommissionField = decisionDashboardBuyerBrokerCommissionField(buyerBrokerDescribe.fields || []);
   const accountField = stemFields.has('Account__c') ? 'Account__c' : stemFields.has('AccountId') ? 'AccountId' : null;
   const portField = stemFields.has('Port__c') ? 'Port__c' : null;
   const dateWhere = Array.isArray(body.dateWindows) && body.dateWindows.length
@@ -8202,7 +8215,9 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const [lineItems, extraCosts, buyerBrokers] = stemIds.length ? await Promise.all([
     decisionDashboardRowsForStemIds('STEM_Line_Item__c', [...new Set(lineSelect)], stemIds),
     decisionDashboardRowsForStemIds('STEM_Extra_Cost__c', [...new Set(extraSelect)], stemIds),
-    decisionDashboardRowsForStemIds('STEM_Buyer_Broker__c', ['STEM__c', 'Commission_Lumpsum__c'], stemIds),
+    buyerBrokerCommissionField
+      ? decisionDashboardRowsForStemIds('STEM_Buyer_Broker__c', ['STEM__c', buyerBrokerCommissionField], stemIds)
+      : Promise.resolve([]),
   ]) : [[], [], []];
   const salesforceCompletedAt = Date.now();
   const lineByStem = new Map();
@@ -8210,7 +8225,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const buyerBrokerByStem = new Map();
   for (const item of lineItems) if (!item.Cancelled__c) lineByStem.set(item.STEM__c, [...(lineByStem.get(item.STEM__c) || []), item]);
   for (const item of extraCosts) if (!item.Cancelled__c) extraByStem.set(item.STEM__c, [...(extraByStem.get(item.STEM__c) || []), item]);
-  for (const item of buyerBrokers) buyerBrokerByStem.set(item.STEM__c, (buyerBrokerByStem.get(item.STEM__c) || 0) + decisionDashboardNumber(item.Commission_Lumpsum__c));
+  for (const item of buyerBrokers) buyerBrokerByStem.set(item.STEM__c, (buyerBrokerByStem.get(item.STEM__c) || 0) + decisionDashboardNumber(item[buyerBrokerCommissionField]));
   let uomWarningCount = 0;
   const rows = pageStems.map((stem) => {
     const delivered = Boolean(stem.Delivery_Date__c);
