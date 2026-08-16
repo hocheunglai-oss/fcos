@@ -24,15 +24,14 @@ test('mobile summary uses the same aligned supplier/product child contract', () 
   assert.match(component, /onAccountClick\(\{ accountId: account\.id, name: label, role: 'supplier' \}\)/);
 });
 
-test('P&L table remains on its existing aggregate projection', () => {
-  assert.match(component, /const pnlRows = useMemo\(\(\) => rows\.map\(pnlRow\)/);
-  assert.match(component, /if \(view === 'pnl'\) return <TableShell title="Filtered STEMs P&L"/);
-  assert.match(component, /<PnlTable records=\{pnlRows\}/);
+test('Dashboard STEMs no longer exposes the P&L table view', () => {
+  assert.doesNotMatch(component, /P&amp;L table|Filtered STEMs P&L|<PnlTable/);
+  assert.match(component, /<TableShell title="STEMs"/);
 });
 
 test('STEM API loads charge names, builds paired rows, and uses the versioned cache', () => {
   assert.match(api, /extraProductLookup/);
   assert.match(api, /dashboardSupplierProductRows\(\{/);
   assert.match(api, /supplierProductRows,/);
-  assert.match(api, /namespace: handler === 'stems' \? 'decision-dashboard-v2-stems'/);
+  assert.match(api, /namespace: handler === 'stems' \? 'decision-dashboard-v3-stems'/);
 });

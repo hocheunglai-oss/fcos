@@ -47,9 +47,8 @@ test.describe('Dashboard', () => {
     await expect(page.getByRole('columnheader', { name: 'Supplier' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Product / extra cost · quantity' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: /Delivery \/ expected date/i })).toBeVisible();
-    await page.getByRole('button', { name: 'P&L table', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Filtered STEMs P&L' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Wide view', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'P&L table', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Filtered STEMs P&L' })).toHaveCount(0);
 
     await page.getByRole('tab', { name: 'Accounts', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toHaveAttribute('data-state', 'active');

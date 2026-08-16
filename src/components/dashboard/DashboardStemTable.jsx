@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Columns3, List, Loader2, Maximize2, Minimize2, Search, Table2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Columns3, Loader2, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import TableShell from '@/components/common/TableShell';
-import PnlTable from '@/components/dashboard/PnlTable';
 
 const DEFAULT_COLUMNS = ['stem', 'deliveryDate', 'vessel', 'buyer', 'supplier', 'productQuantity', 'port', 'turnover', 'grossProfit', 'dispute'];
 const COLUMN_LABELS = {
@@ -113,40 +112,14 @@ function renderValue(row, column, onAccountClick) {
   return value == null || value === '' ? '—' : String(value);
 }
 
-function pnlRow(row) {
-  const actualDelivery = row.deliveryDateSource === 'delivery' ? row.deliveryDate : row.Delivery_Date__c || null;
-  const expectedDelivery = row.deliveryDateSource === 'expected' ? row.deliveryDate : row.Expected_Delivery_Date__c || null;
-  const products = productQuantities(row);
-  return {
-    Id: row.id ?? row.Id,
-    Name: row.name ?? row.Name,
-    CreatedDate: row.createdDate ?? row.CreatedDate,
-    Delivery_Date__c: actualDelivery,
-    Expected_Delivery_Date__c: expectedDelivery,
-    Buyer_Name__c: row.account?.name ?? row.buyerName ?? row.Buyer_Name__c,
-    _Buyer_Account: row.account ? { accountId: row.account.id, name: row.account.name } : row._Buyer_Account,
-    _Supplier_Names: row.supplierNames?.join(', ') ?? row._Supplier_Names,
-    _Supplier_Accounts: (row.supplierAccounts || []).map((account) => ({ accountId: account.id, name: account.name })),
-    _Product_Quantity_List: products,
-    _Product_Quantities: products.map((item) => [item.productName, item.quantityLabel].filter(Boolean).join(' ')).join(', '),
-    Total_Invoice_Amount__c: row.buyer ?? row.Total_Invoice_Amount__c,
-    Total_Invoiced_Amount_From_Suppliers__c: row.supplier ?? row.Total_Invoiced_Amount_From_Suppliers__c,
-    __netPnlCalc: row.netPnl ?? row.grossProfit ?? row.__netPnlCalc,
-  };
-}
-
 function Pagination({ loading, hasPrevious, hasNext, page, onPrevious, onNext }) {
   return <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2"><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasPrevious} onClick={onPrevious}><ChevronLeft className="h-3.5 w-3.5" />Previous</Button><span className="text-xs text-muted-foreground">Page {page}</span><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasNext} onClick={onNext}>Next<ChevronRight className="h-3.5 w-3.5" /></Button></div>;
 }
 
-export default function DashboardStemTable({ result, loading, search = '', onSearch, onPrevious, onNext, onSortChange, onStemClick, onAccountClick, counterpartyMode = 'buyer', onWideChange }) {
+export default function DashboardStemTable({ result, loading, search = '', onSearch, onPrevious, onNext, onSortChange, onStemClick, onAccountClick }) {
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS);
   const [searchDraft, setSearchDraft] = useState(search);
-  const [view, setView] = useState('summary');
-  const [wide, setWide] = useState(false);
   useEffect(() => { setSearchDraft(search); }, [search]);
-  useEffect(() => { onWideChange?.(view === 'pnl' && wide); }, [onWideChange, view, wide]);
-  useEffect(() => () => onWideChange?.(false), [onWideChange]);
   const rows = result?.rows || result?.records || result?.stems || [];
   const page = Number(result?.page ?? result?.pagination?.page ?? 1);
   const pageSize = Number(result?.pageSize ?? result?.pagination?.pageSize ?? 50);
@@ -154,7 +127,6 @@ export default function DashboardStemTable({ result, loading, search = '', onSea
   const hasNext = Boolean(result?.nextCursor ?? result?.pagination?.nextCursor ?? result?.hasNext);
   const hasPrevious = Boolean(result?.previousCursor ?? result?.pagination?.previousCursor ?? page > 1);
   const displayColumns = useMemo(() => DEFAULT_COLUMNS.filter((column) => visibleColumns.includes(column)), [visibleColumns]);
-  const pnlRows = useMemo(() => rows.map(pnlRow), [rows]);
   const sort = result?.sort || {};
   const toggleColumn = (column) => setVisibleColumns((current) => current.includes(column) ? (current.length === 1 ? current : current.filter((value) => value !== column)) : [...current, column]);
   const applySort = (column) => {
@@ -163,9 +135,7 @@ export default function DashboardStemTable({ result, loading, search = '', onSea
     onSortChange?.({ field, direction: sort.field === field && sort.direction === 'asc' ? 'desc' : 'asc' });
   };
   const meta = total ? `${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} · Server paginated` : 'No matching STEMs';
-  const actions = <><form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search</span></Button></form><div className="flex rounded-md border border-border p-0.5"><button type="button" onClick={() => setView('summary')} className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${view === 'summary' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}><List className="h-3.5 w-3.5" />Summary</button><button type="button" onClick={() => setView('pnl')} className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${view === 'pnl' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}><Table2 className="h-3.5 w-3.5" />P&amp;L table</button></div>{view === 'summary' ? <Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="h-8 text-xs"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover> : <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setWide((value) => !value)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button>}</>;
-
-  if (view === 'pnl') return <TableShell title="Filtered STEMs P&L" meta={meta} actions={actions} className="flex h-[calc(100vh-10rem)] min-h-[560px] flex-col" bodyClassName="min-h-0 flex-1 p-2"><PnlTable records={pnlRows} counterpartyMode={counterpartyMode} showAllCounterparties scrollClassName="h-full min-h-0" onStemClick={(id) => onStemClick?.({ id })} onAccountClick={onAccountClick} /><Pagination loading={loading} hasPrevious={hasPrevious} hasNext={hasNext} page={page} onPrevious={onPrevious} onNext={onNext} /></TableShell>;
+  const actions = <><form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="h-8 text-xs"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover></>;
 
   return <TableShell title="STEMs" meta={meta} bodyClassName="p-0" actions={actions}>
     <div className="divide-y divide-border md:hidden">{rows.map((row, index) => {

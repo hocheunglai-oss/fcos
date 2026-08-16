@@ -9,7 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { dashboardCurrency, dashboardMonthlyCounterpartySeries, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
@@ -8323,22 +8323,26 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       const amounts = { sell: extraSellAmount(item, delivered), buy: extraBuyAmount(item, delivered) };
       return {
         sell: total.sell + amounts.sell,
-        buy: total.buy + amounts.buy,
+        uninvoicedBuy: total.uninvoicedBuy + (item.Supplier_Invoice__c ? 0 : amounts.buy),
         invoicedBuy: total.invoicedBuy + (item.Supplier_Invoice__c ? amounts.buy : 0),
-        sellOnly: total.sellOnly + (amounts.buy === 0 && amounts.sell > 0 ? amounts.sell : 0),
+        sellOnlyUninvoiced: total.sellOnlyUninvoiced + (!item.Supplier_Invoice__c && amounts.buy === 0 && amounts.sell > 0 ? amounts.sell : 0),
       };
-    }, { sell: 0, buy: 0, invoicedBuy: 0, sellOnly: 0 });
+    }, { sell: 0, uninvoicedBuy: 0, invoicedBuy: 0, sellOnlyUninvoiced: 0 });
     const calculatedBuyer = lineTotals.sell + extraTotals.sell;
     const buyer = !delivered && calculatedBuyer > 0 ? calculatedBuyer : decisionDashboardNullable(stem.Total_Invoice_Amount__c);
-    const invoicedSupplier = decisionDashboardNumber(stem.Total_Invoiced_Amount_From_Suppliers__c);
-    const supplierBase = invoicedSupplier + (lineTotals.hasSupplierInvoice ? lineTotals.uninvoicedBuy : lineTotals.buy);
-    const rawSupplier = supplierBase + extraTotals.buy;
     const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
       ? decisionDashboardNumber(stem.QLIK_STEM_Line_Item_Total_Cost__c) + decisionDashboardNumber(stem.QLIK_Costs_Total_Cost__c)
       : null;
-    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-    const unmatchedSellOnly = lineTotals.hasSupplierInvoice ? Math.max(0, extraTotals.sellOnly - extraTotals.invoicedBuy) : 0;
-    const supplier = unmatchedSellOnly > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnly + 0.05 ? qlikSupplierCost : rawSupplier;
+    const supplier = decisionDashboardSupplierAmount({
+      invoicedSupplierAmount: stem.Total_Invoiced_Amount_From_Suppliers__c,
+      lineBuyAmount: lineTotals.buy,
+      uninvoicedLineBuyAmount: lineTotals.uninvoicedBuy,
+      hasSupplierInvoice: lineTotals.hasSupplierInvoice,
+      uninvoicedExtraBuyAmount: extraTotals.uninvoicedBuy,
+      invoicedExtraBuyAmount: extraTotals.invoicedBuy,
+      sellOnlyUninvoicedExtraSellAmount: extraTotals.sellOnlyUninvoiced,
+      qlikSupplierCost,
+    });
     // Costs_Total__c participates in the supplier calculation only in the
     // legacy source when represented by a child extra cost.  Do not subtract
     // it again from P&L.
@@ -8682,7 +8686,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
-    namespace: handler === 'stems' ? 'decision-dashboard-v2-stems' : `decision-dashboard-${handler}`,
+    namespace: handler === 'stems' ? 'decision-dashboard-v3-stems' : `decision-dashboard-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

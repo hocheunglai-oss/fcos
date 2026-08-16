@@ -1,5 +1,5 @@
 import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
-import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { SALESFORCE_CORPORATE_CURRENCY, decisionDashboardSupplierAmount } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
@@ -765,20 +765,28 @@ function buildStemFinancialRow(stem, context) {
   const lineBuy = activeLines.reduce((sum, item) => sum + lineBuyAmount(item, stemHasDelivery), 0);
   const extraSell = activeExtraCosts.reduce((sum, item) => sum + extraSellAmount(item, stemHasDelivery), 0);
   const extraBuy = activeExtraCosts.reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0);
+  const uninvoicedExtraBuy = activeExtraCosts.filter((item) => !item.Supplier_Invoice__c).reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0);
+  const invoicedExtraBuy = activeExtraCosts.filter((item) => item.Supplier_Invoice__c).reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0);
+  const sellOnlyUninvoicedExtra = activeExtraCosts.filter((item) => !item.Supplier_Invoice__c && Math.abs(extraBuyAmount(item, stemHasDelivery)) <= ZERO_TOLERANCE).reduce((sum, item) => sum + extraSellAmount(item, stemHasDelivery), 0);
   const salesforceBuyerAmount = number(stem.Total_Invoice_Amount__c);
   const estimatedBuyerAmount = lineSell + extraSell;
   const buyer = !stemHasDelivery && estimatedBuyerAmount > 0 ? estimatedBuyerAmount : salesforceBuyerAmount ?? (estimatedBuyerAmount > 0 ? estimatedBuyerAmount : null);
   const invoicedSupplier = number(stem.Total_Invoiced_Amount_From_Suppliers__c) ?? 0;
   const hasSupplierInvoice = activeLines.some((item) => item.Supplier_Invoice__c);
   const uninvoicedLineBuy = activeLines.filter((item) => !item.Supplier_Invoice__c).reduce((sum, item) => sum + lineBuyAmount(item, stemHasDelivery), 0);
-  const supplierBase = invoicedSupplier + (hasSupplierInvoice ? uninvoicedLineBuy : lineBuy);
-  const rawSupplier = supplierBase + extraBuy;
-  const unmatchedSellOnlyExtra = hasSupplierInvoice ? Math.max(0, activeExtraCosts.filter((item) => item.Supplier_Invoice__c && extraBuyAmount(item, stemHasDelivery) <= ZERO_TOLERANCE).reduce((sum, item) => sum + extraSellAmount(item, stemHasDelivery), 0) - activeExtraCosts.filter((item) => item.Supplier_Invoice__c).reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0)) : 0;
   const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
     ? valueOrZero(stem.QLIK_STEM_Line_Item_Total_Cost__c) + valueOrZero(stem.QLIK_Costs_Total_Cost__c)
     : null;
-  const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-  const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
+  const supplier = decisionDashboardSupplierAmount({
+    invoicedSupplierAmount: invoicedSupplier,
+    lineBuyAmount: lineBuy,
+    uninvoicedLineBuyAmount: uninvoicedLineBuy,
+    hasSupplierInvoice,
+    uninvoicedExtraBuyAmount: uninvoicedExtraBuy,
+    invoicedExtraBuyAmount: invoicedExtraBuy,
+    sellOnlyUninvoicedExtraSellAmount: sellOnlyUninvoicedExtra,
+    qlikSupplierCost,
+  });
   const brokerCommissions = activeLines.reduce((sum, item) => {
     return sum + buyerBrokerCommission(item, stemHasDelivery) + supplierBrokerCommission(item, stemHasDelivery);
   }, 0) + buyerBrokers.reduce((sum, item) => sum + valueOrZero(item._Commission_Amount), 0);

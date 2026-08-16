@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dashboardFilterPayload, normalizeDashboardFilters, presetDashboardPeriod } from '../src/lib/dashboardFilters.js';
+import { dashboardFilterPayload, dashboardSuggestionMatches, normalizeDashboardFilters, presetDashboardPeriod } from '../src/lib/dashboardFilters.js';
 
 test('decision dashboard filter payload uses exact account identifiers and never text matching for a buyer', () => {
   const payload = dashboardFilterPayload(normalizeDashboardFilters({
@@ -35,4 +35,17 @@ test('date presets produce a bounded custom date window', () => {
   const period = presetDashboardPeriod('this_quarter', new Date('2026-08-16T00:00:00Z'));
   assert.deepEqual(period, { selectedYears: [2026], selectedMonths: [7, 8, 9] });
   assert.deepEqual(dashboardFilterPayload(period).dateWindows, [{ startDate: '2026-07-01', endDate: '2026-07-31' }, { startDate: '2026-08-01', endDate: '2026-08-31' }, { startDate: '2026-09-01', endDate: '2026-09-30' }]);
+});
+
+test('combined pickers retain GROUP and country results when ordinary matches fill the limit', () => {
+  const companies = Array.from({ length: 12 }, (_, index) => ({ kind: 'account', id: `company-${index}`, label: `Hong Company ${index}` }));
+  const companyMatches = dashboardSuggestionMatches([...companies, { kind: 'group', id: 'group-1', label: 'GROUP Hong' }], 'Hong', 10);
+  assert.equal(companyMatches.length, 10);
+  assert.ok(companyMatches.some((option) => option.kind === 'account'));
+  assert.ok(companyMatches.some((option) => option.kind === 'group'));
+
+  const ports = Array.from({ length: 12 }, (_, index) => ({ kind: 'port', id: `port-${index}`, label: `Hong Port ${index}` }));
+  const locationMatches = dashboardSuggestionMatches([...ports, { kind: 'country', value: 'country:Hong Kong', label: 'Country · Hong Kong' }], 'Hong', 10);
+  assert.ok(locationMatches.some((option) => option.kind === 'port'));
+  assert.ok(locationMatches.some((option) => option.kind === 'country'));
 });

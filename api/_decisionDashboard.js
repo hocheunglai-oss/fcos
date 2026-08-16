@@ -57,7 +57,7 @@ export function dashboardSupplierProductRows({ lineItems = [], extraCosts = [] }
   const productSupplierIds = new Set(activeLines.map((item) => item.supplierAccount?.id).filter(Boolean));
   const visibleExtraCosts = (Array.isArray(extraCosts) ? extraCosts : [])
     .filter((item) => item?.cancelled !== true)
-    .filter((item) => !item?.supplierAccountId || !productSupplierIds.has(item.supplierAccountId))
+    .filter((item) => item?.supplierAccountId && !productSupplierIds.has(item.supplierAccountId))
     .map((item) => ({
       sourceType: 'extra_cost',
       sourceId: item?.sourceId || null,
@@ -71,6 +71,32 @@ export function dashboardSupplierProductRows({ lineItems = [], extraCosts = [] }
     }))
     .sort(dashboardChildRowOrder);
   return [...activeLines, ...visibleExtraCosts].map(({ createdDate, ...item }) => item);
+}
+
+export function decisionDashboardSupplierAmount({
+  invoicedSupplierAmount = 0,
+  lineBuyAmount = 0,
+  uninvoicedLineBuyAmount = 0,
+  hasSupplierInvoice = false,
+  uninvoicedExtraBuyAmount = 0,
+  invoicedExtraBuyAmount = 0,
+  sellOnlyUninvoicedExtraSellAmount = 0,
+  qlikSupplierCost = null,
+} = {}) {
+  const uninvoicedExtra = finite(uninvoicedExtraBuyAmount);
+  const supplierBase = finite(invoicedSupplierAmount)
+    + (hasSupplierInvoice ? finite(uninvoicedLineBuyAmount) : finite(lineBuyAmount));
+  const rawSupplier = supplierBase + uninvoicedExtra;
+  const unmatchedSellOnlyExtra = hasSupplierInvoice
+    ? Math.max(0, finite(sellOnlyUninvoicedExtraSellAmount) - finite(invoicedExtraBuyAmount))
+    : 0;
+  const qlik = qlikSupplierCost == null ? null : finite(qlikSupplierCost);
+  const supplierOverstatement = qlik == null ? 0 : rawSupplier - qlik;
+  return unmatchedSellOnlyExtra > 0
+    && supplierOverstatement > 0
+    && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05
+    ? qlik
+    : rawSupplier;
 }
 
 export function priorEquivalentDateWindows(dateWindows = []) {

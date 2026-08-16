@@ -251,6 +251,27 @@ test('preserves the pre-redesign parent-delivery quantity rule for STAR FLAME', 
   assert.equal(result.stems.rows[0].volumeMt, 875);
 });
 
+test('does not double count invoiced extra costs already included in the supplier invoice total', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    stems: [stem(STEM_A, {
+      Name: 'HK2627193T',
+      Total_Invoice_Amount__c: 511_525.38,
+      Total_Invoiced_Amount_From_Suppliers__c: 511_190.37,
+      QLIK_STEM_Line_Item_Total_Cost__c: 510_548.38,
+      QLIK_Costs_Total_Cost__c: 641.99,
+    })],
+    lineItems: [line('a02000000000030AAA', STEM_A, SUPPLIER_A, 670.011, 510_883.39, 510_548.38)],
+    extraCosts: [{
+      Id: 'a03000000000030AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A,
+      Supplier__r: { Name: 'Same Supplier Name' }, Quantity__c: 1,
+      Quantity_Delivered_Per_BDN__c: 1, Line_Total__c: 641.99, Line_Total_Buy__c: 641.99,
+      Supplier_Invoice__c: 'a04000000000030AAA', Cancelled__c: false,
+    }],
+  }), { today: '2026-08-16' });
+
+  assert.ok(Math.abs(result.stems.rows[0].grossProfit - 335.01) < 0.000001);
+});
+
 test('supplier role includes only the exact Account ID and its direct volume', () => {
   const supplierData = dataset({
     identity: { accountId: SUPPLIER_A, name: 'Same Supplier Name', clKey: 'SUP-A', inactive: false, recordType: 'Supplier' },

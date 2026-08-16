@@ -56,6 +56,47 @@ export const DASHBOARD_DATE_PRESETS = [
   { value: 'custom', label: 'Custom' },
 ];
 
+const suggestionLabel = (option) => String(option?.label ?? option?.name ?? option?.value ?? option ?? '');
+const suggestionFields = (option) => [
+  suggestionLabel(option),
+  option?.name,
+  option?.countryCode,
+  option?.clKey,
+].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+
+export function dashboardSuggestionMatches(options = [], draft = '', limit = 10) {
+  const query = String(draft || '').trim().toLowerCase();
+  const ranked = (Array.isArray(options) ? options : [])
+    .map((option, index) => {
+      const fields = suggestionFields(option);
+      const label = suggestionLabel(option).toLowerCase();
+      if (query && !fields.some((value) => value.includes(query))) return null;
+      const rank = !query ? 3
+        : fields.some((value) => value === query) ? 0
+          : label.startsWith(query) ? 1
+            : fields.some((value) => value.startsWith(query)) ? 2
+              : 3;
+      return { option, index, rank, label };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index);
+  const size = Math.max(1, Math.min(Number(limit) || 10, 50));
+  const selected = ranked.slice(0, size);
+  const isHighlighted = (entry) => ['group', 'country'].includes(entry.option?.kind);
+  const firstHighlighted = ranked.find(isHighlighted);
+  const firstRegular = ranked.find((entry) => !isHighlighted(entry));
+
+  // A long list of company/port matches must not crowd the corresponding
+  // GROUP/country result out of the combined picker.
+  if (selected.length === size && firstHighlighted && firstRegular) {
+    if (!selected.some(isHighlighted)) selected[selected.length - 1] = firstHighlighted;
+    if (!selected.some((entry) => !isHighlighted(entry))) selected[selected.length - 1] = firstRegular;
+  }
+  return [...new Map(selected
+    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index)
+    .map((entry) => [`${entry.option?.kind || ''}:${entry.option?.id || entry.option?.value || entry.label}`, entry.option])).values()];
+}
+
 function previousMonth(year, month) {
   return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
 }

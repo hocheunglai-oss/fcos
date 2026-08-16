@@ -12,6 +12,7 @@ import {
   encodeDashboardCursor,
   normalizeDecisionDashboardFilters,
   priorEquivalentDateWindows,
+  decisionDashboardSupplierAmount,
   yearOverYearDateWindows,
 } from '../api/_decisionDashboard.js';
 
@@ -36,21 +37,44 @@ test('keeps product suppliers aligned and shows only extra-cost-only suppliers',
     ['line_item', 'line-b', 'supplier-a', 'LSMGO', '50 MT'],
     ['line_item', 'line-c', 'supplier-b', 'HSFO', '75 MT'],
     ['extra_cost', 'extra-visible', 'supplier-d', 'Agency Fee', null],
-    ['extra_cost', 'extra-description', null, 'Customs handling', null],
   ]);
 });
 
 test('falls back to the Salesforce extra-cost record number only after product and description', () => {
   assert.deepEqual(dashboardSupplierProductRows({
-    extraCosts: [{ sourceId: 'extra-1', recordName: 'E-24678' }],
+    extraCosts: [{ sourceId: 'extra-1', supplierAccountId: 'supplier-a', supplierName: 'Supplier A', recordName: 'E-24678' }],
   })[0], {
     sourceType: 'extra_cost',
     sourceId: 'extra-1',
-    supplierAccount: null,
+    supplierAccount: { id: 'supplier-a', name: 'Supplier A' },
     itemName: 'E-24678',
     quantityLabel: null,
     unitOfMeasure: null,
   });
+});
+
+test('omits supplier-less extra costs from the summary while keeping line items visible', () => {
+  assert.deepEqual(dashboardSupplierProductRows({
+    lineItems: [{ sourceId: 'line-1', itemName: 'VLSFO' }],
+    extraCosts: [
+      { sourceId: 'transport', chargeProductName: 'Transport (Unknown)' },
+      { sourceId: 'launch', chargeProductName: 'LAUNCH BOAT FEE' },
+    ],
+  }).map((row) => row.sourceId), ['line-1']);
+});
+
+test('supplier amount does not double count invoiced extra costs already in the Salesforce total', () => {
+  const supplier = decisionDashboardSupplierAmount({
+    invoicedSupplierAmount: 511_190.37,
+    lineBuyAmount: 510_548.38,
+    uninvoicedLineBuyAmount: 0,
+    hasSupplierInvoice: true,
+    uninvoicedExtraBuyAmount: 0,
+    invoicedExtraBuyAmount: 641.99,
+    qlikSupplierCost: 511_190.37,
+  });
+  assert.equal(supplier, 511_190.37);
+  assert.ok(Math.abs(511_525.38 - supplier - 335.01) < 0.000001);
 });
 
 test('single-currency Salesforce records use the confirmed USD corporate currency', () => {

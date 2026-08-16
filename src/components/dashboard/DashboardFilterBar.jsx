@@ -3,7 +3,7 @@ import { Filter, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { MONTHS, DASHBOARD_DATE_PRESETS } from '@/lib/dashboardFilters';
+import { MONTHS, DASHBOARD_DATE_PRESETS, dashboardSuggestionMatches } from '@/lib/dashboardFilters';
 
 function optionLabel(option) { return String(option?.label ?? option?.name ?? option?.value ?? option ?? ''); }
 function optionValue(option) { return String(option?.value ?? option?.canonicalValue ?? option?.id ?? optionLabel(option)); }
@@ -13,7 +13,7 @@ function Picker({ id, label, value, onCommit, options, placeholder, disabled = f
   const [draft, setDraft] = useState(value);
   const [invalid, setInvalid] = useState(false);
   useEffect(() => { setDraft(value); setInvalid(false); }, [value]);
-  const matches = useMemo(() => options.filter((option) => !draft || optionLabel(option).toLowerCase().includes(draft.toLowerCase())).slice(0, 10), [options, draft]);
+  const matches = useMemo(() => dashboardSuggestionMatches(options, draft, 10), [options, draft]);
   const commitDraft = () => {
     const normalized = draft.trim().toLowerCase();
     const exact = options.find((option) => [optionLabel(option), option?.name, option?.countryCode, option?.clKey]
@@ -32,7 +32,11 @@ function Picker({ id, label, value, onCommit, options, placeholder, disabled = f
       <Label htmlFor={id} className="sr-only">{label}</Label>
       <Input id={id} value={draft} onChange={(event) => { setDraft(event.target.value); setInvalid(false); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => window.setTimeout(() => setOpen(false), 120)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitDraft(); } if (event.key === 'Escape') { setDraft(value); setInvalid(false); setOpen(false); } }} placeholder={placeholder} disabled={disabled} aria-invalid={invalid} className="h-8 w-full min-w-40 text-xs sm:w-48" autoComplete="off" />
       {open && matches.length > 0 ? <div className="absolute top-full z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-popover py-1 shadow-lg">
-        {matches.map((option) => <button type="button" key={`${optionValue(option)}:${optionLabel(option)}`} onMouseDown={(event) => { event.preventDefault(); setInvalid(false); onCommit(option); setOpen(false); }} className="block w-full px-3 py-2 text-left text-xs hover:bg-muted">{optionLabel(option)}</button>)}
+        {matches.map((option) => {
+          const highlighted = option?.kind === 'group' || option?.kind === 'country';
+          const typeLabel = option?.kind === 'group' ? 'GROUP' : option?.kind === 'country' ? 'Country' : option?.kind === 'port' ? 'Port' : 'Company';
+          return <button type="button" key={`${option?.kind || ''}:${optionValue(option)}:${optionLabel(option)}`} onMouseDown={(event) => { event.preventDefault(); setInvalid(false); onCommit(option); setOpen(false); }} className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs ${highlighted ? 'bg-amber-100 text-amber-950 hover:bg-amber-200' : 'hover:bg-muted'}`}><span className="min-w-0 truncate">{optionLabel(option)}</span><span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${highlighted ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-border bg-background text-muted-foreground'}`}>{typeLabel}</span></button>;
+        })}
       </div> : null}
       {invalid ? <p className="mt-1 text-[11px] text-destructive">No Salesforce suggestion matches.</p> : null}
     </div>
