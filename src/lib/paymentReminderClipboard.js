@@ -2,8 +2,10 @@ function copyCell(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim() || '-';
 }
 
-export function paymentReminderCopyLine({ stemName, buyerName, amount, dueDate, status } = {}) {
-  return [stemName, buyerName, amount, `Due Date ${copyCell(dueDate)}`, status]
+export function paymentReminderCopyLine({ stemName, buyerName, amount, dueDate, dueDateLabel = 'Due Date', status } = {}) {
+  const cells = [stemName, buyerName, amount, `${copyCell(dueDateLabel)} ${copyCell(dueDate)}`];
+  if (String(status ?? '').trim()) cells.push(status);
+  return cells
     .map(copyCell)
     .join(' - ')
     .toUpperCase();

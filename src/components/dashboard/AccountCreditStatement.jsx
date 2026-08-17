@@ -212,8 +212,9 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
       stemName: row.stemName,
       buyerName: row.accountName || result.identity.name,
       amount: row.hasBuyerInvoice ? reminderCopyMoney(row.buyerInvoiceAmount, row.currency || currency) : 'Invoice Not Issued',
-      dueDate: row.hasBuyerInvoice ? displayDate(row.buyerInvoiceDueDate) : 'Not Issued',
-      status: row.hasBuyerInvoice ? reminderCopyStatus(row.buyerInvoiceDaysUntilDue) : 'Buyer Invoice Not Issued',
+      dueDate: row.hasBuyerInvoice ? displayDate(row.buyerInvoiceDueDate) : displayDate(row.expectedBuyerInvoiceDueDate),
+      dueDateLabel: row.hasBuyerInvoice ? 'Due Date' : 'Expected Due Date',
+      status: row.hasBuyerInvoice ? reminderCopyStatus(row.buyerInvoiceDaysUntilDue) : null,
     })), totalLines);
     try {
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(copyText);

@@ -645,6 +645,8 @@ export function buildAccountCreditStatement({
     const buyerInvoiceAmountComplete = buyerInvoiceScopeComplete && buyerInvoices.length > 0 && buyerInvoiceAmounts.every((amount) => amount != null);
     const buyerInvoiceDueDates = [...new Set(buyerInvoices.map((invoice) => dateOnly(invoice.Invoice_Due_Date__c)).filter(Boolean))].sort();
     const buyerInvoiceDueDate = buyerInvoiceDueDates[0] || null;
+    const expectedDueCandidate = releaseCandidate(stem, cashflowsByStem[stem.Id] || [], dateOnly(today));
+    const expectedBuyerInvoiceDueDate = expectedDueCandidate.date || expectedDueCandidate.missedDate || null;
     return {
       stemId: stem.Id,
       stemName: stem.Name || stem.Id,
@@ -670,6 +672,7 @@ export function buildAccountCreditStatement({
       buyerInvoiceAmount: buyerInvoiceAmountComplete ? currencyAmount(buyerInvoiceAmounts.reduce((sum, amount) => sum + amount, 0)) : null,
       buyerInvoiceAmountComplete,
       buyerInvoiceDueDate,
+      expectedBuyerInvoiceDueDate,
       buyerInvoiceDaysUntilDue: daysBetweenDates(today, buyerInvoiceDueDate),
       buyerInvoiceLastModifiedAt: buyerInvoices.map((invoice) => invoice.LastModifiedDate).filter(Boolean).sort().at(-1) || null,
     };

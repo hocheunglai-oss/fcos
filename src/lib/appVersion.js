@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.170',
+    releasedAt: '2026-08-17',
+    title: 'Clarify expected invoice due dates',
+    changes: [
+      'Keeps the Salesforce-backed expected due date in copied Statement Evidence for STEMs whose buyer invoice is Not Issued.',
+      'Labels that date as Expected Due Date and omits overdue or due-soon status until an actual buyer invoice exists.',
+    ],
+  },
+  {
     version: '2.0.169',
     releasedAt: '2026-08-17',
     title: 'Make Account Insight exports decision-ready',

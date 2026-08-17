@@ -417,6 +417,15 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   assert.equal(incomplete.rows[0].hasBuyerInvoice, true);
   assert.equal(incomplete.rows[0].buyerInvoiceAmountComplete, false);
   assert.equal(incomplete.rows[0].buyerInvoiceAmount, null);
+
+  const notIssued = buildAccountCreditStatement({
+    today: '2026-08-17', account: { Id: accountId, Name: 'BUYER A' }, statementStems: [stem],
+    cashflowsByStem: { [stem.Id]: [{ Id: 'a03000000000051AAA', Invoice_Due_Date__c: '2026-09-22' }] },
+  });
+  assert.equal(notIssued.rows[0].hasBuyerInvoice, false);
+  assert.equal(notIssued.rows[0].buyerInvoiceDueDate, null);
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceDueDate, '2026-09-22');
+  assert.equal(notIssued.rows[0].buyerInvoiceDaysUntilDue, null);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
@@ -512,7 +521,8 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /Total issued invoice amount/);
   assert.match(statement, /Not Issued/);
   assert.match(statement, /bg-red-50\/70/);
-  assert.match(statement, /Buyer Invoice Not Issued/);
+  assert.match(statement, /Expected Due Date/);
+  assert.match(statement, /expectedBuyerInvoiceDueDate/);
   assert.match(statement, /paymentReminderCopyText/);
   assert.match(statement, /!row\.hasBuyerInvoice \|\| row\.buyerInvoiceAmountComplete/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
