@@ -157,6 +157,103 @@ function effectiveDateCondition(windows, prefix = '') {
   return windows.map((window) => `(${field('Delivery_Date__c')} >= ${window.start} AND ${field('Delivery_Date__c')} <= ${window.end}) OR (${field('Delivery_Date__c')} = null AND ${field('Expected_Delivery_Date__c')} >= ${window.start} AND ${field('Expected_Delivery_Date__c')} <= ${window.end})`).map((condition) => `(${condition})`).join(' OR ');
 }
 
+function activeDispute(stem = {}) {
+  const status = text(stem.Dispute_Status__c).toLowerCase();
+  return stem.Dispute__c === true || Boolean(status && status !== 'no dispute' && status !== 'no disputes');
+}
+
+function normalizedDashboardScope(scope = {}) {
+  const filters = scope?.filters || {};
+  return {
+    mode: scope?.mode === 'account_wide' ? 'account_wide' : 'dashboard',
+    portIds: unique(Array.isArray(filters.portIds) ? filters.portIds : []).filter((id) => SALESFORCE_ID.test(id)),
+    countryCodes: unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : []).map((value) => value.toUpperCase()),
+    disputeOnly: scope?.disputeOnly === true,
+    labels: {
+      company: text(scope?.labels?.company),
+      group: text(scope?.labels?.group),
+      port: text(scope?.labels?.port),
+      country: text(scope?.labels?.country),
+    },
+  };
+}
+
+function applyDashboardScope(dataset, requestedScope) {
+  const scope = normalizedDashboardScope(requestedScope);
+  if (scope.mode === 'account_wide') return { dataset, scope };
+  const portKeys = new Set(scope.portIds.map(idKey));
+  const countries = new Set(scope.countryCodes.map((value) => value.toUpperCase()));
+  const matches = (stem) => {
+    if (portKeys.size && !portKeys.has(idKey(stem.Port__c))) return false;
+    if (countries.size && !countries.has(text(stem.Port__r?.Country__c).toUpperCase())) return false;
+    if (scope.disputeOnly && !activeDispute(stem)) return false;
+    return true;
+  };
+  const stems = dataset.stems.filter(matches);
+  const previousStems = dataset.previousStems.filter(matches);
+  const currentIds = new Set(stems.map((stem) => stem.Id));
+  const previousIds = new Set(previousStems.map((stem) => stem.Id));
+  const keepCurrent = (row) => currentIds.has(row.STEM__c);
+  const keepPrevious = (row) => previousIds.has(row.STEM__c);
+  return {
+    scope,
+    dataset: {
+      ...dataset,
+      stems,
+      matchedStemCount: stems.length,
+      previousStems,
+      lineItems: dataset.lineItems.filter(keepCurrent),
+      previousLineItems: dataset.previousLineItems.filter(keepPrevious),
+      extraCosts: dataset.extraCosts.filter(keepCurrent),
+      previousExtraCosts: dataset.previousExtraCosts.filter(keepPrevious),
+      buyerBrokers: dataset.buyerBrokers.filter(keepCurrent),
+      previousBuyerBrokers: dataset.previousBuyerBrokers.filter(keepPrevious),
+      buyerPaymentsByStem: Object.fromEntries(Object.entries(dataset.buyerPaymentsByStem || {}).filter(([stemId]) => currentIds.has(stemId))),
+      supplierInvoices: dataset.supplierInvoices.filter((row) => currentIds.has(row.stemId)),
+    },
+  };
+}
+
+function projectDashboardAccountInsight(result, requestedSection) {
+  const section = ['overview', 'trading', 'payments', 'risk', 'stems', 'children', 'all'].includes(requestedSection) ? requestedSection : 'all';
+  if (section === 'all') return result;
+  const common = {
+    identity: result.identity,
+    availableRoles: result.availableRoles,
+    activeRole: result.activeRole,
+    period: result.period,
+    scope: result.scope,
+    relationship: result.relationship,
+    dashboardScope: result.dashboardScope,
+    warnings: result.warnings,
+    meta: result.meta,
+    section,
+  };
+  if (section === 'overview') {
+    const keys = ['stemCount', 'deliveredStems', 'totalVolumeMt', 'turnover', 'grossProfit', 'grossMarginPct', 'moneyByCurrency', 'firstStemDate', 'lastStemDate', 'relationshipAgeDays', 'daysSinceLastActivity', 'activeMonths', 'inactiveMonths', 'averageStemsPerActiveMonth', 'peakPeriod', 'disputedStems', 'disputeRatePct', 'cancelledStems', 'cancellationRatePct', 'hedgedStems', 'hedgeCoveragePct', 'bestStem', 'worstStem', 'topProducts'];
+    const kpis = Object.fromEntries(keys.filter((key) => Object.hasOwn(result.kpis || {}, key)).map((key) => [key, result.kpis[key]]));
+    return {
+      ...common,
+      kpis,
+      comparisons: result.comparisons,
+      payments: {
+        buyer: result.payments?.buyer ? { byCurrency: result.payments.buyer.byCurrency } : null,
+        supplier: result.payments?.supplier ? { byCurrency: result.payments.supplier.byCurrency } : null,
+      },
+      risk: {
+        dispute: result.risk?.dispute ? { open: result.risk.dispute.open } : {},
+        exceptions: result.risk?.exceptions ? { count: result.risk.exceptions.count } : {},
+        specialTerms: result.risk?.specialTerms ? { count: result.risk.specialTerms.count } : {},
+      },
+    };
+  }
+  if (section === 'trading') return { ...common, kpis: result.kpis };
+  if (section === 'payments') return { ...common, payments: result.payments, collection: result.collection };
+  if (section === 'risk') return { ...common, risk: result.risk };
+  if (section === 'stems') return { ...common, stems: result.stems };
+  return { ...common, children: result.children };
+}
+
 function combineConditions(conditions) {
   return conditions.filter(Boolean).map((condition) => `(${condition})`).join(' AND ');
 }
@@ -827,9 +924,10 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
     force,
     loader: () => loadSalesforceDataset({ accountId, role, period, interoffice, force }),
   });
-  const live = await loadWorkflowState(accessContext.client, cached.value, interoffice, force);
+  const scoped = applyDashboardScope(cached.value, body.dashboardScope);
+  const live = await loadWorkflowState(accessContext.client, scoped.dataset, interoffice, force);
   const dataset = {
-    ...cached.value,
+    ...scoped.dataset,
     scopeAccounts: live.scopeAccounts,
     accountManagers: live.managers.managers,
     accountNote: live.managers.note,
@@ -849,13 +947,16 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
     },
   };
   const result = buildDashboardAccountInsight(dataset, { cursor: body.cursor, pageSize: body.pageSize, today: hongKongToday() });
+  result.dashboardScope = scoped.scope;
   if (!includeExportRows) delete result.exportRows;
-  return result;
+  return includeExportRows ? result : projectDashboardAccountInsight(result, body.section);
 }
 
 export const dashboardAccountInsightServiceInternals = {
   insightPeriod,
   effectiveDateCondition,
+  applyDashboardScope,
+  projectDashboardAccountInsight,
   buyerBrokerQueryConfiguration,
   extraCostSelectFields,
 };

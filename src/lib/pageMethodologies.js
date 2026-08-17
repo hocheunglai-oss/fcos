@@ -155,7 +155,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Completeness and navigation',
-      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs tab is server-paginated and sorted. Accounts adds a searchable buyer Account Statement directory alongside period rankings, and both load only when needed. Top-10 rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy. Account Insight PDF exports use figure-rich KPI and table sections, omit sections without meaningful live data, and rank the displayed STEMs by absolute gross-profit impact instead of reproducing dashboard charts without readable values.',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs tab is server-paginated and sorted. Accounts combines buyer Credit Statements and period buyer/supplier rankings in one searchable table. Account Insight has a linkable Account route, loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. Top-10 rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy. Calculation explanations stay hidden until requested and link summary values to ranked STEM evidence.',
     },
     {
       title: 'Buyer-leg credit statements',
@@ -167,7 +167,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Caching and refresh',
-      body: 'The shell, summary, first STEM page, analytics, and account rankings load independently. Normal loads may reuse short targeted caches while preserving visible results during refresh. Refresh bypasses Dashboard browser and server caches only; consequential workflows continue to revalidate live Salesforce data separately.',
+      body: 'The shell, summary, first STEM page, analytics, and Account directory load independently. Overview and Accounts reuse the same analytics response rather than rebuilding it. Named saved views retain filter specifications in the current browser only and never store Salesforce financial records. Normal loads may reuse short targeted caches while preserving visible results during refresh. Refresh bypasses Dashboard browser and server caches only; consequential workflows continue to revalidate live Salesforce data separately.',
     },
   ],
 };

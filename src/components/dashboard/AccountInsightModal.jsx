@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { AlertTriangle, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Calculator, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
@@ -124,15 +124,18 @@ function Comparison({ value, suffix = '%' }) {
   return <span className={parsed >= 0 ? 'text-emerald-700' : 'text-red-700'}>{parsed >= 0 ? '+' : ''}{parsed.toFixed(1)}{suffix}</span>;
 }
 
-export default function AccountInsightModal({ account, open, onClose, selectedYears, selectedMonths }) {
-  const [periodMode, setPeriodMode] = useState('dashboard_period');
+export default function AccountInsightModal({ account, open, onClose, selectedYears, selectedMonths, dashboardScope = null, initialPeriodMode = 'dashboard_period', onViewChange }) {
+  const safeInitialPeriod = PERIODS.some((period) => period.value === initialPeriodMode) ? initialPeriodMode : 'dashboard_period';
+  const [periodMode, setPeriodMode] = useState(safeInitialPeriod);
   const [role, setRole] = useState(account?.role || 'buyer');
-  const [accountInsight, setData] = useState(null);
+  const [sections, setSections] = useState({});
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [accountWide, setAccountWide] = useState(dashboardScope?.mode === 'account_wide');
+  const [showCalculation, setShowCalculation] = useState(false);
   const [readySelection, setReadySelection] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const requestSequence = useRef(0);
@@ -145,9 +148,10 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     selectedYears,
     selectedMonths,
     pageSize: 50,
-  }), [account?.accountId, periodMode, role, selectedMonths, selectedYears]);
+    dashboardScope: accountWide ? { mode: 'account_wide' } : dashboardScope,
+  }), [account?.accountId, accountWide, dashboardScope, periodMode, role, selectedMonths, selectedYears]);
 
-  const load = async ({ force = false, cursor = null, append = false } = {}) => {
+  const load = async ({ force = false, cursor = null, append = false, section = activeTab } = {}) => {
     if (!account?.accountId) return;
     const requestId = ++requestSequence.current;
     setLoading(true);
@@ -158,13 +162,13 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
         setMeta(response.meta);
         if (response.data?.error) setError(response.data.error);
         else if (append) {
-          setData((current) => ({ ...response.data, stems: { ...response.data.stems, rows: [...(current?.stems?.rows || []), ...(response.data.stems?.rows || [])] } }));
+          setSections((current) => ({ ...current, [section]: { ...response.data, stems: { ...response.data.stems, rows: [...(current?.[section]?.stems?.rows || []), ...(response.data.stems?.rows || [])] } } }));
         } else {
           setError(null);
-          setData(response.data);
+          setSections((current) => ({ ...current, [section]: response.data }));
         }
       };
-      const response = await appClient.functions.invoke('dashboardAccountInsight', { ...payload, cursor }, append
+      const response = await appClient.functions.invoke('dashboardAccountInsight', { ...payload, cursor, section }, append
         ? { cache: true, cacheTtlMs: 180_000, force }
         : { ...navigationCacheOptions('operational', applyResponse), force });
       applyResponse(response);
@@ -178,20 +182,23 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
 
   useEffect(() => {
     if (!open || !account?.accountId) return;
-    setPeriodMode('dashboard_period');
+    if (readySelection === selectionKey) return;
+    setPeriodMode(safeInitialPeriod);
     requestSequence.current += 1;
     setRole(account.role || 'buyer');
     setActiveTab(account.initialTab === 'credit' ? 'credit' : 'overview');
-    setData(null);
+    setSections({});
+    setAccountWide(dashboardScope?.mode === 'account_wide');
+    setShowCalculation(false);
     setError(null);
     setSelectedStemId(null);
     setReadySelection(selectionKey);
-  }, [account?.accountId, account?.initialTab, account?.role, open, selectionKey]);
+  }, [account?.accountId, account?.initialTab, account?.role, dashboardScope?.mode, open, readySelection, safeInitialPeriod, selectionKey]);
 
   useEffect(() => {
     if (!open || !account?.accountId || readySelection !== selectionKey) return;
-    if (activeTab !== 'credit' && !accountInsight) load();
-  }, [accountInsight, activeTab, open, payload, readySelection, selectionKey]);
+    if (activeTab !== 'credit' && !sections[activeTab]) load({ section: activeTab });
+  }, [activeTab, open, payload, readySelection, sections, selectionKey]);
 
   const download = async (formatType) => {
     setExporting(formatType);
@@ -213,7 +220,8 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     }
   };
 
-  const data = accountInsight || {
+  const accountInsight = sections[activeTab] || null;
+  const data = accountInsight || Object.values(sections)[0] || {
     activeRole: role,
     availableRoles: [role],
     identity: account || {},
@@ -258,24 +266,26 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
             <div className="flex flex-wrap items-center gap-2">
               {(data?.availableRoles || [role]).length > 1 ? (
                 <div className="flex rounded-md border border-border bg-muted/30 p-1">
-                  {data.availableRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setData(null); setRole(availableRole); if (availableRole === 'supplier') setActiveTab('overview'); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
+                  {data.availableRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setSections({}); setRole(availableRole); if (availableRole === 'supplier') setActiveTab('overview'); onViewChange?.({ role: availableRole, tab: availableRole === 'supplier' ? 'overview' : activeTab, periodMode, accountWide }); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
                 </div>
               ) : null}
-              {activeTab !== 'credit' ? <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button> : null}
+              {activeTab !== 'credit' ? <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true, section: activeTab })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button> : null}
               <Button type="button" variant="outline" size="sm" onClick={() => download('csv')} disabled={Boolean(exporting)}>{exporting === 'csv' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}CSV</Button>
               <Button type="button" size="sm" onClick={() => download('pdf')} disabled={Boolean(exporting)}>{exporting === 'pdf' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}PDF</Button>
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {PERIODS.map((period) => <button type="button" key={period.value} onClick={() => { if (period.value !== periodMode) { setData(null); setPeriodMode(period.value); } }} className={`rounded-md border px-3 py-1.5 text-xs font-semibold ${periodMode === period.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}>{period.label}</button>)}
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {PERIODS.map((period) => <button type="button" key={period.value} onClick={() => { if (period.value !== periodMode) { setSections({}); setPeriodMode(period.value); onViewChange?.({ role, tab: activeTab, periodMode: period.value, accountWide }); } }} className={`rounded-md border px-3 py-1.5 text-xs font-semibold ${periodMode === period.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}>{period.label}</button>)}
+            {dashboardScope ? <Button type="button" size="sm" variant={accountWide ? 'outline' : 'secondary'} aria-pressed={!accountWide} onClick={() => { const next = !accountWide; setSections({}); setAccountWide(next); onViewChange?.({ role, tab: activeTab, periodMode, accountWide: next }); }}>{accountWide ? 'Account-wide' : 'Dashboard scope'}</Button> : null}
           </div>
+          {dashboardScope && !accountWide ? <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"><span>Inherited filters:</span>{[dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly ? 'Disputed only' : null].filter(Boolean).map((label) => <span key={label} className="rounded-full border border-border bg-background px-2 py-0.5">{label}</span>)}{![dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly].some(Boolean) ? <span>period only</span> : null}</div> : null}
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto bg-muted/15">
           {error ? <div className="m-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
           {loading && !accountInsight && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
           {accountInsight || activeTab === 'credit' ? (
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-full">
+            <Tabs value={activeTab} onValueChange={(nextTab) => { setActiveTab(nextTab); onViewChange?.({ role, tab: nextTab, periodMode, accountWide }); }} className="min-h-full">
               <div className="sticky top-0 z-20 overflow-x-auto border-b border-border bg-background/95 px-5 py-2 backdrop-blur sm:px-6">
                 <TabsList className="h-10 w-max">
                   <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -302,6 +312,14 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                     <Kpi label="Gross Margin" value={formatPercent(kpis.grossMarginPct)} detail={comparison ? <Comparison value={comparison.grossMarginPointChange} suffix=" pts" /> : 'No comparison'} />
                     <Kpi label="Receivable / Payable" value={data.activeRole === 'supplier' ? currencyValue(supplierPayments?.byCurrency, 'outstandingPayable') : currencyValue(buyerPayments?.byCurrency, 'receivable')} />
                   </div>
+                  <Section title="Ranked evidence" description="The strongest operational signals behind this Account summary">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <button type="button" disabled={!kpis.worstStem?.stemId} onClick={() => setSelectedStemId(kpis.worstStem?.stemId)} className="rounded-md border border-red-200 bg-red-50/50 p-3 text-left disabled:opacity-60"><div className="text-[11px] font-semibold uppercase text-red-800">Lowest-profit STEM</div><div className="mt-1 font-semibold text-primary">{kpis.worstStem?.stemName || 'Unavailable'}</div><div className="mt-1 text-xs tabular-nums text-red-800">{formatMoney(kpis.worstStem?.grossProfit, kpis.worstStem?.currency || financialCurrency)}</div></button>
+                      <button type="button" disabled={!kpis.bestStem?.stemId} onClick={() => setSelectedStemId(kpis.bestStem?.stemId)} className="rounded-md border border-emerald-200 bg-emerald-50/50 p-3 text-left disabled:opacity-60"><div className="text-[11px] font-semibold uppercase text-emerald-800">Highest-profit STEM</div><div className="mt-1 font-semibold text-primary">{kpis.bestStem?.stemName || 'Unavailable'}</div><div className="mt-1 text-xs tabular-nums text-emerald-800">{formatMoney(kpis.bestStem?.grossProfit, kpis.bestStem?.currency || financialCurrency)}</div></button>
+                      <div className="rounded-md border border-border bg-background p-3"><div className="text-[11px] font-semibold uppercase text-muted-foreground">Top product</div><div className="mt-1 font-semibold">{kpis.topProducts?.[0]?.label || 'Unavailable'}</div><div className="mt-1 text-xs text-muted-foreground">{formatPercent(kpis.topProducts?.[0]?.percentage)} of activity</div></div>
+                      <div className="rounded-md border border-border bg-background p-3"><div className="text-[11px] font-semibold uppercase text-muted-foreground">Action signals</div><div className="mt-1 font-semibold">{formatNumber(dispute.open)} open disputes</div><div className="mt-1 text-xs text-muted-foreground">{formatNumber(data.risk?.exceptions?.count)} workflow exceptions</div></div>
+                    </div>
+                  </Section>
                   <div className="grid gap-5 lg:grid-cols-2">
                     <Section title="Relationship" description="Salesforce identity and FCOS ownership context">
                       <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
@@ -332,13 +350,11 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                       </div>
                     </Section>
                   </div>
-                  <Section title="Definitions" description="How the displayed figures are derived">
-                    <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-3">
-                      <p><strong className="text-foreground">Buyer and GROUP:</strong> complete STEM turnover, costs, commissions, volume and profit are attributed to the buyer.</p>
-                      <p><strong className="text-foreground">Supplier:</strong> direct revenue and cost are assigned first. Shared commissions and unassigned costs use revenue share, then cost share, then equal share.</p>
-                      <p><strong className="text-foreground">Volume:</strong> L, KL and CBM are converted to approximate MT for statistics only. These conversions never affect price comparisons.</p>
-                    </div>
-                  </Section>
+                  <div><Button type="button" size="sm" variant="outline" aria-expanded={showCalculation} onClick={() => setShowCalculation((visible) => !visible)}><Calculator className="mr-1.5 h-3.5 w-3.5" />{showCalculation ? 'Hide calculation' : 'Explain these figures'}</Button></div>
+                  {showCalculation ? <Section title="Calculation evidence" description="The displayed formula and its currency-separated inputs">
+                    <div className="grid gap-3 text-xs md:grid-cols-2 xl:grid-cols-3">{financialRows.map((row) => <div key={row.currency} className="rounded-md border border-border bg-background p-3"><div className="font-semibold">{row.currency}</div><div className="mt-1 tabular-nums">{formatMoney(row.turnover, row.currency)} − {formatMoney(row.supplierSpend, row.currency)} − {formatMoney(row.brokerCommissions, row.currency)} = <strong>{formatMoney(row.grossProfit, row.currency)}</strong></div><div className="mt-1 text-muted-foreground">Gross margin: {formatPercent(row.grossMarginPct)} · {formatNumber(kpis.stemCount)} STEMs</div></div>)}</div>
+                    <div className="mt-3 grid gap-3 text-xs text-muted-foreground md:grid-cols-3"><p><strong className="text-foreground">Buyer and GROUP:</strong> complete STEM turnover, costs, commissions, volume and profit are attributed to the buyer.</p><p><strong className="text-foreground">Supplier:</strong> direct revenue and cost are assigned first. Shared commissions and unassigned costs use revenue share, then cost share, then equal share.</p><p><strong className="text-foreground">Volume:</strong> L, KL and CBM are converted to approximate MT for statistics only. These conversions never affect price comparisons.</p></div>
+                  </Section> : null}
                 </TabsContent>
 
                 <TabsContent value="trading" className="mt-0 space-y-5">
@@ -406,7 +422,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                 </TabsContent>
 
                 <TabsContent value="stems" className="mt-0">
-                  <Section title="Underlying STEMs" description={`${formatNumber(data.stems?.rows?.length)} shown · ${formatNumber(data.stems?.total)} matched`} action={data.stems?.cursor ? <Button type="button" variant="outline" size="sm" onClick={() => load({ cursor: data.stems.cursor, append: true })} disabled={loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Load more</Button> : null}>
+                  <Section title="Underlying STEMs" description={`${formatNumber(data.stems?.rows?.length)} shown · ${formatNumber(data.stems?.total)} matched`} action={data.stems?.cursor ? <Button type="button" variant="outline" size="sm" onClick={() => load({ cursor: data.stems.cursor, append: true, section: 'stems' })} disabled={loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Load more</Button> : null}>
                     <div className="overflow-x-auto rounded-md border border-border"><table className="w-full min-w-[1000px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">STEM</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Products</th><th className="px-3 py-2 text-right">Volume</th><th className="px-3 py-2 text-right">Turnover</th><th className="px-3 py-2 text-right">Gross Profit</th><th className="px-3 py-2">Status</th></tr></thead><tbody>{data.stems?.rows?.map((row) => <tr key={row.stemId} className="border-t border-border"><td className="px-3 py-2 font-semibold"><button type="button" className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelectedStemId(row.stemId)}>{row.stemName}</button></td><td className="px-3 py-2">{formatDate(row.effectiveDate)}</td><td className="max-w-80 px-3 py-2"><div className="truncate" title={row.products?.map((item) => item.name).join(', ')}>{row.products?.map((item) => item.name).join(', ') || '—'}</div></td><td className="px-3 py-2 text-right">{formatNumber(row.volumeMt, 1)} MT</td><td className="px-3 py-2 text-right">{formatMoney(row.turnover, row.currency)}</td><td className={`px-3 py-2 text-right font-semibold ${number(row.grossProfit) < 0 ? 'text-red-700' : 'text-emerald-700'}`}>{formatMoney(row.grossProfit, row.currency)}</td><td className="px-3 py-2">{row.disputed ? <span className="rounded-sm bg-amber-100 px-2 py-1 text-xs text-amber-900">{row.disputeStatus || 'Disputed'}</span> : row.status}</td></tr>)}{!data.stems?.rows?.length ? <tr><td colSpan={7}><Empty /></td></tr> : null}</tbody></table></div>
                   </Section>
                 </TabsContent>
@@ -418,7 +434,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
         </div>
       </DialogContent>
     </Dialog>
-    <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} onUpdated={() => load({ force: true })} />
+    <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} onUpdated={() => load({ force: true, section: activeTab })} />
     </>
   );
 }

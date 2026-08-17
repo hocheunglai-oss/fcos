@@ -8672,6 +8672,22 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
   });
   const currentSummary = decisionDashboardSummary(current.rows.filter((row) => row.buyer != null), current.completeness);
   const priorSummary = decisionDashboardSummary(prior.rows.filter((row) => row.buyer != null), prior.completeness);
+  const attentionStem = (row, kind) => ({
+    kind,
+    stemId: row.id,
+    stemName: row.name,
+    accountId: row.account?.id || null,
+    accountName: row.account?.name || null,
+    currency: row.currency,
+    grossProfit: row.netPnl,
+    deliveryDate: row.deliveryDate,
+  });
+  const attention = {
+    lossMaking: current.rows.filter((row) => Number(row.netPnl) < 0).sort((left, right) => Number(left.netPnl) - Number(right.netPnl)).slice(0, 5).map((row) => attentionStem(row, 'loss')),
+    disputed: current.rows.filter((row) => row.dispute).sort((left, right) => String(right.deliveryDate || '').localeCompare(String(left.deliveryDate || ''))).slice(0, 5).map((row) => attentionStem(row, 'dispute')),
+    incomplete: current.completeness.complete !== true,
+    warnings: current.dataWarnings,
+  };
   return {
     ...currentSummary,
     ...decisionDashboardOverviewMetrics(current, body),
@@ -8700,6 +8716,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
     priorPeriod: { stemCount: prior.completeness.matchingCount },
     distributions: { status: distribution(current.rows, 'status'), type: distribution(current.rows, 'type') },
     rankings: { accountsByNetPnl: ranking(current.rows, 'account'), portsByNetPnl: ranking(current.rows, 'port'), suppliersByNetPnl: ranking(current.rows, 'supplier') },
+    attention,
     timing: current.timing,
     dataWarnings: current.dataWarnings,
   };
@@ -8712,10 +8729,10 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v6-stems'
+      ? 'decision-dashboard-v7-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v6-analytics'
-        : `decision-dashboard-v6-${handler}`,
+        ? 'decision-dashboard-v7-analytics'
+        : `decision-dashboard-v7-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

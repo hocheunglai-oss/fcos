@@ -47,6 +47,24 @@ export function formatSelectedMonths(selectedMonths) {
 }
 
 export const DASHBOARD_FILTER_STORAGE_KEY = 'fcos:dashboard-filter-v3';
+export const DASHBOARD_SAVED_VIEWS_STORAGE_KEY = 'fcos:dashboard-saved-views-v1';
+
+export function normalizeDashboardSavedViews(input) {
+  if (!Array.isArray(input)) return [];
+  const names = new Set();
+  return input.slice(0, 10).map((view, index) => {
+    const name = String(view?.name || '').trim().slice(0, 60);
+    const key = name.toLowerCase();
+    if (!name || names.has(key)) return null;
+    names.add(key);
+    return {
+      id: String(view?.id || `saved-${index + 1}`),
+      name,
+      filters: normalizeDashboardFilters(view?.filters || {}),
+      createdAt: String(view?.createdAt || ''),
+    };
+  }).filter(Boolean);
+}
 
 export const DASHBOARD_DATE_PRESETS = [
   { value: 'this_month', label: 'This month' },

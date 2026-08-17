@@ -12,6 +12,7 @@ import ModuleGateAny from '@/components/ModuleGateAny';
 import Layout from '@/components/Layout';
 
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
+const AccountInsight = lazy(() => import('@/pages/AccountInsight'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
 const BrokerWorkspace = lazy(() => import('@/pages/BrokerWorkspace'));
 const ReviewQueue = lazy(() => import('@/pages/ReviewQueue'));
@@ -96,6 +97,7 @@ const AuthenticatedApp = () => {
             <Route path="/fcos-improvements" element={<FcosImprovements />} />
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
+            <Route path="/accounts/:accountId" element={<ModuleGate moduleId="dashboard"><AccountInsight /></ModuleGate>} />
             <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
             <Route path="/review" element={<ModuleGate moduleId="review"><ReviewQueue /></ModuleGate>} />
