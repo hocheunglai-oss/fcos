@@ -921,6 +921,8 @@ export function buildDashboardAccountInsight(dataset, {
 } = {}) {
   const role = dataset.role;
   const accountKey = salesforceIdKey(dataset.identity.accountId);
+  const visibleScopeAccounts = dataset.scopeAccounts.filter((account) => !account.inactive);
+  const visibleScopeAccountKeys = new Set(visibleScopeAccounts.map((account) => salesforceIdKey(account.accountId)).filter(Boolean));
   const lineItemsByStem = mapRows(dataset.lineItems);
   const extraCostsByStem = mapRows(dataset.extraCosts);
   const buyerBrokersByStem = mapRows(dataset.buyerBrokers);
@@ -940,6 +942,8 @@ export function buildDashboardAccountInsight(dataset, {
   let rows = dataset.stems.map((stem) => buildStemFinancialRow(stem, context));
   if (role === 'supplier') {
     rows = rows.filter((row) => row.supplierAllocation || (lineItemsByStem.get(row.stemId) || []).some((item) => salesforceIdKey(item.Original_Supplier__c) === accountKey) || (extraCostsByStem.get(row.stemId) || []).some((item) => salesforceIdKey(dataset.schema.extraCostSupplierField ? item[dataset.schema.extraCostSupplierField] : null) === accountKey));
+  } else if (role === 'group') {
+    rows = rows.filter((row) => visibleScopeAccountKeys.has(salesforceIdKey(row.buyerAccountId)));
   }
   rows.sort((left, right) => String(right.effectiveDate || '').localeCompare(String(left.effectiveDate || '')) || String(right.stemName || '').localeCompare(String(left.stemName || '')));
   const previousRows = (dataset.previousStems || []).map((stem) => buildStemFinancialRow(stem, {
@@ -947,7 +951,7 @@ export function buildDashboardAccountInsight(dataset, {
     lineItemsByStem: mapRows(dataset.previousLineItems),
     extraCostsByStem: mapRows(dataset.previousExtraCosts),
     buyerBrokersByStem: mapRows(dataset.previousBuyerBrokers),
-  })).filter((row) => role !== 'supplier' || row.supplierAllocation);
+  })).filter((row) => role === 'supplier' ? row.supplierAllocation : role !== 'group' || visibleScopeAccountKeys.has(salesforceIdKey(row.buyerAccountId)));
   const summary = summarizeRows(rows, { today, allHistory: dataset.period.mode === 'all_history' });
   const previous = summarizeRows(previousRows, { today });
   const comparisonCurrencyCompatible = summary.moneyByCurrency.length === 1
@@ -968,7 +972,7 @@ export function buildDashboardAccountInsight(dataset, {
   const supplierPayments = role === 'supplier' ? supplierPaymentMetrics((dataset.supplierInvoices || []).filter((invoice) => activeStemIds.has(invoice.stemId)), today) : null;
   const collection = role === 'supplier' ? null : summarizeCollection(dataset.collectionByStem, activeRows, today);
   const dispute = summarizeDisputes(dataset.workflows, rows, dataset.identity.accountId, role, today);
-  const compensationAccountIds = role === 'group' ? dataset.scopeAccounts.map((account) => account.accountId) : [dataset.identity.accountId];
+  const compensationAccountIds = role === 'group' ? visibleScopeAccounts.map((account) => account.accountId) : [dataset.identity.accountId];
   const compensation = summarizeCompensation(dataset.compensation, compensationAccountIds, today);
   const cancelledChildRecords = rows.reduce((sum, row) => sum + row.cancelledLineCount + row.cancelledExtraCostCount, 0);
   const totalChildRecords = rows.reduce((sum, row) => sum + row.totalLineCount + row.totalExtraCostCount, 0);
@@ -996,7 +1000,7 @@ export function buildDashboardAccountInsight(dataset, {
   const offset = Math.max(0, Number(cursor) || 0);
   const limit = Math.max(10, Math.min(Number(pageSize) || 50, 100));
   const paginatedRows = enrichedRows.slice(offset, offset + limit);
-  const childSummaries = role === 'group' ? dataset.scopeAccounts.filter((account) => !account.root).map((account) => {
+  const childSummaries = role === 'group' ? visibleScopeAccounts.filter((account) => !account.root).map((account) => {
     const childRows = rows.filter((row) => salesforceIdKey(row.buyerAccountId) === salesforceIdKey(account.accountId));
     const childSummary = summarizeRows(childRows, { today });
     return {
@@ -1014,7 +1018,6 @@ export function buildDashboardAccountInsight(dataset, {
       lastActivityDate: childSummary.lastStemDate,
     };
   }).sort((left, right) => right.volumeMt - left.volumeMt || right.stemCount - left.stemCount || left.name.localeCompare(right.name)) : [];
-  const activeChildren = childSummaries.filter((row) => !row.inactive);
   const tradingChildren = childSummaries.filter((row) => row.stemCount > 0);
   const topTurnoverChild = [...childSummaries].sort((left, right) => valueOrZero(right.turnover) - valueOrZero(left.turnover))[0] || null;
   const missingFinancialUomCount = [...(dataset.lineItems || []), ...(dataset.extraCosts || [])].filter((item) => {
@@ -1042,17 +1045,17 @@ export function buildDashboardAccountInsight(dataset, {
     activeRole: role,
     period: dataset.period,
     scope: {
-      accountCount: dataset.scopeAccounts.length,
-      accounts: dataset.scopeAccounts,
-      includeInactiveHistory: role === 'group',
+      accountCount: visibleScopeAccounts.length,
+      accounts: visibleScopeAccounts,
+      includeInactiveHistory: false,
     },
     relationship: {
       accountManagers: dataset.accountManagers || [],
       accountNote: dataset.accountNote || null,
       managerCoverage: dataset.accountManagers?.length || 0,
       childCount: role === 'group' ? childSummaries.length : 0,
-      activeChildCount: role === 'group' ? activeChildren.length : 0,
-      inactiveChildCount: role === 'group' ? childSummaries.length - activeChildren.length : 0,
+      activeChildCount: role === 'group' ? childSummaries.length : 0,
+      inactiveChildCount: 0,
       tradingChildCount: role === 'group' ? tradingChildren.length : 0,
       topChildConcentrationPct: role === 'group' && summary.turnover ? percentage(topTurnoverChild?.turnover, summary.turnover) : null,
       childrenWithoutManagers: role === 'group' ? childSummaries.filter((row) => !row.managerCount).length : 0,

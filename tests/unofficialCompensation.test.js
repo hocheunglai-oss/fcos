@@ -70,6 +70,16 @@ test('incomplete and mismatched historical records stay visible as data issues',
   assert.match(result.accounts[0].issues.join(' '), /roll-up totals do not match/i);
 });
 
+test('inactive Accounts and their related compensation history stay hidden', () => {
+  const result = buildUnofficialCompensationWorkspace({
+    accounts: [{ ...account, Inactive_Suspended__c: true }],
+    claims: [{ Id: 'a011', Account__c: account.Id, Account__r: { ...account, Inactive_Suspended__c: true }, Amount__c: 50, CurrencyIsoCode: 'USD', Status__c: 'Opened' }],
+    recoveries: [],
+    today: '2026-08-01',
+  });
+  assert.equal(result.accounts.length, 0);
+});
+
 test('Unofficial Compensation is service-only, permissioned, navigable and dispute-linked', async () => {
   const [migration, server, service, page, layout, app, authModules, disputePage] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260801092222_unofficial_compensation_monitoring.sql', import.meta.url), 'utf8'),

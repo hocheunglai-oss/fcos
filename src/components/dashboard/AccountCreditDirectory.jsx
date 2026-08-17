@@ -18,7 +18,7 @@ function DirectoryTableRow({ account, onStatement }) {
       <tr className="border-t border-border">
         <td className="px-3 py-3">
           <div className="font-semibold">{account.name}</div>
-          <div className="text-xs text-muted-foreground">{account.clKey ? `CL Key ${account.clKey}` : 'CL Key not set'}{account.inactive ? ' · Inactive with history' : ''}</div>
+          <div className="text-xs text-muted-foreground">{account.clKey ? `CL Key ${account.clKey}` : 'CL Key not set'}</div>
         </td>
         <td className="px-3 py-3">{account.groupName || 'No GROUP ancestor'}</td>
         <td className="px-3 py-3 text-right tabular-nums">{account.openStemCount.toLocaleString()}</td>

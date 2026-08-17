@@ -340,7 +340,7 @@ export function dashboardMonthlyCounterpartySeries(rows = [], counterpartyMode =
           name: String(item?.name || '').trim(),
           grossProfit: item?.netPnl,
         }))
-      : row?.account
+      : row?.account?.id
         ? [{ accountId: row.account.id || null, name: String(row.account.name || '').trim(), grossProfit: row.netPnl }]
         : [];
     for (const entity of entities) {

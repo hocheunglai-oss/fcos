@@ -68,6 +68,21 @@ test('builds buyer, line supplier, and extra-cost supplier candidates', () => {
   assert.equal(findDisputeParty(registry, 'supplier', SUPPLIER_B)?.name, 'Supplier B');
 });
 
+test('inactive buyer and supplier Accounts never become dispute-party options', () => {
+  const inactiveLine = lineItem('a02000000000011AAA', SUPPLIER_A, 'Inactive Supplier', '30 days');
+  inactiveLine.Original_Supplier__r.Inactive_Suspended__c = true;
+  const inactiveExtra = extraCost('a03000000000003AAA', SUPPLIER_B, 'Inactive Extra Supplier', '45 days');
+  inactiveExtra.Supplier__r.Inactive_Suspended__c = true;
+  const registry = buildDisputePartyRegistry({
+    stem: { Id: STEM_ID, Account__c: BUYER_ID, Account__r: { Name: 'Inactive Buyer', Inactive_Suspended__c: true } },
+    lineItems: [inactiveLine],
+    extraCosts: [inactiveExtra],
+    extraCostSupplierField: 'Supplier__c',
+    extraCostSupplierRelationship: 'Supplier__r',
+  });
+  assert.equal(registry.candidates.length, 0);
+});
+
 test('includes cancelled supplier sources without changing their identity', () => {
   const registry = buildDisputePartyRegistry({
     lineItems: [lineItem('a02000000000002AAA', SUPPLIER_A, 'Supplier A', '30 days', { cancelled: true })],

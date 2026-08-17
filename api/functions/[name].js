@@ -3034,6 +3034,7 @@ async function currentEligibleAccountGroup(body = {}, { includeGroupChildren = t
       SELECT ${ACCOUNT_MANAGER_ACCOUNT_FIELDS.join(', ')}
       FROM Account
       WHERE ParentId IN (${parentIds})
+        AND Inactive_Suspended__c = false
       ORDER BY Name ASC, Id ASC
     `,
       { limit: 5000 },
@@ -5393,7 +5394,7 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
   }
   const mode = body.counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
   const cached = await cachedSalesforceValue({
-    namespace: 'dashboard-filter-options',
+    namespace: 'dashboard-filter-options-v2',
     ttlSeconds: 10 * 60,
     payload: { optionType, mode },
     tags: ['salesforce:dashboard', 'salesforce:reference'],
@@ -5441,9 +5442,10 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
         if (!accountFields.has('ParentId') || !stemFields.has('Account__c')) {
           throw appError('Dashboard GROUP filtering requires the Salesforce Account hierarchy and STEM buyer Account lookup.', 503, 'DASHBOARD_GROUP_SCHEMA', undefined, true);
         }
-        const accountSelect = ['Id', 'Name', 'ParentId', accountFields.has('Company_Code__c') ? 'Company_Code__c' : null, 'RecordType.Name'].filter(Boolean);
+        if (!accountFields.has('Inactive_Suspended__c')) throw appError('Dashboard Account filtering cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_ACCOUNT_STATUS_SCHEMA', undefined, true);
+        const accountSelect = ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c', accountFields.has('Company_Code__c') ? 'Company_Code__c' : null, 'RecordType.Name'].filter(Boolean);
         const [accounts, stems] = await Promise.all([
-          decisionDashboardQueryAll(`SELECT ${accountSelect.join(',')} FROM Account ORDER BY Name,Id`),
+          decisionDashboardQueryAll(`SELECT ${accountSelect.join(',')} FROM Account WHERE Inactive_Suspended__c = false ORDER BY Name,Id`),
           decisionDashboardQueryAll('SELECT Account__c FROM stem__c WHERE Account__c != null'),
         ]);
         const accountsById = new Map(accounts.map((account) => [account.Id, account]));
@@ -5484,6 +5486,7 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
       ]);
       const stemFields = fieldNameSetFrom(stemDescribe.fields || []);
       const accountFields = fieldNameSetFrom(accountDescribe.fields || []);
+      if (!accountFields.has('Inactive_Suspended__c')) throw appError('Dashboard Account filtering cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_ACCOUNT_STATUS_SCHEMA', undefined, true);
       if (mode === 'supplier') {
         const [lineDescribe, extraDescribe] = await Promise.all([
           salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }),
@@ -5500,8 +5503,10 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
             lineLookup.fieldName,
             `${lineLookup.relationshipName}.Name`,
             accountFields.has('Company_Code__c') ? `${lineLookup.relationshipName}.Company_Code__c` : null,
+            `${lineLookup.relationshipName}.Inactive_Suspended__c`,
           ].filter(Boolean).join(', ')} FROM STEM_Line_Item__c WHERE ${combineWhereConditions([
             `${lineLookup.fieldName} != null`,
+            `${lineLookup.relationshipName}.Inactive_Suspended__c = false`,
             lineFields.has('Cancelled__c') ? 'Cancelled__c = false' : '',
             scope,
           ])}`) : [],
@@ -5509,8 +5514,10 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
             extraLookup.fieldName,
             `${extraLookup.relationshipName}.Name`,
             accountFields.has('Company_Code__c') ? `${extraLookup.relationshipName}.Company_Code__c` : null,
+            `${extraLookup.relationshipName}.Inactive_Suspended__c`,
           ].filter(Boolean).join(', ')} FROM STEM_Extra_Cost__c WHERE ${combineWhereConditions([
             `${extraLookup.fieldName} != null`,
+            `${extraLookup.relationshipName}.Inactive_Suspended__c = false`,
             extraFields.has('Cancelled__c') ? 'Cancelled__c = false' : '',
             scope,
           ])}`) : [],
@@ -5539,9 +5546,10 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
         'Account__c',
         'Account__r.Name',
         accountFields.has('Company_Code__c') ? 'Account__r.Company_Code__c' : null,
+        'Account__r.Inactive_Suspended__c',
       ].filter(Boolean);
       const scope = await interofficeStemAccessCondition(accessContext, stemFields, accountFields);
-      const result = await sfQuery(`SELECT ${selected.join(',')} FROM stem__c${scope ? ` WHERE ${scope}` : ''}`, { clean: true, limit: Number.MAX_SAFE_INTEGER });
+      const result = await sfQuery(`SELECT ${selected.join(',')} FROM stem__c WHERE ${combineWhereConditions([scope, 'Account__r.Inactive_Suspended__c = false'])}`, { clean: true, limit: Number.MAX_SAFE_INTEGER });
       const optionsById = new Map();
       for (const row of result.records || []) {
         if (!row.Account__c || optionsById.has(row.Account__c)) continue;
@@ -8124,16 +8132,19 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   } catch (error) {
     throw appError(error.message, 400, 'DASHBOARD_FILTER_INVALID');
   }
-  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe] = await Promise.all([
+  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe, accountDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
     salesforceObjectFields({ objectName: 'STEM_Buyer_Broker__c', forceRefresh: force }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Account', forceRefresh: force }),
   ]);
   const stemFields = new Set((stemDescribe.fields || []).map((field) => field.name));
   const lineFields = new Set((lineItemDescribe.fields || []).map((field) => field.name));
   const extraFields = new Set((extraCostDescribe.fields || []).map((field) => field.name));
+  const accountFields = new Set((accountDescribe.fields || []).map((field) => field.name));
+  if (!accountFields.has('Inactive_Suspended__c')) throw appError('Dashboard cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_ACCOUNT_STATUS_SCHEMA', undefined, true);
   const buyerBrokerCommissionField = decisionDashboardBuyerBrokerCommissionField(buyerBrokerDescribe.fields || []);
   const accountField = stemFields.has('Account__c') ? 'Account__c' : stemFields.has('AccountId') ? 'AccountId' : null;
   const portField = stemFields.has('Port__c') ? 'Port__c' : null;
@@ -8148,6 +8159,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     if (!accountField) throw appError('Account filtering is unavailable because Salesforce Account metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
     const accountChunks = chunkIds(filters.accountIds);
     conditions.push(`(${accountChunks.map((ids) => `${accountField} IN (${decisionDashboardValues(ids)})`).join(' OR ')})`);
+    conditions.push('Account__r.Inactive_Suspended__c = false');
   }
   if (filters.portIds.length) {
     if (!portField) throw appError('Port filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
@@ -8171,7 +8183,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     const like = `%${escapeSoql(search)}%`;
     const searchFields = [
       `Name LIKE '${like}'`,
-      accountField ? `Account__r.Name LIKE '${like}'` : '',
+      accountField ? `(Account__r.Inactive_Suspended__c = false AND Account__r.Name LIKE '${like}')` : '',
       portField ? `Port__r.Name LIKE '${like}'` : '',
       stemFields.has('Vessel__c') ? `Vessel__r.Name LIKE '${like}'` : '',
     ].filter(Boolean);
@@ -8181,7 +8193,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   if (pageOnly && body.cursor && !cursor) throw appError('Dashboard cursor is invalid.', 400, 'DASHBOARD_CURSOR_INVALID');
   const parentSelect = ['Id', 'Name', 'CreatedDate'];
   for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
-  if (accountField) parentSelect.push(accountField, 'Account__r.Name');
+  if (accountField) parentSelect.push(accountField, 'Account__r.Name', 'Account__r.Inactive_Suspended__c');
   if (portField) parentSelect.push(portField, 'Port__r.Name', 'Port__r.Country__c');
   if (stemFields.has('Vessel__c')) parentSelect.push('Vessel__c', 'Vessel__r.Name');
   const pageSize = Math.min(Math.max(Number(body.pageSize) || 50, 1), 200);
@@ -8193,10 +8205,10 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const lineSupplier = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
   const extraSupplier = resolveExtraCostSupplierLookup(extraCostDescribe.fields || []);
   if (filters.supplierIds.length) {
-    if (lineSupplier.valid) supplierConditions.push(`${lineSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)})`);
+    if (lineSupplier.valid) supplierConditions.push(`${lineSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)}) AND ${lineSupplier.relationshipName}.Inactive_Suspended__c = false`);
   }
   const extraSupplierConditions = [];
-  if (filters.supplierIds.length && extraSupplier.valid) extraSupplierConditions.push(`${extraSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)})`);
+  if (filters.supplierIds.length && extraSupplier.valid) extraSupplierConditions.push(`${extraSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)}) AND ${extraSupplier.relationshipName}.Inactive_Suspended__c = false`);
   if (filters.supplierIds.length && !supplierConditions.length && !extraSupplierConditions.length) {
     throw appError('Supplier filtering is unavailable because Salesforce supplier metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
   }
@@ -8255,6 +8267,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const lineSelect = ['Id', 'CreatedDate', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
   if (lineSupplier.valid) lineSelect.push(lineSupplier.fieldName);
   if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Name`);
+  if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Inactive_Suspended__c`);
   if (lineItemUomField) lineSelect.push(lineItemUomField);
   if (lineFields.has('Product__c')) {
     lineSelect.push('Product__r.Name', 'Product__r.Family');
@@ -8265,6 +8278,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   if (extraProductLookup) extraSelect.push(`${extraProductLookup.relationshipName}.Name`);
   if (extraSupplier.valid) extraSelect.push(extraSupplier.fieldName);
   if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Name`);
+  if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Inactive_Suspended__c`);
   const [lineItems, extraCosts, buyerBrokers] = stemIds.length ? await Promise.all([
     decisionDashboardRowsForStemIds('STEM_Line_Item__c', [...new Set(lineSelect)], stemIds),
     decisionDashboardRowsForStemIds('STEM_Extra_Cost__c', [...new Set(extraSelect)], stemIds),
@@ -8350,7 +8364,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     const brokerCommissions = lineTotals.buyerComm + lineTotals.supplierComm + (buyerBrokerByStem.get(stem.Id) || 0);
     const netPnl = buyer == null ? null : buyer - supplier - brokerCommissions;
     const supplierWeights = new Map();
-    const addSupplierWeight = (id, name, weight) => {
+    const addSupplierWeight = (id, name, weight, inactive) => {
+      if (inactive === true) return;
       const normalizedName = String(name || '').trim();
       if (!id && !normalizedName) return;
       const key = id || `name:${normalizedName.toLowerCase()}`;
@@ -8363,6 +8378,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         lineSupplier.valid ? item[lineSupplier.fieldName] : null,
         item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
         lineBuyAmount(item, delivered),
+        lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Inactive_Suspended__c : null,
       );
     }
     for (const item of extras) {
@@ -8370,6 +8386,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         extraSupplier.valid ? item[extraSupplier.fieldName] : null,
         item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
         extraBuyAmount(item, delivered),
+        extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Inactive_Suspended__c : null,
       );
     }
     const weightedSuppliers = [...supplierWeights.values()];
@@ -8385,8 +8402,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     }));
     const supplierNames = [...new Set(weightedSuppliers.map((item) => item.name).filter(Boolean))].sort();
     const supplierAccounts = [...new Map([
-      ...lines.map((item) => [item[lineSupplier.fieldName], item[lineSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
-      ...extras.map((item) => [item[extraSupplier.fieldName], item[extraSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
+      ...lines.filter((item) => item[lineSupplier.relationshipName]?.Inactive_Suspended__c !== true).map((item) => [item[lineSupplier.fieldName], item[lineSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
+      ...extras.filter((item) => item[extraSupplier.relationshipName]?.Inactive_Suspended__c !== true).map((item) => [item[extraSupplier.fieldName], item[extraSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
     ].filter(([id]) => id).map(([id, name]) => [id, { id, name: String(name || '').trim() || null }])).values()].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')) || left.id.localeCompare(right.id));
     const supplierProductRows = dashboardSupplierProductRows({
       lineItems: lines.map((item) => {
@@ -8400,8 +8417,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         return {
           sourceId: item.Id,
           createdDate: item.CreatedDate,
-          supplierAccountId: lineSupplier.valid ? item[lineSupplier.fieldName] : null,
-          supplierName: item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
+          supplierAccountId: lineSupplier.valid && item[lineSupplier.relationshipName]?.Inactive_Suspended__c !== true ? item[lineSupplier.fieldName] : null,
+          supplierName: lineSupplier.relationshipName && item[lineSupplier.relationshipName]?.Inactive_Suspended__c === true ? null : item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
           itemName: item.Product__r?.Name || 'Product unavailable',
           quantityLabel: dashboardVolumeLabel(volume),
           unitOfMeasure: volume.unitOfMeasure || 'MT',
@@ -8410,8 +8427,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       extraCosts: extras.map((item) => ({
         sourceId: item.Id,
         createdDate: item.CreatedDate,
-        supplierAccountId: extraSupplier.valid ? item[extraSupplier.fieldName] : null,
-        supplierName: item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
+        supplierAccountId: extraSupplier.valid && item[extraSupplier.relationshipName]?.Inactive_Suspended__c !== true ? item[extraSupplier.fieldName] : null,
+        supplierName: extraSupplier.relationshipName && item[extraSupplier.relationshipName]?.Inactive_Suspended__c === true ? null : item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
         chargeProductName: extraProductLookup ? item[extraProductLookup.relationshipName]?.Name : null,
         description: item.Description__c,
         recordName: item.Name,
@@ -8426,7 +8443,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       status: stem.Status__c || null,
       type: stem.Type__c || null,
       dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
-      account: accountField && stem[accountField] ? { id: stem[accountField], name: stem.Account__r?.Name || null } : null,
+      account: accountField && stem[accountField] && stem.Account__r?.Inactive_Suspended__c !== true ? { id: stem[accountField], name: stem.Account__r?.Name || null } : accountField && stem[accountField] ? { id: null, name: 'Account unavailable' } : null,
       port: portField && stem[portField] ? { id: stem[portField], name: stem.Port__r?.Name || null, countryCode: stem.Port__r?.Country__c || null } : null,
       vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
       supplierNames,
@@ -8527,7 +8544,8 @@ async function decisionDashboardInternalAccountIdentity(body = {}, req = null, a
       const fields = fieldNameSetFrom(describe.fields || []);
       if (!fields.has('ParentId')) throw appError('Dashboard rankings require the Salesforce Account hierarchy.', 503, 'DASHBOARD_RANKING_ACCOUNT_HIERARCHY', undefined, true);
       const groupNameField = fields.has('Group_Name__c') ? 'Group_Name__c' : null;
-      const accounts = await decisionDashboardQueryAll(`SELECT ${['Id', 'Name', 'ParentId', groupNameField].filter(Boolean).join(',')} FROM Account ORDER BY Id`);
+      if (!fields.has('Inactive_Suspended__c')) throw appError('Dashboard rankings cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_RANKING_ACCOUNT_STATUS', undefined, true);
+      const accounts = await decisionDashboardQueryAll(`SELECT ${['Id', 'Name', 'ParentId', groupNameField].filter(Boolean).join(',')} FROM Account WHERE Inactive_Suspended__c = false ORDER BY Id`);
       const byId = new Map(accounts.map((account) => [account.Id, account]));
       const normalizedGroupIdentity = (value) => String(value || '').trim().toUpperCase().replace(/^GROUP\s*(?:-|–|—|:)\s*/, '');
       const rootIds = new Set(accounts.filter((account) => normalizedGroupIdentity(account.Name) === INTEROFFICE_EXCLUDED_BUYER_GROUP).map((account) => account.Id));
@@ -8695,10 +8713,10 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v4-stems'
+      ? 'decision-dashboard-v5-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v4-analytics'
-        : `decision-dashboard-v4-${handler}`,
+        ? 'decision-dashboard-v5-analytics'
+        : `decision-dashboard-v5-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
@@ -9037,14 +9055,14 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   };
   const addSupplierAccount = (stemId, accountId, name, clKey, inactive) => {
     const accountKey = disputeSalesforceIdKey(accountId);
-    if (!stemId || !accountKey) return;
+    if (!stemId || !accountKey || inactive === true) return;
     if (!supplierAccountsByStem[stemId]) supplierAccountsByStem[stemId] = new Map();
     const existing = supplierAccountsByStem[stemId].get(accountKey);
     supplierAccountsByStem[stemId].set(accountKey, {
       accountId: existing?.accountId || accountId,
       name: existing?.name || String(name || 'Supplier name unavailable').trim(),
       clKey: existing?.clKey || String(clKey || '').trim(),
-      inactive: existing?.inactive === true || inactive === true,
+      inactive: false,
     });
   };
   for (const li of lineItems) {
@@ -9062,8 +9080,8 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
       productFamily: dashboardFamily,
     });
     const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
-    const supplierName = String(li.Supplier_Name__c || '').trim();
     const supplierAccount = originalSupplierLookup.valid ? li[originalSupplierRelationship] || {} : {};
+    const supplierName = supplierAccount.Inactive_Suspended__c === true ? '' : String(li.Supplier_Name__c || '').trim();
     addSupplierAccount(id, li.Original_Supplier__c, supplierAccount.Name || supplierName, supplierAccount.Company_Code__c, supplierAccount.Inactive_Suspended__c);
     addSupplierInvoiceAmount(id, supplierName, lineBuy);
     const supplierMatchesCompanyFilter = !supplierCompanyFilterActive || companyMatches(supplierName);
@@ -9131,8 +9149,8 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     if (!ec.STEM__c || ec.Cancelled__c) continue;
     const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
     const buy = extraBuyAmount(ec, stemHasDelivery);
-    const supplierName = String(ec.Supplier_Name__c || '').trim();
     const supplierAccount = extraCostSupplierRelationship ? ec[extraCostSupplierRelationship] || {} : {};
+    const supplierName = supplierAccount.Inactive_Suspended__c === true ? '' : String(ec.Supplier_Name__c || '').trim();
     addSupplierAccount(ec.STEM__c, extraCostSupplierField ? ec[extraCostSupplierField] : null, supplierAccount.Name || supplierName, supplierAccount.Company_Code__c, supplierAccount.Inactive_Suspended__c);
     if (supplierName) {
       addSupplierInvoiceAmount(ec.STEM__c, supplierName, buy);
@@ -9210,19 +9228,19 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     const productQuantities = productQuantitiesByStem[stem.Id] || [];
     const extraCostNames = [...(extraCostNamesByStem[stem.Id] || [])].sort();
     const buyerAccount = stem['Account__r'] || {};
-    const buyerGroupAccount = buyerAccount.ParentId ? {
+    const buyerGroupAccount = buyerAccount.ParentId && buyerAccount.Parent?.Inactive_Suspended__c !== true ? {
       accountId: buyerAccount.ParentId,
       name: buyerAccount.Parent?.Name || buyerAccount.Group_Name__c || 'GROUP name unavailable',
       clKey: buyerAccount.Parent?.Company_Code__c || '',
-      inactive: buyerAccount.Parent?.Inactive_Suspended__c === true,
+      inactive: false,
       recordType: buyerAccount.Parent?.RecordType?.Name || 'Group',
     } : null;
-    const buyerGroup = buyerGroupAccount?.name || buyerAccount.Group_Name__c || null;
-    const buyerAccountIdentity = stem[accountField] ? {
+    const buyerGroup = buyerAccount.Parent?.Inactive_Suspended__c === true ? null : buyerGroupAccount?.name || buyerAccount.Group_Name__c || null;
+    const buyerAccountIdentity = stem[accountField] && buyerAccount.Inactive_Suspended__c !== true ? {
       accountId: stem[accountField],
       name: buyerAccount.Name || stem[buyerNameField] || 'Buyer name unavailable',
       clKey: buyerAccount.Company_Code__c || '',
-      inactive: buyerAccount.Inactive_Suspended__c === true,
+      inactive: false,
       recordType: buyerAccount.RecordType?.Name || null,
     } : null;
     const supplierAccounts = [...(supplierAccountsByStem[stem.Id]?.values() || [])]
@@ -9261,6 +9279,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
     }
     return {
       ...stem,
+      ...(buyerNameField && buyerAccount.Inactive_Suspended__c === true ? { [buyerNameField]: 'Account unavailable' } : {}),
       [bf]: calc.buyer ?? null,
       [sf2]: calc.supplier || null,
       _Buyer_Group: buyerGroup,
@@ -9308,6 +9327,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
 
   const buyerPnlMap = {};
   for (const stem of recentStems) {
+    if (stem.Account__r?.Inactive_Suspended__c === true) continue;
     const buyerName = stem[buyerNameField] || null;
     if (buyerName && buyerName.toUpperCase().includes('COSULICH')) continue;
     if (!buyerName || stem[bf] == null || stem.__netPnlCalc == null) continue;
@@ -10009,6 +10029,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
           SELECT ${[...new Set(brokerAccountFields)].join(', ')}
           FROM Account
           WHERE Id IN (${inList})
+            AND Inactive_Suspended__c = false
           LIMIT 5000
         `,
             limit: 5000,
@@ -14292,8 +14313,15 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
 async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
   const requestedStemId = isSalesforceId(String(body.stemId || '').trim()) ? String(body.stemId).trim() : null;
-  const describe = await salesforceObjectFields({ objectName: 'stem__c' });
+  const [describe, accountDescribe] = await Promise.all([
+    salesforceObjectFields({ objectName: 'stem__c' }),
+    salesforceObjectFields({ objectName: 'Account' }),
+  ]);
   const fieldNames = describe.fields.map((f) => f.name);
+  const disputeAccountFields = new Set((accountDescribe.fields || []).map((field) => field.name));
+  if (!disputeAccountFields.has('Inactive_Suspended__c')) {
+    throw appError('Dispute Account discovery cannot verify active Salesforce Accounts.', 503, 'DISPUTE_ACCOUNT_STATUS_SCHEMA', undefined, true);
+  }
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames);
   const hasDispute = fieldNames.includes('Dispute__c');
   const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
@@ -14340,7 +14368,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   }
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
   if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
-  if (fieldNames.includes('Account__c')) fields.push('Account__r.Name');
+  if (fieldNames.includes('Account__c')) fields.push('Account__r.Name', 'Account__r.Inactive_Suspended__c');
 
   const activeDisputeStatusCondition = "(Dispute_Status__c != null AND Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != 'No Disputes' AND Dispute_Status__c != 'no dispute' AND Dispute_Status__c != 'no disputes')";
   const disputeCondition = hasDisputeStatus ? activeDisputeStatusCondition : 'Dispute__c = true';
@@ -14371,7 +14399,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           return {
             soql: `
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
-                 ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name,` : ''}
+                 ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name, ${originalSupplierRelationship}.Inactive_Suspended__c,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
                  Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
                  Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
@@ -14390,7 +14418,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
       compositeQueryRows(
         chunkIds(stemIds).map((chunk) => {
           const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          const extraCostSelectFields = ['Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Supplier_Invoice__c', 'Cancelled__c', extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null, extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null, extraCostSupplierLookup.valid ? extraCostSupplierField : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null].filter(Boolean);
+          const extraCostSelectFields = ['Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Supplier_Invoice__c', 'Cancelled__c', extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null, extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null, extraCostSupplierLookup.valid ? extraCostSupplierField : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Inactive_Suspended__c` : null].filter(Boolean);
           return {
             soql: `
           SELECT ${[...new Set(extraCostSelectFields)].join(', ')}
@@ -14407,7 +14435,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         ? compositeQueryRows(
             chunkIds(stemIds).map((chunk) => {
               const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-              const supplierInvoiceSelectFields = ['STEM__c', 'Id', 'Name', 'CreatedDate', 'LastModifiedDate', ...supplierInvoiceAmountFields, ...supplierInvoiceDueDateFields, ...supplierInvoiceDateFields, ...supplierInvoiceStatusFields, supplierInvoicePayableField, supplierInvoiceFieldNames.includes('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierNameRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+              const supplierInvoiceSelectFields = ['STEM__c', 'Id', 'Name', 'CreatedDate', 'LastModifiedDate', ...supplierInvoiceAmountFields, ...supplierInvoiceDueDateFields, ...supplierInvoiceDateFields, ...supplierInvoiceStatusFields, supplierInvoicePayableField, supplierInvoiceFieldNames.includes('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierNameRelationships.flatMap((relationship) => [`${relationship}.Name`, `${relationship}.Inactive_Suspended__c`])].filter(Boolean);
               return {
                 soql: `
               SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
@@ -14512,9 +14540,10 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
 
         for (const item of lineItems) {
           if (item.Cancelled__c) continue;
-          const originalSupplierAccountId = item.Original_Supplier__c || null;
+          const originalSupplierInactive = item[originalSupplierRelationship]?.Inactive_Suspended__c === true;
+          const originalSupplierAccountId = originalSupplierInactive ? null : item.Original_Supplier__c || null;
           const originalSupplierAccountKey = disputeSalesforceIdKey(originalSupplierAccountId);
-          const originalSupplierName = item[originalSupplierRelationship]?.Name || item.Supplier_Name__c || originalSupplierAccountId || null;
+          const originalSupplierName = originalSupplierInactive ? null : item[originalSupplierRelationship]?.Name || item.Supplier_Name__c || originalSupplierAccountId || null;
           if (originalSupplierName) supplierNames.add(originalSupplierName);
           const productName = item['Product__r']?.Name;
           if (productName) productNames.add(productName);
@@ -14572,9 +14601,10 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         for (const item of extraCosts) {
           if (item.Cancelled__c) continue;
           const productName = disputeQueueExtraCostProductName(item);
-          const supplierAccountId = extraCostSupplierField ? item[extraCostSupplierField] : null;
+          const supplierInactive = extraCostSupplierRelationship && item[extraCostSupplierRelationship]?.Inactive_Suspended__c === true;
+          const supplierAccountId = supplierInactive ? null : extraCostSupplierField ? item[extraCostSupplierField] : null;
           const supplierAccountKey = disputeSalesforceIdKey(supplierAccountId);
-          const supplierName = (extraCostSupplierRelationship ? item[extraCostSupplierRelationship]?.Name : null) || item.Supplier_Name__c || supplierAccountId || null;
+          const supplierName = supplierInactive ? null : (extraCostSupplierRelationship ? item[extraCostSupplierRelationship]?.Name : null) || item.Supplier_Name__c || supplierAccountId || null;
           if (productName) productNames.add(productName);
           if (supplierName || productName) {
             const pairKey = `${supplierAccountKey || supplierName || ''}\u0000${productName || ''}`;
@@ -14652,9 +14682,10 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         };
         for (const invoice of supplierInvoices) {
           const supplierAccountField = supplierInvoiceSupplierFields.find((field) => invoice[field]);
-          const supplierAccountId = supplierAccountField ? invoice[supplierAccountField] : null;
           const supplierAccountRelationship = supplierAccountField ? supplierInvoiceFieldByName[supplierAccountField]?.relationshipName : null;
-          const supplierName = (supplierAccountRelationship ? invoice[supplierAccountRelationship]?.Name : null) || invoice['Supplier__r']?.Name || invoice.Supplier_Name__c || invoice['Expected_Supplier__r']?.Name || invoice['Substitute_Supplier__r']?.Name || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || null;
+          const supplierAccountInactive = supplierAccountRelationship && invoice[supplierAccountRelationship]?.Inactive_Suspended__c === true;
+          const supplierAccountId = supplierAccountInactive ? null : supplierAccountField ? invoice[supplierAccountField] : null;
+          const supplierName = supplierAccountInactive ? null : (supplierAccountRelationship ? invoice[supplierAccountRelationship]?.Name : null) || invoice['Supplier__r']?.Name || invoice.Supplier_Name__c || invoice['Expected_Supplier__r']?.Name || invoice['Substitute_Supplier__r']?.Name || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || null;
           const invoiceAmountField = supplierInvoiceAmountFields.find((field) => invoice[field] != null);
           const invoiceAmount = invoiceAmountField ? Number(invoice[invoiceAmountField] || 0) : 0;
           const supplierPayableBalanceValue = supplierInvoicePayableField ? invoice[supplierInvoicePayableField] : null;
@@ -14791,7 +14822,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
         const supplierFinanceRows = supplierCandidateRows.length ? supplierCandidateRows : supplierFinanceOnlyRows;
         const buyerFinanceRow = {
-          buyerName: disputePartyRegistry.buyer?.name || stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
+          buyerName: disputePartyRegistry.buyer?.name || (stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null),
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
           paymentDueDate: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
           receivableBalance: stem.Receivable_Balance__c ?? null,
@@ -14802,6 +14833,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
 
         return {
           ...stem,
+          ...(stem.Account__r?.Inactive_Suspended__c === true ? { Account__r: null, Account__c: null } : {}),
           Total_Invoice_Amount__c: buyerInvoiceAmount ?? stem.Total_Invoice_Amount__c ?? null,
           Total_Invoiced_Amount_From_Suppliers__c: calculatedSupplierInvoice || stem.Total_Invoiced_Amount_From_Suppliers__c || null,
           _Supplier_Names: [...supplierNames].sort().join(', ') || null,
@@ -14825,7 +14857,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           _Payable_Balance_Split_Label: supplierFinanceRows.map((dispute) => dispute.payableBalance).join('\n') || null,
           _Payable_Balance: payableBalance,
           _Display_Name: formatStemName(stem),
-          _Buyer_Name: stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
+          _Buyer_Name: stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
           _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
         };
       }),
@@ -17617,7 +17649,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
       const ids = chunk.map((id) => `'${id}'`).join(',');
       return ids
         ? {
-            soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids})`,
+            soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids}) AND Inactive_Suspended__c = false`,
             softFail: true,
           }
         : null;

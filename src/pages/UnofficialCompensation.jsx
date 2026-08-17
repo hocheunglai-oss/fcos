@@ -387,7 +387,7 @@ export default function UnofficialCompensation() {
                 return [
                   <TableRow key={account.accountId} className={account.issues?.length ? 'bg-amber-50/40' : ''}>
                     <TableCell><Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleExpanded(account.accountId)} aria-label={isOpen ? 'Collapse Account' : 'Expand Account'}>{isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</Button></TableCell>
-                    <TableCell><SalesforceRecordLink instanceUrl={workspace.instanceUrl} id={account.accountId}>{account.accountName}</SalesforceRecordLink><div className="mt-0.5 text-xs text-muted-foreground">{accountClKeyLabel(account.clKey)}{account.active ? '' : ' · Inactive'}</div></TableCell>
+                    <TableCell><SalesforceRecordLink instanceUrl={workspace.instanceUrl} id={account.accountId}>{account.accountName}</SalesforceRecordLink><div className="mt-0.5 text-xs text-muted-foreground">{accountClKeyLabel(account.clKey)}</div></TableCell>
                     <TableCell>{account.pics?.length ? account.pics.join(', ') : <span className="text-amber-700">Not set</span>}</TableCell>
                     <TableCell className="text-right">{currencyLines(account, 'agreedAmount')}</TableCell>
                     <TableCell className="text-right text-emerald-700">{currencyLines(account, 'recoveredAmount')}</TableCell>

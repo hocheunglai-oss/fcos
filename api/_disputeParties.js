@@ -187,7 +187,7 @@ export function buildDisputePartyRegistry({
   const issues = schemaIssues.filter(Boolean);
   const candidateMap = new Map();
   const buyerAccountId = text(stem.Account__c);
-  if (buyerAccountId) {
+  if (buyerAccountId && stem.Account__r?.Inactive_Suspended__c !== true) {
     if (disputeSalesforceIdKey(buyerAccountId)) {
       addCandidate(candidateMap, {
         accountId: buyerAccountId,
@@ -204,6 +204,7 @@ export function buildDisputePartyRegistry({
   }
 
   for (const lineItem of lineItems) {
+    if (lineItem[originalSupplierRelationship]?.Inactive_Suspended__c === true) continue;
     const supplierName = relatedName(lineItem, originalSupplierRelationship) || text(lineItem.Supplier_Name__c);
     const accountId = text(lineItem.Original_Supplier__c);
     if (!accountId && !supplierName) continue;
@@ -229,6 +230,7 @@ export function buildDisputePartyRegistry({
   }
 
   for (const extraCost of extraCosts) {
+    if (extraCostSupplierRelationship && extraCost[extraCostSupplierRelationship]?.Inactive_Suspended__c === true) continue;
     const supplierName = relatedName(extraCost, extraCostSupplierRelationship) || text(extraCost.Supplier_Name__c);
     const accountId = extraCostSupplierField ? text(extraCost[extraCostSupplierField]) : '';
     if (!accountId && !supplierName) continue;

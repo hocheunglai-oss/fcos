@@ -27,3 +27,11 @@ test('month labels and tooltip pair current/prior actuals and retain product det
   assert.match(component, /Prior-year products/);
   assert.match(component, /prior-year series are shown as gaps/);
 });
+
+test('prior-year chart data can be hidden and restored from an in-chart label button', () => {
+  assert.match(component, /aria-pressed=\{showPriorYear\}/);
+  assert.match(component, /Prior year · \{showPriorYear \? 'Shown' : 'Hidden'\}/);
+  assert.match(component, /showPriorYear \? <Bar yAxisId="profit" dataKey="priorGrossProfit"/);
+  assert.match(component, /showPriorYear \? <Bar yAxisId="volume" dataKey="priorVolume"/);
+  assert.match(component, /showPriorYear \? <Line yAxisId="margin"[^>]+dataKey="priorGrossMarginPct"/);
+});

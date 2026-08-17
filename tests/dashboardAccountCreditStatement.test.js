@@ -237,6 +237,8 @@ test('credit cursors reject malformed values and round-trip directory and statem
 
 test('Salesforce loader is buyer-leg only and does not use supplier child relationships', async () => {
   const source = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
+  assert.match(source, /Inactive_Suspended__c = false/);
+  assert.match(source, /ACCOUNT_CREDIT_ACCOUNT_INACTIVE/);
   assert.match(source, /Account__c IN \(\$\{ids/);
   assert.match(source, /Id IN \(SELECT Account__c FROM STEM__c WHERE Account__c != null\)/);
   assert.doesNotMatch(source, /STEM_Line_Item__c|STEM_Extra_Cost__c|Buyer_Broker__c|Supplier_Broker__c/);

@@ -114,10 +114,10 @@ function statusForBalance(value) {
 
 export function buildUnofficialCompensationWorkspace({ accounts = [], claims = [], recoveries = [], today }) {
   const todayDate = dateOnly(today) || new Date().toISOString().slice(0, 10);
-  const accountMap = new Map(accounts.map((account) => [textValue(account.Id), account]));
+  const accountMap = new Map(accounts.filter((account) => account.Inactive_Suspended__c !== true).map((account) => [textValue(account.Id), account]));
   for (const record of [...claims, ...recoveries]) {
     const accountId = textValue(record.Account__c);
-    if (accountId && !accountMap.has(accountId)) accountMap.set(accountId, { Id: accountId, ...(record.Account__r || {}), Name: record.Account__r?.Name || '' });
+    if (accountId && !accountMap.has(accountId) && record.Account__r?.Inactive_Suspended__c === false) accountMap.set(accountId, { Id: accountId, ...(record.Account__r || {}), Name: record.Account__r?.Name || '' });
   }
 
   const output = [];

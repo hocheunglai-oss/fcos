@@ -191,7 +191,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-directory',
-    version: '2',
+    version: '3',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { query, limit, cursor },
@@ -205,9 +205,9 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       ]);
       const accountFields = fieldMap(accountDescribe);
       const stemFields = fieldMap(stemDescribe);
-      requireFields(accountFields, ['Id', 'Name'], 'Account');
+      requireFields(accountFields, ['Id', 'Name', 'Inactive_Suspended__c'], 'Account');
       requireFields(stemFields, ['Account__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
-      const conditions = ['Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null)'];
+      const conditions = ['Inactive_Suspended__c = false', 'Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null)'];
       if (query) {
         const escaped = `%${soql(query)}%`;
         const searchable = [`Name LIKE '${escaped}'`];
@@ -243,7 +243,6 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
             accountId: account.Id,
             name: account.Name,
             clKey: account.Company_Code__c || null,
-            inactive: account.Inactive_Suspended__c === true,
             groupName: group?.Name || account.Group_Name__c || null,
             category: account.CL_Category__c || null,
             openStemCount: exposure.openStemCount,
@@ -299,7 +298,7 @@ async function loadGroupMembers(group, fields) {
   for (let depth = 0; depth < MAX_GROUP_DEPTH && parentIds.length; depth += 1) {
     const next = [];
     for (const ids of chunkIds(parentIds)) {
-      const result = await queryAll(`SELECT ${select.join(',')} FROM Account WHERE ParentId IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 50000`, 50_000);
+      const result = await queryAll(`SELECT ${select.join(',')} FROM Account WHERE ParentId IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) AND Inactive_Suspended__c = false LIMIT 50000`, 50_000);
       for (const account of result.records) {
         const key = idKey(account.Id);
         if (!key || seen.has(key)) continue;
@@ -318,7 +317,7 @@ async function loadSameNameCreditCandidates(account, accountFields, interoffice)
   const normalizedName = normalizeCreditAccountName(account?.Name);
   const namePattern = text(account?.Name).split(/\s+/).filter(Boolean).map((token) => token.replace(/[%_]/g, '\\$&')).join('%');
   if (!normalizedName || !namePattern) return { candidates: [], groupsByAccountId: {} };
-  const result = await queryAll(`SELECT ${accountSelectFields(accountFields).join(',')} FROM Account WHERE Name LIKE '${soql(namePattern)}' ORDER BY CreatedDate,Id LIMIT 201`, 201);
+  const result = await queryAll(`SELECT ${accountSelectFields(accountFields).join(',')} FROM Account WHERE Inactive_Suspended__c = false AND Name LIKE '${soql(namePattern)}' ORDER BY CreatedDate,Id LIMIT 201`, 201);
   if (result.records.length > 200) throw serviceError('Same-name credit snapshot resolution is too broad to complete safely.', 503, 'ACCOUNT_CREDIT_DUPLICATE_SCOPE');
   const candidates = result.records.filter((candidate) => normalizeCreditAccountName(candidate.Name) === normalizedName);
   const chains = await loadDirectoryAccountChains(candidates, accountFields);
@@ -524,7 +523,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const stemFields = fieldMap(stemDescribe);
   const paymentFields = fieldMap(paymentDescribe);
   const cashflowFields = fieldMap(cashflowDescribe);
-  requireFields(accountFields, ['Id', 'Name', 'ParentId', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c', 'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c'], 'Account');
+  requireFields(accountFields, ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c', 'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c'], 'Account');
   requireFields(stemFields, ['Id', 'Name', 'CreatedDate', 'Account__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
   requireFields(paymentFields, ['Id', 'STEM__c', 'Account__c'], 'Payment__c');
   requireFields(cashflowFields, ['Id', 'STEM__c', 'Account__c'], 'Cashflow__c');
@@ -534,6 +533,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   stageStartedAt = Date.now();
   const chain = await loadAccountChain(accountId, accountFields);
   const account = chain[0];
+  if (account.Inactive_Suspended__c === true) throw serviceError('This Salesforce Account is inactive and is not available in FCOS.', 404, 'ACCOUNT_CREDIT_ACCOUNT_INACTIVE');
   const group = selectUltimateCreditGroup(chain);
   ensureInterofficeAccountAccess(account, chain, interoffice);
   const groupMembers = group ? await loadGroupMembers(group, accountFields) : [account];
@@ -635,7 +635,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '2',
+    version: '3',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },

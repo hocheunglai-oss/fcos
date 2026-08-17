@@ -288,7 +288,8 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     ...allLineItems.map((row) => row.Original_Supplier__c),
     ...allExtraCosts.map((row) => row.Supplier__c),
   ].filter(Boolean))];
-  const accounts = await queryIds('Account', 'Id, Name, Imported_Particulars__c, Supplier_Payment_Term__c, LastModifiedDate', supplierIds);
+  const accounts = (await queryIds('Account', 'Id, Name, Imported_Particulars__c, Supplier_Payment_Term__c, Inactive_Suspended__c, LastModifiedDate', supplierIds))
+    .filter((account) => account.Inactive_Suspended__c !== true);
   const accountMap = new Map(accounts.map((row) => [row.Id, row]));
   const shipAgentAccountIds = new Set(accounts.filter(isShipAgentAccount).map((row) => row.Id));
   const relevantLines = allLineItems.filter((row) => shipAgentAccountIds.has(row.Original_Supplier__c));

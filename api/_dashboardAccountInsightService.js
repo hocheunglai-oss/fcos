@@ -167,6 +167,7 @@ function accountSelectFields(fields) {
   if (fields.has('ParentId')) {
     values.push('Parent.Name');
     if (fields.has('Company_Code__c')) values.push('Parent.Company_Code__c');
+    if (fields.has('Inactive_Suspended__c')) values.push('Parent.Inactive_Suspended__c');
   }
   return [...new Set(values)];
 }
@@ -198,6 +199,8 @@ async function loadAccountScope(accountId, role, accountFields, interoffice) {
   const result = await sfQuery(`SELECT ${fields.join(',')} FROM Account WHERE Id = '${soql(accountId)}' LIMIT 1`, { clean: true, limit: 1 });
   const root = result.records[0];
   if (!root) throw serviceError('The Salesforce Account no longer exists.', 404, 'ACCOUNT_INSIGHT_ACCOUNT_NOT_FOUND');
+  if (!accountFields.has('Inactive_Suspended__c')) throw serviceError('Account Insight cannot verify active Salesforce Accounts.', 503, 'ACCOUNT_INSIGHT_ACCOUNT_STATUS_SCHEMA');
+  if (root.Inactive_Suspended__c === true) throw serviceError('This Salesforce Account is inactive and is not available in FCOS.', 404, 'ACCOUNT_INSIGHT_ACCOUNT_INACTIVE');
   if (interoffice && [root.Group_Name__c, root.Parent?.Name, root.Name].some((value) => text(value).toUpperCase() === INTEROFFICE_EXCLUDED_GROUP)) {
     throw serviceError('This Account is outside the Interoffice access scope.', 403, 'ACCOUNT_INSIGHT_ACCESS_DENIED');
   }
@@ -209,7 +212,7 @@ async function loadAccountScope(accountId, role, accountFields, interoffice) {
   for (let depth = 0; depth < 20 && parentIds.length; depth += 1) {
     const level = [];
     for (const chunk of chunkIds(parentIds)) {
-      const childResult = await sfQuery(`SELECT ${fields.join(',')} FROM Account WHERE ParentId IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 50000`, { clean: true, limit: 50_000 });
+      const childResult = await sfQuery(`SELECT ${fields.join(',')} FROM Account WHERE ParentId IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) AND Inactive_Suspended__c = false LIMIT 50000`, { clean: true, limit: 50_000 });
       for (const child of childResult.records) {
         const key = idKey(child.Id);
         if (!key || seen.has(key)) continue;
@@ -568,7 +571,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
       ...serializeAccount(scope.root, { root: true }),
       accountId: scope.root.Id,
       active: scope.root.Inactive_Suspended__c !== true,
-      group: scope.root.Parent ? { accountId: scope.root.ParentId, name: scope.root.Parent.Name, clKey: scope.root.Parent.Company_Code__c || '' } : null,
+      group: scope.root.Parent && scope.root.Parent.Inactive_Suspended__c !== true ? { accountId: scope.root.ParentId, name: scope.root.Parent.Name, clKey: scope.root.Parent.Company_Code__c || '' } : null,
     },
     role,
     availableRoles: unique(availableRoles),
@@ -805,7 +808,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
   const cachePayload = { accountId: idKey(accountId), role, period };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '1',
+    version: '2',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,

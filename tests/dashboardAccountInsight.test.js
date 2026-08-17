@@ -345,7 +345,7 @@ test('counts disputes only for the exact Account party outside GROUP scope', () 
   assert.equal(result.risk.dispute.open, 1);
 });
 
-test('GROUP insight includes inactive descendants and their historical activity', () => {
+test('GROUP insight excludes inactive descendants and their historical activity', () => {
   const groupData = dataset({
     identity: { accountId: GROUP, name: 'Buyer Group', clKey: 'GRP001', inactive: false, recordType: 'Group' },
     role: 'group',
@@ -357,10 +357,11 @@ test('GROUP insight includes inactive descendants and their historical activity'
   });
   const result = buildDashboardAccountInsight(groupData, { today: '2026-08-05' });
 
-  assert.equal(result.relationship.childCount, 1);
-  assert.equal(result.relationship.inactiveChildCount, 1);
-  assert.equal(result.relationship.tradingChildCount, 1);
-  assert.equal(result.children.find((child) => child.accountId === BUYER).stemCount, 1);
+  assert.equal(result.relationship.childCount, 0);
+  assert.equal(result.relationship.inactiveChildCount, 0);
+  assert.equal(result.relationship.tradingChildCount, 0);
+  assert.equal(result.children.some((child) => child.accountId === BUYER), false);
+  assert.equal(result.kpis.stemCount, 0);
 });
 
 test('builds Dashboard, trailing-12, and all-history date scopes', () => {

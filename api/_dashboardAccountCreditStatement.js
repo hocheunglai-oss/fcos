@@ -93,7 +93,7 @@ export function decodeAccountCreditCursor(cursor) {
 }
 
 export function selectUltimateCreditGroup(accountChain = []) {
-  const groups = accountChain.filter((account) => /^GROUP(?:\s*-|\s|$)/i.test(text(account?.Name || account?.name)));
+  const groups = accountChain.filter((account) => account?.Inactive_Suspended__c !== true && /^GROUP(?:\s*-|\s|$)/i.test(text(account?.Name || account?.name)));
   return groups.at(-1) || null;
 }
 

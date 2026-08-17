@@ -248,7 +248,7 @@ export async function listUnofficialCompensation({ force = false, interoffice = 
     : null;
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-unofficial-compensation',
-    version: '1',
+    version: '2',
     accessScope,
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { view: scopedAccountIds.length ? 'account-scope' : 'workspace', accountIds: scopedAccountIds },
@@ -258,10 +258,12 @@ export async function listUnofficialCompensation({ force = false, interoffice = 
     loader: async () => {
       const accountWhere = [
         accountScope || '(Agreed_Compansation_Size__c > 0 OR Unofficial_Compensation_Size__c > 0)',
+        'Inactive_Suspended__c = false',
         ...(interoffice ? interofficeAccountConditions(schema) : []),
       ].join(' AND ');
       const relatedAccountWhere = [
         relatedAccountScope,
+        'Account__r.Inactive_Suspended__c = false',
         ...(interoffice ? interofficeAccountConditions(schema, 'Account__r') : []),
       ].filter(Boolean);
       const [accountResult, claimResult, recoveryResult] = await sfCompositeQueries([
@@ -301,10 +303,9 @@ async function contactsForAccount(accountId) {
 }
 
 async function assertAccountAccess(schema, accountId, interoffice) {
-  if (!interoffice) return;
-  const conditions = [`Id = '${soql(accountId)}'`, ...interofficeAccountConditions(schema)];
+  const conditions = [`Id = '${soql(accountId)}'`, 'Inactive_Suspended__c = false', ...(interoffice ? interofficeAccountConditions(schema) : [])];
   const result = await sfQuery(`SELECT Id FROM Account WHERE ${conditions.join(' AND ')} LIMIT 1`, { clean: true, limit: 1 });
-  if (!result.records[0]) throw serviceError('This Account is not available for Interoffice users.', 403);
+  if (!result.records[0]) throw serviceError('This Account is inactive or unavailable.', 403);
 }
 
 function stemBuyerAccessCondition(schema, interoffice) {
@@ -316,7 +317,7 @@ async function findStems(schema, keyword, interoffice) {
   const query = text(keyword);
   if (query.length < 2) return [];
   const fields = selected(schema.fields.stem, ['Id', 'Name', 'Delivery_Date__c', 'Account__c', 'LastModifiedDate']).concat(['Account__r.Name']);
-  const conditions = [`Name LIKE '%${soql(query)}%'`];
+  const conditions = [`Name LIKE '%${soql(query)}%'`, 'Account__r.Inactive_Suspended__c = false'];
   const access = stemBuyerAccessCondition(schema, interoffice);
   if (access) conditions.push(access);
   const result = await sfQuery(`SELECT ${fields.join(',')} FROM STEM__c WHERE ${conditions.join(' AND ')} ORDER BY LastModifiedDate DESC LIMIT 30`, { clean: true, limit: 30 });
@@ -347,7 +348,7 @@ async function stemRecoveryContext(schema, stemId, interoffice) {
   if (!participantIds.length) return { stem, lineItems: lineResult.records, eligibleAccounts: [] };
   const ids = soqlIds(participantIds);
   const [accountResult, claimResult] = await sfCompositeQueries([
-    { soql: `SELECT ${accountSelectFields(schema).join(',')} FROM Account WHERE Id IN (${ids})`, clean: true, limit: 500 },
+    { soql: `SELECT ${accountSelectFields(schema).join(',')} FROM Account WHERE Id IN (${ids}) AND Inactive_Suspended__c = false`, clean: true, limit: 500 },
     { soql: `SELECT ${claimSelectFields(schema).join(',')} FROM Agreed_Compensation__c WHERE Account__c IN (${ids}) AND Status__c = 'Opened' ORDER BY Account__c, Contact__c, CreatedDate`, clean: true, limit: 5000 },
   ]);
   const claimsByAccount = new Map();
