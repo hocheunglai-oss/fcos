@@ -16,6 +16,9 @@ test('chart assigns profit, volume, and monthly margin to three color-coded axes
   assert.match(component, /yAxisId="profit"/);
   assert.match(component, /yAxisId="volume" orientation="right"/);
   assert.match(component, /yAxisId="margin" orientation="right"/);
+  assert.doesNotMatch(component, /label=\{\{ value: currency/);
+  assert.doesNotMatch(component, /label=\{\{ value: 'MT'/);
+  assert.doesNotMatch(component, /label=\{\{ value: '%'/);
   assert.match(component, /dataKey="currentGrossMarginPct" name="Current gross margin" stroke="#7c3aed"/);
   assert.match(component, /dataKey="priorGrossMarginPct" name="Prior-year gross margin" stroke="#a78bfa"[^>]+strokeDasharray="6 4"/);
 });
@@ -29,6 +32,7 @@ test('month labels and tooltip pair current/prior actuals and retain product det
 });
 
 test('prior-year chart data can be hidden and restored from an in-chart label button', () => {
+  assert.match(component, /useState\(false\)/);
   assert.match(component, /aria-pressed=\{showPriorYear\}/);
   assert.match(component, /Prior year · \{showPriorYear \? 'Shown' : 'Hidden'\}/);
   assert.match(component, /showPriorYear \? <Bar yAxisId="profit" dataKey="priorGrossProfit"/);
