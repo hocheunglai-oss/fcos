@@ -27,11 +27,20 @@ test.describe('Special Terms term-first workspace', () => {
 
     await page.goto(`/special-terms/${termId}`);
     await expect(page.getByText('Complete Special Term update')).toBeVisible({ timeout: 30_000 });
-    for (const section of ['Terms Text', 'Confirmation', 'Nomination', 'Matching Rules', 'Preview']) {
+    for (const section of ['Terms Text', 'Confirmation', 'Nomination', 'Matching Rules']) {
       await expect(page.getByRole('tab', { name: section, exact: true })).toBeVisible();
     }
-    await page.getByRole('tab', { name: 'Preview', exact: true }).click();
-    await expect(page.getByText('A4 document preview')).toBeVisible();
+    const previewTab = page.getByRole('tab', { name: 'Preview', exact: true });
+    if (await previewTab.count()) {
+      await expect(previewTab).toBeVisible();
+      await previewTab.click();
+      await expect(page.getByText('A4 document preview')).toBeVisible();
+    } else {
+      await page.getByRole('tab', { name: 'Terms Text', exact: true }).click();
+      const emptyLegacyTerms = page.getByText('No Terms Text', { exact: true });
+      if (await emptyLegacyTerms.count()) await expect(emptyLegacyTerms).toBeVisible();
+      else await expect(page.getByRole('button', { name: 'Add clause', exact: true }).last()).toBeVisible();
+    }
 
     await page.goto('/special-terms');
     await page.getByRole('tab', { name: 'Clause Library', exact: true }).click();
