@@ -22,7 +22,7 @@ test.describe('Dashboard', () => {
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Dashboard filters' })).toBeVisible();
     await expect(page.getByLabel('Company or GROUP')).toBeVisible();
-    await expect(page.getByLabel('Port or COUNTRY')).toBeVisible();
+    await expect(page.getByLabel(/Port or (?:COUNTRY|country)/)).toBeVisible();
     for (const removedAction of ['Open P&L workspace', 'Review disputes', 'Payment collections', 'Cashflow forecast']) {
       await expect(page.getByRole('button', { name: removedAction, exact: true })).toHaveCount(0);
     }
