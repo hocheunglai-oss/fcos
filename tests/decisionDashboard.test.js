@@ -245,10 +245,11 @@ test('incomplete prior-year scope leaves gaps without suppressing current monthl
 });
 
 test('new dashboard handlers are authenticated, live-only, and supplier matching checks both child objects', async () => {
-  const [api, policies, analytics] = await Promise.all([
+  const [api, policies, analytics, rankings] = await Promise.all([
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/dashboard/DashboardAnalytics.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/dashboardAccountRankings.js', import.meta.url), 'utf8'),
   ]);
   for (const handler of ['dashboardSummary', 'dashboardStemList', 'dashboardAnalytics']) {
     assert.equal(api.includes(`${handler}: ['dashboard']`), true);
@@ -276,7 +277,8 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /decisionDashboardInternalAccountIdentity/);
   assert.match(loader, /normalizedGroupIdentity/);
   assert.match(loader, /Group_Name__c/);
-  assert.match(loader, /internalAccountIds\.has\(entity\.id\)/);
+  assert.match(api, /excludedAccountIds: internalAccountIds/);
+  assert.match(rankings, /excludedAccountIds\.has\(entity\.id\)/);
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
   assert.doesNotMatch(analytics, /Monthly gross profit by|MonthlyCounterpartyChart|monthlyCounterparties/);
   assert.match(analytics, /MonthlyPerformanceChart/);

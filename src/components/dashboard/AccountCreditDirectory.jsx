@@ -13,8 +13,8 @@ function money(value, currency) {
 
 function rankingRows(analytics) {
   return [
-    ...(analytics?.rankings?.accountsByNetPnl || []).map((row) => ({ ...row, role: 'buyer' })),
-    ...(analytics?.rankings?.suppliersByNetPnl || []).map((row) => ({ ...row, role: 'supplier' })),
+    ...(analytics?.directoryRankings?.buyers || analytics?.rankings?.accountsByNetPnl || []).map((row) => ({ ...row, role: 'buyer' })),
+    ...(analytics?.directoryRankings?.suppliers || analytics?.rankings?.suppliersByNetPnl || []).map((row) => ({ ...row, role: 'supplier' })),
   ].map((row) => ({ accountId: row.accountId, name: row.name, role: row.role, currency: row.currency || 'USD', grossProfit: row.grossProfit ?? row.netPnl, source: 'ranking' }));
 }
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { dashboardAccountInsightServiceInternals } from '../api/_dashboardAccountInsightService.js';
+import { dashboardAccountRankings } from '../src/lib/dashboardAccountRankings.js';
 import { dashboardFilterKey, normalizeDashboardSavedViews } from '../src/lib/dashboardFilters.js';
 
 const ACCOUNT = '001000000000001AAA';
@@ -57,18 +58,41 @@ test('saved Dashboard views normalize filters and reject duplicate names', () =>
   assert.equal(typeof dashboardFilterKey(views[0].filters), 'string');
 });
 
-test('Dashboard reuses one analytics response and Account Insight is linkable and lazy', async () => {
-  const [dashboard, account, app, directory] = await Promise.all([
+test('complete Account directory rankings retain Achieve Bunker outside the Top 10', () => {
+  const rows = Array.from({ length: 12 }, (_, index) => ({
+    currency: 'USD',
+    netPnl: 1200 - index * 100,
+    account: { id: `0010000000000${String(index).padStart(2, '0')}AAA`, name: index === 11 ? 'ACHIEVE BUNKER LTD' : `BUYER ${index + 1}` },
+    supplierAllocations: [{ id: `0010000000001${String(index).padStart(2, '0')}AAA`, name: index === 11 ? 'ACHIEVE BUNKER LTD' : `SUPPLIER ${index + 1}`, netPnl: 1200 - index * 100 }],
+  }));
+  const buyers = dashboardAccountRankings(rows, 'account');
+  const suppliers = dashboardAccountRankings(rows, 'supplier');
+  assert.equal(buyers.length, 12);
+  assert.equal(suppliers.length, 12);
+  assert.equal(buyers.slice(0, 10).some((row) => row.name === 'ACHIEVE BUNKER LTD'), false);
+  assert.equal(suppliers.slice(0, 10).some((row) => row.name === 'ACHIEVE BUNKER LTD'), false);
+  assert.equal(buyers.some((row) => row.name === 'ACHIEVE BUNKER LTD'), true);
+  assert.equal(suppliers.some((row) => row.name === 'ACHIEVE BUNKER LTD'), true);
+});
+
+test('Dashboard reuses complete rankings without attention or explanation panels and Account Insight stays linkable and lazy', async () => {
+  const [dashboard, dashboardKpis, account, app, directory, api] = await Promise.all([
     readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/dashboard/DashboardKpis.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/dashboard/AccountInsightModal.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/dashboard/AccountCreditDirectory.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
   ]);
   assert.equal((dashboard.match(/dashboardAnalytics/g) || []).length, 1);
   assert.doesNotMatch(dashboard, /loadAccounts/);
+  assert.doesNotMatch(dashboard, /DashboardAttention|Needs attention/);
+  assert.doesNotMatch(dashboardKpis, /Explain these figures|Live calculation evidence/);
   assert.match(app, /accounts\/:accountId/);
   assert.match(account, /section: activeTab/);
   assert.match(account, /Dashboard scope/);
   assert.match(account, /Explain these figures/);
   assert.match(directory, /One searchable table/);
+  assert.match(directory, /directoryRankings\?\.buyers/);
+  assert.match(api, /directoryRankings: \{ buyers: accountDirectoryRankings, suppliers: supplierDirectoryRankings \}/);
 });

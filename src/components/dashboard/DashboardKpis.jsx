@@ -1,6 +1,4 @@
-import { useState } from 'react';
-import { AlertTriangle, Building2, Calculator, Package } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { AlertTriangle, Building2, Package } from 'lucide-react';
 import StatCard from '@/components/dashboard/StatCard';
 
 const number = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -28,8 +26,7 @@ function ProductVolumeCard({ productVolume }) {
   return <div className="glass-surface rounded-xl border border-border bg-card p-4"><div className="flex items-center gap-2"><Package className="h-4 w-4 text-cyan-700" /><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product volume</p></div><p className="mt-3 text-xl font-bold tabular-nums">{number(productVolume.quantity).toLocaleString(undefined, { maximumFractionDigits: 2 })} {productVolume.unitOfMeasure || 'MT'}</p><p className="mt-1 text-xs text-muted-foreground">Ordered quantity before delivery; BDN quantity after actual delivery</p><div className="mt-3 flex flex-wrap gap-x-3 gap-y-1.5">{(productVolume.breakdown || []).map((item) => <span key={`${item.family}:${item.unitOfMeasure}`} className="inline-flex items-center gap-1.5 text-[11px]"><span className={`h-2.5 w-2.5 rounded-sm ${PRODUCT_COLORS[String(item.family).toUpperCase()] || 'bg-slate-500'}`} /><span className="text-muted-foreground">{item.family}</span><strong>{number(item.quantity)?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {item.unitOfMeasure || 'MT'}</strong></span>)}</div></div>;
 }
 
-export default function DashboardKpis({ summary, onShowStems }) {
-  const [showCalculation, setShowCalculation] = useState(false);
+export default function DashboardKpis({ summary }) {
   const rows = currencyRows(summary);
   const stemCount = summary?.matchingCount ?? summary?.stemCount ?? summary?.stemTotal;
   const accountCount = summary?.accountCount ?? summary?.buyerAccountCount;
@@ -44,8 +41,6 @@ export default function DashboardKpis({ summary, onShowStems }) {
       <ProductVolumeCard productVolume={summary?.productVolumeKpi || summary?.productVolume} />
     </div>
     {complete ? <div className="grid gap-3 lg:grid-cols-3"><FinancialCard label="Turnover" field="buyer" rows={rows} accent="text-sky-700" /><FinancialCard label="Gross profit" field="netPnl" rows={rows} accent="text-emerald-700" /><FinancialCard label="Gross margin" field="grossMarginPct" rows={rows} accent="text-violet-700" percent /></div> : <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{summary?.matchingCount?.toLocaleString?.() ?? 'Some'} STEMs match, but only {summary?.processedCount?.toLocaleString?.() ?? 'part'} of the selection has been processed. Financial KPIs are withheld until the scope is complete.</div>}
-    <div><Button type="button" size="sm" variant="outline" aria-expanded={showCalculation} onClick={() => setShowCalculation((visible) => !visible)}><Calculator className="mr-1.5 h-3.5 w-3.5" />{showCalculation ? 'Hide calculation' : 'Explain these figures'}</Button></div>
-    {showCalculation ? <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-xs text-sky-950"><div className="font-semibold">Live calculation evidence</div><p className="mt-1">Every currency is calculated separately. Gross profit = buyer turnover − supplier cost − buyer/supplier broker commissions. Gross margin = gross profit ÷ buyer turnover.</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{rows.map((row) => <div key={row.currency} className="rounded-md border border-sky-200 bg-background p-2 tabular-nums"><strong>{row.currency}</strong><div className="mt-1">{money(row.buyer, row.currency)} − {money(row.supplier, row.currency)} − {money(row.brokerCommissions, row.currency)} = <strong>{money(row.netPnl, row.currency)}</strong></div><div>{number(row.netPnl) == null || number(row.buyer) === 0 ? 'Margin unavailable' : `${number(row.netPnl).toLocaleString()} ÷ ${number(row.buyer).toLocaleString()} = ${number(row.grossMarginPct).toFixed(1)}%`}</div><div className="mt-1 text-muted-foreground">{number(row.stemCount)?.toLocaleString() || 0} underlying STEMs</div></div>)}</div>{onShowStems ? <Button type="button" size="sm" variant="link" className="mt-2 h-auto px-0" onClick={onShowStems}>Open the underlying STEM evidence</Button> : null}</div> : null}
     {(summary?.dataWarnings || []).map((warning) => <div key={warning} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{warning}</div>)}
   </section>;
 }
