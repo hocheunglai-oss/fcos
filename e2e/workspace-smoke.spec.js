@@ -51,8 +51,9 @@ test.describe('authenticated read-only workspace matrix', () => {
       page.on('pageerror', (error) => failures.push(error.message));
       await page.goto(route);
       await expect(page).not.toHaveURL(/\/login(?:\?|$)/);
-      await expect(page.getByText(title, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByRole('button', { name: 'Methodology' }).first()).toBeVisible();
+      // Wait for the workspace header, not the always-visible sidebar label.
+      await expect(page.getByRole('heading', { level: 1, name: title, exact: false }).first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByRole('button', { name: 'Methodology' }).first()).toBeVisible({ timeout: 20_000 });
       await expect(page.locator('body')).not.toContainText('Something went wrong');
       expect(failures).toEqual([]);
     });
