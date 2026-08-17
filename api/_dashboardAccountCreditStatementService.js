@@ -385,7 +385,8 @@ function stemSelectFields(fields) {
   const result = selected(fields, [
     'Id', 'Name', 'CreatedDate', 'LastModifiedDate', 'Account__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c',
     'Expected_Delivery_Date_Payment_Term__c', 'Payment_Term__c', 'Payment_Term_Number__c', 'Invoice_Due_Date__c',
-    'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Payment_Date__c', 'Invoice_Status__c', 'QLIK_Receivable_Balance__c', 'CurrencyIsoCode',
+    'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Payment_Date__c', 'Invoice_Status__c', 'Total_Invoice_Amount__c',
+    'QLIK_Receivable_Balance__c', 'CurrencyIsoCode',
   ]);
   if (fields.has('Account__c')) result.push('Account__r.Name');
   return [...new Set(result)];

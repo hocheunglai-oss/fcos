@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.171',
+    releasedAt: '2026-08-17',
+    title: 'Include expected invoice amounts',
+    changes: [
+      'Adds the live Salesforce STEM invoice total to copied Statement Evidence when the Buyer Invoice has not yet been issued.',
+      'Keeps Not Issued explicit, labels the value as Expected Invoice Amount, and appends currency-separated expected-amount totals.',
+    ],
+  },
+  {
     version: '2.0.170',
     releasedAt: '2026-08-17',
     title: 'Clarify expected invoice due dates',

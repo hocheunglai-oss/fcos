@@ -647,6 +647,8 @@ export function buildAccountCreditStatement({
     const buyerInvoiceDueDate = buyerInvoiceDueDates[0] || null;
     const expectedDueCandidate = releaseCandidate(stem, cashflowsByStem[stem.Id] || [], dateOnly(today));
     const expectedBuyerInvoiceDueDate = expectedDueCandidate.date || expectedDueCandidate.missedDate || null;
+    const stemInvoiceTotal = number(stem.Total_Invoice_Amount__c);
+    const expectedBuyerInvoiceAmount = currencyAmount(stemInvoiceTotal ?? number(stem.QLIK_Receivable_Balance__c));
     return {
       stemId: stem.Id,
       stemName: stem.Name || stem.Id,
@@ -672,6 +674,8 @@ export function buildAccountCreditStatement({
       buyerInvoiceAmount: buyerInvoiceAmountComplete ? currencyAmount(buyerInvoiceAmounts.reduce((sum, amount) => sum + amount, 0)) : null,
       buyerInvoiceAmountComplete,
       buyerInvoiceDueDate,
+      expectedBuyerInvoiceAmount,
+      expectedBuyerInvoiceAmountSource: stemInvoiceTotal != null ? 'stem_total_invoice' : 'current_exposure',
       expectedBuyerInvoiceDueDate,
       buyerInvoiceDaysUntilDue: daysBetweenDates(today, buyerInvoiceDueDate),
       buyerInvoiceLastModifiedAt: buyerInvoices.map((invoice) => invoice.LastModifiedDate).filter(Boolean).sort().at(-1) || null,

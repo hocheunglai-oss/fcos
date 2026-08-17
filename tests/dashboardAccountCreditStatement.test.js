@@ -388,7 +388,7 @@ test('undated residual counts keep selected Account and GROUP STEMs distinct', (
 });
 
 test('statement rows expose only complete live final buyer-invoice totals for selection', () => {
-  const stem = { Id: 'a01000000000051AAA', Name: 'INVOICED STEM', Account__c: accountId, Account__r: { Name: 'BUYER A' }, CurrencyIsoCode: 'USD', Delivery_Date__c: '2026-08-01', QLIK_Receivable_Balance__c: 100 };
+  const stem = { Id: 'a01000000000051AAA', Name: 'INVOICED STEM', Account__c: accountId, Account__r: { Name: 'BUYER A' }, CurrencyIsoCode: 'USD', Delivery_Date__c: '2026-08-01', Total_Invoice_Amount__c: 125, QLIK_Receivable_Balance__c: 100 };
   const statement = buildAccountCreditStatement({
     today: '2026-08-17',
     account: { Id: accountId, Name: 'BUYER A', CL_Category__c: 'Individual', CL_Individual__c: 500, CL_Used_Customer__c: 100 },
@@ -424,6 +424,8 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   });
   assert.equal(notIssued.rows[0].hasBuyerInvoice, false);
   assert.equal(notIssued.rows[0].buyerInvoiceDueDate, null);
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmount, 125);
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountSource, 'stem_total_invoice');
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceDueDate, '2026-09-22');
   assert.equal(notIssued.rows[0].buyerInvoiceDaysUntilDue, null);
 });
@@ -532,6 +534,9 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /Not Issued/);
   assert.match(statement, /bg-red-50\/70/);
   assert.match(statement, /Expected Due Date/);
+  assert.match(statement, /Expected Invoice Amount/);
+  assert.match(statement, /Total expected invoice amount/);
+  assert.match(statement, /expectedBuyerInvoiceAmount/);
   assert.match(statement, /expectedBuyerInvoiceDueDate/);
   assert.match(statement, /paymentReminderCopyText/);
   assert.match(statement, /!row\.hasBuyerInvoice \|\| row\.buyerInvoiceAmountComplete/);

@@ -19,11 +19,11 @@ test('statement copy identifies a missing buyer invoice, preserves its expected 
     paymentReminderCopyText([{
       stemName: 'HK2627001T',
       buyerName: 'Buyer A',
-      amount: 'Invoice Not Issued',
+      amount: 'Invoice Not Issued - Expected Invoice Amount $125.00',
       dueDate: '22 Sep 2026',
       dueDateLabel: 'Expected Due Date',
       status: null,
-    }], ['Buyer invoice not issued - 1 STEM']),
-    'HK2627001T - BUYER A - INVOICE NOT ISSUED - EXPECTED DUE DATE 22 SEP 2026\nBUYER INVOICE NOT ISSUED - 1 STEM',
+    }], ['Total expected invoice amount - $125.00', 'Buyer invoice not issued - 1 STEM']),
+    'HK2627001T - BUYER A - INVOICE NOT ISSUED - EXPECTED INVOICE AMOUNT $125.00 - EXPECTED DUE DATE 22 SEP 2026\nTOTAL EXPECTED INVOICE AMOUNT - $125.00\nBUYER INVOICE NOT ISSUED - 1 STEM',
   );
 });

@@ -183,6 +183,13 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
     totals[rowCurrency] = (totals[rowCurrency] || 0) + Number(row.buyerInvoiceAmount || 0);
     return totals;
   }, {});
+  const selectedExpectedInvoiceTotals = selectedInvoiceRows.reduce((totals, row) => {
+    const expectedAmount = numeric(row.expectedBuyerInvoiceAmount);
+    if (row.hasBuyerInvoice || expectedAmount == null) return totals;
+    const rowCurrency = row.currency || currency || 'USD';
+    totals[rowCurrency] = (totals[rowCurrency] || 0) + expectedAmount;
+    return totals;
+  }, {});
 
   const toggleInvoice = (row) => {
     setCopyState('idle');
@@ -206,12 +213,15 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
   const copySelectedInvoices = async () => {
     const totalLines = [
       ...Object.entries(selectedInvoiceTotals).map(([totalCurrency, amount]) => `Total issued invoice amount - ${reminderCopyMoney(amount, totalCurrency)}`),
+      ...Object.entries(selectedExpectedInvoiceTotals).map(([totalCurrency, amount]) => `Total expected invoice amount - ${reminderCopyMoney(amount, totalCurrency)}`),
       ...(selectedNotIssuedCount ? [`Buyer invoice not issued - ${selectedNotIssuedCount} STEM${selectedNotIssuedCount === 1 ? '' : 's'}`] : []),
     ];
     const copyText = paymentReminderCopyText(selectedInvoiceRows.map((row) => ({
       stemName: row.stemName,
       buyerName: row.accountName || result.identity.name,
-      amount: row.hasBuyerInvoice ? reminderCopyMoney(row.buyerInvoiceAmount, row.currency || currency) : 'Invoice Not Issued',
+      amount: row.hasBuyerInvoice
+        ? reminderCopyMoney(row.buyerInvoiceAmount, row.currency || currency)
+        : `Invoice Not Issued - Expected Invoice Amount ${reminderCopyMoney(row.expectedBuyerInvoiceAmount, row.currency || currency)}`,
       dueDate: row.hasBuyerInvoice ? displayDate(row.buyerInvoiceDueDate) : displayDate(row.expectedBuyerInvoiceDueDate),
       dueDateLabel: row.hasBuyerInvoice ? 'Due Date' : 'Expected Due Date',
       status: row.hasBuyerInvoice ? reminderCopyStatus(row.buyerInvoiceDaysUntilDue) : null,
