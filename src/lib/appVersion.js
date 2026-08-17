@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.168',
+    releasedAt: '2026-08-17',
+    title: 'Clarify Salesforce credit capacity',
+    changes: [
+      'Applies Salesforce Individual, Group, and Special credit-category policies exactly, including uncapped GROUP sharing for COSCO and a one-unit threshold before showing calculated availability differences.',
+      'Moves applicable positive credit limits into a compact forecast legend, removes overlapping zero-limit labels, and removes the monthly buyer/supplier gross-profit chart and payload.',
+      'Hides Special Term live and draft document previews when neither live nor draft Terms Text contains a clause.',
+      'Adds an N/A change-reason toggle that disables the whole-term reason field and submits N/A as the governed revision reason.',
+    ],
+  },
+  {
     version: '2.0.167',
     releasedAt: '2026-08-14',
     title: 'Enforce DEVEE-first Salesforce promotion',

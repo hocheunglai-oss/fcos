@@ -133,6 +133,51 @@ export function accountCreditSnapshot(account = {}, currency = null) {
   return { ...snapshot, ...accountCreditBalances(snapshot) };
 }
 
+export function accountCreditPolicy(snapshot = {}) {
+  const category = text(snapshot.category);
+  const specialIndividualLimit = number(snapshot.specialIndividualLimit);
+  if (category === 'Individual') {
+    return {
+      code: 'individual_only',
+      label: 'Individual only',
+      explanation: 'This Account uses only its individual credit limit and cannot share GROUP credit.',
+      formula: 'CL_Individual__c − CL_Used_Customer__c',
+    };
+  }
+  if (category === 'Group') {
+    return {
+      code: 'group_shared_uncapped',
+      label: 'GROUP shared · no individual cap',
+      explanation: 'This Account shares the remaining GROUP credit line without a separate individual cap.',
+      formula: 'CL_Group__c − CL_Used_Group__c',
+    };
+  }
+  if (category === 'Special' && specialIndividualLimit == null) {
+    return {
+      code: 'special_legacy_fallback',
+      label: 'Special · legacy Salesforce fallback',
+      explanation: 'The special individual limit is blank, so Salesforce applies its legacy Special-category fallback.',
+      formula: 'MAX(CL_Individual__c, CL_Used_Customer__c)',
+    };
+  }
+  if (category === 'Special') {
+    return {
+      code: specialIndividualLimit === 0 ? 'group_shared_zero_cap' : 'group_shared_special_cap',
+      label: specialIndividualLimit === 0 ? 'GROUP shared · zero special cap' : 'GROUP shared · special cap',
+      explanation: specialIndividualLimit === 0
+        ? 'This Account is linked to GROUP credit but its special individual cap is zero, so no GROUP credit is available to it.'
+        : 'This Account shares GROUP credit subject to both its special individual cap and the remaining GROUP capacity.',
+      formula: 'MIN(CL_Special__c − CL_Used_Customer__c, CL_Group__c + CL_Special_Group__c − CL_Used_Group__c)',
+    };
+  }
+  return {
+    code: 'unavailable',
+    label: 'Credit category unavailable',
+    explanation: 'Salesforce did not provide a supported credit category, so FCOS does not calculate category availability.',
+    formula: null,
+  };
+}
+
 export function normalizeCreditAccountName(name) {
   return text(name).replace(/\s+/g, ' ').toUpperCase();
 }
@@ -235,19 +280,63 @@ export function accountCreditBalances(snapshot = {}, overrides = {}) {
   const groupLimit = number(snapshot.groupLimit);
   const specialGroupLimit = number(snapshot.specialGroupLimit);
   const category = snapshot.category;
-  const individualCapacity = category === 'Special' ? specialIndividualLimit : individualLimit;
-  const groupCapacity = category === 'Special'
-    ? value(groupLimit) + value(specialGroupLimit)
-    : groupLimit;
-  const individualBalance = individualCapacity == null || usedCustomer == null ? null : individualCapacity - usedCustomer;
-  const groupBalance = groupCapacity == null || usedGroup == null ? null : groupCapacity - usedGroup;
+  const policy = accountCreditPolicy({ ...snapshot, category, specialIndividualLimit });
+  let individualCapacity = null;
+  let groupCapacity = null;
+  let individualBalance = null;
+  let groupBalance = null;
   let calculatedAvailable = null;
-  if (category === 'Individual') calculatedAvailable = individualBalance;
-  else if (category === 'Group') calculatedAvailable = groupBalance;
-  else if (category === 'Special') {
-    calculatedAvailable = individualBalance == null || groupBalance == null ? null : Math.min(individualBalance, groupBalance);
+  if (category === 'Individual') {
+    individualCapacity = individualLimit;
+    individualBalance = individualCapacity == null || usedCustomer == null ? null : individualCapacity - usedCustomer;
+    calculatedAvailable = individualBalance;
+  } else if (category === 'Group') {
+    groupCapacity = groupLimit;
+    groupBalance = groupCapacity == null || usedGroup == null ? null : groupCapacity - usedGroup;
+    calculatedAvailable = groupBalance;
   }
-  return { individualCapacity, groupCapacity, individualBalance, groupBalance, calculatedAvailable };
+  else if (category === 'Special') {
+    groupCapacity = value(groupLimit) + value(specialGroupLimit);
+    groupBalance = usedGroup == null ? null : groupCapacity - usedGroup;
+    if (specialIndividualLimit == null) {
+      calculatedAvailable = Math.max(value(individualLimit), value(usedCustomer));
+    } else {
+      individualCapacity = specialIndividualLimit;
+      individualBalance = usedCustomer == null ? null : individualCapacity - usedCustomer;
+      calculatedAvailable = individualBalance == null || groupBalance == null ? null : Math.min(individualBalance, groupBalance);
+    }
+  }
+  const salesforceAvailable = number(snapshot.salesforceAvailable);
+  const availableDifference = calculatedAvailable == null || salesforceAvailable == null
+    ? null
+    : currencyAmount(calculatedAvailable - salesforceAvailable);
+  const availableComparison = {
+    comparable: availableDifference != null,
+    difference: availableDifference,
+    materiallyDifferent: availableDifference != null && Math.abs(availableDifference) > CREDIT_RECONCILIATION_TOLERANCE,
+    tolerance: CREDIT_RECONCILIATION_TOLERANCE,
+    formula: policy.formula,
+    explanation: policy.explanation,
+  };
+  const referenceLimits = [];
+  if (category === 'Individual' && individualLimit > 0) {
+    referenceLimits.push({ key: 'individual_limit', scope: 'account', label: 'Individual limit', value: individualLimit });
+  } else if (category === 'Group' && groupLimit > 0) {
+    referenceLimits.push({ key: 'group_limit', scope: 'group', label: 'GROUP limit', value: groupLimit });
+  } else if (category === 'Special') {
+    if (specialIndividualLimit > 0) referenceLimits.push({ key: 'special_account_cap', scope: 'account', label: 'Special Account cap', value: specialIndividualLimit });
+    if (groupCapacity > 0) referenceLimits.push({ key: 'special_group_capacity', scope: 'group', label: 'GROUP capacity', value: groupCapacity });
+  }
+  return {
+    individualCapacity,
+    groupCapacity,
+    individualBalance,
+    groupBalance,
+    calculatedAvailable,
+    policy,
+    availableComparison,
+    referenceLimits,
+  };
 }
 
 export function reconcileCreditExposure(expected, reconstructed, { complete = true, tolerance = CREDIT_RECONCILIATION_TOLERANCE } = {}) {

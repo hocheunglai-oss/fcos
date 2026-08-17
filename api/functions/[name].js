@@ -9,7 +9,7 @@ import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../.
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardMonthlyComparison, dashboardMonthlyCounterpartySeries, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { dashboardCurrency, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
@@ -8693,7 +8693,6 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
         monthly: monthlyYearOverYear,
         monthlyVolume: monthlyVolumeYearOverYear,
       },
-      monthlyCounterparties: dashboardMonthlyCounterpartySeries(current.rows, body.counterpartyMode),
     },
     comparisonByCurrency: currentSummary.complete && priorSummary.complete
       ? decisionDashboardCurrencyComparison(currentSummary.financials, priorSummary.financials)
@@ -8713,10 +8712,10 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v5-stems'
+      ? 'decision-dashboard-v6-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v5-analytics'
-        : `decision-dashboard-v5-${handler}`,
+        ? 'decision-dashboard-v6-analytics'
+        : `decision-dashboard-v6-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],

@@ -159,7 +159,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Buyer-leg credit statements',
-      body: 'Credit Statements default to open buyer-leg exposure and include only STEMs whose Salesforce Account lookup is the selected active Account and whose actual Delivery Date, or Expected Delivery Date when actual is unavailable, is on or after 1 January 2026. Supplier line items, extra costs, brokers, inactive duplicate Accounts, and earlier deliveries never widen exposure. Current signed QLIK receivable balances reconcile independently to individual and ultimate-GROUP used-credit fields within one currency unit. If the selected Account credit fields conflict, FCOS may use exactly one compatible, uniquely reconciling same-name lineage snapshot and duplicate-record Created Date window. Square step lines show remaining individual and GROUP exposure after each evidenced release. Exposure without a reliable date remains in the final plateau instead of receiving an invented release date. Diagnostic assumptions are available on demand and hidden by default. Statement rows with complete live final Buyer Invoices can be selected, totalled by currency, and copied in the Payment Reminder detail format without sending an email.',
+      body: 'Credit Statements default to open buyer-leg exposure and include only STEMs whose Salesforce Account lookup is the selected active Account and whose actual Delivery Date, or Expected Delivery Date when actual is unavailable, is on or after 1 January 2026. Supplier line items, extra costs, brokers, inactive duplicate Accounts, and earlier deliveries never widen exposure. Salesforce CL Category controls access: Individual uses only its Account limit, Group shares remaining GROUP capacity without an individual cap, and Special shares GROUP capacity subject to its special Account cap. CL_Available_Credit__c remains authoritative; FCOS shows its calculated category value only when the difference exceeds one currency unit. Current signed QLIK receivable balances reconcile independently to Account and ultimate-GROUP used-credit fields within that tolerance. If the selected Account credit fields conflict, FCOS may use exactly one compatible, uniquely reconciling same-name lineage snapshot and duplicate-record Created Date window. Square step lines show remaining Account and GROUP exposure after each evidenced release, while applicable positive limits appear in a compact legend rather than over the chart. Exposure without a reliable date remains in the final plateau instead of receiving an invented release date. Diagnostic assumptions are available on demand and hidden by default. Statement rows with complete live final Buyer Invoices can be selected, totalled by currency, and copied in the Payment Reminder detail format without sending an email.',
     },
     {
       title: 'AI Search',
@@ -466,7 +466,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Term-first workflow',
-      body: 'The Special Terms list loads lightweight summaries and presents one status, one next action, and one primary button. Opening a term creates a local working copy immediately. Terms Text, Confirmation, Nomination, Matching Rules, and Preview load only for that term, use one change reason, and finish with Submit for approval or Approve & publish. Successful actions merge their authoritative Salesforce result locally without reloading the workspace.',
+      body: 'The Special Terms list loads lightweight summaries and presents one status, one next action, and one primary button. Opening a term creates a local working copy immediately. Terms Text, Confirmation, Nomination, Matching Rules, and Preview load only for that term, use one change-reason result, and finish with Submit for approval or Approve & publish. Users may explicitly select N/A when no explanatory reason applies; FCOS then disables the reason field and records N/A. Successful actions merge their authoritative Salesforce result locally without reloading the workspace.',
     },
     {
       title: 'Clause Library',
@@ -494,7 +494,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Generated documents',
-      body: 'FCOS generates live PDF and editable Word documents from the authoritative Salesforce Terms Text only. Both formats use the same A4 letterhead, typography, numbering, and page layout; Confirmation and Nomination remarks remain separate. Saved revisions may be reviewed as watermarked draft PDFs, while unsaved drafts and draft Word files cannot be downloaded. Editing a downloaded Word file never changes Salesforce or creates an approved FCOS revision.',
+      body: 'FCOS generates live PDF and editable Word documents from the authoritative Salesforce Terms Text only. Both formats use the same A4 letterhead, typography, numbering, and page layout; Confirmation and Nomination remarks remain separate. The Preview section and live/draft document controls appear only when live or draft Terms Text contains at least one clause. Saved revisions may be reviewed as watermarked draft PDFs, while unsaved drafts and draft Word files cannot be downloaded. Editing a downloaded Word file never changes Salesforce or creates an approved FCOS revision.',
     },
     {
       title: 'Copying remarks',

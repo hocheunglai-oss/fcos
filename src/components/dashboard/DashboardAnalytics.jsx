@@ -3,7 +3,6 @@ import { Bar, Cell, ComposedChart, Legend, Line, Rectangle, ResponsiveContainer,
 import { Loader2 } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
 
-const COLORS = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#dc2626', '#0891b2'];
 const MONTH_FORMATTER = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 function monthLabel(value) {
@@ -51,26 +50,6 @@ function MonthlyPerformanceChart({ comparison }) {
   return <section className="relative rounded-xl border border-border bg-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-sm font-semibold">Monthly gross profit, volume and margin</h3><p className="mt-1 text-xs text-muted-foreground">Each month is paired with the same calendar month last year. Bars show actual gross profit and MT volume; purple lines show each month’s independently calculated gross margin.</p></div><button type="button" aria-pressed={showPriorYear} onClick={() => setShowPriorYear((visible) => !visible)} className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground shadow-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Prior year · {showPriorYear ? 'Shown' : 'Hidden'}</button></div>{comparison?.complete === false && showPriorYear ? <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">Prior-year Salesforce data is incomplete. Current values remain visible; prior-year series are shown as gaps.</p> : null}<div className="mt-4 space-y-6">{model.map(({ currency, rows }) => <CurrencyMonthlyChart key={currency} currency={currency} rows={rows} showPriorYear={showPriorYear} />)}</div></section>;
 }
 
-function monthlyCounterpartyModel(data, currency) {
-  const series = (data?.series || []).filter((item) => (item.currency || 'USD') === currency);
-  const seriesKeys = new Set(series.map((item) => item.seriesKey));
-  const byMonth = new Map();
-  for (const point of data?.points || []) {
-    if (!seriesKeys.has(point.seriesKey)) continue;
-    const row = byMonth.get(point.month) || { month: point.month };
-    row[point.seriesKey] = Number(point.grossProfit || 0);
-    byMonth.set(point.month, row);
-  }
-  return { series, rows: [...byMonth.values()].sort((left, right) => left.month.localeCompare(right.month)) };
-}
-
-function MonthlyCounterpartyChart({ data, counterpartyMode }) {
-  const currencies = [...new Set((data?.series || []).map((item) => item.currency || 'USD'))].sort();
-  if (!currencies.length) return null;
-  const label = counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
-  return <section className="rounded-xl border border-border bg-card p-4"><h3 className="text-sm font-semibold">Monthly gross profit by {label}</h3><p className="mt-1 text-xs text-muted-foreground">Stacked monthly contribution from the top 10 {label}s in the selected period.</p><div className="mt-4 space-y-6">{currencies.map((currency) => { const model = monthlyCounterpartyModel(data, currency); return <div key={currency}><p className="mb-2 text-xs font-semibold text-muted-foreground">{currency}</p><ResponsiveContainer width="100%" height={300}><ComposedChart data={model.rows} margin={{ right: 12 }}><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} /><Tooltip formatter={(value, name) => [`${currency} ${Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, name]} /><Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />{model.series.map((item, index) => <Bar key={item.seriesKey} dataKey={item.seriesKey} name={item.name} stackId={currency} fill={COLORS[index % COLORS.length]} radius={index === model.series.length - 1 ? [4, 4, 0, 0] : undefined} />)}</ComposedChart></ResponsiveContainer></div>; })}</div></section>;
-}
-
 function TopAccounts({ rows, counterpartyMode, onAccountClick }) {
   if (!rows.length) return null;
   const max = Math.max(...rows.map((row) => Math.abs(Number(row.netPnl || row.grossProfit || 0))), 1);
@@ -83,8 +62,7 @@ export default function DashboardAnalytics({ data, loading, error, onLoad, count
   if (loading && !data) return <div className="flex min-h-56 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading analytics…</div>;
   if (error && !data) return <StateBlock title="Analytics unavailable" description={error} />;
   const monthlyComparison = data?.trend?.monthlyComparison || null;
-  const monthlyCounterparties = data?.trend?.monthlyCounterparties || null;
   const ranking = counterpartyMode === 'supplier' ? data?.rankings?.suppliersByNetPnl || [] : data?.rankings?.accountsByNetPnl || [];
-  if (!monthlyComparison?.rows?.length && !monthlyCounterparties?.series?.length && !ranking.length) return <StateBlock title="No analytics for this selection" description="Try a wider period or remove a filter." />;
-  return <div className="space-y-4"><MonthlyPerformanceChart comparison={monthlyComparison} /><MonthlyCounterpartyChart data={monthlyCounterparties} counterpartyMode={counterpartyMode} /><TopAccounts rows={ranking} counterpartyMode={counterpartyMode} onAccountClick={onAccountClick} /></div>;
+  if (!monthlyComparison?.rows?.length && !ranking.length) return <StateBlock title="No analytics for this selection" description="Try a wider period or remove a filter." />;
+  return <div className="space-y-4"><MonthlyPerformanceChart comparison={monthlyComparison} /><TopAccounts rows={ranking} counterpartyMode={counterpartyMode} onAccountClick={onAccountClick} /></div>;
 }

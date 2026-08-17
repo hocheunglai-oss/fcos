@@ -11,6 +11,13 @@ const SCOPES = [
   { value: 'all', label: 'All history' },
 ];
 
+const CREDIT_LIMIT_COLORS = {
+  individual_limit: '#0369a1',
+  group_limit: '#7c3aed',
+  special_account_cap: '#0d9488',
+  special_group_capacity: '#a855f7',
+};
+
 function numeric(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -42,8 +49,8 @@ function reminderCopyStatus(daysUntilDue) {
   return 'Due Soon';
 }
 
-function CreditKpi({ label, value, currency, detail, warning = false }) {
-  return <div className={`rounded-lg border p-3 ${warning ? 'border-amber-200 bg-amber-50' : 'border-border bg-card'}`}><div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div><div className="mt-1 text-lg font-semibold tabular-nums">{money(value, currency)}</div>{detail ? <div className="mt-1 text-xs text-muted-foreground">{detail}</div> : null}</div>;
+function CreditKpi({ label, value, displayValue = null, currency, detail, warning = false }) {
+  return <div className={`rounded-lg border p-3 ${warning ? 'border-amber-200 bg-amber-50' : 'border-border bg-card'}`}><div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div><div className="mt-1 text-lg font-semibold tabular-nums">{displayValue ?? money(value, currency)}</div>{detail ? <div className="mt-1 text-xs text-muted-foreground">{detail}</div> : null}</div>;
 }
 
 function ReconciliationBadge({ label, result }) {
@@ -51,8 +58,41 @@ function ReconciliationBadge({ label, result }) {
   return <span className={`rounded-full px-2 py-1 text-xs font-semibold ${result?.matches ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}`}>{label}: {result?.matches ? 'Reconciled' : 'Projection hidden'}</span>;
 }
 
-function CreditPositionPanel({ title, reconciliation, values, currency, emptyMessage = null }) {
-  return <section className="rounded-xl border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{title}</h3><ReconciliationBadge label={title} result={reconciliation} /></div>{emptyMessage ? <div className="mt-4 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div> : <div className="mt-4 grid grid-cols-2 gap-3"><CreditKpi label="Base limit" value={values.base} currency={currency} /><CreditKpi label="Special limit" value={values.special} currency={currency} /><CreditKpi label="Used credit" value={values.used} currency={currency} /><CreditKpi label="Balance" value={reconciliation?.matches ? values.balance : null} currency={currency} warning={!reconciliation?.matches} /></div>}</section>;
+function CreditPositionPanel({ title, reconciliation, cards = [], currency, emptyMessage = null }) {
+  return <section className="rounded-xl border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{title}</h3><ReconciliationBadge label={title} result={reconciliation} /></div>{emptyMessage ? <div className="mt-4 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div> : <div className="mt-4 grid grid-cols-2 gap-3">{cards.map((card) => <CreditKpi key={card.label} {...card} currency={currency} />)}</div>}</section>;
+}
+
+function accountPositionCards(credit, reconciliation) {
+  if (credit.policy?.code === 'group_shared_uncapped') {
+    return [
+      { label: 'Used by Account', value: credit.usedCustomer },
+      { label: 'Credit access', displayValue: 'No individual cap', detail: 'Uses remaining GROUP capacity.' },
+    ];
+  }
+  if (credit.category === 'Special') {
+    return [
+      { label: 'Special Account cap', value: credit.specialIndividualLimit },
+      { label: 'Used by Account', value: credit.usedCustomer },
+      { label: 'Remaining special capacity', value: reconciliation?.matches ? credit.individualBalance : null, warning: !reconciliation?.matches },
+      { label: 'Credit access', displayValue: credit.specialIndividualLimit === 0 ? 'No available credit' : 'GROUP with cap', detail: 'Both Account and GROUP constraints apply.' },
+    ];
+  }
+  return [
+    { label: 'Individual limit', value: credit.individualLimit },
+    { label: 'Used by Account', value: credit.usedCustomer },
+    { label: 'Individual balance', value: reconciliation?.matches ? credit.individualBalance : null, warning: !reconciliation?.matches },
+    { label: 'Credit access', displayValue: credit.category === 'Individual' ? 'Individual only' : 'Unavailable', detail: credit.category === 'Individual' ? 'GROUP capacity is not available.' : 'Salesforce category is not supported.' },
+  ];
+}
+
+function groupPositionCards(credit, reconciliation) {
+  const cards = [{ label: 'GROUP limit', value: credit.groupLimit }];
+  if (credit.category === 'Special') cards.push({ label: 'Special GROUP uplift', value: credit.specialGroupLimit });
+  cards.push(
+    { label: 'Used by GROUP', value: credit.usedGroup },
+    { label: 'GROUP balance', value: reconciliation?.matches ? credit.groupBalance : null, warning: !reconciliation?.matches },
+  );
+  return cards;
 }
 
 function ReleaseTooltip({ active, payload, label, currency }) {
@@ -61,13 +101,23 @@ function ReleaseTooltip({ active, payload, label, currency }) {
   return <div className="max-w-sm rounded-md border border-border bg-background p-3 text-xs shadow-lg"><div className="font-semibold">{point.residualPlateau ? 'Undated residual plateau' : `Forecast point ${displayDate(label)}`}</div>{point.events?.length ? <div className="mt-2 space-y-2">{point.events.map((event) => <div key={`${event.stemId}:${event.date}:${event.source}`}><div className="font-medium">{event.stemName} · {money(event.amount, currency)}</div><div className="text-muted-foreground">Exact date {displayDate(event.date)} · {event.sourceLabel}{event.accountName ? ` · ${event.accountName}` : ''}</div></div>)}</div> : <div className="mt-1 text-muted-foreground">{point.residualPlateau ? 'Exposure without a reliable release date remains outstanding.' : 'Opening exposure before forecast releases.'}</div>}</div>;
 }
 
+export function visibleCreditLimitReferences(data, series) {
+  return (data?.credit?.referenceLimits || []).filter((limit) => {
+    if (!(numeric(limit.value) > 0)) return false;
+    if (limit.scope === 'account') return Boolean(series.account && data.reconciliation?.individual?.matches);
+    if (limit.scope === 'group') return Boolean(data.group && series.group && data.reconciliation?.group?.matches);
+    return false;
+  });
+}
+
 function ReleaseChart({ data, series }) {
   const chart = data.chart;
   const credit = data.credit;
   if (!data.complete || !chart?.points?.length || (!data.reconciliation?.individual?.matches && !data.reconciliation?.group?.matches)) {
     return <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-border text-center text-sm text-muted-foreground">A complete, reconciled future release projection is not available. Exact STEM evidence remains in the statement below.</div>;
   }
-  return <div className="h-[340px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chart.points} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(value) => String(value).slice(5)} /><YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(undefined, { notation: 'compact' })} /><Tooltip content={<ReleaseTooltip currency={credit.currency} />} /><Legend wrapperStyle={{ fontSize: 11 }} />{series.account && data.reconciliation.individual.matches ? <Line type="stepAfter" dataKey="individualExposure" name="Individual remaining exposure" stroke="#0369a1" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{data.group && series.group && data.reconciliation.group.matches ? <Line type="stepAfter" dataKey="groupExposure" name="GROUP remaining exposure" stroke="#7c3aed" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{series.account && numeric(credit.individualLimit) != null ? <ReferenceLine y={credit.individualLimit} stroke="#0369a1" strokeDasharray="4 4" label={{ value: 'Individual base', fontSize: 10 }} /> : null}{series.account && numeric(credit.specialIndividualLimit) != null ? <ReferenceLine y={credit.specialIndividualLimit} stroke="#0d9488" strokeDasharray="4 4" label={{ value: 'Special individual', fontSize: 10 }} /> : null}{data.group && series.group && numeric(credit.groupLimit) != null ? <ReferenceLine y={credit.groupLimit} stroke="#7c3aed" strokeDasharray="4 4" label={{ value: 'GROUP base', fontSize: 10 }} /> : null}{data.group && series.group && numeric(credit.specialGroupLimit) ? <ReferenceLine y={numeric(credit.groupLimit) + numeric(credit.specialGroupLimit)} stroke="#a855f7" strokeDasharray="4 4" label={{ value: 'GROUP + special', fontSize: 10 }} /> : null}</ComposedChart></ResponsiveContainer></div>;
+  const referenceLimits = visibleCreditLimitReferences(data, series);
+  return <div className="w-full">{referenceLimits.length ? <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground" aria-label="Applicable credit limits">{referenceLimits.map((limit) => <span key={limit.key} className="inline-flex items-center gap-1.5"><span className="w-5 border-t-2 border-dashed" style={{ borderColor: CREDIT_LIMIT_COLORS[limit.key] || '#64748b' }} aria-hidden="true" />{limit.label}: <span className="font-semibold text-foreground">{money(limit.value, credit.currency)}</span></span>)}</div> : null}<div className="h-[340px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chart.points} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(value) => String(value).slice(5)} /><YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(undefined, { notation: 'compact' })} /><Tooltip content={<ReleaseTooltip currency={credit.currency} />} /><Legend wrapperStyle={{ fontSize: 11 }} />{series.account && data.reconciliation.individual.matches ? <Line type="stepAfter" dataKey="individualExposure" name="Account remaining exposure" stroke="#0369a1" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{data.group && series.group && data.reconciliation.group.matches ? <Line type="stepAfter" dataKey="groupExposure" name="GROUP remaining exposure" stroke="#7c3aed" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{referenceLimits.map((limit) => <ReferenceLine key={limit.key} y={limit.value} stroke={CREDIT_LIMIT_COLORS[limit.key] || '#64748b'} strokeDasharray="4 4" ifOverflow="extendDomain" />)}</ComposedChart></ResponsiveContainer></div></div>;
 }
 
 function StatementCard({ row, currency, onStemClick, selected, onSelect }) {
@@ -185,12 +235,28 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
   if (loading && !result) return <div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading live buyer-leg credit statement…</div>;
   if (error && !result) return <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}<Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => load()}>Retry</Button></div>;
   if (!result) return null;
+  const creditPolicy = result.credit.policy || { label: result.credit.category || 'Unavailable', explanation: 'Salesforce credit policy is unavailable.' };
+  const availableComparison = result.credit.availableComparison || {};
+  const availableDifferenceDirection = numeric(availableComparison.difference) > 0 ? 'higher than' : 'lower than';
+  const availableDifferenceDetail = availableComparison.materiallyDifferent
+    ? `${availableComparison.formula}. Calculated availability is ${money(Math.abs(availableComparison.difference), currency)} ${availableDifferenceDirection} Salesforce.`
+    : null;
 
   return <div className="space-y-5" data-testid="account-credit-statement">
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 lg:flex-row lg:items-center lg:justify-between"><div><h2 className="font-semibold">Buyer-leg Credit Statement</h2><p className="mt-1 text-xs text-muted-foreground">{result.identity.name}{result.group ? ` · Ultimate GROUP ${result.group.name} · ${result.group.memberCount} hierarchy Accounts` : ' · No Salesforce GROUP ancestor'} · {currency}</p></div><div className="flex flex-wrap gap-2">{SCOPES.map((item) => <Button key={item.value} type="button" size="sm" variant={scope === item.value ? 'default' : 'outline'} onClick={() => { setResult(null); setNavigation({ cursor: null, history: [] }); setSelectedInvoiceIds(new Set()); setCopyState('idle'); setScope(item.value); }}>{item.label}</Button>)}<Button type="button" size="sm" variant="outline" aria-expanded={showAssumptions} onClick={() => setShowAssumptions((visible) => !visible)}>{showAssumptions ? <EyeOff className="mr-1.5 h-4 w-4" /> : <Eye className="mr-1.5 h-4 w-4" />}{showAssumptions ? 'Hide assumptions' : 'Show assumptions'}</Button><Button type="button" size="icon" variant="ghost" aria-label="Refresh Credit Statement" onClick={() => load({ cursor: navigation.cursor, history: navigation.history, force: true })} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></Button></div></div>
     {error ? <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
     {showAssumptions ? <div className="space-y-3">{result.creditResolution?.mode === 'same_name_fallback' ? <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950"><div className="font-semibold">Salesforce credit snapshot resolved</div><p className="mt-1 text-xs">{result.creditResolution.notice}</p><p className="mt-1 text-xs font-medium">Fallback CL Key: {result.creditResolution.clKey || 'Unavailable'} · Reconciliation window: {displayDate(result.creditResolution.reconciliationWindowStart)}</p></div> : null}{projectionWarnings.length ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-950"><AlertTriangle className="h-4 w-4" />Projection safeguards</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{projectionWarnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}</div> : null}
-    <section className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold">Credit position</h3><p className="mt-1 text-xs text-muted-foreground">Individual and GROUP limits remain separate.</p></div><span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-900">Category: {result.credit.category || 'Unavailable'}</span></div><div className="grid gap-3 xl:grid-cols-2"><CreditPositionPanel title="Individual" reconciliation={result.reconciliation.individual} currency={currency} values={{ base: result.credit.individualLimit, special: result.credit.specialIndividualLimit, used: result.credit.usedCustomer, balance: result.credit.individualBalance }} />{result.group ? <CreditPositionPanel title="GROUP" reconciliation={result.reconciliation.group} currency={currency} values={{ base: result.credit.groupLimit, special: result.credit.specialGroupLimit, used: result.credit.usedGroup, balance: result.credit.groupBalance }} /> : <CreditPositionPanel title="GROUP" reconciliation={{ notApplicable: true }} currency={currency} values={{}} emptyMessage="No Salesforce GROUP ancestor applies to this Account." />}</div><div className="grid gap-3 sm:grid-cols-2"><CreditKpi label="Salesforce effective available" value={result.credit.salesforceAvailable} currency={currency} detail="Authoritative CL_Available_Credit__c" /><CreditKpi label="Calculated category available" value={calculatedAvailable} currency={currency} detail="Calculated from the selected Salesforce credit category" /></div></section>
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">Credit position</h3><p className="mt-1 max-w-3xl text-xs text-muted-foreground">{creditPolicy.explanation}</p></div><span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-900">{creditPolicy.label}</span></div>
+      <div className="grid gap-3 xl:grid-cols-2">
+        <CreditPositionPanel title="Selected Account" reconciliation={result.reconciliation.individual} currency={currency} cards={accountPositionCards(result.credit, result.reconciliation.individual)} />
+        {result.group ? <CreditPositionPanel title="GROUP" reconciliation={result.reconciliation.group} currency={currency} cards={groupPositionCards(result.credit, result.reconciliation.group)} /> : <CreditPositionPanel title="GROUP" reconciliation={{ notApplicable: true }} currency={currency} emptyMessage="No Salesforce GROUP ancestor applies to this Account." />}
+      </div>
+      <div className={`grid gap-3 ${availableComparison.materiallyDifferent ? 'sm:grid-cols-2' : ''}`}>
+        <CreditKpi label="Salesforce effective available" value={result.credit.salesforceAvailable} currency={currency} detail="Authoritative CL_Available_Credit__c" />
+        {availableComparison.materiallyDifferent ? <CreditKpi label="Calculated category available" value={calculatedAvailable} currency={currency} detail={availableDifferenceDetail} warning /> : null}
+      </div>
+    </section>
     <section className="rounded-xl border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold">Remaining credit exposure forecast</h3><p className="mt-1 text-xs text-muted-foreground">Square step lines stay flat until an evidenced release date, then descend. Dense views are bucketed {result.chart?.granularity || 'by day'} without changing exact row details.</p></div><div className="flex rounded-md border border-border p-1"><button type="button" aria-pressed={series.account} className={`rounded px-3 py-1 text-xs font-semibold ${series.account ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`} onClick={() => setSeries((value) => ({ ...value, account: !value.account }))}>Selected Account</button>{result.group ? <button type="button" aria-pressed={series.group} className={`rounded px-3 py-1 text-xs font-semibold ${series.group ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`} onClick={() => setSeries((value) => ({ ...value, group: !value.group }))}>GROUP</button> : null}</div></div><div className="mt-4"><ReleaseChart data={result} series={series} /></div>{showAssumptions && result.chart?.undatedGroupStemCount ? <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><div className="font-semibold">Exposure retained without an evidenced future release date</div><div className="mt-1">Selected Account: {money(result.chart.undatedExposure?.individual, currency)} across {result.chart.undatedAccountStemCount} STEM{result.chart.undatedAccountStemCount === 1 ? '' : 's'}</div>{result.group ? <div>GROUP: {money(result.chart.undatedExposure?.group, currency)} across {result.chart.undatedGroupStemCount} STEM{result.chart.undatedGroupStemCount === 1 ? '' : 's'}</div> : null}<div className="mt-2 flex flex-wrap gap-2">{result.chart.undatedStems?.map((stem) => <button key={stem.stemId} type="button" className="font-semibold text-amber-950 underline underline-offset-2" onClick={() => onStemClick(stem.stemId)}>{stem.stemName} · {money(stem.amount, currency)}</button>)}</div></div> : null}</section>
     <section className="rounded-xl border border-border bg-card">
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">

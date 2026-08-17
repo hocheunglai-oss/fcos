@@ -138,6 +138,10 @@ test('Special Terms data is service-only and included in the Universal Audit Tra
   assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.textIndentMm/);
   assert.match(preview, /SPECIAL_TERMS_DOCUMENT_TOKENS\.list\.nestedTextIndentMm/);
   assert.match(preview, /Word is editable; Salesforce remains authoritative\. Attachments are PDF-only\./);
+  assert.match(preview, /if \(!hasLiveTerms && !hasDraftTerms\) return null/);
+  assert.doesNotMatch(preview, /No Terms Text clauses\./);
+  assert.match(revisionPanel, /hasTermsDocument/);
+  assert.match(revisionPanel, /\.\.\.\(hasTermsDocument \? \[\['preview', 'Preview'\]\] : \[\]\)/);
   const batchPanel = read('src/components/special-terms/MigrationBatchPanel.jsx');
   assert.match(batchPanel, /specialTermMigrationBatchList/);
   assert.match(batchPanel, /At most 20 related terms per batch/);

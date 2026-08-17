@@ -84,7 +84,7 @@ function DocumentSheet({ model, pageText, nextPageText, pageIndex, pageCount, zo
         <h2 className="text-left font-bold uppercase tracking-[0.08em] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.sectionLabelPt) }}>Special Terms</h2>
         <h3 className="mt-2 text-left font-bold leading-[1.15] text-[#00417b]" style={{ fontSize: previewPointSize(TYPE.titlePt) }}>{model.title}</h3>
         <div className="mt-2 h-px bg-[#00417b]" />
-        <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} nextPageText={nextPageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : 'No Terms Text clauses.'}</div>
+        <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} nextPageText={nextPageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : null}</div>
       </section>
       <footer className="absolute border-t border-[#00417b] pt-1 text-right text-[#00417b]" style={{ bottom: pagePercent(PAGE.heightMm - PAGE.footerTextMm, PAGE.heightMm), left: pagePercent(PAGE.leftMm, PAGE.widthMm), right: pagePercent(PAGE.rightMm, PAGE.widthMm), fontSize: previewPointSize(7) }}>Page {pageIndex + 1} of {pageCount}</footer>
     </article>
@@ -94,23 +94,29 @@ function DocumentSheet({ model, pageText, nextPageText, pageIndex, pageCount, zo
 export default function SpecialTermDocumentPreview({ term, detail, revision, unsaved = false, onExport }) {
   const [mode, setMode] = useState(revision?.id || revision?.status === 'Draft' ? 'draft' : 'live');
   const [zoom, setZoom] = useState('fit');
-  const model = useMemo(() => specialTermDocumentModel({ term, detail, revision, mode }), [detail, mode, revision, term]);
+  const liveModel = useMemo(() => specialTermDocumentModel({ term, detail, revision, mode: 'live' }), [detail, revision, term]);
+  const draftModel = useMemo(() => specialTermDocumentModel({ term, detail, revision, mode: 'draft' }), [detail, revision, term]);
+  const hasLiveTerms = Boolean(liveModel.termsText.trim());
+  const hasDraftTerms = Boolean(revision && draftModel.termsText.trim());
+  const effectiveMode = mode === 'draft' && hasDraftTerms ? 'draft' : hasLiveTerms ? 'live' : 'draft';
+  const model = effectiveMode === 'draft' ? draftModel : liveModel;
   const pages = useMemo(() => paginateDocumentText(model.termsText, { title: model.title }), [model.termsText, model.title]);
   const liveReadiness = useMemo(() => exportReadiness(term), [term]);
   const draftExportAllowed = Boolean(revision?.id) && !unsaved;
+  if (!hasLiveTerms && !hasDraftTerms) return null;
   return (
     <section className="min-w-0 space-y-3 rounded-lg border border-border bg-muted/20 p-3 sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /><strong className="text-sm">A4 document preview</strong><Badge variant={model.isDraft ? 'secondary' : 'default'}>{model.isDraft ? 'Draft preview' : 'Live document'}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Rendered locally from Terms Text clause state. Clause edits never call an export service.</p></div>
-        <div className="flex flex-wrap gap-1"><Button type="button" size="sm" variant={mode === 'live' ? 'default' : 'outline'} onClick={() => setMode('live')}><Monitor className="mr-1 h-3.5 w-3.5" />Live document</Button><Button type="button" size="sm" variant={mode === 'draft' ? 'default' : 'outline'} onClick={() => setMode('draft')} disabled={!revision}><FileClock className="mr-1 h-3.5 w-3.5" />Draft preview</Button></div>
+        <div className="flex flex-wrap gap-1">{hasLiveTerms ? <Button type="button" size="sm" variant={effectiveMode === 'live' ? 'default' : 'outline'} onClick={() => setMode('live')}><Monitor className="mr-1 h-3.5 w-3.5" />Live document</Button> : null}{hasDraftTerms ? <Button type="button" size="sm" variant={effectiveMode === 'draft' ? 'default' : 'outline'} onClick={() => setMode('draft')}><FileClock className="mr-1 h-3.5 w-3.5" />Draft preview</Button> : null}</div>
       </div>
       <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2">
-        <Button type="button" size="sm" variant="outline" onClick={() => onExport?.('pdf', mode)} disabled={model.isDraft && !draftExportAllowed}>PDF</Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => onExport?.('docx', mode)} disabled={model.isDraft}>Word</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => onExport?.('pdf', effectiveMode)} disabled={model.isDraft && !draftExportAllowed}>PDF</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => onExport?.('docx', effectiveMode)} disabled={model.isDraft}>Word</Button>
         {model.isDraft && unsaved ? <span className="text-xs text-amber-800">Save this revision before exporting its PDF.</span> : null}
-        {mode === 'live' ? <span className="text-xs text-muted-foreground">Word is editable; Salesforce remains authoritative. Attachments are PDF-only.</span> : <span className="text-xs text-amber-800">A saved draft may be exported as PDF only; it is not an attachment or issued document.</span>}
+        {effectiveMode === 'live' ? <span className="text-xs text-muted-foreground">Word is editable; Salesforce remains authoritative. Attachments are PDF-only.</span> : <span className="text-xs text-amber-800">A saved draft may be exported as PDF only; it is not an attachment or issued document.</span>}
       </div>
-      {mode === 'live' ? <div className={`rounded-md border p-2 text-xs ${liveReadiness.state === 'verified' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : liveReadiness.state === 'legacy' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-900'}`}><strong>{liveReadiness.label}.</strong> {liveReadiness.reason}</div> : null}
+      {effectiveMode === 'live' ? <div className={`rounded-md border p-2 text-xs ${liveReadiness.state === 'verified' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : liveReadiness.state === 'legacy' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-900'}`}><strong>{liveReadiness.label}.</strong> {liveReadiness.reason}</div> : null}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>{pages.length} {pages.length === 1 ? 'page' : 'pages'} · local preview</span>
         <div className="flex gap-1"><Button type="button" size="sm" variant={zoom === 'fit' ? 'secondary' : 'ghost'} onClick={() => setZoom('fit')}>Fit width</Button><Button type="button" size="sm" variant={zoom === '100' ? 'secondary' : 'ghost'} onClick={() => setZoom('100')}>100%</Button></div>

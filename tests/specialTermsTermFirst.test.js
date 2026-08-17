@@ -34,9 +34,12 @@ test('one complete editor action submits or atomically approves and publishes', 
   assert.match(panel, /\['confirmationRemark', 'Confirmation'\]/);
   assert.match(panel, /\['nominationRemark', 'Nomination'\]/);
   assert.match(panel, /\['rules', 'Matching Rules'\]/);
-  assert.match(panel, /\['preview', 'Preview'\]/);
+  assert.match(panel, /hasTermsDocument \? \[\['preview', 'Preview'\]\] : \[\]/);
   assert.match(panel, /canApprove \? 'approve_publish' : 'submit'/);
   assert.match(panel, /specialTermMigrationSaveAll/);
+  assert.match(panel, /aria-pressed=\{reasonNotApplicable\}/);
+  assert.match(panel, /reasonNotApplicable \? 'N\/A' : revisionReason/);
+  assert.match(panel, /disabled=\{reasonNotApplicable\}/);
   assert.doesNotMatch(panel.match(/const commit = async[\s\S]*?\n  };/)?.[0] || '', /specialTermMigrationSave['"]|specialTermDetail/);
   assert.match(panel, /Approve &amp; publish/);
   assert.doesNotMatch(panel.match(/const commit = async[\s\S]*?\n  };/)?.[0] || '', /setConfirm/);

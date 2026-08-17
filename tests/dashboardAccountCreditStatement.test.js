@@ -21,14 +21,60 @@ const groupId = '001000000000002AAA';
 const otherAccountId = '001000000000003AAA';
 
 test('credit category formulas preserve Salesforce individual, group, and special constraints', () => {
-  assert.deepEqual(accountCreditBalances({ category: 'Individual', individualLimit: 100, usedCustomer: 30 }), {
-    individualCapacity: 100, groupCapacity: null, individualBalance: 70, groupBalance: null, calculatedAvailable: 70,
-  });
-  assert.equal(accountCreditBalances({ category: 'Group', groupLimit: 500, usedGroup: 125 }).calculatedAvailable, 375);
-  assert.equal(accountCreditBalances({
+  const individual = accountCreditBalances({ category: 'Individual', individualLimit: 100, usedCustomer: 30 });
+  assert.equal(individual.individualCapacity, 100);
+  assert.equal(individual.individualBalance, 70);
+  assert.equal(individual.groupCapacity, null);
+  assert.equal(individual.calculatedAvailable, 70);
+  assert.equal(individual.policy.code, 'individual_only');
+  assert.deepEqual(individual.referenceLimits, [{ key: 'individual_limit', scope: 'account', label: 'Individual limit', value: 100 }]);
+
+  const group = accountCreditBalances({ category: 'Group', individualLimit: 0, specialIndividualLimit: 0, groupLimit: 500, usedCustomer: 30, usedGroup: 125 });
+  assert.equal(group.individualCapacity, null);
+  assert.equal(group.individualBalance, null);
+  assert.equal(group.groupCapacity, 500);
+  assert.equal(group.calculatedAvailable, 375);
+  assert.equal(group.policy.code, 'group_shared_uncapped');
+  assert.deepEqual(group.referenceLimits, [{ key: 'group_limit', scope: 'group', label: 'GROUP limit', value: 500 }]);
+
+  const special = accountCreditBalances({
     category: 'Special', specialIndividualLimit: 175, groupLimit: 500, specialGroupLimit: 50, usedCustomer: 20, usedGroup: 420,
-  }).calculatedAvailable, 130);
-  assert.equal(accountCreditBalances({ category: 'Special', groupLimit: 500, usedCustomer: 20, usedGroup: 100 }).calculatedAvailable, null);
+  });
+  assert.equal(special.calculatedAvailable, 130);
+  assert.equal(special.policy.code, 'group_shared_special_cap');
+  assert.deepEqual(special.referenceLimits, [
+    { key: 'special_account_cap', scope: 'account', label: 'Special Account cap', value: 175 },
+    { key: 'special_group_capacity', scope: 'group', label: 'GROUP capacity', value: 550 },
+  ]);
+
+  const legacyFallback = accountCreditBalances({ category: 'Special', individualLimit: 80, groupLimit: 500, usedCustomer: 20, usedGroup: 100 });
+  assert.equal(legacyFallback.calculatedAvailable, 80);
+  assert.equal(legacyFallback.policy.code, 'special_legacy_fallback');
+});
+
+test('calculated availability comparison uses the one-dollar tolerance', () => {
+  const matching = accountCreditBalances({ category: 'Group', groupLimit: 500, usedGroup: 125, salesforceAvailable: 374 });
+  assert.equal(matching.calculatedAvailable, 375);
+  assert.equal(matching.availableComparison.difference, 1);
+  assert.equal(matching.availableComparison.materiallyDifferent, false);
+
+  const different = accountCreditBalances({ category: 'Group', groupLimit: 500, usedGroup: 125, salesforceAvailable: 373.99 });
+  assert.equal(different.availableComparison.difference, 1.01);
+  assert.equal(different.availableComparison.materiallyDifferent, true);
+});
+
+test('COSCO Group policy ignores zero individual and special limits', () => {
+  const cosco = accountCreditBalances({
+    category: 'Group', individualLimit: 0, specialIndividualLimit: 0,
+    groupLimit: 20_000_000, specialGroupLimit: 0,
+    usedCustomer: 6_495_272, usedGroup: 8_187_257, salesforceAvailable: 11_812_743,
+  });
+  assert.equal(cosco.policy.code, 'group_shared_uncapped');
+  assert.equal(cosco.individualCapacity, null);
+  assert.equal(cosco.groupCapacity, 20_000_000);
+  assert.equal(cosco.calculatedAvailable, 11_812_743);
+  assert.equal(cosco.availableComparison.materiallyDifferent, false);
+  assert.deepEqual(cosco.referenceLimits, [{ key: 'group_limit', scope: 'group', label: 'GROUP limit', value: 20_000_000 }]);
 });
 
 test('credit exposure reconciliation uses a one-unit tolerance and suppresses incomplete scopes', () => {
@@ -425,6 +471,7 @@ test('Salesforce loader is buyer-leg only and does not use supplier child relati
   assert.match(source, /FROM Invoice__c WHERE STEM__c IN/);
   assert.match(source, /Proforma__c = false AND Deprecated__c = false/);
   assert.match(source, /filter\(finalBuyerInvoice\)/);
+  assert.doesNotMatch(source, /Shared__c/);
 });
 
 test('credit statement handlers are authenticated server-cached reads and the UI stays lazy', async () => {
@@ -452,8 +499,14 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /Show assumptions/);
   assert.match(statement, /showAssumptions \? <div/);
   assert.match(statement, /showAssumptions && result\.chart\?\.undatedGroupStemCount/);
-  assert.match(statement, /CreditPositionPanel title="Individual"/);
+  assert.match(statement, /CreditPositionPanel title="Selected Account"/);
   assert.match(statement, /CreditPositionPanel title="GROUP"/);
+  assert.match(statement, /group_shared_uncapped/);
+  assert.match(statement, /No individual cap/);
+  assert.match(statement, /availableComparison\.materiallyDifferent/);
+  assert.match(statement, /visibleCreditLimitReferences/);
+  assert.match(statement, /aria-label="Applicable credit limits"/);
+  assert.doesNotMatch(statement, /label=\{\{ value: '(?:Individual base|Special individual|GROUP base|GROUP \+ special)'/);
   assert.doesNotMatch(statement, /Legacy Credit_Limit__c|credit\.legacyLimit/);
   assert.match(statement, /Select all invoiced/);
   assert.match(statement, /Total invoice amount/);

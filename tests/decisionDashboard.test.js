@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   dashboardFinancialBuckets,
-  dashboardMonthlyCounterpartySeries,
   dashboardMonthlyComparison,
   dashboardMonthlyFinancialTrend,
   dashboardMonthlyYearOverYear,
@@ -245,24 +244,11 @@ test('incomplete prior-year scope leaves gaps without suppressing current monthl
   });
 });
 
-test('builds a currency-safe monthly top-10 counterparty series', () => {
-  const series = dashboardMonthlyCounterpartySeries([
-    { deliveryDate: '2026-07-10', currency: 'USD', netPnl: 10, account: { id: '001000000000001AAA', name: 'Buyer A' } },
-    { deliveryDate: '2026-08-10', currency: 'USD', netPnl: 20, account: { id: '001000000000001AAA', name: 'Buyer A' } },
-    { deliveryDate: '2026-08-11', currency: 'USD', netPnl: 5, account: { id: '001000000000002AAA', name: 'Buyer B' } },
-  ], 'buyer');
-  assert.deepEqual(series.series.map((item) => [item.name, item.grossProfit]), [['Buyer A', 30], ['Buyer B', 5]]);
-  assert.deepEqual(series.points, [
-    { month: '2026-07', seriesKey: 'counterparty:0', grossProfit: 10 },
-    { month: '2026-08', seriesKey: 'counterparty:0', grossProfit: 20 },
-    { month: '2026-08', seriesKey: 'counterparty:1', grossProfit: 5 },
-  ]);
-});
-
 test('new dashboard handlers are authenticated, live-only, and supplier matching checks both child objects', async () => {
-  const [api, policies] = await Promise.all([
+  const [api, policies, analytics] = await Promise.all([
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/dashboard/DashboardAnalytics.jsx', import.meta.url), 'utf8'),
   ]);
   for (const handler of ['dashboardSummary', 'dashboardStemList', 'dashboardAnalytics']) {
     assert.equal(api.includes(`${handler}: ['dashboard']`), true);
@@ -283,7 +269,7 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /productVolumes/);
   assert.match(loader, /productQuantities/);
   assert.match(loader, /monthlyVolume/);
-  assert.match(loader, /monthlyCounterparties/);
+  assert.doesNotMatch(loader, /monthlyCounterparties|dashboardMonthlyCounterpartySeries/);
   assert.match(loader, /monthlyVolumeYearOverYear/);
   assert.match(loader, /monthlyComparison/);
   assert.match(loader, /decisionDashboardInternalAccountIdentity/);
@@ -291,4 +277,7 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(loader, /Group_Name__c/);
   assert.match(loader, /internalAccountIds\.has\(entity\.id\)/);
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
+  assert.doesNotMatch(analytics, /Monthly gross profit by|MonthlyCounterpartyChart|monthlyCounterparties/);
+  assert.match(analytics, /MonthlyPerformanceChart/);
+  assert.match(analytics, /TopAccounts/);
 });
