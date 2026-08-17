@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Columns3, Loader2, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Columns3, Loader2, Maximize2, Minimize2, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -116,7 +116,7 @@ function Pagination({ loading, hasPrevious, hasNext, page, onPrevious, onNext })
   return <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2"><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasPrevious} onClick={onPrevious}><ChevronLeft className="h-3.5 w-3.5" />Previous</Button><span className="text-xs text-muted-foreground">Page {page}</span><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasNext} onClick={onNext}>Next<ChevronRight className="h-3.5 w-3.5" /></Button></div>;
 }
 
-export default function DashboardStemTable({ result, loading, search = '', onSearch, onPrevious, onNext, onSortChange, onStemClick, onAccountClick }) {
+export default function DashboardStemTable({ result, loading, search = '', wide = false, onWideChange, onSearch, onPrevious, onNext, onSortChange, onStemClick, onAccountClick }) {
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS);
   const [searchDraft, setSearchDraft] = useState(search);
   useEffect(() => { setSearchDraft(search); }, [search]);
@@ -135,7 +135,7 @@ export default function DashboardStemTable({ result, loading, search = '', onSea
     onSortChange?.({ field, direction: sort.field === field && sort.direction === 'asc' ? 'desc' : 'asc' });
   };
   const meta = total ? `${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} · Server paginated` : 'No matching STEMs';
-  const actions = <><form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="h-8 text-xs"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover></>;
+  const actions = <><Button type="button" variant="outline" size="sm" className="h-8 text-xs" aria-pressed={wide} onClick={() => onWideChange?.(!wide)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button><form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="h-8 text-xs"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover></>;
 
   return <TableShell title="STEMs" meta={meta} bodyClassName="p-0" actions={actions}>
     <div className="divide-y divide-border md:hidden">{rows.map((row, index) => {
