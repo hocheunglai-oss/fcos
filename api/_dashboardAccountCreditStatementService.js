@@ -317,7 +317,7 @@ async function loadSameNameCreditCandidates(account, accountFields, interoffice)
   const normalizedName = normalizeCreditAccountName(account?.Name);
   const namePattern = text(account?.Name).split(/\s+/).filter(Boolean).map((token) => token.replace(/[%_]/g, '\\$&')).join('%');
   if (!normalizedName || !namePattern) return { candidates: [], groupsByAccountId: {} };
-  const result = await queryAll(`SELECT ${accountSelectFields(accountFields).join(',')} FROM Account WHERE Inactive_Suspended__c = false AND Name LIKE '${soql(namePattern)}' ORDER BY CreatedDate,Id LIMIT 201`, 201);
+  const result = await queryAll(`SELECT ${accountSelectFields(accountFields).join(',')} FROM Account WHERE Name LIKE '${soql(namePattern)}' ORDER BY CreatedDate,Id LIMIT 201`, 201);
   if (result.records.length > 200) throw serviceError('Same-name credit snapshot resolution is too broad to complete safely.', 503, 'ACCOUNT_CREDIT_DUPLICATE_SCOPE');
   const candidates = result.records.filter((candidate) => normalizeCreditAccountName(candidate.Name) === normalizedName);
   const chains = await loadDirectoryAccountChains(candidates, accountFields);
@@ -566,7 +566,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
         accountId: resolution.candidate.Id,
         clKey: resolution.candidate.Company_Code__c || null,
         reconciliationWindowStart: resolution.windowStart,
-        notice: `Salesforce credit fields were reconciled from the unique same-name Account snapshot ${resolution.candidate.Company_Code__c || 'without a CL Key'}, effective ${resolution.windowStart}. Buyer-leg STEM membership remains restricted to the selected Account ID.`,
+        notice: `Salesforce credit fields were reconciled from the unique same-name Account lineage snapshot ${resolution.candidate.Company_Code__c || 'without a CL Key'}, effective ${resolution.windowStart}. Historical nonzero balances outside that lineage window remain visible as evidence but are excluded from the current credit projection. Buyer-leg STEM membership remains restricted to the selected active Account ID.`,
       };
     } else {
       creditResolution = {
@@ -635,7 +635,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '3',
+    version: '4',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },

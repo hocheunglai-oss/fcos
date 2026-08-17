@@ -153,28 +153,49 @@ export function resolveCreditSnapshotCandidate({
   const selectedName = normalizeCreditAccountName(selectedAccount?.Name);
   const selectedGroupId = accountGroupKey(selectedGroup);
   if (!selectedId || !selectedName || !complete) return { status: 'unresolved', matches: [] };
+  const candidatePool = [...new Map([selectedAccount, ...(candidates || [])]
+    .filter((candidate) => idKey(candidate?.Id))
+    .map((candidate) => [idKey(candidate.Id), candidate])).values()];
+  const lineageWindows = [...new Map(candidatePool
+    .map((candidate) => [dateTime(candidate.CreatedDate), candidate])
+    .filter(([created]) => created != null)).entries()]
+    .map(([created, source]) => ({ created, source }));
   const matches = [];
-  for (const candidate of candidates || []) {
-    if (!idKey(candidate?.Id) || idKey(candidate.Id) === selectedId) continue;
+  const seenMatches = new Set();
+  for (const candidate of candidatePool) {
     if (normalizeCreditAccountName(candidate.Name) !== selectedName) continue;
     if (!compatibleCreditSnapshot(selectedAccount, candidate)) continue;
-    const candidateGroup = candidateGroupsById[idKey(candidate.Id)] || null;
+    const candidateGroup = idKey(candidate.Id) === selectedId
+      ? selectedGroup
+      : candidateGroupsById[idKey(candidate.Id)] || null;
     if (accountGroupKey(candidateGroup) !== selectedGroupId) continue;
-    const windowStart = dateTime(candidate.CreatedDate);
-    if (windowStart == null) continue;
-    const windowStems = (openStems || []).filter((stem) => {
-      const created = dateTime(stem?.CreatedDate);
-      return created != null && created >= windowStart;
-    });
-    const individualExposure = windowStems
-      .filter((stem) => idKey(stem.Account__c) === selectedId)
-      .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
-    const groupExposure = windowStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
-    const snapshot = accountCreditSnapshot(candidate);
-    const individual = reconcileCreditExposure(snapshot.usedCustomer, individualExposure, { complete });
-    const group = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete });
-    if (individual.matches && group.matches) {
-      matches.push({ candidate, candidateGroup, windowStart: String(candidate.CreatedDate).slice(0, 10), windowStems, individual, group });
+    for (const lineageWindow of lineageWindows) {
+      const windowStart = String(lineageWindow.source.CreatedDate).slice(0, 10);
+      const matchKey = `${idKey(candidate.Id)}:${windowStart}`;
+      if (seenMatches.has(matchKey)) continue;
+      seenMatches.add(matchKey);
+      const windowStems = (openStems || []).filter((stem) => {
+        const created = dateTime(stem?.CreatedDate);
+        return created != null && created >= lineageWindow.created;
+      });
+      const individualExposure = windowStems
+        .filter((stem) => idKey(stem.Account__c) === selectedId)
+        .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+      const groupExposure = windowStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+      const snapshot = accountCreditSnapshot(candidate);
+      const individual = reconcileCreditExposure(snapshot.usedCustomer, individualExposure, { complete });
+      const group = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete });
+      if (individual.matches && group.matches) {
+        matches.push({
+          candidate,
+          candidateGroup,
+          windowSource: lineageWindow.source,
+          windowStart,
+          windowStems,
+          individual,
+          group,
+        });
+      }
     }
   }
   return matches.length === 1
@@ -421,6 +442,7 @@ export function buildCreditReleaseChart({
     sourceLabel: event.sourceLabel,
     missedReleaseDate: event.missedDate || null,
   }])).values()];
+  const undatedAccountStems = undatedStems.filter((stem) => idKey(stem.accountId) === idKey(selectedAccountId));
   return {
     granularity,
     points,
@@ -430,6 +452,9 @@ export function buildCreditReleaseChart({
       group: currencyAmount(undated.reduce((sum, event) => sum + value(event.amount), 0)),
     },
     undatedStemCount: undatedStems.length,
+    undatedAccountStemCount: undatedAccountStems.length,
+    undatedGroupStemCount: undatedStems.length,
+    undatedAccountStems,
     undatedStems,
   };
 }
@@ -489,7 +514,8 @@ export function buildAccountCreditStatement({
   });
   const releaseByStem = new Map(releases.map((release) => [idKey(release.stemId), release]));
   const rows = statementStems.map((stem) => {
-    const release = releaseByStem.get(idKey(stem.Id)) || buildStemCreditRelease({
+    const projectionRelease = releaseByStem.get(idKey(stem.Id));
+    const release = projectionRelease || buildStemCreditRelease({
       stem,
       payments: paymentsByStem[stem.Id] || [],
       cashflows: cashflowsByStem[stem.Id] || [],
@@ -517,6 +543,7 @@ export function buildAccountCreditStatement({
       missedReleaseDate: release.missedReleaseDate,
       actualReleases: release.actualReleases,
       forecastEvents: release.forecastEvents,
+      inCreditProjection: Boolean(projectionRelease),
     };
   });
   const derivedWarnings = [

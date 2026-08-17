@@ -194,7 +194,97 @@ test('Achieve Bunker unique same-name snapshot produces the confirmed five-step 
   assert.equal(statement.chart.points.at(-1).individualExposure, 4_055.68);
   assert.equal(statement.chart.undatedExposure.individual, 4_055.68);
   assert.equal(statement.chart.undatedStemCount, 1);
+  assert.equal(statement.chart.undatedAccountStemCount, 1);
+  assert.equal(statement.chart.undatedGroupStemCount, 1);
   assert.equal(statement.chart.undatedStems[0].stemName, 'HELGOLAND');
+});
+
+test('COSCO SHIPPING resolves a split same-name snapshot and lineage window without including stale residuals', () => {
+  const coscoGroup = { Id: '001000000000044AAA', Name: 'GROUP - COSCO' };
+  const selected = {
+    Id: '001000000000041AAA',
+    Name: 'COSCO SHIPPING (SINGAPORE) PETROLEUM PTE LTD',
+    CreatedDate: '2023-10-23T07:57:37.000Z',
+    Company_Code__c: 'HKCOSCO ACTIVE',
+    CL_Category__c: 'Group',
+    CL_Individual__c: 0,
+    CL_Special__c: 0,
+    CL_Group__c: 10_000,
+    CL_Special_Group__c: 0,
+    CL_Used_Customer__c: 700,
+    CL_Used_Group__c: 800,
+  };
+  const creditSnapshot = {
+    ...selected,
+    Id: '001000000000042AAA',
+    CreatedDate: '2023-10-20T12:43:14.000Z',
+    Company_Code__c: 'HKCOSCO SNAPSHOT',
+    Inactive_Suspended__c: true,
+    CL_Used_Customer__c: 600,
+    CL_Used_Group__c: 600,
+  };
+  const lineageBoundary = {
+    ...selected,
+    Id: '001000000000043AAA',
+    CreatedDate: '2025-12-12T03:32:29.000Z',
+    Company_Code__c: 'COSCO LINEAGE BOUNDARY',
+    Inactive_Suspended__c: true,
+    CL_Used_Customer__c: 0,
+    CL_Used_Group__c: 600,
+  };
+  const staleStem = { Id: 'a01000000000041AAA', Name: 'LEGACY RESIDUAL', CreatedDate: '2024-11-26T09:58:01.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 40, Invoice_Due_Date__c: '2025-01-05' };
+  const currentStems = [
+    { Id: 'a01000000000042AAA', Name: 'CURRENT ONE', CreatedDate: '2026-08-13T10:44:49.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 100, Invoice_Due_Date__c: '2026-09-18' },
+    { Id: 'a01000000000043AAA', Name: 'CURRENT TWO', CreatedDate: '2026-08-11T10:51:01.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 200, Invoice_Due_Date__c: '2026-09-23' },
+    { Id: 'a01000000000044AAA', Name: 'CURRENT THREE', CreatedDate: '2026-01-02T00:00:00.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 300.09, Invoice_Due_Date__c: '2026-09-30' },
+  ];
+  const groupByCandidate = Object.fromEntries([creditSnapshot, lineageBoundary].map((candidate) => [candidate.Id.slice(0, 15), coscoGroup]));
+  const resolution = resolveCreditSnapshotCandidate({
+    selectedAccount: selected,
+    selectedGroup: coscoGroup,
+    candidates: [selected, creditSnapshot, lineageBoundary],
+    candidateGroupsById: groupByCandidate,
+    openStems: [staleStem, ...currentStems],
+  });
+  assert.equal(resolution.status, 'resolved');
+  assert.equal(resolution.candidate.Id, creditSnapshot.Id);
+  assert.equal(resolution.windowSource.Id, lineageBoundary.Id);
+  assert.equal(resolution.windowStart, '2025-12-12');
+  assert.deepEqual(resolution.windowStems.map((stem) => stem.Id), currentStems.map((stem) => stem.Id));
+
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: selected,
+    creditAccount: creditSnapshot,
+    group: coscoGroup,
+    groupMembers: [coscoGroup, selected],
+    openStems: resolution.windowStems,
+    statementStems: [staleStem, ...currentStems],
+  });
+  assert.equal(statement.reconciliation.individual.matches, true);
+  assert.equal(statement.reconciliation.group.matches, true);
+  assert.equal(statement.chart.points[0].individualExposure, 600.09);
+  assert.equal(statement.chart.points[0].groupExposure, 600.09);
+  assert.equal(statement.rows.find((row) => row.stemId === staleStem.Id).inCreditProjection, false);
+  assert.equal(statement.rows.find((row) => row.stemId === currentStems[0].Id).inCreditProjection, true);
+  assert.equal(statement.warnings.some((warning) => /does not reconcile/i.test(warning)), false);
+});
+
+test('undated residual counts keep selected Account and GROUP STEMs distinct', () => {
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: { Id: accountId, Name: 'BUYER A', CL_Category__c: 'Group', CL_Group__c: 500, CL_Used_Customer__c: 100, CL_Used_Group__c: 250 },
+    group: { Id: groupId, Name: 'GROUP - GLOBAL' },
+    openStems: [
+      { Id: 'a01000000000031AAA', Name: 'ACCOUNT UNDATED', Account__c: accountId, QLIK_Receivable_Balance__c: 100, Invoice_Due_Date__c: '2026-08-01' },
+      { Id: 'a01000000000032AAA', Name: 'GROUP UNDATED', Account__c: otherAccountId, QLIK_Receivable_Balance__c: 150, Invoice_Due_Date__c: '2026-08-02' },
+    ],
+  });
+  assert.equal(statement.chart.undatedExposure.individual, 100);
+  assert.equal(statement.chart.undatedExposure.group, 250);
+  assert.equal(statement.chart.undatedAccountStemCount, 1);
+  assert.equal(statement.chart.undatedGroupStemCount, 2);
+  assert.deepEqual(statement.chart.undatedAccountStems.map((stem) => stem.stemName), ['ACCOUNT UNDATED']);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
@@ -268,6 +358,8 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
+  assert.match(statement, /undatedAccountStemCount/);
+  assert.match(statement, /Outside current credit lineage window/);
   assert.match(statement, /\{result\.group \? <button type="button" aria-pressed=\{series\.group\}/);
   assert.match(statement, /\{result\.group \? <ReconciliationBadge label="GROUP"/);
 });
