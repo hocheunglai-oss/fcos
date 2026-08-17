@@ -46,7 +46,7 @@ export function formatSelectedMonths(selectedMonths) {
     .join(', ');
 }
 
-export const DASHBOARD_FILTER_STORAGE_KEY = 'fcos:dashboard-filter-v2';
+export const DASHBOARD_FILTER_STORAGE_KEY = 'fcos:dashboard-filter-v3';
 
 export const DASHBOARD_DATE_PRESETS = [
   { value: 'this_month', label: 'This month' },
@@ -117,12 +117,14 @@ export function presetDashboardPeriod(preset, currentDate = new Date()) {
 }
 
 export function normalizeDashboardFilters(input = {}) {
-  const years = [...new Set((input.selectedYears || [THIS_YEAR]).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
-  const months = [...new Set((input.selectedMonths || [THIS_MONTH]).map(Number).filter((month) => month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const datePreset = DASHBOARD_DATE_PRESETS.some((item) => item.value === input.datePreset) ? input.datePreset : 'year_to_date';
+  const fallbackPeriod = presetDashboardPeriod(datePreset);
+  const years = [...new Set((input.selectedYears || fallbackPeriod.selectedYears).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const months = [...new Set((input.selectedMonths || fallbackPeriod.selectedMonths).map(Number).filter((month) => month >= 1 && month <= 12))].sort((a, b) => a - b);
   const legacyLocationId = String(input.portCountryId ?? '').trim();
   const legacyCountry = legacyLocationId.toLowerCase().startsWith('country:');
   return {
-    datePreset: DASHBOARD_DATE_PRESETS.some((item) => item.value === input.datePreset) ? input.datePreset : 'this_month',
+    datePreset,
     selectedYears: years.length ? years : [THIS_YEAR],
     selectedMonths: months.length ? months : [THIS_MONTH],
     disputeOnly: input.disputeOnly === true,

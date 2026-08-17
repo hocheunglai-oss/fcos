@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { dashboardFilterPayload, dashboardSuggestionMatches, normalizeDashboardFilters, presetDashboardPeriod } from '../src/lib/dashboardFilters.js';
 
@@ -35,6 +36,19 @@ test('date presets produce a bounded custom date window', () => {
   const period = presetDashboardPeriod('this_quarter', new Date('2026-08-16T00:00:00Z'));
   assert.deepEqual(period, { selectedYears: [2026], selectedMonths: [7, 8, 9] });
   assert.deepEqual(dashboardFilterPayload(period).dateWindows, [{ startDate: '2026-07-01', endDate: '2026-07-31' }, { startDate: '2026-08-01', endDate: '2026-08-31' }, { startDate: '2026-09-01', endDate: '2026-09-30' }]);
+});
+
+test('dashboard defaults and resets to year to date', async () => {
+  const filters = normalizeDashboardFilters({});
+  assert.equal(filters.datePreset, 'year_to_date');
+  assert.deepEqual(filters.selectedMonths, Array.from({ length: new Date().getMonth() + 1 }, (_, index) => index + 1));
+  const [page, bar] = await Promise.all([
+    readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/dashboard/DashboardFilterBar.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(page, /presetDashboardPeriod\('year_to_date'\)/);
+  assert.match(bar, /filters\.datePreset !== 'year_to_date'/);
+  assert.match(bar, /set\(\{ datePreset: 'year_to_date' \}\)/);
 });
 
 test('combined pickers retain GROUP and country results when ordinary matches fill the limit', () => {

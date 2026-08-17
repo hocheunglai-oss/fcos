@@ -55,7 +55,7 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
   const companyGroupOptions = useMemo(() => filters.counterpartyMode === 'buyer'
     ? [...companyOptions, ...groupOptions]
     : companyOptions, [companyOptions, filters.counterpartyMode, groupOptions]);
-  const hasFilters = filters.disputeOnly || filters.company || filters.group || filters.port || filters.country || filters.datePreset !== 'this_month';
+  const hasFilters = filters.disputeOnly || filters.company || filters.group || filters.port || filters.country || filters.datePreset !== 'year_to_date';
   const set = (patch) => onChange({ ...filters, ...patch });
   const setPreset = (datePreset) => { setShowCustom(datePreset === 'custom'); set({ datePreset }); };
   const submitAi = (event) => { event.preventDefault(); if (aiPrompt.trim().length >= 3) onAiSearch?.(aiPrompt.trim()); };
@@ -89,7 +89,7 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5" aria-live="polite">
-        <FilterChip onRemove={() => set({ datePreset: 'this_month' })}>{selectedMonthLabel} {filters.selectedYears.join(', ')}</FilterChip>
+        <FilterChip onRemove={() => set({ datePreset: 'year_to_date' })}>{selectedMonthLabel} {filters.selectedYears.join(', ')}</FilterChip>
         {filters.disputeOnly ? <FilterChip onRemove={() => set({ disputeOnly: false })}>Disputed</FilterChip> : null}
         {filters.company ? <FilterChip onRemove={() => set({ company: '', companyId: '' })}>{filters.counterpartyMode}: {filters.company}</FilterChip> : null}
         {filters.group ? <FilterChip onRemove={() => set({ group: '', groupId: '', groupAccountIds: [] })}>GROUP: {filters.group}</FilterChip> : null}

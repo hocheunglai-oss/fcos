@@ -114,6 +114,8 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(buyerPage, /Dispute open/);
   assert.match(buyerPage, /Dispute history/);
   assert.match(buyerPage, /With dispute/);
+  assert.match(buyerPage, /flex flex-wrap items-center gap-2[\s\S]{0,180}Buyer Trader \/ Payment Handler/);
+  assert.match(buyerPage, /flex flex-wrap items-center gap-2[\s\S]{0,180}Collection Status/);
   assert.match(server, /async function buyerInvoicePaymentAdviceSave/);
   assert.match(server, /disputeStatus: stem\.Dispute_Status__c \|\| null/);
   assert.match(server, /Payment Collections requires STEM__c\.Receivable_Balance__c/);

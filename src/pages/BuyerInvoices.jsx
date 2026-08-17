@@ -3040,7 +3040,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
         <div className="mt-4 grid gap-4 border-t border-border pt-4 xl:grid-cols-[1fr_1fr]">
           {buyerTraderOptions.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader / Payment Handler</Label>
                 <button type="button" onClick={toggleAllBuyerTraders} className="text-xs text-primary hover:underline">
                   {selectedBuyerTraders.length === buyerTraderOptions.length ? 'Clear all' : 'Select all'}
@@ -3066,7 +3066,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
           )}
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection Status</Label>
               <button
                 type="button"
