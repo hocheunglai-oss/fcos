@@ -5,6 +5,7 @@ const ONE_DAY_MS = 86_400_000;
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 
 export const CREDIT_RECONCILIATION_TOLERANCE = 1;
+export const CREDIT_EXPOSURE_DELIVERY_START = '2026-01-01';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -50,6 +51,13 @@ function addDays(date, days) {
   return result.toISOString().slice(0, 10);
 }
 
+function daysBetweenDates(fromDate, toDate) {
+  const from = dateOnly(fromDate);
+  const to = dateOnly(toDate);
+  if (!from || !to) return null;
+  return Math.round((Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / ONE_DAY_MS);
+}
+
 function uniqueById(rows = []) {
   const seen = new Set();
   return rows.filter((row) => {
@@ -61,7 +69,17 @@ function uniqueById(rows = []) {
 }
 
 export function normalizeAccountCreditScope(scope) {
-  return ['open_recent', 'open', 'all'].includes(scope) ? scope : 'open_recent';
+  return ['open_recent', 'open', 'all'].includes(scope) ? scope : 'open';
+}
+
+export function creditExposureDeliveryDate(stem = {}) {
+  return dateOnly(stem.Delivery_Date__c) || dateOnly(stem.Expected_Delivery_Date__c);
+}
+
+export function isCreditExposureStemEligible(stem = {}, startDate = CREDIT_EXPOSURE_DELIVERY_START) {
+  const deliveryDate = creditExposureDeliveryDate(stem);
+  const cutoff = dateOnly(startDate);
+  return Boolean(deliveryDate && cutoff && deliveryDate >= cutoff);
 }
 
 export function encodeAccountCreditCursor(payload = {}) {
@@ -104,7 +122,6 @@ export function accountCreditSnapshot(account = {}, currency = null) {
   const snapshot = {
     category,
     currency: text(currency || account.CurrencyIsoCode) || SALESFORCE_CORPORATE_CURRENCY,
-    legacyLimit: number(account.Credit_Limit__c),
     individualLimit: number(account.CL_Individual__c),
     specialIndividualLimit: number(account.CL_Special__c),
     usedCustomer: number(account.CL_Used_Customer__c),
@@ -469,6 +486,8 @@ export function buildAccountCreditStatement({
   statementStems = [],
   paymentsByStem = {},
   cashflowsByStem = {},
+  buyerInvoicesByStem = {},
+  buyerInvoiceScopeComplete = true,
   today,
   complete = true,
   warnings = [],
@@ -525,6 +544,11 @@ export function buildAccountCreditStatement({
       currency: text(stem.CurrencyIsoCode) || snapshot.currency,
     });
     const actualReleased = release.actualReleases.reduce((sum, row) => sum + value(row.amount), 0);
+    const buyerInvoices = buyerInvoicesByStem[stem.Id] || [];
+    const buyerInvoiceAmounts = buyerInvoices.map((invoice) => number(invoice.Amount__c));
+    const buyerInvoiceAmountComplete = buyerInvoiceScopeComplete && buyerInvoices.length > 0 && buyerInvoiceAmounts.every((amount) => amount != null);
+    const buyerInvoiceDueDates = [...new Set(buyerInvoices.map((invoice) => dateOnly(invoice.Invoice_Due_Date__c)).filter(Boolean))].sort();
+    const buyerInvoiceDueDate = buyerInvoiceDueDates[0] || null;
     return {
       stemId: stem.Id,
       stemName: stem.Name || stem.Id,
@@ -544,6 +568,14 @@ export function buildAccountCreditStatement({
       actualReleases: release.actualReleases,
       forecastEvents: release.forecastEvents,
       inCreditProjection: Boolean(projectionRelease),
+      hasBuyerInvoice: buyerInvoices.length > 0,
+      buyerInvoiceCount: buyerInvoices.length,
+      buyerInvoiceNames: buyerInvoices.map((invoice) => invoice.Name || invoice.Id),
+      buyerInvoiceAmount: buyerInvoiceAmountComplete ? currencyAmount(buyerInvoiceAmounts.reduce((sum, amount) => sum + amount, 0)) : null,
+      buyerInvoiceAmountComplete,
+      buyerInvoiceDueDate,
+      buyerInvoiceDaysUntilDue: daysBetweenDates(today, buyerInvoiceDueDate),
+      buyerInvoiceLastModifiedAt: buyerInvoices.map((invoice) => invoice.LastModifiedDate).filter(Boolean).sort().at(-1) || null,
     };
   });
   const projectionWarnings = [

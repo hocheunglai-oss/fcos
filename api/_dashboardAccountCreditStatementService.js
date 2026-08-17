@@ -4,8 +4,10 @@ import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import {
   accountCreditSnapshot,
   buildAccountCreditStatement,
+  CREDIT_EXPOSURE_DELIVERY_START,
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
+  isCreditExposureStemEligible,
   normalizeAccountCreditScope,
   normalizeCreditAccountName,
   reconcileCreditExposure,
@@ -134,12 +136,16 @@ function ensureInterofficeAccountAccess(account, chain, interoffice) {
 function accountSelectFields(fields) {
   const names = [
     'Id', 'Name', 'ParentId', 'CreatedDate', 'LastModifiedDate', 'Company_Code__c', 'Inactive_Suspended__c', 'Group_Name__c', 'CurrencyIsoCode',
-    'Credit_Limit__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c',
+    'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c',
     'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c',
   ];
   const result = selected(fields, names);
   if (fields.has('ParentId')) result.push('Parent.Name');
   return [...new Set(result)];
+}
+
+function creditExposureDeliveryWhere() {
+  return `((Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}))`;
 }
 
 function requireFields(fields, names, objectName) {
@@ -191,7 +197,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-directory',
-    version: '3',
+    version: '4',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { query, limit, cursor },
@@ -206,7 +212,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       const accountFields = fieldMap(accountDescribe);
       const stemFields = fieldMap(stemDescribe);
       requireFields(accountFields, ['Id', 'Name', 'Inactive_Suspended__c'], 'Account');
-      requireFields(stemFields, ['Account__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
+      requireFields(stemFields, ['Account__c', 'QLIK_Receivable_Balance__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'], 'STEM__c');
       const conditions = ['Inactive_Suspended__c = false', 'Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null)'];
       if (query) {
         const escaped = `%${soql(query)}%`;
@@ -229,7 +235,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       }
       const accountIds = accounts.map((account) => account.Id);
       const aggregates = accountIds.length
-        ? await queryAll(`SELECT Account__c accountId,COUNT(Id) openStemCount,SUM(QLIK_Receivable_Balance__c) openExposure FROM STEM__c WHERE Account__c IN (${accountIds.map((id) => `'${soql(id)}'`).join(',')}) AND QLIK_Receivable_Balance__c != 0 GROUP BY Account__c`)
+        ? await queryAll(`SELECT Account__c accountId,COUNT(Id) openStemCount,SUM(QLIK_Receivable_Balance__c) openExposure FROM STEM__c WHERE Account__c IN (${accountIds.map((id) => `'${soql(id)}'`).join(',')}) AND QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()} GROUP BY Account__c`)
         : { records: [] };
       const exposureByAccount = new Map((aggregates.records || []).map((row) => [idKey(row.accountId ?? row.Account__c), {
         openStemCount: Number(row.openStemCount || 0),
@@ -426,6 +432,32 @@ function cashflowSelectFields(fields) {
   return [...new Set(result)];
 }
 
+function buyerInvoiceSelectFields(fields) {
+  return selected(fields, [
+    'Id', 'Name', 'STEM__c', 'Amount__c', 'Invoice_Due_Date__c', 'Invoice_Date__c',
+    'Proforma__c', 'Deprecated__c', 'LastModifiedDate',
+  ]);
+}
+
+function finalBuyerInvoice(invoice) {
+  return invoice?.Proforma__c !== true
+    && invoice?.Deprecated__c !== true
+    && !/-CN-/i.test(text(invoice?.Name));
+}
+
+async function queryBuyerInvoices(stems, fields) {
+  if (!stems.length) return { rows: [], complete: true };
+  const select = buyerInvoiceSelectFields(fields);
+  const rows = [];
+  let complete = true;
+  for (const ids of chunkIds(stems.map((stem) => stem.Id))) {
+    const result = await queryAll(`SELECT ${select.join(',')} FROM Invoice__c WHERE STEM__c IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) AND Proforma__c = false AND Deprecated__c = false LIMIT ${MAX_EVIDENCE_ROWS}`, MAX_EVIDENCE_ROWS);
+    rows.push(...result.records);
+    if (result.records.length >= MAX_EVIDENCE_ROWS || rows.length > MAX_EVIDENCE_ROWS) complete = false;
+  }
+  return { rows: rows.slice(0, MAX_EVIDENCE_ROWS).filter(finalBuyerInvoice), complete };
+}
+
 async function queryCashflows(stems, fields) {
   if (!stems.length) return { rows: [], complete: true };
   const select = cashflowSelectFields(fields);
@@ -512,21 +544,24 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const today = hongKongToday();
   let stageStartedAt = Date.now();
-  const [accountDescribe, stemDescribe, paymentDescribe, cashflowDescribe] = await Promise.all([
+  const [accountDescribe, stemDescribe, paymentDescribe, cashflowDescribe, buyerInvoiceDescribe] = await Promise.all([
     describeObject('Account', force),
     describeObject('STEM__c', force),
     describeObject('Payment__c', force),
     describeObject('Cashflow__c', force),
+    describeObject('Invoice__c', force),
   ]);
   timings.schemaMs = Date.now() - stageStartedAt;
   const accountFields = fieldMap(accountDescribe);
   const stemFields = fieldMap(stemDescribe);
   const paymentFields = fieldMap(paymentDescribe);
   const cashflowFields = fieldMap(cashflowDescribe);
+  const buyerInvoiceFields = fieldMap(buyerInvoiceDescribe);
   requireFields(accountFields, ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c', 'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c'], 'Account');
-  requireFields(stemFields, ['Id', 'Name', 'CreatedDate', 'Account__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
+  requireFields(stemFields, ['Id', 'Name', 'CreatedDate', 'Account__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
   requireFields(paymentFields, ['Id', 'STEM__c', 'Account__c'], 'Payment__c');
   requireFields(cashflowFields, ['Id', 'STEM__c', 'Account__c'], 'Cashflow__c');
+  requireFields(buyerInvoiceFields, ['Id', 'Name', 'STEM__c', 'Amount__c', 'Invoice_Due_Date__c', 'Proforma__c', 'Deprecated__c'], 'Invoice__c');
   const paymentConfig = paymentConfiguration(paymentFields);
   if (!paymentConfig.amountField || !paymentConfig.dateField) throw serviceError('Payment__c does not expose an authoritative amount and date for credit releases.', 503, 'ACCOUNT_CREDIT_PAYMENT_SCHEMA');
 
@@ -541,9 +576,9 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   if (!groupMembers.some((member) => idKey(member.Id) === idKey(account.Id))) groupMembers.push(account);
   const groupAccountIds = unique(groupMembers.map((member) => member.Id));
   stageStartedAt = Date.now();
-  const openStemsRaw = await queryStemsForAccountIds(groupAccountIds, stemFields, 'QLIK_Receivable_Balance__c != 0');
+  const openStemsRaw = await queryStemsForAccountIds(groupAccountIds, stemFields, `QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}`);
   const openStemScopeComplete = openStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
-  const openStems = openStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS);
+  const openStems = openStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS).filter((stem) => isCreditExposureStemEligible(stem));
   let creditAccount = account;
   let creditOpenStems = openStems;
   let creditResolution = null;
@@ -585,13 +620,15 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   timings.statementScopeMs = Date.now() - stageStartedAt;
   const relevantStems = mergeStems([...openStems, ...statement.rows]);
   stageStartedAt = Date.now();
-  const [payments, cashflows] = await Promise.all([
+  const [payments, cashflows, buyerInvoices] = await Promise.all([
     queryPayments(relevantStems, paymentFields, paymentConfig),
     queryCashflows(relevantStems, cashflowFields),
+    queryBuyerInvoices(statement.rows, buyerInvoiceFields),
   ]);
   const complete = openStemScopeComplete && recentPayments.complete && payments.complete && cashflows.complete;
   const paymentsByStem = indexByStem(payments.rows, (row) => serializePayment(row, paymentConfig));
   const cashflowsByStem = indexByStem(cashflows.rows);
+  const buyerInvoicesByStem = indexByStem(buyerInvoices.rows);
   timings.releaseEvidenceMs = Date.now() - stageStartedAt;
   const model = buildAccountCreditStatement({
     account,
@@ -603,6 +640,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     statementStems: statement.rows,
     paymentsByStem,
     cashflowsByStem,
+    buyerInvoicesByStem,
+    buyerInvoiceScopeComplete: buyerInvoices.complete,
     today,
     complete,
   });
@@ -622,6 +661,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       openStemCount: openStems.length,
       statementRowCount: model.rows.length,
       complete,
+      buyerInvoiceScopeComplete: buyerInvoices.complete,
       timings,
       salesforceFetchedAt: new Date().toISOString(),
     },
@@ -635,12 +675,12 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '4',
+    version: '5',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },
     ttlSeconds: 60,
-    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment', 'salesforce:account-credit', `salesforce:account:${idKey(accountId)}`],
+    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment', 'salesforce:invoice', 'salesforce:account-credit', `salesforce:account:${idKey(accountId)}`],
     force,
     loader: () => loadAccountCreditStatementUncached({ body: { ...body, accountId, scope, limit }, accessContext, force }),
   });
@@ -654,5 +694,7 @@ export const dashboardAccountCreditStatementServiceInternals = {
   interofficeAccountCondition,
   paymentConfiguration,
   validBuyerPayment,
+  finalBuyerInvoice,
+  creditExposureDeliveryWhere,
   statementRows,
 };

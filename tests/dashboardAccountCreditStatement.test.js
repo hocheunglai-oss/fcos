@@ -5,8 +5,12 @@ import {
   accountCreditBalances,
   buildAccountCreditStatement,
   buildStemCreditRelease,
+  CREDIT_EXPOSURE_DELIVERY_START,
+  creditExposureDeliveryDate,
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
+  isCreditExposureStemEligible,
+  normalizeAccountCreditScope,
   reconcileCreditExposure,
   resolveCreditSnapshotCandidate,
   selectUltimateCreditGroup,
@@ -33,6 +37,19 @@ test('credit exposure reconciliation uses a one-unit tolerance and suppresses in
   assert.deepEqual(reconcileCreditExposure(100, 100, { complete: false }), {
     complete: false, matches: false, expected: 100, reconstructed: 100, difference: null, tolerance: 1,
   });
+});
+
+test('credit exposure defaults to open only and starts from the 2026 delivery cutoff', () => {
+  assert.equal(normalizeAccountCreditScope(), 'open');
+  assert.equal(normalizeAccountCreditScope('unexpected'), 'open');
+  assert.equal(normalizeAccountCreditScope('open_recent'), 'open_recent');
+  assert.equal(CREDIT_EXPOSURE_DELIVERY_START, '2026-01-01');
+  assert.equal(creditExposureDeliveryDate({ Delivery_Date__c: '2025-12-31', Expected_Delivery_Date__c: '2026-01-02' }), '2025-12-31');
+  assert.equal(creditExposureDeliveryDate({ Expected_Delivery_Date__c: '2026-01-02' }), '2026-01-02');
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: '2025-12-31' }), false);
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: '2026-01-01' }), true);
+  assert.equal(isCreditExposureStemEligible({ Expected_Delivery_Date__c: '2026-01-02' }), true);
+  assert.equal(isCreditExposureStemEligible({}), false);
 });
 
 test('ultimate GROUP ancestry chooses the highest named GROUP parent', () => {
@@ -290,6 +307,38 @@ test('undated residual counts keep selected Account and GROUP STEMs distinct', (
   assert.equal(statement.releaseWarnings.length, 1);
 });
 
+test('statement rows expose only complete live final buyer-invoice totals for selection', () => {
+  const stem = { Id: 'a01000000000051AAA', Name: 'INVOICED STEM', Account__c: accountId, Account__r: { Name: 'BUYER A' }, CurrencyIsoCode: 'USD', Delivery_Date__c: '2026-08-01', QLIK_Receivable_Balance__c: 100 };
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: { Id: accountId, Name: 'BUYER A', CL_Category__c: 'Individual', CL_Individual__c: 500, CL_Used_Customer__c: 100 },
+    openStems: [stem],
+    statementStems: [stem],
+    buyerInvoicesByStem: {
+      [stem.Id]: [
+        { Id: 'a04000000000001AAA', Name: 'INV-1', Amount__c: 60, Invoice_Due_Date__c: '2026-09-01', LastModifiedDate: '2026-08-16T01:00:00Z' },
+        { Id: 'a04000000000002AAA', Name: 'INV-2', Amount__c: 40, Invoice_Due_Date__c: '2026-09-03', LastModifiedDate: '2026-08-16T02:00:00Z' },
+      ],
+    },
+  });
+  const [row] = statement.rows;
+  assert.equal(row.hasBuyerInvoice, true);
+  assert.equal(row.buyerInvoiceCount, 2);
+  assert.equal(row.buyerInvoiceAmount, 100);
+  assert.equal(row.buyerInvoiceAmountComplete, true);
+  assert.equal(row.buyerInvoiceDueDate, '2026-09-01');
+  assert.equal(row.buyerInvoiceDaysUntilDue, 15);
+  assert.equal(row.buyerInvoiceLastModifiedAt, '2026-08-16T02:00:00Z');
+
+  const incomplete = buildAccountCreditStatement({
+    today: '2026-08-17', account: { Id: accountId, Name: 'BUYER A' }, statementStems: [stem],
+    buyerInvoicesByStem: { [stem.Id]: [{ Id: 'a04000000000003AAA', Name: 'INV-3', Amount__c: null }] },
+  });
+  assert.equal(incomplete.rows[0].hasBuyerInvoice, true);
+  assert.equal(incomplete.rows[0].buyerInvoiceAmountComplete, false);
+  assert.equal(incomplete.rows[0].buyerInvoiceAmount, null);
+});
+
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
   const selected = { Id: accountId, Name: 'Buyer A', CL_Category__c: 'Individual', CL_Individual__c: 100 };
   const openStems = [{ Id: 'a01000000000021AAA', CreatedDate: '2026-01-10T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 50 }];
@@ -336,6 +385,12 @@ test('Salesforce loader is buyer-leg only and does not use supplier child relati
   assert.match(source, /Id IN \(SELECT Account__c FROM STEM__c WHERE Account__c != null\)/);
   assert.doesNotMatch(source, /STEM_Line_Item__c|STEM_Extra_Cost__c|Buyer_Broker__c|Supplier_Broker__c/);
   assert.match(source, /QLIK_Receivable_Balance__c != 0/);
+  assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
+  assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
+  assert.match(source, /filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
+  assert.match(source, /FROM Invoice__c WHERE STEM__c IN/);
+  assert.match(source, /Proforma__c = false AND Deprecated__c = false/);
+  assert.match(source, /filter\(finalBuyerInvoice\)/);
 });
 
 test('credit statement handlers are authenticated server-cached reads and the UI stays lazy', async () => {
@@ -357,7 +412,19 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(insight, /account\.initialTab === 'credit'/);
   assert.match(dashboard, /role: 'buyer', initialTab: 'credit'/);
   assert.match(directory, /dashboardAccountCreditDirectory/);
-  assert.match(statement, /Open \+ 12 months settled/);
+  assert.match(statement, /useState\('open'\)/);
+  assert.match(statement, /\{ value: 'open', label: 'Open only' \},\s+\{ value: 'open_recent', label: 'Open \+ 12 months settled' \}/);
+  assert.match(statement, /useState\(false\)/);
+  assert.match(statement, /Show assumptions/);
+  assert.match(statement, /showAssumptions \? <div/);
+  assert.match(statement, /showAssumptions && result\.chart\?\.undatedGroupStemCount/);
+  assert.match(statement, /CreditPositionPanel title="Individual"/);
+  assert.match(statement, /CreditPositionPanel title="GROUP"/);
+  assert.doesNotMatch(statement, /Legacy Credit_Limit__c|credit\.legacyLimit/);
+  assert.match(statement, /Select all invoiced/);
+  assert.match(statement, /Total invoice amount/);
+  assert.match(statement, /paymentReminderCopyText/);
+  assert.match(statement, /row\.hasBuyerInvoice && row\.buyerInvoiceAmountComplete/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
@@ -365,5 +432,5 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /result\?\.projectionWarnings \|\| result\?\.warnings/);
   assert.match(statement, /Outside current credit lineage window/);
   assert.match(statement, /\{result\.group \? <button type="button" aria-pressed=\{series\.group\}/);
-  assert.match(statement, /\{result\.group \? <ReconciliationBadge label="GROUP"/);
+  assert.match(statement, /result\.group \? <CreditPositionPanel title="GROUP"/);
 });

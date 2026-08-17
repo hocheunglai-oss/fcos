@@ -47,6 +47,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
+import { paymentReminderCopyLine } from '@/lib/paymentReminderClipboard';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
@@ -691,7 +692,14 @@ function escapeHtml(value) {
 }
 
 function invoiceRecordPlainText(row) {
-  return COPY_ROW_FIELDS.map((getValue) => copyCell(getValue(row))).join(' - ').toUpperCase();
+  const values = COPY_ROW_FIELDS.map((getValue) => copyCell(getValue(row)));
+  return paymentReminderCopyLine({
+    stemName: values[0],
+    buyerName: values[1],
+    amount: values[2],
+    dueDate: values[3].replace(/^Due Date\s*/i, ''),
+    status: values[4],
+  });
 }
 
 function invoiceRecordHtml(row) {
