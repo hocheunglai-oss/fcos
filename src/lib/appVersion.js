@@ -12,6 +12,7 @@ export const APP_VERSION_HISTORY = [
       'Labels that date as Expected Due Date and omits overdue or due-soon status until an actual buyer invoice exists.',
       'Places each Payment Collection queue Select all or Clear all control directly beside the filter label it changes.',
       'Opens and resets Dashboard to Year to date by default, with a new saved-filter version so the default takes effect immediately.',
+      'Applies Dashboard buyer Account/GROUP and Port/COUNTRY filters to Account Statements, prioritizes GROUP and COUNTRY suggestions, and standardizes COUNTRY labels.',
     ],
   },
   {

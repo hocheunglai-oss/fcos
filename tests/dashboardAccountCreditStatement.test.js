@@ -502,6 +502,16 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(insight, /account\.initialTab === 'credit'/);
   assert.match(dashboard, /role: 'buyer', initialTab: 'credit'/);
   assert.match(directory, /dashboardAccountCreditDirectory/);
+  assert.match(directory, /filters: directoryFilters/);
+  assert.match(dashboard, /AccountCreditDirectory filters=\{filterPayload\.filters\}/);
+  assert.match(api, /dashboardAccountCreditDirectory/);
+  const service = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
+  assert.match(service, /directoryFilters\(body\.filters\)/);
+  assert.match(service, /filters\.accountIds/);
+  assert.match(service, /filters\.portIds/);
+  assert.match(service, /filters\.countryCodes/);
+  assert.match(service, /FROM Port__c WHERE Country__c IN/);
+  assert.match(service, /Port__c IN/);
   assert.match(statement, /useState\('open'\)/);
   assert.match(statement, /\{ value: 'open', label: 'Open only' \},\s+\{ value: 'open_recent', label: 'Open \+ 12 months settled' \}/);
   assert.match(statement, /useState\(false\)/);

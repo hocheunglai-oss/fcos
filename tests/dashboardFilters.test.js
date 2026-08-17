@@ -55,11 +55,13 @@ test('combined pickers retain GROUP and country results when ordinary matches fi
   const companies = Array.from({ length: 12 }, (_, index) => ({ kind: 'account', id: `company-${index}`, label: `Hong Company ${index}` }));
   const companyMatches = dashboardSuggestionMatches([...companies, { kind: 'group', id: 'group-1', label: 'GROUP Hong' }], 'Hong', 10);
   assert.equal(companyMatches.length, 10);
+  assert.equal(companyMatches[0].kind, 'group');
   assert.ok(companyMatches.some((option) => option.kind === 'account'));
   assert.ok(companyMatches.some((option) => option.kind === 'group'));
 
   const ports = Array.from({ length: 12 }, (_, index) => ({ kind: 'port', id: `port-${index}`, label: `Hong Port ${index}` }));
-  const locationMatches = dashboardSuggestionMatches([...ports, { kind: 'country', value: 'country:Hong Kong', label: 'Country · Hong Kong' }], 'Hong', 10);
+  const locationMatches = dashboardSuggestionMatches([...ports, { kind: 'country', value: 'country:Hong Kong', label: 'COUNTRY - Hong Kong' }], 'Hong', 10);
+  assert.equal(locationMatches[0].kind, 'country');
   assert.ok(locationMatches.some((option) => option.kind === 'port'));
   assert.ok(locationMatches.some((option) => option.kind === 'country'));
 });

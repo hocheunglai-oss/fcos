@@ -5426,7 +5426,7 @@ async function dashboardFilterOptions(body = {}, req = null, accessContext = nul
               kind: 'country',
               value: `country:${countryCode}`,
               countryCode,
-              label: `Country · ${countryCode}`,
+              label: `COUNTRY - ${countryCode}`,
             })),
           ],
         };

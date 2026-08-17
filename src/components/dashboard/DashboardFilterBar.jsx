@@ -34,7 +34,7 @@ function Picker({ id, label, value, onCommit, options, placeholder, disabled = f
       {open && matches.length > 0 ? <div className="absolute top-full z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-popover py-1 shadow-lg">
         {matches.map((option) => {
           const highlighted = option?.kind === 'group' || option?.kind === 'country';
-          const typeLabel = option?.kind === 'group' ? 'GROUP' : option?.kind === 'country' ? 'Country' : option?.kind === 'port' ? 'Port' : 'Company';
+          const typeLabel = option?.kind === 'group' ? 'GROUP' : option?.kind === 'country' ? 'COUNTRY' : option?.kind === 'port' ? 'Port' : 'Company';
           return <button type="button" key={`${option?.kind || ''}:${optionValue(option)}:${optionLabel(option)}`} onMouseDown={(event) => { event.preventDefault(); setInvalid(false); onCommit(option); setOpen(false); }} className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs ${highlighted ? 'bg-amber-100 text-amber-950 hover:bg-amber-200' : 'hover:bg-muted'}`}><span className="min-w-0 truncate">{optionLabel(option)}</span><span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${highlighted ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-border bg-background text-muted-foreground'}`}>{typeLabel}</span></button>;
         })}
       </div> : null}
@@ -83,9 +83,9 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
         <Picker id="dashboard-counterparty" label="Company or GROUP" value={filters.group || filters.company} onCommit={(option) => option?.kind === 'group'
           ? set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })
           : set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyGroupOptions} placeholder={filters.counterpartyMode === 'buyer' ? 'Company or GROUP' : 'Supplier company'} />
-        <Picker id="dashboard-location" label="Port or country" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
+        <Picker id="dashboard-location" label="Port or COUNTRY" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
           ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '' })
-          : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or country" />
+          : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or COUNTRY" />
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5" aria-live="polite">

@@ -63,6 +63,7 @@ const suggestionFields = (option) => [
   option?.countryCode,
   option?.clKey,
 ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+const suggestionKindPriority = (option) => ['group', 'country'].includes(option?.kind) ? 0 : 1;
 
 export function dashboardSuggestionMatches(options = [], draft = '', limit = 10) {
   const query = String(draft || '').trim().toLowerCase();
@@ -79,7 +80,7 @@ export function dashboardSuggestionMatches(options = [], draft = '', limit = 10)
       return { option, index, rank, label };
     })
     .filter(Boolean)
-    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index);
+    .sort((left, right) => suggestionKindPriority(left.option) - suggestionKindPriority(right.option) || left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index);
   const size = Math.max(1, Math.min(Number(limit) || 10, 50));
   const selected = ranked.slice(0, size);
   const isHighlighted = (entry) => ['group', 'country'].includes(entry.option?.kind);
@@ -93,7 +94,7 @@ export function dashboardSuggestionMatches(options = [], draft = '', limit = 10)
     if (!selected.some((entry) => !isHighlighted(entry))) selected[selected.length - 1] = firstRegular;
   }
   return [...new Map(selected
-    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index)
+    .sort((left, right) => suggestionKindPriority(left.option) - suggestionKindPriority(right.option) || left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index)
     .map((entry) => [`${entry.option?.kind || ''}:${entry.option?.id || entry.option?.value || entry.label}`, entry.option])).values()];
 }
 

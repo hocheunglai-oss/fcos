@@ -143,7 +143,7 @@ export const DASHBOARD_METHODOLOGY = {
   sections: [
     {
       title: 'Record period',
-      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. The combined Company or GROUP and Port or country keyword searches display friendly suggestions while retaining exact Salesforce Account and Port identifiers or canonical country values. Supplier scope includes both line-item and extra-cost suppliers. Inactive Salesforce Accounts are excluded from every Account directory, picker, ranking, and Account Insight entry point; historical STEM financial amounts remain in scope without exposing the inactive Account as a selectable or linked identity.',
+      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. The combined Company or GROUP and Port or COUNTRY keyword searches show GROUP and COUNTRY results first while retaining exact Salesforce Account and Port identifiers or canonical country values. The Account Statements directory follows those buyer Account/GROUP and Port/COUNTRY selections. Supplier scope includes both line-item and extra-cost suppliers. Inactive Salesforce Accounts are excluded from every Account directory, picker, ranking, and Account Insight entry point; historical STEM financial amounts remain in scope without exposing the inactive Account as a selectable or linked identity.',
     },
     {
       title: 'Currency-safe financial calculations',

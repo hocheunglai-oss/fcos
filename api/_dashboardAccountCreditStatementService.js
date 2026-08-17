@@ -58,6 +58,19 @@ function unique(values) {
   return [...new Set(values.map(text).filter(Boolean))];
 }
 
+function directoryFilters(value = {}) {
+  const filters = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const accountIds = unique(Array.isArray(filters.accountIds) ? filters.accountIds : []).map((id) => salesforceId(id, 'Dashboard Account'));
+  const portIds = unique(Array.isArray(filters.portIds) ? filters.portIds : []).map((id) => salesforceId(id, 'Dashboard Port'));
+  const countryCodes = unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : [])
+    .map((country) => country.toUpperCase())
+    .filter(Boolean);
+  if (accountIds.length > 2_000 || portIds.length > 2_000 || countryCodes.length > 200) {
+    throw serviceError('Dashboard Account Statement filters exceed the supported scope.', 400, 'ACCOUNT_CREDIT_FILTER_LIMIT');
+  }
+  return { accountIds, portIds, countryCodes };
+}
+
 function fieldMap(describe) {
   return new Map((describe?.fields || []).map((field) => [field.name, field]));
 }
@@ -192,28 +205,44 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
   const startedAt = Date.now();
   const query = text(body.query).slice(0, 100);
   const limit = Math.min(Math.max(Number(body.limit) || 25, 1), 100);
+  const filters = directoryFilters(body.filters);
   const cursor = decodeAccountCreditCursor(body.cursor);
   if (body.cursor && cursor?.kind !== 'directory') throw serviceError('Account Statement directory cursor is invalid.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-directory',
-    version: '4',
+    version: '5',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { query, limit, cursor },
+    payload: { query, limit, cursor, filters },
     ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:stem', 'salesforce:account-credit'],
     force,
     loader: async () => {
-      const [accountDescribe, stemDescribe] = await Promise.all([
+      const [accountDescribe, stemDescribe, portDescribe] = await Promise.all([
         describeObject('Account', force),
         describeObject('STEM__c', force),
+        filters.countryCodes.length ? describeObject('Port__c', force) : Promise.resolve(null),
       ]);
       const accountFields = fieldMap(accountDescribe);
       const stemFields = fieldMap(stemDescribe);
+      const portFields = fieldMap(portDescribe);
       requireFields(accountFields, ['Id', 'Name', 'Inactive_Suspended__c'], 'Account');
       requireFields(stemFields, ['Account__c', 'QLIK_Receivable_Balance__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'], 'STEM__c');
       const conditions = ['Inactive_Suspended__c = false', 'Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null)'];
+      if (filters.accountIds.length) conditions.push(`Id IN (${filters.accountIds.map((id) => `'${soql(id)}'`).join(',')})`);
+      let locationPortIds = [...filters.portIds];
+      if (filters.countryCodes.length) {
+        requireFields(portFields, ['Id', 'Country__c'], 'Port__c');
+        const ports = await queryAll(`SELECT Id FROM Port__c WHERE Country__c IN (${filters.countryCodes.map((country) => `'${soql(country)}'`).join(',')}) LIMIT 50000`, 50_000);
+        locationPortIds = unique([...locationPortIds, ...ports.records.map((port) => port.Id)]);
+      }
+      if (filters.portIds.length || filters.countryCodes.length) {
+        requireFields(stemFields, ['Port__c'], 'STEM__c');
+        conditions.push(locationPortIds.length
+          ? `Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null AND Port__c IN (${locationPortIds.map((id) => `'${soql(id)}'`).join(',')}))`
+          : 'Id = null');
+      }
       if (query) {
         const escaped = `%${soql(query)}%`;
         const searchable = [`Name LIKE '${escaped}'`];

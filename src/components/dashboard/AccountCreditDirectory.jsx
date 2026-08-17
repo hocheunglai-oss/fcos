@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Landmark, Loader2, RefreshCw, Search } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
@@ -41,7 +41,7 @@ function DirectoryCard({ account, onStatement }) {
   );
 }
 
-export default function AccountCreditDirectory({ onStatement }) {
+export default function AccountCreditDirectory({ onStatement, filters = {} }) {
   const [query, setQuery] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
   const [result, setResult] = useState(null);
@@ -49,6 +49,11 @@ export default function AccountCreditDirectory({ onStatement }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestRef = useRef(null);
+  const directoryFilters = useMemo(() => ({
+    accountIds: Array.isArray(filters.accountIds) ? filters.accountIds : [],
+    portIds: Array.isArray(filters.portIds) ? filters.portIds : [],
+    countryCodes: Array.isArray(filters.countryCodes) ? filters.countryCodes : [],
+  }), [filters.accountIds, filters.countryCodes, filters.portIds]);
 
   const load = useCallback(async ({ cursor = null, history = [], force = false, search = appliedQuery } = {}) => {
     requestRef.current?.abort();
@@ -58,7 +63,7 @@ export default function AccountCreditDirectory({ onStatement }) {
     setError(null);
     try {
       const response = await appClient.functions.invoke('dashboardAccountCreditDirectory', {
-        query: search || null, cursor, limit: PAGE_SIZE, force,
+        query: search || null, cursor, limit: PAGE_SIZE, filters: directoryFilters, force,
       }, { cache: true, cacheTtlMs: 60_000, cacheTags: ['dashboard', 'account-credit'], signal: controller.signal, force });
       if (controller.signal.aborted) return;
       if (response.data?.error) throw new Error(response.data.error);
@@ -69,7 +74,7 @@ export default function AccountCreditDirectory({ onStatement }) {
     } finally {
       if (requestRef.current === controller) setLoading(false);
     }
-  }, [appliedQuery]);
+  }, [appliedQuery, directoryFilters]);
 
   useEffect(() => { load(); return () => requestRef.current?.abort(); }, [load]);
 
@@ -87,7 +92,7 @@ export default function AccountCreditDirectory({ onStatement }) {
   return (
     <section className="mb-5 rounded-xl border border-border bg-card">
       <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-end sm:justify-between">
-        <div><div className="flex items-center gap-2"><Landmark className="h-4 w-4 text-primary" /><h2 className="font-semibold">Account Statements</h2></div><p className="mt-1 text-xs text-muted-foreground">Buyer-leg STEMs only. Supplier, extra-cost, and broker relationships are excluded.</p></div>
+        <div><div className="flex items-center gap-2"><Landmark className="h-4 w-4 text-primary" /><h2 className="font-semibold">Account Statements</h2></div><p className="mt-1 text-xs text-muted-foreground">Buyer-leg STEMs only. Dashboard buyer Account/GROUP and Port/COUNTRY filters apply; supplier, extra-cost, and broker relationships remain excluded.</p></div>
         <form className="flex w-full gap-2 sm:max-w-md" onSubmit={submitSearch} role="search">
           <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Search Account name or CL Key" aria-label="Search Account Statements" /></div>
           <Button type="submit" size="sm" variant="outline" disabled={loading}>Search</Button>

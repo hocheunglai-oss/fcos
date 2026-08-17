@@ -258,6 +258,7 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.match(api, /FROM STEM_Line_Item__c WHERE Cancelled__c = false/);
   assert.match(api, /FROM STEM_Extra_Cost__c WHERE Cancelled__c = false/);
   assert.match(api, /optionType === 'groups'/);
+  assert.match(api, /label: `COUNTRY - \$\{countryCode\}`/);
   assert.match(api, /accountIds: \[\.\.\.buyerIds\]\.sort\(\)/);
   const loader = api.slice(api.indexOf('async function loadDecisionDashboardScope'), api.indexOf('async function salesforceDashboardFilteredUncached'));
   assert.doesNotMatch(loader, /LIMIT 3000/);
