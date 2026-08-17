@@ -12,8 +12,17 @@ export function paymentReminderCopyLine({ stemName, buyerName, amount, dueDate, 
 }
 
 export function paymentReminderCopyText(rows = [], totalLines = []) {
+  const rowLines = rows.map((row) => paymentReminderCopyLine(row));
+  const totals = totalLines.map((line) => copyCell(line).toUpperCase());
   return [
-    ...rows.map((row) => paymentReminderCopyLine(row)),
-    ...totalLines.map((line) => copyCell(line).toUpperCase()),
+    ...rowLines,
+    ...(rowLines.length && totals.length ? [''] : []),
+    ...totals,
   ].join('\n');
+}
+
+export function accountStatementInvoiceCopyText(rows = [], totalLines = []) {
+  const issued = rows.filter((row) => row?.invoiceIssued !== false);
+  const notIssued = rows.filter((row) => row?.invoiceIssued === false);
+  return paymentReminderCopyText([...issued, ...notIssued], totalLines);
 }

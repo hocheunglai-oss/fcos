@@ -3,7 +3,7 @@ import { AlertTriangle, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Loa
 import { CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
-import { paymentReminderCopyText } from '@/lib/paymentReminderClipboard';
+import { accountStatementInvoiceCopyText } from '@/lib/paymentReminderClipboard';
 
 const SCOPES = [
   { value: 'open', label: 'Open only' },
@@ -47,6 +47,21 @@ function reminderCopyStatus(daysUntilDue) {
   if (days == null) return '-';
   if (days <= 0) return `Overdue ${Math.abs(days).toLocaleString()} Days`;
   return 'Due Soon';
+}
+
+function expectedInvoiceBasisSuffix(row, { uppercase = false } = {}) {
+  if (row?.expectedBuyerInvoiceAmountBasis !== 'range_max_quantity') return '';
+  return uppercase ? ' (BASIS MAX QTY)' : ' (basis max qty)';
+}
+
+function statementExposureBasisSuffix(row) {
+  return row?.statementExposureBasis === 'range_max_quantity' ? ' (Basis Max Qty)' : '';
+}
+
+function statementRowSelectable(row) {
+  return row?.hasBuyerInvoice
+    ? row.buyerInvoiceAmountComplete === true
+    : row?.expectedBuyerInvoiceAmountComplete === true;
 }
 
 function CreditKpi({ label, value, displayValue = null, currency, detail, warning = false }) {
@@ -117,13 +132,13 @@ function ReleaseChart({ data, series }) {
     return <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-border text-center text-sm text-muted-foreground">A complete, reconciled future release projection is not available. Exact STEM evidence remains in the statement below.</div>;
   }
   const referenceLimits = visibleCreditLimitReferences(data, series);
-  return <div className="w-full">{referenceLimits.length ? <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground" aria-label="Applicable credit limits">{referenceLimits.map((limit) => <span key={limit.key} className="inline-flex items-center gap-1.5"><span className="w-5 border-t-2 border-dashed" style={{ borderColor: CREDIT_LIMIT_COLORS[limit.key] || '#64748b' }} aria-hidden="true" />{limit.label}: <span className="font-semibold text-foreground">{money(limit.value, credit.currency)}</span></span>)}</div> : null}<div className="h-[340px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chart.points} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(value) => String(value).slice(5)} /><YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(undefined, { notation: 'compact' })} /><Tooltip content={<ReleaseTooltip currency={credit.currency} />} /><Legend wrapperStyle={{ fontSize: 11 }} />{series.account && data.reconciliation.individual.matches ? <Line type="stepAfter" dataKey="individualExposure" name="Account remaining exposure" stroke="#0369a1" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{data.group && series.group && data.reconciliation.group.matches ? <Line type="stepAfter" dataKey="groupExposure" name="GROUP remaining exposure" stroke="#7c3aed" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{referenceLimits.map((limit) => <ReferenceLine key={limit.key} y={limit.value} stroke={CREDIT_LIMIT_COLORS[limit.key] || '#64748b'} strokeDasharray="4 4" ifOverflow="extendDomain" />)}</ComposedChart></ResponsiveContainer></div></div>;
+  return <div className="w-full">{referenceLimits.length ? <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground" aria-label="Applicable credit limits">{referenceLimits.map((limit) => <span key={limit.key} className="inline-flex items-center gap-1.5"><span className="w-5 border-t-2 border-dashed" style={{ borderColor: CREDIT_LIMIT_COLORS[limit.key] || '#64748b' }} aria-hidden="true" />{limit.label}: <span className="font-semibold text-foreground">{money(limit.value, credit.currency)}</span></span>)}</div> : null}<div className="mb-1 text-[11px] font-medium text-muted-foreground">Un-Invoiced STEMs here use mid-qty if in range</div><div className="h-[340px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chart.points} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(value) => String(value).slice(5)} /><YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(undefined, { notation: 'compact' })} /><Tooltip content={<ReleaseTooltip currency={credit.currency} />} /><Legend wrapperStyle={{ fontSize: 11 }} />{series.account && data.reconciliation.individual.matches ? <Line type="stepAfter" dataKey="individualExposure" name="Account remaining exposure" stroke="#0369a1" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{data.group && series.group && data.reconciliation.group.matches ? <Line type="stepAfter" dataKey="groupExposure" name="GROUP remaining exposure" stroke="#7c3aed" strokeWidth={3} dot={{ r: 2.5 }} connectNulls={false} /> : null}{referenceLimits.map((limit) => <ReferenceLine key={limit.key} y={limit.value} stroke={CREDIT_LIMIT_COLORS[limit.key] || '#64748b'} strokeDasharray="4 4" ifOverflow="extendDomain" />)}</ComposedChart></ResponsiveContainer></div></div>;
 }
 
 function StatementCard({ row, currency, onStemClick, selected, onSelect }) {
   const rowCurrency = row.currency || currency;
-  const selectable = !row.hasBuyerInvoice || row.buyerInvoiceAmountComplete;
-  return <article className={`rounded-lg border p-4 ${row.hasBuyerInvoice ? 'border-border bg-card' : 'border-red-200 bg-red-50/70'}`}><div className="flex items-start gap-3"><input type="checkbox" className="mt-1 h-4 w-4" aria-label={`Select ${row.stemName} statement evidence`} checked={selected} disabled={!selectable} onChange={() => onSelect(row)} /><div className="min-w-0"><button type="button" className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onStemClick(row.stemId)}>{row.stemName}</button><div className="mt-1 text-xs text-muted-foreground">{row.accountName || 'Selected Account'} · {displayDate(row.effectiveDate)}</div>{row.hasBuyerInvoice ? <div className="mt-1 text-xs font-medium">Buyer invoice: {row.buyerInvoiceAmountComplete ? money(row.buyerInvoiceAmount, rowCurrency) : 'Amount unavailable'}</div> : <div className="mt-1 text-xs font-semibold text-red-800">Buyer invoice: Not Issued</div>}</div></div>{row.inCreditProjection === false ? <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-700">Outside current credit lineage window</div> : null}<dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Current exposure</dt><dd className="font-semibold">{money(row.currentExposure, rowCurrency)}</dd></div><div><dt className="text-xs text-muted-foreground">Actual released</dt><dd className="font-semibold">{money(row.actualReleased, rowCurrency)}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Release evidence</dt><dd className="mt-1 space-y-1">{row.actualReleases?.map((release) => <div key={`actual:${release.paymentId}`}><span className="font-medium">{displayDate(release.date)} · Actual payment</span> · {money(release.amount, rowCurrency)}</div>)}{row.forecastEvents?.map((release, index) => <div key={`forecast:${release.paymentId || release.cashflowId || index}`}><span className="font-medium">{displayDate(release.date)} · {release.sourceLabel}</span> · {money(release.amount, rowCurrency)}</div>)}{!row.actualReleases?.length && !row.forecastEvents?.length ? <div className="text-muted-foreground">No payment or reliable forecast evidence.</div> : null}</dd></div></dl></article>;
+  const selectable = statementRowSelectable(row);
+  return <article className={`rounded-lg border p-4 ${row.hasBuyerInvoice ? 'border-border bg-card' : 'border-red-200 bg-red-50/70'}`}><div className="flex items-start gap-3"><input type="checkbox" className="mt-1 h-4 w-4" aria-label={`Select ${row.stemName} statement evidence`} checked={selected} disabled={!selectable} title={!selectable ? row.expectedBuyerInvoiceAmountBlockingReason || 'Invoice amount unavailable' : undefined} onChange={() => onSelect(row)} /><div className="min-w-0"><button type="button" className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onStemClick(row.stemId)}>{row.stemName}</button><div className="mt-1 text-xs text-muted-foreground">{row.accountName || 'Selected Account'} · {displayDate(row.effectiveDate)}</div>{row.hasBuyerInvoice ? <div className="mt-1 text-xs font-medium">Buyer invoice: {row.buyerInvoiceAmountComplete ? money(row.buyerInvoiceAmount, rowCurrency) : 'Amount unavailable'}</div> : <div className="mt-1 text-xs font-semibold text-red-800">Buyer invoice: Not Issued · Expected {row.expectedBuyerInvoiceAmountComplete ? <>{money(row.expectedBuyerInvoiceAmount, rowCurrency)}{expectedInvoiceBasisSuffix(row)}</> : 'amount unavailable'}</div>}</div></div>{row.inCreditProjection === false ? <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-700">Outside current credit lineage window</div> : null}<dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Current exposure</dt><dd className="font-semibold" title={row.statementExposureComplete ? undefined : row.statementExposureBlockingReason || 'Exposure unavailable'}>{row.statementExposureComplete ? <>{money(row.statementExposureAmount, rowCurrency)}{statementExposureBasisSuffix(row)}</> : <><span>Unavailable</span><span className="mt-1 block text-[11px] font-normal text-amber-700">{row.statementExposureBlockingReason || 'Exposure evidence is incomplete.'}</span></>}</dd></div><div><dt className="text-xs text-muted-foreground">Actual released</dt><dd className="font-semibold">{money(row.actualReleased, rowCurrency)}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Release evidence</dt><dd className="mt-1 space-y-1">{row.actualReleases?.map((release) => <div key={`actual:${release.paymentId}`}><span className="font-medium">{displayDate(release.date)} · Actual payment</span> · {money(release.amount, rowCurrency)}</div>)}{row.forecastEvents?.map((release, index) => <div key={`forecast:${release.paymentId || release.cashflowId || index}`}><span className="font-medium">{displayDate(release.date)} · {release.sourceLabel}</span> · {money(release.amount, rowCurrency)}</div>)}{!row.actualReleases?.length && !row.forecastEvents?.length ? <div className="text-muted-foreground">No payment or reliable forecast evidence.</div> : null}</dd></div></dl></article>;
 }
 
 export default function AccountCreditStatement({ accountId, active, onStemClick }) {
@@ -154,7 +169,7 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
       if (response.data?.error) throw new Error(response.data.error);
       setResult(response.data);
       const liveRows = response.data?.statement?.rows || [];
-      setSelectedInvoiceIds((selected) => new Set([...selected].filter((stemId) => liveRows.some((row) => row.stemId === stemId && (!row.hasBuyerInvoice || row.buyerInvoiceAmountComplete)))));
+      setSelectedInvoiceIds((selected) => new Set([...selected].filter((stemId) => liveRows.some((row) => row.stemId === stemId && statementRowSelectable(row)))));
       setNavigation({ cursor, history });
     } catch (loadError) {
       if (loadError.name !== 'AbortError') setError(loadError.message || 'The live credit statement could not be loaded.');
@@ -174,20 +189,18 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
   const nextCursor = result?.statement?.nextCursor;
   const calculatedAvailable = result?.credit?.calculatedAvailable;
   const projectionWarnings = result?.projectionWarnings || result?.warnings || [];
-  const selectableInvoiceRows = rows.filter((row) => !row.hasBuyerInvoice || row.buyerInvoiceAmountComplete);
+  const selectableInvoiceRows = rows.filter(statementRowSelectable);
   const selectedInvoiceRows = selectableInvoiceRows.filter((row) => selectedInvoiceIds.has(row.stemId));
   const selectedNotIssuedCount = selectedInvoiceRows.filter((row) => !row.hasBuyerInvoice).length;
   const selectedInvoiceTotals = selectedInvoiceRows.reduce((totals, row) => {
-    if (!row.hasBuyerInvoice || !row.buyerInvoiceAmountComplete) return totals;
     const rowCurrency = row.currency || currency || 'USD';
-    totals[rowCurrency] = (totals[rowCurrency] || 0) + Number(row.buyerInvoiceAmount || 0);
-    return totals;
-  }, {});
-  const selectedExpectedInvoiceTotals = selectedInvoiceRows.reduce((totals, row) => {
-    const expectedAmount = numeric(row.expectedBuyerInvoiceAmount);
-    if (row.hasBuyerInvoice || expectedAmount == null) return totals;
-    const rowCurrency = row.currency || currency || 'USD';
-    totals[rowCurrency] = (totals[rowCurrency] || 0) + expectedAmount;
+    const amount = row.hasBuyerInvoice ? numeric(row.buyerInvoiceAmount) : numeric(row.expectedBuyerInvoiceAmount);
+    if (amount == null) return totals;
+    const current = totals[rowCurrency] || { amount: 0, hasExpected: false };
+    totals[rowCurrency] = {
+      amount: current.amount + amount,
+      hasExpected: current.hasExpected || !row.hasBuyerInvoice,
+    };
     return totals;
   }, {});
 
@@ -211,17 +224,14 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
   };
 
   const copySelectedInvoices = async () => {
-    const totalLines = [
-      ...Object.entries(selectedInvoiceTotals).map(([totalCurrency, amount]) => `Total issued invoice amount - ${reminderCopyMoney(amount, totalCurrency)}`),
-      ...Object.entries(selectedExpectedInvoiceTotals).map(([totalCurrency, amount]) => `Total expected invoice amount - ${reminderCopyMoney(amount, totalCurrency)}`),
-      ...(selectedNotIssuedCount ? [`Buyer invoice not issued - ${selectedNotIssuedCount} STEM${selectedNotIssuedCount === 1 ? '' : 's'}`] : []),
-    ];
-    const copyText = paymentReminderCopyText(selectedInvoiceRows.map((row) => ({
+    const totalLines = Object.entries(selectedInvoiceTotals).map(([totalCurrency, total]) => `Total invoice amount - ${reminderCopyMoney(total.amount, totalCurrency)}${total.hasExpected ? ' (Expected)' : ''}`);
+    const copyText = accountStatementInvoiceCopyText(selectedInvoiceRows.map((row) => ({
       stemName: row.stemName,
       buyerName: row.accountName || result.identity.name,
+      invoiceIssued: row.hasBuyerInvoice,
       amount: row.hasBuyerInvoice
         ? reminderCopyMoney(row.buyerInvoiceAmount, row.currency || currency)
-        : `Invoice Not Issued - Expected Invoice Amount ${reminderCopyMoney(row.expectedBuyerInvoiceAmount, row.currency || currency)}`,
+        : `Invoice Not Issued - Expected Invoice Amount ${reminderCopyMoney(row.expectedBuyerInvoiceAmount, row.currency || currency)}${expectedInvoiceBasisSuffix(row, { uppercase: true })}`,
       dueDate: row.hasBuyerInvoice ? displayDate(row.buyerInvoiceDueDate) : displayDate(row.expectedBuyerInvoiceDueDate),
       dueDateLabel: row.hasBuyerInvoice ? 'Due Date' : 'Expected Due Date',
       status: row.hasBuyerInvoice ? reminderCopyStatus(row.buyerInvoiceDaysUntilDue) : null,
@@ -278,7 +288,7 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
         <div><h3 className="font-semibold">Statement evidence</h3><p className="mt-1 text-xs text-muted-foreground">Only STEM__c.Account__c equals this Account. Open exposure uses delivery dates from 1 January 2026 onward.</p></div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="mr-1 text-xs text-muted-foreground">{selectedInvoiceRows.length ? <><span className="font-semibold text-foreground">{selectedInvoiceRows.length} selected</span>{Object.entries(selectedInvoiceTotals).map(([totalCurrency, amount]) => <span key={totalCurrency}> · Total issued invoice amount {money(amount, totalCurrency)}</span>)}{selectedNotIssuedCount ? <span className="font-semibold text-red-700"> · {selectedNotIssuedCount} Not Issued</span> : null}</> : `${selectableInvoiceRows.length} statement STEM${selectableInvoiceRows.length === 1 ? '' : 's'} available`}</div>
+          <div className="mr-1 text-xs text-muted-foreground">{selectedInvoiceRows.length ? <><span className="font-semibold text-foreground">{selectedInvoiceRows.length} selected</span>{Object.entries(selectedInvoiceTotals).map(([totalCurrency, total]) => <span key={totalCurrency}> · Total invoice amount {money(total.amount, totalCurrency)}{total.hasExpected ? ' (expected)' : ''}</span>)}{selectedNotIssuedCount ? <span className="font-semibold text-red-700"> · {selectedNotIssuedCount} Not Issued</span> : null}</> : `${selectableInvoiceRows.length} statement STEM${selectableInvoiceRows.length === 1 ? '' : 's'} available`}</div>
           <Button type="button" size="sm" variant="outline" onClick={toggleAllInvoices} disabled={!selectableInvoiceRows.length}>{selectedInvoiceRows.length === selectableInvoiceRows.length && selectableInvoiceRows.length ? 'Clear selection' : 'Select all'}</Button>
           <Button type="button" size="sm" onClick={copySelectedInvoices} disabled={!selectedInvoiceRows.length} className="gap-2">{copyState === 'copied' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}{copyState === 'copied' ? 'Copied' : 'Copy details'}</Button>
         </div>
@@ -289,8 +299,8 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
         <table className="w-full min-w-[1280px] text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2"><input type="checkbox" aria-label="Select all statement STEMs on this page" checked={selectableInvoiceRows.length > 0 && selectedInvoiceRows.length === selectableInvoiceRows.length} disabled={!selectableInvoiceRows.length} onChange={toggleAllInvoices} /></th><th className="px-3 py-2">STEM</th><th className="px-3 py-2 text-right">Buyer invoice</th><th className="px-3 py-2">Delivery</th><th className="px-3 py-2 text-right">Current exposure</th><th className="px-3 py-2 text-right">Actual released</th><th className="px-3 py-2">Next release</th><th className="px-3 py-2">Exact evidence</th></tr></thead>
           <tbody>{rows.map((row) => {
-            const selectable = !row.hasBuyerInvoice || row.buyerInvoiceAmountComplete;
-            return <tr key={row.stemId} className={`border-t border-border align-top ${row.hasBuyerInvoice ? '' : 'bg-red-50/70'}`}><td className="px-3 py-3"><input type="checkbox" aria-label={`Select ${row.stemName} statement evidence`} checked={selectedInvoiceIds.has(row.stemId)} disabled={!selectable} onChange={() => toggleInvoice(row)} /></td><td className="px-3 py-3"><button type="button" className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onStemClick(row.stemId)}>{row.stemName}</button><div className="text-xs text-muted-foreground">{row.accountName || result.identity.name}</div>{row.inCreditProjection === false ? <div className="mt-1 text-[10px] font-semibold text-slate-600">Outside current credit lineage window</div> : null}</td><td className="px-3 py-3 text-right tabular-nums">{row.hasBuyerInvoice ? row.buyerInvoiceAmountComplete ? money(row.buyerInvoiceAmount, row.currency || currency) : <span className="text-xs text-amber-700">Amount unavailable</span> : <span className="text-xs font-semibold text-red-800">Not Issued</span>}</td><td className="px-3 py-3">{displayDate(row.effectiveDate)}</td><td className="px-3 py-3 text-right tabular-nums">{money(row.currentExposure, row.currency || currency)}</td><td className="px-3 py-3 text-right tabular-nums">{money(row.actualReleased, row.currency || currency)}</td><td className="px-3 py-3"><div>{displayDate(row.releaseDate)}</div><div className="text-xs text-muted-foreground">{row.releaseSourceLabel || 'No reliable future date'}</div></td><td className="space-y-1 px-3 py-3 text-xs">{row.actualReleases?.map((release) => <div key={`actual:${release.paymentId}`}><span className="font-medium">{displayDate(release.date)} · Actual payment</span> · {money(release.amount, row.currency || currency)}</div>)}{row.forecastEvents?.map((release, index) => <div key={`forecast:${release.paymentId || release.cashflowId || index}`}><span className="font-medium">{displayDate(release.date)} · {release.sourceLabel}</span> · {money(release.amount, row.currency || currency)}</div>)}{!row.actualReleases?.length && !row.forecastEvents?.length ? <span className="text-muted-foreground">No payment or reliable forecast evidence.</span> : null}</td></tr>;
+            const selectable = statementRowSelectable(row);
+            return <tr key={row.stemId} className={`border-t border-border align-top ${row.hasBuyerInvoice ? '' : 'bg-red-50/70'}`}><td className="px-3 py-3"><input type="checkbox" aria-label={`Select ${row.stemName} statement evidence`} checked={selectedInvoiceIds.has(row.stemId)} disabled={!selectable} title={!selectable ? row.expectedBuyerInvoiceAmountBlockingReason || 'Invoice amount unavailable' : undefined} onChange={() => toggleInvoice(row)} /></td><td className="px-3 py-3"><button type="button" className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onStemClick(row.stemId)}>{row.stemName}</button><div className="text-xs text-muted-foreground">{row.accountName || result.identity.name}</div>{row.inCreditProjection === false ? <div className="mt-1 text-[10px] font-semibold text-slate-600">Outside current credit lineage window</div> : null}</td><td className="px-3 py-3 text-right tabular-nums">{row.hasBuyerInvoice ? row.buyerInvoiceAmountComplete ? money(row.buyerInvoiceAmount, row.currency || currency) : <span className="text-xs text-amber-700">Amount unavailable</span> : <div className="text-xs font-semibold text-red-800"><div>Not Issued</div><div className="mt-1 font-medium">Expected {row.expectedBuyerInvoiceAmountComplete ? <>{money(row.expectedBuyerInvoiceAmount, row.currency || currency)}{expectedInvoiceBasisSuffix(row)}</> : 'amount unavailable'}</div></div>}</td><td className="px-3 py-3">{displayDate(row.effectiveDate)}</td><td className="px-3 py-3 text-right tabular-nums" title={row.statementExposureComplete ? undefined : row.statementExposureBlockingReason || 'Exposure unavailable'}>{row.statementExposureComplete ? <>{money(row.statementExposureAmount, row.currency || currency)}{statementExposureBasisSuffix(row)}</> : <><span className="text-xs text-amber-700">Unavailable</span><div className="mt-1 max-w-48 text-[10px] text-amber-700">{row.statementExposureBlockingReason || 'Exposure evidence is incomplete.'}</div></>}</td><td className="px-3 py-3 text-right tabular-nums">{money(row.actualReleased, row.currency || currency)}</td><td className="px-3 py-3"><div>{displayDate(row.releaseDate)}</div><div className="text-xs text-muted-foreground">{row.releaseSourceLabel || 'No reliable future date'}</div></td><td className="space-y-1 px-3 py-3 text-xs">{row.actualReleases?.map((release) => <div key={`actual:${release.paymentId}`}><span className="font-medium">{displayDate(release.date)} · Actual payment</span> · {money(release.amount, row.currency || currency)}</div>)}{row.forecastEvents?.map((release, index) => <div key={`forecast:${release.paymentId || release.cashflowId || index}`}><span className="font-medium">{displayDate(release.date)} · {release.sourceLabel}</span> · {money(release.amount, row.currency || currency)}</div>)}{!row.actualReleases?.length && !row.forecastEvents?.length ? <span className="text-muted-foreground">No payment or reliable forecast evidence.</span> : null}</td></tr>;
           })}{!rows.length ? <tr><td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">No buyer-leg STEMs match this statement scope.</td></tr> : null}</tbody>
         </table>
       </div>

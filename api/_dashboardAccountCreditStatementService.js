@@ -475,6 +475,60 @@ function finalBuyerInvoice(invoice) {
     && !/-CN-/i.test(text(invoice?.Name));
 }
 
+function expectedInvoiceLineItemSelectFields(fields) {
+  const result = selected(fields, [
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Is_Quantity_Range__c',
+    'Price_Per_Unit__c', 'Unit_Sell_At__c',
+  ]);
+  const offerLookup = fields.get('Offer_Line_Item__c');
+  if (offerLookup?.relationshipName) result.push(`${offerLookup.relationshipName}.UnitPrice`);
+  return [...new Set(result)];
+}
+
+function expectedInvoiceExtraCostSelectFields(fields) {
+  return selected(fields, [
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
+    'Unit_Price__c', 'Line_Total__c',
+  ]);
+}
+
+function validateExpectedInvoiceSchema(lineFields, extraCostFields) {
+  requireFields(lineFields, ['Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Is_Quantity_Range__c'], 'STEM Line Item');
+  if (!['Price_Per_Unit__c', 'Unit_Sell_At__c', 'Offer_Line_Item__c'].some((field) => lineFields.has(field))) {
+    throw serviceError('STEM Line Item does not expose a buyer sell unit price for expected invoice calculations.', 503, 'ACCOUNT_CREDIT_SCHEMA');
+  }
+  requireFields(extraCostFields, [
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
+    'Unit_Price__c', 'Line_Total__c',
+  ], 'STEM Extra Cost');
+}
+
+async function queryExpectedInvoiceChildRows(stems, fields, objectName, selectFields) {
+  if (!stems.length) return { rows: [], complete: true };
+  const rows = [];
+  let complete = true;
+  for (const ids of chunkIds(stems.map((stem) => stem.Id))) {
+    const result = await queryAll(`SELECT ${selectFields(fields).join(',')} FROM ${objectName} WHERE STEM__c IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) AND Cancelled__c = false LIMIT ${MAX_EVIDENCE_ROWS + 1}`, MAX_EVIDENCE_ROWS + 1);
+    rows.push(...result.records);
+    if (result.totalSize > MAX_EVIDENCE_ROWS || rows.length > MAX_EVIDENCE_ROWS) complete = false;
+  }
+  return { rows: rows.slice(0, MAX_EVIDENCE_ROWS), complete };
+}
+
+async function queryExpectedInvoiceEvidence(stems, lineFields, extraCostFields) {
+  if (!stems.length) return { lineItems: [], extraCosts: [], complete: true };
+  validateExpectedInvoiceSchema(lineFields, extraCostFields);
+  const [lineItems, extraCosts] = await Promise.all([
+    queryExpectedInvoiceChildRows(stems, lineFields, 'STEM_Line_Item__c', expectedInvoiceLineItemSelectFields),
+    queryExpectedInvoiceChildRows(stems, extraCostFields, 'STEM_Extra_Cost__c', expectedInvoiceExtraCostSelectFields),
+  ]);
+  return {
+    lineItems: lineItems.rows,
+    extraCosts: extraCosts.rows,
+    complete: lineItems.complete && extraCosts.complete,
+  };
+}
+
 async function queryBuyerInvoices(stems, fields) {
   if (!stems.length) return { rows: [], complete: true };
   const select = buyerInvoiceSelectFields(fields);
@@ -529,21 +583,34 @@ function serializePayment(row, config) {
 function mergeStems(rows) {
   const values = new Map();
   for (const row of rows) if (row?.Id) values.set(idKey(row.Id), row);
-  return [...values.values()].sort((left, right) => String(right.CreatedDate || '').localeCompare(String(left.CreatedDate || '')) || String(right.Id).localeCompare(String(left.Id)));
+  return [...values.values()].sort(compareStatementStems);
+}
+
+function statementDeliveryDate(stem) {
+  return text(stem?.Delivery_Date__c || stem?.Expected_Delivery_Date__c).slice(0, 10);
+}
+
+function compareStatementStems(left, right) {
+  const leftDelivery = statementDeliveryDate(left);
+  const rightDelivery = statementDeliveryDate(right);
+  if (leftDelivery && rightDelivery && leftDelivery !== rightDelivery) return rightDelivery.localeCompare(leftDelivery);
+  if (leftDelivery && !rightDelivery) return -1;
+  if (!leftDelivery && rightDelivery) return 1;
+  return String(right.CreatedDate || '').localeCompare(String(left.CreatedDate || '')) || String(right.Id).localeCompare(String(left.Id));
 }
 
 async function statementRows({ accountId, scope, cursor, limit, openStems, recentPayments, stemFields }) {
   if (scope === 'all') {
-    if (cursor && cursor.kind !== 'all') throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-    const conditions = [`Account__c = '${soql(accountId)}'`];
-    if (cursor) conditions.push(`(CreatedDate < ${cursor.createdDate} OR (CreatedDate = ${cursor.createdDate} AND Id < '${soql(cursor.id)}'))`);
-    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE ${conditions.join(' AND ')} ORDER BY CreatedDate DESC,Id DESC LIMIT ${limit + 1}`, limit + 1);
-    const hasMore = result.records.length > limit;
-    const rows = result.records.slice(0, limit);
+    if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
+    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c = '${soql(accountId)}' LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
+    if (result.records.length > MAX_GROUP_OPEN_STEMS) throw serviceError('The Account Statement exceeds the supported delivery-sorted history scope. Narrow the statement filter.', 503, 'ACCOUNT_CREDIT_STATEMENT_LIMIT');
+    const sorted = mergeStems(result.records);
+    const offset = cursor?.offset || 0;
+    const rows = sorted.slice(offset, offset + limit);
     return {
       rows,
-      total: null,
-      nextCursor: hasMore && rows.length ? encodeAccountCreditCursor({ kind: 'all', createdDate: rows.at(-1).CreatedDate, id: rows.at(-1).Id }) : null,
+      total: sorted.length,
+      nextCursor: offset + rows.length < sorted.length ? encodeAccountCreditCursor({ kind: 'statement', scope, offset: offset + rows.length }) : null,
     };
   }
   if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
@@ -574,12 +641,14 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const today = hongKongToday();
   let stageStartedAt = Date.now();
-  const [accountDescribe, stemDescribe, paymentDescribe, cashflowDescribe, buyerInvoiceDescribe] = await Promise.all([
+  const [accountDescribe, stemDescribe, paymentDescribe, cashflowDescribe, buyerInvoiceDescribe, lineItemDescribe, extraCostDescribe] = await Promise.all([
     describeObject('Account', force),
     describeObject('STEM__c', force),
     describeObject('Payment__c', force),
     describeObject('Cashflow__c', force),
     describeObject('Invoice__c', force),
+    describeObject('STEM_Line_Item__c', force),
+    describeObject('STEM_Extra_Cost__c', force),
   ]);
   timings.schemaMs = Date.now() - stageStartedAt;
   const accountFields = fieldMap(accountDescribe);
@@ -587,6 +656,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const paymentFields = fieldMap(paymentDescribe);
   const cashflowFields = fieldMap(cashflowDescribe);
   const buyerInvoiceFields = fieldMap(buyerInvoiceDescribe);
+  const lineItemFields = fieldMap(lineItemDescribe);
+  const extraCostFields = fieldMap(extraCostDescribe);
   requireFields(accountFields, ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c', 'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c'], 'Account');
   requireFields(stemFields, ['Id', 'Name', 'CreatedDate', 'Account__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
   requireFields(paymentFields, ['Id', 'STEM__c', 'Account__c'], 'Payment__c');
@@ -660,6 +731,16 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const cashflowsByStem = indexByStem(cashflows.rows);
   const buyerInvoicesByStem = indexByStem(buyerInvoices.rows);
   timings.releaseEvidenceMs = Date.now() - stageStartedAt;
+  stageStartedAt = Date.now();
+  const notIssuedStems = buyerInvoices.complete
+    ? statement.rows.filter((stem) => !(buyerInvoicesByStem[stem.Id] || []).length)
+    : [];
+  const expectedInvoiceEvidence = buyerInvoices.complete
+    ? await queryExpectedInvoiceEvidence(notIssuedStems, lineItemFields, extraCostFields)
+    : { lineItems: [], extraCosts: [], complete: false };
+  const expectedInvoiceLineItemsByStem = indexByStem(expectedInvoiceEvidence.lineItems);
+  const expectedInvoiceExtraCostsByStem = indexByStem(expectedInvoiceEvidence.extraCosts);
+  timings.expectedInvoiceMs = Date.now() - stageStartedAt;
   const model = buildAccountCreditStatement({
     account,
     creditAccount,
@@ -672,6 +753,9 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     cashflowsByStem,
     buyerInvoicesByStem,
     buyerInvoiceScopeComplete: buyerInvoices.complete,
+    expectedInvoiceLineItemsByStem,
+    expectedInvoiceExtraCostsByStem,
+    expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
     today,
     complete,
   });
@@ -692,6 +776,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       statementRowCount: model.rows.length,
       complete,
       buyerInvoiceScopeComplete: buyerInvoices.complete,
+      expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
       timings,
       salesforceFetchedAt: new Date().toISOString(),
     },
@@ -705,7 +790,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '7',
+    version: '9',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },
@@ -721,6 +806,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
 }
 
 export const dashboardAccountCreditStatementServiceInternals = {
+  compareStatementStems,
   interofficeAccountCondition,
   paymentConfiguration,
   validBuyerPayment,

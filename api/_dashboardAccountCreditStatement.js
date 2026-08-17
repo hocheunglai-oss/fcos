@@ -572,6 +572,100 @@ export function buildCreditReleaseChart({
   };
 }
 
+function expectedInvoiceQuantity(item, maxField) {
+  if (item?.Is_Quantity_Range__c === true) {
+    const maximum = number(item?.[maxField]);
+    return maximum == null
+      ? { complete: false, quantity: null, basis: 'range_max_quantity' }
+      : { complete: true, quantity: maximum, basis: 'range_max_quantity' };
+  }
+  const ordered = number(item?.Quantity__c);
+  return ordered == null
+    ? { complete: false, quantity: null, basis: 'ordered_quantity' }
+    : { complete: true, quantity: ordered, basis: 'ordered_quantity' };
+}
+
+function firstNumeric(...values) {
+  for (const candidate of values) {
+    const parsed = number(candidate);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+export function expectedBuyerInvoiceEstimate({
+  lineItems = [],
+  extraCosts = [],
+  complete = true,
+} = {}) {
+  const activeLineItems = lineItems.filter((item) => item?.Cancelled__c !== true);
+  const activeExtraCosts = extraCosts.filter((item) => item?.Cancelled__c !== true);
+  if (!complete) {
+    return {
+      amount: null,
+      complete: false,
+      source: 'ordered_buyer_lines',
+      basis: null,
+      blockingReason: 'Expected invoice evidence is incomplete in Salesforce.',
+    };
+  }
+  if (!activeLineItems.length && !activeExtraCosts.length) {
+    return {
+      amount: null,
+      complete: false,
+      source: 'ordered_buyer_lines',
+      basis: null,
+      blockingReason: 'No active buyer-billable rows are available for the expected invoice calculation.',
+    };
+  }
+
+  let amount = 0;
+  let usesMaximumQuantity = false;
+  let missingInput = false;
+  for (const item of activeLineItems) {
+    const quantity = expectedInvoiceQuantity(item, 'Quantity_Max__c');
+    const unitPrice = firstNumeric(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item.Offer_Line_Item__r?.UnitPrice);
+    if (!quantity.complete || unitPrice == null) {
+      missingInput = true;
+      continue;
+    }
+    amount += unitPrice * quantity.quantity;
+    if (quantity.basis === 'range_max_quantity') usesMaximumQuantity = true;
+  }
+  for (const item of activeExtraCosts) {
+    const unitPrice = number(item.Unit_Price__c);
+    if (unitPrice == null) {
+      const fixedAmount = number(item.Line_Total__c);
+      if (fixedAmount == null) missingInput = true;
+      else amount += fixedAmount;
+      continue;
+    }
+    const quantity = expectedInvoiceQuantity(item, 'Quantity_Range_Max__c');
+    if (!quantity.complete) {
+      missingInput = true;
+      continue;
+    }
+    amount += unitPrice * quantity.quantity;
+    if (quantity.basis === 'range_max_quantity') usesMaximumQuantity = true;
+  }
+  if (missingInput) {
+    return {
+      amount: null,
+      complete: false,
+      source: 'ordered_buyer_lines',
+      basis: usesMaximumQuantity ? 'range_max_quantity' : 'ordered_quantity',
+      blockingReason: 'One or more active buyer-billable rows lack an ordered quantity or sell price.',
+    };
+  }
+  return {
+    amount: currencyAmount(amount),
+    complete: true,
+    source: 'ordered_buyer_lines',
+    basis: usesMaximumQuantity ? 'range_max_quantity' : 'ordered_quantity',
+    blockingReason: null,
+  };
+}
+
 export function buildAccountCreditStatement({
   account,
   creditAccount = account,
@@ -584,6 +678,9 @@ export function buildAccountCreditStatement({
   cashflowsByStem = {},
   buyerInvoicesByStem = {},
   buyerInvoiceScopeComplete = true,
+  expectedInvoiceLineItemsByStem = {},
+  expectedInvoiceExtraCostsByStem = {},
+  expectedInvoiceScopeComplete = true,
   today,
   complete = true,
   warnings = [],
@@ -647,8 +744,21 @@ export function buildAccountCreditStatement({
     const buyerInvoiceDueDate = buyerInvoiceDueDates[0] || null;
     const expectedDueCandidate = releaseCandidate(stem, cashflowsByStem[stem.Id] || [], dateOnly(today));
     const expectedBuyerInvoiceDueDate = expectedDueCandidate.date || expectedDueCandidate.missedDate || null;
-    const stemInvoiceTotal = number(stem.Total_Invoice_Amount__c);
-    const expectedBuyerInvoiceAmount = currencyAmount(stemInvoiceTotal ?? number(stem.QLIK_Receivable_Balance__c));
+    const expectedInvoice = buyerInvoices.length ? null : expectedBuyerInvoiceEstimate({
+      lineItems: expectedInvoiceLineItemsByStem[stem.Id] || [],
+      extraCosts: expectedInvoiceExtraCostsByStem[stem.Id] || [],
+      complete: expectedInvoiceScopeComplete,
+    });
+    const salesforceCurrentExposure = number(stem.QLIK_Receivable_Balance__c);
+    const statementExposure = buyerInvoices.length
+      ? {
+        amount: salesforceCurrentExposure,
+        complete: salesforceCurrentExposure != null,
+        source: 'salesforce_qlik_receivable_balance',
+        basis: 'salesforce_receivable_balance',
+        blockingReason: salesforceCurrentExposure == null ? 'Salesforce receivable balance is unavailable.' : null,
+      }
+      : expectedInvoice;
     return {
       stemId: stem.Id,
       stemName: stem.Name || stem.Id,
@@ -658,7 +768,12 @@ export function buildAccountCreditStatement({
       effectiveDate: dateOnly(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c),
       invoiceStatus: stem.Invoice_Status__c || null,
       paymentTerm: stem.Payment_Term__c || null,
-      currentExposure: number(stem.QLIK_Receivable_Balance__c) ?? 0,
+      currentExposure: salesforceCurrentExposure ?? 0,
+      statementExposureAmount: statementExposure?.amount ?? null,
+      statementExposureComplete: statementExposure?.complete === true,
+      statementExposureSource: statementExposure?.source ?? null,
+      statementExposureBasis: statementExposure?.basis ?? null,
+      statementExposureBlockingReason: statementExposure?.blockingReason ?? null,
       actualReleased,
       latestActualReleaseDate: release.actualReleases.at(-1)?.date || dateOnly(stem.Payment_Date__c),
       releaseDate: release.releaseDate,
@@ -674,8 +789,11 @@ export function buildAccountCreditStatement({
       buyerInvoiceAmount: buyerInvoiceAmountComplete ? currencyAmount(buyerInvoiceAmounts.reduce((sum, amount) => sum + amount, 0)) : null,
       buyerInvoiceAmountComplete,
       buyerInvoiceDueDate,
-      expectedBuyerInvoiceAmount,
-      expectedBuyerInvoiceAmountSource: stemInvoiceTotal != null ? 'stem_total_invoice' : 'current_exposure',
+      expectedBuyerInvoiceAmount: expectedInvoice?.amount ?? null,
+      expectedBuyerInvoiceAmountComplete: expectedInvoice?.complete === true,
+      expectedBuyerInvoiceAmountSource: expectedInvoice?.source ?? null,
+      expectedBuyerInvoiceAmountBasis: expectedInvoice?.basis ?? null,
+      expectedBuyerInvoiceAmountBlockingReason: expectedInvoice?.blockingReason ?? null,
       expectedBuyerInvoiceDueDate,
       buyerInvoiceDaysUntilDue: daysBetweenDates(today, buyerInvoiceDueDate),
       buyerInvoiceLastModifiedAt: buyerInvoices.map((invoice) => invoice.LastModifiedDate).filter(Boolean).sort().at(-1) || null,

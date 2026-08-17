@@ -4,6 +4,24 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.173',
+    releasedAt: '2026-08-17',
+    title: 'Clarify Statement exposure quantities',
+    changes: [
+      'Uses ordered maximum quantities for Not Issued Statement Evidence exposure while preserving Salesforce QLIK quantities for credit reconciliation and forecasts.',
+      'Sorts Statement Evidence by delivery date from newest to oldest and labels the forecast midpoint basis for un-invoiced quantity ranges.',
+    ],
+  },
+  {
+    version: '2.0.172',
+    releasedAt: '2026-08-17',
+    title: 'Calculate complete expected invoice totals',
+    changes: [
+      'Calculates Not Issued Buyer Invoice estimates from non-cancelled ordered product and extra-cost rows without using zero BDN quantities.',
+      'Uses maximum quantities for range orders, identifies those rows as BASIS MAX QTY, groups Not Issued STEMs, and combines actual and expected values into one clearly marked total.',
+    ],
+  },
+  {
     version: '2.0.171',
     releasedAt: '2026-08-17',
     title: 'Include expected invoice amounts',

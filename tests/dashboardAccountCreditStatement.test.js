@@ -9,16 +9,19 @@ import {
   creditExposureDeliveryDate,
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
+  expectedBuyerInvoiceEstimate,
   isCreditExposureStemEligible,
   normalizeAccountCreditScope,
   reconcileCreditExposure,
   resolveCreditSnapshotCandidate,
   selectUltimateCreditGroup,
 } from '../api/_dashboardAccountCreditStatement.js';
+import { dashboardAccountCreditStatementServiceInternals } from '../api/_dashboardAccountCreditStatementService.js';
 
 const accountId = '001000000000001AAA';
 const groupId = '001000000000002AAA';
 const otherAccountId = '001000000000003AAA';
+const { compareStatementStems } = dashboardAccountCreditStatementServiceInternals;
 
 test('credit category formulas preserve Salesforce individual, group, and special constraints', () => {
   const individual = accountCreditBalances({ category: 'Individual', individualLimit: 100, usedCustomer: 30 });
@@ -409,6 +412,10 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   assert.equal(row.buyerInvoiceDueDate, '2026-09-01');
   assert.equal(row.buyerInvoiceDaysUntilDue, 15);
   assert.equal(row.buyerInvoiceLastModifiedAt, '2026-08-16T02:00:00Z');
+  assert.equal(row.statementExposureAmount, 100);
+  assert.equal(row.statementExposureComplete, true);
+  assert.equal(row.statementExposureSource, 'salesforce_qlik_receivable_balance');
+  assert.equal(row.statementExposureBasis, 'salesforce_receivable_balance');
 
   const incomplete = buildAccountCreditStatement({
     today: '2026-08-17', account: { Id: accountId, Name: 'BUYER A' }, statementStems: [stem],
@@ -421,13 +428,115 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   const notIssued = buildAccountCreditStatement({
     today: '2026-08-17', account: { Id: accountId, Name: 'BUYER A' }, statementStems: [stem],
     cashflowsByStem: { [stem.Id]: [{ Id: 'a03000000000051AAA', Invoice_Due_Date__c: '2026-09-22' }] },
+    expectedInvoiceLineItemsByStem: {
+      [stem.Id]: [{ Id: 'a05000000000051AAA', STEM__c: stem.Id, Quantity__c: 125, Quantity_Delivered_Per_BDN__c: 0, Price_Per_Unit__c: 1, Total_Price__c: 0, Cancelled__c: false }],
+    },
   });
   assert.equal(notIssued.rows[0].hasBuyerInvoice, false);
   assert.equal(notIssued.rows[0].buyerInvoiceDueDate, null);
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmount, 125);
-  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountSource, 'stem_total_invoice');
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountComplete, true);
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountSource, 'ordered_buyer_lines');
+  assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountBasis, 'ordered_quantity');
+  assert.equal(notIssued.rows[0].statementExposureAmount, 125);
+  assert.equal(notIssued.rows[0].statementExposureComplete, true);
+  assert.equal(notIssued.rows[0].statementExposureSource, 'ordered_buyer_lines');
+  assert.equal(notIssued.rows[0].statementExposureBasis, 'ordered_quantity');
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceDueDate, '2026-09-22');
   assert.equal(notIssued.rows[0].buyerInvoiceDaysUntilDue, null);
+});
+
+test('Not Issued Statement Evidence uses maximum range exposure while forecast exposure remains QLIK-based', () => {
+  const stem = {
+    Id: 'a01000000000071AAA', Name: 'RANGE STEM', Account__c: accountId,
+    Delivery_Date__c: '2026-08-17', QLIK_Receivable_Balance__c: 165,
+  };
+  const result = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: { Id: accountId, Name: 'BUYER A' },
+    openStems: [stem],
+    statementStems: [stem],
+    expectedInvoiceLineItemsByStem: {
+      [stem.Id]: [{ Quantity__c: 50, Quantity_Max__c: 60, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3, Cancelled__c: false }],
+    },
+  });
+  assert.equal(result.rows[0].currentExposure, 165);
+  assert.equal(result.rows[0].statementExposureAmount, 180);
+  assert.equal(result.rows[0].statementExposureBasis, 'range_max_quantity');
+  assert.equal(result.rows[0].statementExposureComplete, true);
+  assert.equal(result.releases[0].currentExposure, 165);
+
+  const incomplete = buildAccountCreditStatement({
+    today: '2026-08-17',
+    account: { Id: accountId, Name: 'BUYER A' },
+    statementStems: [stem],
+    expectedInvoiceLineItemsByStem: {
+      [stem.Id]: [{ Quantity__c: 50, Quantity_Max__c: null, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3, Cancelled__c: false }],
+    },
+  });
+  assert.equal(incomplete.rows[0].statementExposureAmount, null);
+  assert.equal(incomplete.rows[0].statementExposureComplete, false);
+  assert.match(incomplete.rows[0].statementExposureBlockingReason, /lack an ordered quantity or sell price/i);
+});
+
+test('expected buyer invoice uses ordered and maximum range quantities instead of BDN quantities', () => {
+  const estimate = expectedBuyerInvoiceEstimate({
+    lineItems: [
+      { Quantity__c: 100, Quantity_Delivered_Per_BDN__c: 0, Price_Per_Unit__c: 2, Total_Price__c: 0, Cancelled__c: false },
+      { Quantity__c: 50, Quantity_Max__c: 60, Quantity_Delivered_Per_BDN__c: 0, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3, Cancelled__c: false },
+      { Quantity__c: 999, Price_Per_Unit__c: 999, Cancelled__c: true },
+    ],
+    extraCosts: [
+      { Quantity__c: 1, Quantity_Range_Max__c: 2, Is_Quantity_Range__c: true, Unit_Price__c: 10, Line_Total__c: 0, Cancelled__c: false },
+      { Unit_Price__c: null, Line_Total__c: 25, Cancelled__c: false },
+    ],
+  });
+  assert.deepEqual(estimate, {
+    amount: 425,
+    complete: true,
+    source: 'ordered_buyer_lines',
+    basis: 'range_max_quantity',
+    blockingReason: null,
+  });
+
+  const incomplete = expectedBuyerInvoiceEstimate({
+    lineItems: [{ Quantity__c: 100, Quantity_Delivered_Per_BDN__c: 0, Price_Per_Unit__c: null, Unit_Sell_At__c: null, Cancelled__c: false }],
+  });
+  assert.equal(incomplete.amount, null);
+  assert.equal(incomplete.complete, false);
+  assert.match(incomplete.blockingReason, /lack an ordered quantity or sell price/i);
+});
+
+test('HK2627318T expected invoice acceptance calculation is USD 640,460 without a max-quantity basis', () => {
+  const estimate = expectedBuyerInvoiceEstimate({
+    lineItems: [
+      { Quantity__c: 670, Unit_Sell_At__c: 806, Cancelled__c: false },
+      { Quantity__c: 90, Unit_Sell_At__c: 1116, Cancelled__c: false },
+    ],
+    extraCosts: Array.from({ length: 4 }, () => ({ Unit_Price__c: null, Line_Total__c: 0, Cancelled__c: false })),
+  });
+  assert.deepEqual(estimate, {
+    amount: 640460,
+    complete: true,
+    source: 'ordered_buyer_lines',
+    basis: 'ordered_quantity',
+    blockingReason: null,
+  });
+});
+
+test('Statement Evidence delivery sorting uses actual date, expected fallback, nulls last, and stable ties', () => {
+  const rows = [
+    { Id: 'a01000000000075AAA', CreatedDate: '2026-08-15T00:00:00Z' },
+    { Id: 'a01000000000072AAA', Expected_Delivery_Date__c: '2026-09-01', CreatedDate: '2026-08-01T00:00:00Z' },
+    { Id: 'a01000000000074AAA', Delivery_Date__c: '2026-08-20', CreatedDate: '2026-08-12T00:00:00Z' },
+    { Id: 'a01000000000073AAA', Delivery_Date__c: '2026-08-20', CreatedDate: '2026-08-13T00:00:00Z' },
+  ].sort(compareStatementStems);
+  assert.deepEqual(rows.map((row) => row.Id), [
+    'a01000000000072AAA',
+    'a01000000000073AAA',
+    'a01000000000074AAA',
+    'a01000000000075AAA',
+  ]);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
@@ -468,13 +577,16 @@ test('credit cursors reject malformed values and round-trip directory and statem
   assert.equal(decodeAccountCreditCursor('bad'), null);
 });
 
-test('Salesforce loader is buyer-leg only and does not use supplier child relationships', async () => {
+test('Salesforce loader keeps buyer-leg membership Account-only and loads expected invoice children without supplier widening', async () => {
   const source = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
   assert.match(source, /Inactive_Suspended__c = false/);
   assert.match(source, /ACCOUNT_CREDIT_ACCOUNT_INACTIVE/);
   assert.match(source, /Account__c IN \(\$\{ids/);
   assert.match(source, /Id IN \(SELECT Account__c FROM STEM__c WHERE Account__c != null\)/);
-  assert.doesNotMatch(source, /STEM_Line_Item__c|STEM_Extra_Cost__c|Buyer_Broker__c|Supplier_Broker__c/);
+  assert.match(source, /queryExpectedInvoiceEvidence\(notIssuedStems/);
+  assert.match(source, /FROM \$\{objectName\} WHERE STEM__c IN/);
+  assert.match(source, /AND Cancelled__c = false/);
+  assert.doesNotMatch(source, /Original_Supplier__c|Supplier__c|Buyer_Broker__c|Supplier_Broker__c/);
   assert.match(source, /QLIK_Receivable_Balance__c != 0/);
   assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
   assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
@@ -530,16 +642,23 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.doesNotMatch(statement, /label=\{\{ value: '(?:Individual base|Special individual|GROUP base|GROUP \+ special)'/);
   assert.doesNotMatch(statement, /Legacy Credit_Limit__c|credit\.legacyLimit/);
   assert.match(statement, /Select all/);
-  assert.match(statement, /Total issued invoice amount/);
+  assert.match(statement, /Total invoice amount/);
   assert.match(statement, /Not Issued/);
   assert.match(statement, /bg-red-50\/70/);
   assert.match(statement, /Expected Due Date/);
   assert.match(statement, /Expected Invoice Amount/);
-  assert.match(statement, /Total expected invoice amount/);
+  assert.doesNotMatch(statement, /Total expected invoice amount/);
   assert.match(statement, /expectedBuyerInvoiceAmount/);
   assert.match(statement, /expectedBuyerInvoiceDueDate/);
-  assert.match(statement, /paymentReminderCopyText/);
-  assert.match(statement, /!row\.hasBuyerInvoice \|\| row\.buyerInvoiceAmountComplete/);
+  assert.match(statement, /accountStatementInvoiceCopyText/);
+  assert.match(statement, /expectedBuyerInvoiceAmountComplete/);
+  assert.match(statement, /statementExposureAmount/);
+  assert.match(statement, /statementExposureComplete/);
+  assert.match(statement, /statementExposureBlockingReason/);
+  assert.match(statement, /range_max_quantity/);
+  assert.match(statement, /BASIS MAX QTY/);
+  assert.match(statement, /Basis Max Qty/);
+  assert.match(statement, /Un-Invoiced STEMs here use mid-qty if in range/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
