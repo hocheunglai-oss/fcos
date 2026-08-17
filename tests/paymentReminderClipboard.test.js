@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { accountStatementInvoiceCopyText, paymentReminderCopyLine, paymentReminderCopyText } from '../src/lib/paymentReminderClipboard.js';
+import { accountStatementInvoiceCopyPayload, accountStatementInvoiceCopyText, paymentReminderCopyLine, paymentReminderCopyText } from '../src/lib/paymentReminderClipboard.js';
 
 test('statement invoice copy uses the payment-reminder line format and appends currency-safe totals', () => {
   const line = paymentReminderCopyLine({
@@ -21,7 +21,9 @@ test('statement copy groups Not Issued rows, marks maximum-quantity estimates, a
         stemName: 'HK2627001T',
         buyerName: 'Buyer A',
         invoiceIssued: false,
-        amount: 'Invoice Not Issued - Expected Invoice Amount $125.00 (BASIS MAX QTY)',
+        amount: '$125.00',
+        amountLabel: 'Expected Invoice Amount',
+        amountSuffix: '(BASIS MAX QTY)',
         dueDate: '22 Sep 2026',
         dueDateLabel: 'Expected Due Date',
         status: null,
@@ -35,6 +37,25 @@ test('statement copy groups Not Issued rows, marks maximum-quantity estimates, a
         status: 'Due Soon',
       },
     ], ['Total invoice amount - $200.00 (Expected)']),
-    'HK2626999T - BUYER A - $75.00 - DUE DATE 20 SEP 2026 - DUE SOON\nHK2627001T - BUYER A - INVOICE NOT ISSUED - EXPECTED INVOICE AMOUNT $125.00 (BASIS MAX QTY) - EXPECTED DUE DATE 22 SEP 2026\n\nTOTAL INVOICE AMOUNT - $200.00 (EXPECTED)',
+    'HK2626999T - BUYER A - $75.00 - DUE DATE 20 SEP 2026 - DUE SOON\nHK2627001T - BUYER A - *EXPECTED INVOICE AMOUNT $125.00* (BASIS MAX QTY) - *EXPECTED DUE DATE 22 SEP 2026*\n\nTOTAL INVOICE AMOUNT - $200.00 (EXPECTED)',
   );
+});
+
+test('statement copy underlines expected fields in rich text and escapes contractual display values', () => {
+  const payload = accountStatementInvoiceCopyPayload([{
+    stemName: 'HK2627001T',
+    buyerName: 'Buyer <A&B>',
+    invoiceIssued: false,
+    amount: '$125.00',
+    amountSuffix: '(BASIS MAX QTY)',
+    dueDate: '22 Sep 2026',
+  }], ['Total invoice amount - $125.00 (Expected)']);
+
+  assert.doesNotMatch(payload.text, /INVOICE NOT ISSUED/);
+  assert.match(payload.text, /\*EXPECTED INVOICE AMOUNT \$125\.00\*/);
+  assert.match(payload.text, /\*EXPECTED DUE DATE 22 SEP 2026\*/);
+  assert.match(payload.html, /<span style="text-decoration:underline;">EXPECTED INVOICE AMOUNT \$125\.00<\/span> \(BASIS MAX QTY\)/);
+  assert.match(payload.html, /<span style="text-decoration:underline;">EXPECTED DUE DATE 22 SEP 2026<\/span>/);
+  assert.match(payload.html, /BUYER &lt;A&amp;B&gt;/);
+  assert.doesNotMatch(payload.html, /INVOICE NOT ISSUED|<script/i);
 });

@@ -650,7 +650,7 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.doesNotMatch(statement, /Total expected invoice amount/);
   assert.match(statement, /expectedBuyerInvoiceAmount/);
   assert.match(statement, /expectedBuyerInvoiceDueDate/);
-  assert.match(statement, /accountStatementInvoiceCopyText/);
+  assert.match(statement, /accountStatementInvoiceCopyPayload/);
   assert.match(statement, /expectedBuyerInvoiceAmountComplete/);
   assert.match(statement, /statementExposureAmount/);
   assert.match(statement, /statementExposureComplete/);

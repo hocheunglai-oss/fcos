@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.174',
+    releasedAt: '2026-08-17',
+    title: 'Emphasize expected invoice copy details',
+    changes: [
+      'Removes the redundant Not Issued wording from copied Statement Evidence while keeping the interface warning unchanged.',
+      'Underlines expected invoice amounts and due dates in rich-text destinations and surrounds those phrases with asterisks in plain text.',
+    ],
+  },
+  {
     version: '2.0.173',
     releasedAt: '2026-08-17',
     title: 'Clarify Statement exposure quantities',

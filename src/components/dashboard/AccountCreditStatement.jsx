@@ -3,7 +3,7 @@ import { AlertTriangle, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Loa
 import { CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
-import { accountStatementInvoiceCopyText } from '@/lib/paymentReminderClipboard';
+import { accountStatementInvoiceCopyPayload } from '@/lib/paymentReminderClipboard';
 
 const SCOPES = [
   { value: 'open', label: 'Open only' },
@@ -225,22 +225,31 @@ export default function AccountCreditStatement({ accountId, active, onStemClick 
 
   const copySelectedInvoices = async () => {
     const totalLines = Object.entries(selectedInvoiceTotals).map(([totalCurrency, total]) => `Total invoice amount - ${reminderCopyMoney(total.amount, totalCurrency)}${total.hasExpected ? ' (Expected)' : ''}`);
-    const copyText = accountStatementInvoiceCopyText(selectedInvoiceRows.map((row) => ({
+    const copyPayload = accountStatementInvoiceCopyPayload(selectedInvoiceRows.map((row) => ({
       stemName: row.stemName,
       buyerName: row.accountName || result.identity.name,
       invoiceIssued: row.hasBuyerInvoice,
       amount: row.hasBuyerInvoice
         ? reminderCopyMoney(row.buyerInvoiceAmount, row.currency || currency)
-        : `Invoice Not Issued - Expected Invoice Amount ${reminderCopyMoney(row.expectedBuyerInvoiceAmount, row.currency || currency)}${expectedInvoiceBasisSuffix(row, { uppercase: true })}`,
+        : reminderCopyMoney(row.expectedBuyerInvoiceAmount, row.currency || currency),
+      amountLabel: row.hasBuyerInvoice ? null : 'Expected Invoice Amount',
+      amountSuffix: row.hasBuyerInvoice ? null : expectedInvoiceBasisSuffix(row, { uppercase: true }),
       dueDate: row.hasBuyerInvoice ? displayDate(row.buyerInvoiceDueDate) : displayDate(row.expectedBuyerInvoiceDueDate),
       dueDateLabel: row.hasBuyerInvoice ? 'Due Date' : 'Expected Due Date',
       status: row.hasBuyerInvoice ? reminderCopyStatus(row.buyerInvoiceDaysUntilDue) : null,
     })), totalLines);
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(copyText);
+      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': new Blob([copyPayload.html], { type: 'text/html' }),
+            'text/plain': new Blob([copyPayload.text], { type: 'text/plain' }),
+          }),
+        ]);
+      } else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(copyPayload.text);
       else {
         const textarea = document.createElement('textarea');
-        textarea.value = copyText;
+        textarea.value = copyPayload.text;
         textarea.setAttribute('readonly', '');
         textarea.style.position = 'fixed';
         textarea.style.left = '-9999px';
