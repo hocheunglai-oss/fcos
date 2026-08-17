@@ -546,14 +546,16 @@ export function buildAccountCreditStatement({
       inCreditProjection: Boolean(projectionRelease),
     };
   });
-  const derivedWarnings = [
+  const projectionWarnings = [
     ...warnings,
     ...(!individualReconciliation.matches ? ['Individual used credit does not reconcile to the selected Account’s current buyer-leg STEM exposure. The individual projection is hidden.'] : []),
     ...(group && !groupReconciliation.matches ? ['Group used credit does not reconcile to current buyer-leg STEM exposure across the Salesforce GROUP hierarchy. The group projection is hidden.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
     ...(currencyConflict ? [`Buyer-leg STEM exposure spans multiple currencies (${currencyLabels.join(', ')}). Values remain separated by row and projected balances are hidden.`] : []),
-    ...(releases.some((release) => release.forecastEvents.some((event) => !event.date)) ? ['One or more open STEMs have no reliable future release date. Their exposure remains visible in the final forecast plateau until reliable evidence is available.'] : []),
   ];
+  const releaseWarnings = releases.some((release) => release.forecastEvents.some((event) => !event.date))
+    ? ['One or more open STEMs have no reliable future release date. Their exposure remains visible in the final forecast plateau until reliable evidence is available.']
+    : [];
   return {
     identity: {
       accountId: selectedAccountId,
@@ -577,7 +579,9 @@ export function buildAccountCreditStatement({
     currencies: currencyLabels.length ? currencyLabels : [snapshot.currency],
     rows,
     complete,
-    warnings: [...new Set(derivedWarnings.filter(Boolean))],
+    projectionWarnings: [...new Set(projectionWarnings.filter(Boolean))],
+    releaseWarnings,
+    warnings: [...new Set([...projectionWarnings, ...releaseWarnings].filter(Boolean))],
   };
 }
 

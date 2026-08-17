@@ -268,6 +268,7 @@ test('COSCO SHIPPING resolves a split same-name snapshot and lineage window with
   assert.equal(statement.rows.find((row) => row.stemId === staleStem.Id).inCreditProjection, false);
   assert.equal(statement.rows.find((row) => row.stemId === currentStems[0].Id).inCreditProjection, true);
   assert.equal(statement.warnings.some((warning) => /does not reconcile/i.test(warning)), false);
+  assert.deepEqual(statement.projectionWarnings, []);
 });
 
 test('undated residual counts keep selected Account and GROUP STEMs distinct', () => {
@@ -285,6 +286,8 @@ test('undated residual counts keep selected Account and GROUP STEMs distinct', (
   assert.equal(statement.chart.undatedAccountStemCount, 1);
   assert.equal(statement.chart.undatedGroupStemCount, 2);
   assert.deepEqual(statement.chart.undatedAccountStems.map((stem) => stem.stemName), ['ACCOUNT UNDATED']);
+  assert.deepEqual(statement.projectionWarnings, []);
+  assert.equal(statement.releaseWarnings.length, 1);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
@@ -359,6 +362,7 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
   assert.match(statement, /undatedAccountStemCount/);
+  assert.match(statement, /result\?\.projectionWarnings \|\| result\?\.warnings/);
   assert.match(statement, /Outside current credit lineage window/);
   assert.match(statement, /\{result\.group \? <button type="button" aria-pressed=\{series\.group\}/);
   assert.match(statement, /\{result\.group \? <ReconciliationBadge label="GROUP"/);
