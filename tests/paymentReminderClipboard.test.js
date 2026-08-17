@@ -13,3 +13,16 @@ test('statement invoice copy uses the payment-reminder line format and appends c
   assert.equal(line, 'HK2627294T - YUE DIAN 103 - HONG KONG - BUYER A - $371,250.00 - DUE DATE 15 SEP 2026 - DUE SOON');
   assert.equal(paymentReminderCopyText([{ stemName: 'STEM 1', buyerName: 'Buyer A', amount: '$10.00', dueDate: '01 Sep 2026', status: 'Due Soon' }], ['Total invoice amount - $10.00']), 'STEM 1 - BUYER A - $10.00 - DUE DATE 01 SEP 2026 - DUE SOON\nTOTAL INVOICE AMOUNT - $10.00');
 });
+
+test('statement copy makes a missing buyer invoice unmistakable', () => {
+  assert.equal(
+    paymentReminderCopyText([{
+      stemName: 'HK2627001T',
+      buyerName: 'Buyer A',
+      amount: 'Invoice Not Issued',
+      dueDate: 'Not Issued',
+      status: 'Buyer Invoice Not Issued',
+    }], ['Buyer invoice not issued - 1 STEM']),
+    'HK2627001T - BUYER A - INVOICE NOT ISSUED - DUE DATE NOT ISSUED - BUYER INVOICE NOT ISSUED\nBUYER INVOICE NOT ISSUED - 1 STEM',
+  );
+});

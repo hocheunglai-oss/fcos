@@ -4,7 +4,7 @@ import {
   allocateSupplierContribution,
   buildDashboardAccountInsight,
 } from '../api/_dashboardAccountInsight.js';
-import { generateDashboardAccountInsightExport } from '../api/_dashboardAccountInsightExport.js';
+import { dashboardAccountInsightExportInternals, generateDashboardAccountInsightExport } from '../api/_dashboardAccountInsightExport.js';
 import { dashboardAccountInsightServiceInternals } from '../api/_dashboardAccountInsightService.js';
 
 const BUYER = '001000000000001AAA';
@@ -87,6 +87,7 @@ function dataset(overrides = {}) {
       extraCostSupplierField: 'Supplier__c',
       extraCostSupplierRelationship: 'Supplier__r',
       lineItemUomField: null,
+      extraCostUomField: null,
       productUomField: 'QuantityUnitOfMeasure',
     },
     collectionByStem: {},
@@ -154,6 +155,50 @@ test('buyer-broker enrichment selects a commission amount only when describe con
   assert.equal(config.commissionField, 'Commission_Amount__c');
   assert.ok(config.fields.includes('Commission_Amount__c'));
   assert.equal(config.warning, null);
+});
+
+test('loads Salesforce UOM and Product UOM fallbacks for extra costs', () => {
+  const extraFields = new Map([
+    ['Product2Id__c', { name: 'Product2Id__c', relationshipName: 'Product2Id__r' }],
+    ['Unit_of_Measure__c', { name: 'Unit_of_Measure__c' }],
+  ]);
+  const fields = dashboardAccountInsightServiceInternals.extraCostSelectFields(
+    extraFields,
+    new Map(),
+    new Map([['Family', { name: 'Family' }]]),
+    { valid: false },
+    { extraCostUomField: 'Unit_of_Measure__c', productUomField: 'QuantityUnitOfMeasure' },
+  );
+
+  assert.ok(fields.includes('Unit_of_Measure__c'));
+  assert.ok(fields.includes('Product2Id__r.QuantityUnitOfMeasure'));
+});
+
+test('does not report fixed delivered extra costs as missing a financial UOM', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    extraCosts: [{
+      Id: 'a03000000000041AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A,
+      Quantity__c: 1, Quantity_Delivered_Per_BDN__c: 1,
+      Line_Total__c: 200, Line_Total_Buy__c: 150,
+      Supplier_Invoice__c: null, Cancelled__c: false,
+    }],
+  }), { today: '2026-08-16' });
+
+  assert.equal(result.warnings.some((warning) => warning.includes('Salesforce UOM')), false);
+});
+
+test('uses an extra-cost Product UOM fallback for undelivered per-unit pricing', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    stems: [stem(STEM_A, { Delivery_Date__c: null })],
+    extraCosts: [{
+      Id: 'a03000000000042AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A,
+      Quantity__c: 2, Unit_Price__c: 100, Unit_Cost__c: 80,
+      Product2Id__r: { QuantityUnitOfMeasure: 'EA' },
+      Supplier_Invoice__c: null, Cancelled__c: false,
+    }],
+  }), { today: '2026-08-16' });
+
+  assert.equal(result.warnings.some((warning) => warning.includes('Salesforce UOM')), false);
 });
 
 test('combines repeated occurrences of one supplier ID and gives the final supplier any rounding residual', () => {
@@ -376,7 +421,7 @@ test('builds Dashboard, trailing-12, and all-history date scopes', () => {
   assert.deepEqual(history.windows, []);
 });
 
-test('creates analysis-ready CSV and a valid PDF without persisting a report', () => {
+test('creates analysis-ready CSV and a figure-rich PDF without empty legacy sections', () => {
   const insight = buildDashboardAccountInsight(dataset(), { today: '2026-08-05' });
   const csv = generateDashboardAccountInsightExport(insight, { format: 'csv', actorName: 'Test User', today: '2026-08-05' });
   const pdf = generateDashboardAccountInsightExport(insight, { format: 'pdf', actorName: 'Test User', today: '2026-08-05' });
@@ -391,4 +436,10 @@ test('creates analysis-ready CSV and a valid PDF without persisting a report', (
   assert.equal(pdf.filename, '20260805 Buyer One BUY001 Account Insight.pdf');
   assert.equal(pdf.buffer.subarray(0, 4).toString('ascii'), '%PDF');
   assert.ok(pdf.buffer.length > 3000);
+  assert.deepEqual(dashboardAccountInsightExportInternals.recentPerformanceRows(insight.kpis, 'USD')[0], [
+    '2026-07', '1', '100 MT', 'USD 1,100.00', 'USD 100.00', '9.09%',
+  ]);
+  assert.equal(dashboardAccountInsightExportInternals.topStemRows(insight)[0][0], 'HK260001T');
+  assert.equal(dashboardAccountInsightExportInternals.hasMeaningfulPayment(insight.payments.buyer.byCurrency[0], 'buyer'), true);
+  assert.equal(dashboardAccountInsightExportInternals.hasMeaningfulPayment({ currency: 'USD' }, 'buyer'), false);
 });

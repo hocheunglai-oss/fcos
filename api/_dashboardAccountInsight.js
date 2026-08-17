@@ -936,6 +936,7 @@ export function buildDashboardAccountInsight(dataset, {
     extraCostSupplierField: dataset.schema.extraCostSupplierField,
     extraCostSupplierRelationship: dataset.schema.extraCostSupplierRelationship,
     lineItemUomField: dataset.schema.lineItemUomField,
+    extraCostUomField: dataset.schema.extraCostUomField,
     productUomField: dataset.schema.productUomField,
     hedgeByStem: dataset.hedgeByStem || {},
   };
@@ -1020,15 +1021,30 @@ export function buildDashboardAccountInsight(dataset, {
   }).sort((left, right) => right.volumeMt - left.volumeMt || right.stemCount - left.stemCount || left.name.localeCompare(right.name)) : [];
   const tradingChildren = childSummaries.filter((row) => row.stemCount > 0);
   const topTurnoverChild = [...childSummaries].sort((left, right) => valueOrZero(right.turnover) - valueOrZero(left.turnover))[0] || null;
-  const missingFinancialUomCount = [...(dataset.lineItems || []), ...(dataset.extraCosts || [])].filter((item) => {
+  const deliveryByStem = new Map((dataset.stems || []).map((stem) => [stem.Id, Boolean(stem.Delivery_Date__c)]));
+  const missingLineItemUomCount = (dataset.lineItems || []).filter((item) => {
     if (item.Cancelled__c === true) return false;
-    return Boolean(nativeFinancialQuantity(item, {
-      stemHasDelivery: Boolean((dataset.stems || []).find((stem) => stem.Id === item.STEM__c)?.Delivery_Date__c),
-      maxField: Object.prototype.hasOwnProperty.call(item, 'Quantity_Range_Max__c') ? 'Quantity_Range_Max__c' : 'Quantity_Max__c',
+    const quantity = nativeFinancialQuantity(item, {
+      stemHasDelivery: deliveryByStem.get(item.STEM__c) === true,
+      maxField: 'Quantity_Max__c',
       lineItemUomField: dataset.schema?.lineItemUomField,
       productUomField: dataset.schema?.productUomField,
-    }).warning);
+    });
+    return quantity.quantity !== 0 && Boolean(quantity.warning);
   }).length;
+  const missingExtraCostUomCount = (dataset.extraCosts || []).filter((item) => {
+    if (item.Cancelled__c === true || deliveryByStem.get(item.STEM__c) === true) return false;
+    const usesPerUnitPricing = number(item.Unit_Price__c) != null || number(item.Unit_Cost__c) != null;
+    if (!usesPerUnitPricing) return false;
+    const quantity = nativeFinancialQuantity(item, {
+      stemHasDelivery: false,
+      maxField: 'Quantity_Range_Max__c',
+      lineItemUomField: dataset.schema?.extraCostUomField,
+      productUomField: dataset.schema?.productUomField,
+    });
+    return quantity.quantity !== 0 && Boolean(quantity.warning);
+  }).length;
+  const missingFinancialUomCount = missingLineItemUomCount + missingExtraCostUomCount;
   const warnings = unique([
     ...(dataset.warnings || []),
     ...(!dataset.identity.clKey ? ['CL Key is not set for this Salesforce Account.'] : []),
@@ -1036,7 +1052,7 @@ export function buildDashboardAccountInsight(dataset, {
     ...(role !== 'supplier' && rows.some((row) => row.receivableBalance == null) ? ['One or more Salesforce receivable balances are unavailable and are not treated as zero.'] : []),
     ...(rows.some((row) => row.invoiceValueSource === 'unavailable') ? ['One or more STEM values are unavailable because neither an invoiced nor estimated amount could be derived.'] : []),
     ...(dataset.truncated ? ['Salesforce returned more records than the Account Insight safety limit. Refine the period for complete totals.'] : []),
-    ...(missingFinancialUomCount ? [`${missingFinancialUomCount} financial line${missingFinancialUomCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`] : []),
+    ...(missingFinancialUomCount ? [`${missingFinancialUomCount} quantity-based financial line${missingFinancialUomCount === 1 ? '' : 's'} have no Salesforce UOM. FCOS preserved native quantities and did not infer a unit.`] : []),
     ...(!rows.length ? ['No STEM activity matched this Account, role, and period.'] : []),
   ]);
   return {

@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.169',
+    releasedAt: '2026-08-17',
+    title: 'Make Account Insight exports decision-ready',
+    changes: [
+      'Replaces empty or decorative Account Insight PDF charts with an executive KPI summary, recent-period figures, meaningful payment and risk sections, and ranked STEM tables with repeated page headers.',
+      'Loads Salesforce UOM and Product UOM fallbacks for extra costs and limits missing-UOM alerts to quantity-priced rows that actually require a unit.',
+      'Highlights statement STEMs without buyer invoices as Not Issued, allows them to be copied, and separates issued invoice totals from the explicit not-issued count.',
+    ],
+  },
+  {
     version: '2.0.168',
     releasedAt: '2026-08-17',
     title: 'Clarify Salesforce credit capacity',

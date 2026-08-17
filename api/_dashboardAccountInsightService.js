@@ -311,12 +311,17 @@ function lineItemSelectFields(lineFields, accountFields, productFields, lookup) 
   return [...new Set(values)];
 }
 
-function extraCostSelectFields(extraFields, accountFields, productFields, lookup) {
+function extraCostSelectFields(extraFields, accountFields, productFields, lookup, {
+  extraCostUomField = null,
+  productUomField = null,
+} = {}) {
   const values = ['Id', 'STEM__c', ...selected(extraFields, ['Name', 'Description__c', 'Supplier_Name__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Payment_Term__c', 'Product__c', 'Product2Id__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c'])];
+  if (extraCostUomField) values.push(extraCostUomField);
   const productField = extraFields.get('Product2Id__c') || extraFields.get('Product__c');
   if (productField?.relationshipName) {
     values.push(`${productField.relationshipName}.Name`);
     if (productFields.has('Family')) values.push(`${productField.relationshipName}.Family`);
+    if (productUomField) values.push(`${productField.relationshipName}.${productUomField}`);
   }
   if (lookup.valid) {
     values.push(lookup.fieldName, `${lookup.relationshipName}.Name`);
@@ -521,11 +526,15 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   const previous = period.previousWindows.length ? await queryInsightStems({ role, scopeAccountIds: scopeIds, supplierIds: supplierScope.ids, dateWindows: period.previousWindows, fields, accessCondition }) : { records: [], truncated: false, totalSize: 0 };
   const allStemIds = unique([...current.records, ...previous.records].map((stem) => stem.Id));
   const lineItemUomField = findDashboardUomField(lineDescribe.fields || [], 'lineItem');
+  const extraCostUomField = findDashboardUomField(extraDescribe.fields || [], 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
   const lineFieldsToQuery = lineItemSelectFields(lineFields, accountFields, productFields, originalSupplierLookup);
   if (lineItemUomField) lineFieldsToQuery.push(lineItemUomField);
   if (productUomField) lineFieldsToQuery.push(`Product__r.${productUomField}`);
-  const extraFieldsToQuery = extraCostSelectFields(extraFields, accountFields, productFields, extraCostSupplierLookup);
+  const extraFieldsToQuery = extraCostSelectFields(extraFields, accountFields, productFields, extraCostSupplierLookup, {
+    extraCostUomField,
+    productUomField,
+  });
   const buyerBrokerConfig = buyerBrokerQueryConfiguration(buyerBrokerFields, accountFields);
   const [lineItems, extraCosts, buyerBrokerRows] = await Promise.all([
     queryChildren(allStemIds, [...new Set(lineFieldsToQuery)], 'STEM_Line_Item__c'),
@@ -549,6 +558,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     extraCostSupplierField: extraCostSupplierLookup.fieldName,
     extraCostSupplierRelationship: extraCostSupplierLookup.relationshipName,
     lineItemUomField,
+    extraCostUomField,
     productUomField,
     supplierSettlement,
   };
@@ -847,4 +857,5 @@ export const dashboardAccountInsightServiceInternals = {
   insightPeriod,
   effectiveDateCondition,
   buyerBrokerQueryConfiguration,
+  extraCostSelectFields,
 };

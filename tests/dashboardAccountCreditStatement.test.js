@@ -508,10 +508,13 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /aria-label="Applicable credit limits"/);
   assert.doesNotMatch(statement, /label=\{\{ value: '(?:Individual base|Special individual|GROUP base|GROUP \+ special)'/);
   assert.doesNotMatch(statement, /Legacy Credit_Limit__c|credit\.legacyLimit/);
-  assert.match(statement, /Select all invoiced/);
-  assert.match(statement, /Total invoice amount/);
+  assert.match(statement, /Select all/);
+  assert.match(statement, /Total issued invoice amount/);
+  assert.match(statement, /Not Issued/);
+  assert.match(statement, /bg-red-50\/70/);
+  assert.match(statement, /Buyer Invoice Not Issued/);
   assert.match(statement, /paymentReminderCopyText/);
-  assert.match(statement, /row\.hasBuyerInvoice && row\.buyerInvoiceAmountComplete/);
+  assert.match(statement, /!row\.hasBuyerInvoice \|\| row\.buyerInvoiceAmountComplete/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
