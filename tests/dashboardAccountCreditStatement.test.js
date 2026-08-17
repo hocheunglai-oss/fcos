@@ -288,6 +288,40 @@ test('COSCO SHIPPING resolves a split same-name snapshot and lineage window with
   assert.deepEqual(statement.projectionWarnings, []);
 });
 
+test('COSCO SHIPPING collapses equivalent lineage windows to the latest unique boundary', () => {
+  const coscoGroup = { Id: '001000000000054AAA', Name: 'GROUP - COSCO' };
+  const selected = {
+    Id: '001000000000051AAA', Name: 'COSCO SHIPPING (SINGAPORE) PETROLEUM PTE LTD', CreatedDate: '2023-10-23T07:57:37.000Z',
+    CL_Category__c: 'Group', CL_Individual__c: 0, CL_Special__c: 0, CL_Group__c: 20_000_000, CL_Special_Group__c: 0,
+    CL_Used_Customer__c: 6_495_272, CL_Used_Group__c: 8_187_257,
+  };
+  const creditSnapshot = {
+    ...selected, Id: '001000000000052AAA', CreatedDate: '2023-10-20T12:43:14.000Z', Inactive_Suspended__c: true,
+    CL_Used_Customer__c: 6_111_903, CL_Used_Group__c: 6_111_903,
+  };
+  const latestBoundary = {
+    ...selected, Id: '001000000000053AAA', CreatedDate: '2025-12-12T03:32:29.000Z', Inactive_Suspended__c: true,
+    CL_Used_Customer__c: 0, CL_Used_Group__c: 6_111_903,
+  };
+  const currentStems = [
+    { Id: 'a01000000000051AAA', CreatedDate: '2026-01-10T00:00:00.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 3_000_000 },
+    { Id: 'a01000000000052AAA', CreatedDate: '2026-08-10T00:00:00.000Z', Account__c: selected.Id, QLIK_Receivable_Balance__c: 3_111_903.09 },
+  ];
+  const candidateGroupsById = Object.fromEntries([creditSnapshot, latestBoundary].map((candidate) => [candidate.Id.slice(0, 15), coscoGroup]));
+  const resolution = resolveCreditSnapshotCandidate({
+    selectedAccount: selected,
+    selectedGroup: coscoGroup,
+    candidates: [selected, creditSnapshot, latestBoundary],
+    candidateGroupsById,
+    openStems: currentStems,
+  });
+  assert.equal(resolution.status, 'resolved');
+  assert.equal(resolution.candidate.Id, creditSnapshot.Id);
+  assert.equal(resolution.windowSource.Id, latestBoundary.Id);
+  assert.equal(resolution.windowStart, '2025-12-12');
+  assert.deepEqual(resolution.windowStems.map((stem) => stem.Id), currentStems.map((stem) => stem.Id));
+});
+
 test('undated residual counts keep selected Account and GROUP STEMs distinct', () => {
   const statement = buildAccountCreditStatement({
     today: '2026-08-17',

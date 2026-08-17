@@ -215,9 +215,16 @@ export function resolveCreditSnapshotCandidate({
       }
     }
   }
-  return matches.length === 1
-    ? { status: 'resolved', ...matches[0], matches: matches.map((match) => match.candidate.Id) }
-    : { status: matches.length ? 'ambiguous' : 'unresolved', matches: matches.map((match) => match.candidate.Id) };
+  const distinctMatches = [...matches.reduce((resolved, match) => {
+    const stemSet = match.windowStems.map((stem) => idKey(stem.Id)).filter(Boolean).sort().join(',');
+    const key = `${idKey(match.candidate.Id)}:${stemSet}`;
+    const existing = resolved.get(key);
+    if (!existing || match.windowStart > existing.windowStart) resolved.set(key, match);
+    return resolved;
+  }, new Map()).values()];
+  return distinctMatches.length === 1
+    ? { status: 'resolved', ...distinctMatches[0], matches: distinctMatches.map((match) => match.candidate.Id) }
+    : { status: distinctMatches.length ? 'ambiguous' : 'unresolved', matches: distinctMatches.map((match) => match.candidate.Id) };
 }
 
 export function accountCreditBalances(snapshot = {}, overrides = {}) {
