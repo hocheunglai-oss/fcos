@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.179',
+    releasedAt: '2026-08-18',
+    title: 'Split FCOS Updates queue from preparation',
+    changes: [
+      'Loads the first FCOS Updates screen from queue-only data while mailbox, recipient, and interrupted-delivery preparation continue in the background.',
+      'Preserves the full live preparation response before any batch editing or delivery action becomes available.',
+    ],
+  },
+  {
     version: '2.0.178',
     releasedAt: '2026-08-18',
     title: 'Open FCOS Updates faster',

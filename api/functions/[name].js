@@ -2303,6 +2303,7 @@ async function adminFcosUpdatesList(body, req) {
     client,
     profile,
     sync: body.sync !== false,
+    includePreparation: body.includePreparation !== false,
   });
 }
 

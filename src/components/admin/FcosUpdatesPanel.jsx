@@ -219,14 +219,22 @@ export default function FcosUpdatesPanel() {
     ).some((item) => item.id === id && item.status === 'Pending' && !item.assignedBatchId)));
   };
 
-  const load = async ({ force = false, sync = false, blocking = false } = {}) => {
+  const load = async ({
+    force = false,
+    sync = false,
+    blocking = false,
+    includePreparation = true,
+  } = {}) => {
     if (blocking) setLoading(true);
     setError('');
     try {
-      const response = await appClient.functions.invoke('adminFcosUpdatesList', { sync }, {
+      const response = await appClient.functions.invoke('adminFcosUpdatesList', {
+        sync,
+        includePreparation,
+      }, {
         cache: true,
         force,
-        cacheKey: `adminFcosUpdatesList:${sync ? 'sync' : 'read'}`,
+        cacheKey: `adminFcosUpdatesList:${sync ? 'sync' : 'read'}:${includePreparation ? 'full' : 'queue'}`,
       });
       if (response.data?.error) setError(response.data.error);
       else applyModel(response.data);
@@ -255,7 +263,12 @@ export default function FcosUpdatesPanel() {
   };
 
   useEffect(() => {
-    load({ force: false, sync: false, blocking: true }).then(() => syncReleases());
+    load({
+      force: false,
+      sync: false,
+      blocking: true,
+      includePreparation: false,
+    }).then(() => syncReleases());
   }, []);
 
   const pendingItems = useMemo(() => (model.items || []).filter((item) => (
@@ -598,7 +611,7 @@ export default function FcosUpdatesPanel() {
     skipped: model.counters?.skipped || 0,
   };
   const batchReadOnly = ['Sending', 'Sent', 'Partial Failure', 'Cancelled'].includes(batchDraft.status);
-  const canControl = model.authority?.canControl === true;
+  const canControl = model.authority?.canControl === true && model.preparationReady === true;
   const availableRecipients = (model.activeRecipients || []).filter((recipient) => (
     !batchDraft.recipients.some((selected) => selected.userId === recipient.userId)
   ));

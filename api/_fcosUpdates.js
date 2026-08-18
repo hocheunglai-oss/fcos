@@ -466,7 +466,7 @@ const BATCH_SELECT = [
   'fcos_update_deliveries(id,batch_id,user_id,recipient_name,recipient_email,status,attempt_count,email_message_id,last_error,last_attempt_at,sent_at,sender_mailbox_id,sender_mailbox_snapshot,created_at,updated_at)',
 ].join(',');
 
-export async function listFcosUpdates({ client, profile, sync = true }) {
+export async function listFcosUpdates({ client, profile, sync = true, includePreparation = true }) {
   let syncResult = null;
   if (sync) syncResult = await syncFcosUpdateItems({ client, profile });
 
@@ -476,8 +476,12 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     .order('updated_at', { ascending: false })
     .limit(200);
   let [senderResult, recoveredBatchCount, itemsResult, batchesResult, recipientsResult, settings, generalManager] = await Promise.all([
-    resolveGraphEmailSender(client, 'fcos_updates').catch((error) => ({ error })),
-    recoverInterruptedFcosUpdateDeliveries(client, profile),
+    includePreparation
+      ? resolveGraphEmailSender(client, 'fcos_updates').catch((error) => ({ error }))
+      : Promise.resolve({}),
+    includePreparation
+      ? recoverInterruptedFcosUpdateDeliveries(client, profile)
+      : Promise.resolve(0),
     client
       .from('fcos_update_items')
       .select(ITEM_SELECT)
@@ -485,14 +489,16 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
       .order('source_version', { ascending: false })
       .order('source_change_index', { ascending: true }),
     loadBatches(),
-    client
-      .from('user_profiles')
-      .select('id,email,full_name')
-      .eq('active', true)
-      .order('full_name', { ascending: true })
-      .order('email', { ascending: true }),
+    includePreparation
+      ? client
+        .from('user_profiles')
+        .select('id,email,full_name')
+        .eq('active', true)
+        .order('full_name', { ascending: true })
+        .order('email', { ascending: true })
+      : Promise.resolve({ data: [], error: null }),
     loadSettings(client),
-    isGeneralManager(client, profile),
+    includePreparation ? isGeneralManager(client, profile) : Promise.resolve(false),
   ]);
   if (recoveredBatchCount > 0) batchesResult = await loadBatches();
   if (itemsResult.error) throwUpdateSchemaError(itemsResult.error);
@@ -532,6 +538,7 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
       canPrepare: ['administrator', 'general_manager'].includes(profile.user_type),
       canControl: generalManager,
     },
+    preparationReady: includePreparation,
     settings: {
       backfillStart: settings.initial_backfill_start,
       lastSyncedAt: settings.last_synced_at,

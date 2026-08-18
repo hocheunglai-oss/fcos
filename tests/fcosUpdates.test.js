@@ -154,6 +154,11 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
   assert.match(server, /function requireExpectedBatchRevision/);
   assert.match(server, /recoverInterruptedFcosUpdateDeliveries/);
   assert.match(server, /let \[senderResult, recoveredBatchCount, itemsResult, batchesResult, recipientsResult, settings, generalManager\] = await Promise\.all/);
+  assert.match(server, /includePreparation[\s\S]*resolveGraphEmailSender/);
+  assert.match(server, /includePreparation[\s\S]*recoverInterruptedFcosUpdateDeliveries/);
+  assert.match(server, /includePreparation[\s\S]*from\('user_profiles'\)/);
+  assert.match(server, /includePreparation \? isGeneralManager\(client, profile\) : Promise\.resolve\(false\)/);
+  assert.match(server, /preparationReady: includePreparation/);
   assert.match(server, /if \(recoveredBatchCount > 0\) batchesResult = await loadBatches\(\)/);
   assert.match(server, /rpc\('save_fcos_update_batch_with_recipients'/);
   assert.match(server, /rpc\('start_fcos_update_saved_delivery'/);
@@ -179,9 +184,10 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
   assert.match(panel, /current\.status !== 'Draft'/);
   assert.match(panel, /disabled=\{Boolean\(working\) \|\| batchIsDirty\}/);
   assert.match(panel, /Discard unsaved changes\?/);
-  assert.match(panel, /load\(\{ force: false, sync: false, blocking: true \}\)\.then\(\(\) => syncReleases\(\)\)/);
+  assert.match(panel, /includePreparation: false,[\s\S]*\}\)\.then\(\(\) => syncReleases\(\)\)/);
   assert.match(panel, /adminFcosUpdatesSync/);
   assert.match(panel, /The saved queue remains available/);
+  assert.match(panel, /model\.authority\?\.canControl === true && model\.preparationReady === true/);
   assert.match(panel, /const ITEMS_PER_PAGE = 50/);
   assert.match(panel, /visibleItems\.map/);
   assert.match(panel, /Page \{boundedItemPage\} of \{itemPageCount\}/);
