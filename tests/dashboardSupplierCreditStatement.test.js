@@ -212,6 +212,9 @@ test('Supplier Credit Statement wiring preserves buyer compatibility, access sco
   assert.match(ui, /Include GROUP/);
   assert.match(ui, /TOTAL PAYABLE EXPOSURE/);
   assert.match(ui, /BASIS MAX QTY/);
+  assert.match(ui, /Supplier invoice \/ estimate/);
+  assert.match(ui, /Supplier Invoice number/);
+  assert.match(ui, /Supplier Invoice \$\{row\.supplierInvoiceName\}/);
   assert.match(ui, /text\/html/);
   assert.match(ui, /numeric\(row\.currentExposure\) > 0\.005/);
   assert.match(methodology, /Supplier Credit Statement/);

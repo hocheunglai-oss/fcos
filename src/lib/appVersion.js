@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.184',
+    releasedAt: '2026-08-18',
+    title: 'Clarify Supplier Invoice evidence',
+    changes: [
+      'Labels issued Supplier Statement evidence as a Supplier Invoice number instead of displaying an unexplained Salesforce value.',
+      'Renames the desktop evidence column to Supplier invoice / estimate and gives mobile evidence the same explicit wording.',
+    ],
+  },
+  {
     version: '2.0.183',
     releasedAt: '2026-08-18',
     title: 'Preserve Account results around Insight',
