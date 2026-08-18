@@ -3,56 +3,48 @@
         <template if:true={actionExecuting}>
             <lightning-spinner alternative-text="Loading..."></lightning-spinner>
         </template>
-        <div class="slds-grid slds-gutters">
-            <div class="slds-col slds-size_1-of-4">
-                <div class="slds-p-horizontal_x-small">
+        <div class="record-type-panel">
+            <div class="record-type-grid">
+                <div class="record-type-field record-type-field_primary">
                     <lightning-combobox name="recordType" label="Record Type" placeholder="Select Record Type"
                         value={recordTypeId} options={recordTypeIds} onchange={handleChangeRecordType}>
                     </lightning-combobox>
                 </div>
-            </div>
-            <div class="slds-col slds-size_1-of-4">
-                <div class="slds-p-horizontal_x-small">
+                <div class="record-type-field">
                     <lightning-input name="isAgent" type="checkbox" label="Is Agent" variant="label-stacked"
                         checked={isAgent} onchange={handleChangeRecordType}>
                     </lightning-input>
                 </div>
-            </div>
-            <template if:false={isBrokerRecordType}>
-                <div class="slds-col slds-size_1-of-4">
-                    <div class="slds-p-horizontal_x-small">
+                <template if:false={isBrokerRecordType}>
+                    <div class="record-type-field">
                         <lightning-input name="isBroker" type="checkbox" label="Is Broker" variant="label-stacked"
                             checked={isBroker} onchange={handleChangeRecordType}>
                         </lightning-input>
                     </div>
-                </div>
-            </template>
-            <template if:true={isBroker}>
-                <div class="slds-col slds-size_1-of-4">
-                    <div class="slds-p-horizontal_x-small">
+                </template>
+                <template if:true={isBroker}>
+                    <div class="record-type-field">
                         <lightning-input name="hiddenBroker" type="checkbox" label="Hidden Broker Individual" variant="label-stacked"
                             checked={hiddenBroker} onchange={handleChangeRecordType}>
                         </lightning-input>
                     </div>
-                </div>
-                <div class="slds-col slds-size_1-of-4">
-                    <div class="slds-p-horizontal_x-small">
+                    <div class="record-type-field">
                         <lightning-input name="hiddenBrokerCompany" type="checkbox" label="Hidden Broker Company" variant="label-stacked"
                             checked={hiddenBrokerCompany} onchange={handleChangeRecordType}>
                         </lightning-input>
                     </div>
-                </div>
-            </template>
-        </div>
-        <div>
-            <lightning-input name="invoicingRequirement" type="text" label="Invoicing Requirement" variant="label-stacked"
-                            value={invoicingRequirement} onchange={handleChangeInvoicingRequirement}>
-            </lightning-input>
+                </template>
+            </div>
+            <div class="invoicing-requirement">
+                <lightning-input name="invoicingRequirement" type="text" label="Invoicing Requirement" variant="label-stacked"
+                    value={invoicingRequirement} onchange={handleChangeInvoicingRequirement}>
+                </lightning-input>
+            </div>
         </div>
         <template if:true={isBroker}>
-            <div class="slds-grid slds-gutters"> 
-                <div class="slds-col slds-size_1-of-4">
-                    <div class="slds-p-horizontal_x-small">
+            <div class="preference-panel">
+                <div class="preference-grid">
+                    <div>
                         <lightning-radio-group 
                             label="Confirmation Format"
                             options={confirmationFormatOptions}
@@ -61,8 +53,7 @@
                             disabled={disabledRadioButtons}>
                         </lightning-radio-group>    
                     </div>
-                </div>
-                <div class="slds-col slds-size_1-of-4">
+                    <div>
                     <lightning-radio-group 
                         label="Confirmation Email"
                         options={emailConfirmationOptions}
@@ -70,8 +61,8 @@
                         onchange={handleEmailConfirmationChange}
                         disabled={disabledRadioButtons}>
                     </lightning-radio-group>
-                </div> 
-                <div class="slds-col slds-size_1-of-4">
+                    </div>
+                    <div>
                     <lightning-radio-group 
                         label="Nomination Format"
                         options={nominationFormatOptions}
@@ -79,8 +70,8 @@
                         onchange={handleNominationFormatChange}
                         disabled={disabledRadioButtons}>
                     </lightning-radio-group>
-                </div>
-                <div class="slds-col slds-size_1-of-4 slds-p-horizontal_x-small">
+                    </div>
+                    <div>
                     <lightning-radio-group 
                         label="Nomination Email"
                         options={emailNominationOptions}
@@ -88,11 +79,10 @@
                         onchange={handleEmailNominationChange}
                         disabled={disabledRadioButtons}>
                     </lightning-radio-group>
+                    </div>
                 </div>
-            </div>
-            <div class="slds-grid slds-gutters">
-                <div class="slds-col slds-size_1-of-4">
-                    <div class="slds-p-horizontal_x-small">
+                <div class="preference-grid preference-grid_secondary">
+                    <div>
                         <lightning-radio-group 
                             label="Invoice Format"
                             options={invoiceFormatOptions}
@@ -101,8 +91,7 @@
                             disabled={disabledRadioButtons}>
                         </lightning-radio-group>
                     </div>
-                </div>
-                <div class="slds-col slds-size_1-of-4">
+                    <div>
                     <lightning-radio-group 
                         label="Invoice Email"
                         options={emailInvoiceOptions}
@@ -110,6 +99,7 @@
                         onchange={handleEmailInvoiceChange}
                         disabled={disabledRadioButtons}>
                     </lightning-radio-group>    
+                    </div>
                 </div>
             </div>
         </template>

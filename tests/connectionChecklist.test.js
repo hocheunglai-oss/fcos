@@ -176,7 +176,9 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
   assert.match(source, /writeDeveeSourceState/);
   assert.match(source, /FCOS_SALESFORCE_TEST_LEVEL/);
-  assert.match(source, /\['RunLocalTests', 'RunSpecifiedTests'\]\.includes\(TEST_LEVEL\)/);
+  assert.match(source, /manifestHasApex \? 'RunLocalTests' : 'RunRelevantTests'/);
+  assert.match(source, /\['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'\]\.includes\(TEST_LEVEL\)/);
+  assert.match(source, /deploymentMode: !manifestHasApex && MANIFEST \? 'all-or-none-metadata' : 'validated-quick-deploy'/);
   assert.match(source, /--schema-cutover/);
   assert.match(source, /--schema-bootstrap/);
   assert.match(source, /all-or-none-schema-bootstrap/);

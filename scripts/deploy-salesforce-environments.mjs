@@ -29,6 +29,8 @@ const relativeSource = path.relative(process.cwd(), sourcePath);
 if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource) || !existsSync(sourcePath)) {
   throw new Error(MANIFEST ? 'Salesforce manifest must be an existing file inside this project.' : 'The force-app source directory is missing.');
 }
+const manifestContent = MANIFEST ? readFileSync(sourcePath, 'utf8') : '';
+const manifestHasApex = /<name>Apex(?:Class|Trigger)<\/name>/u.test(manifestContent);
 
 function manifestTestClasses(manifestPath) {
   if (!manifestPath) return [];
@@ -42,12 +44,11 @@ function manifestTestClasses(manifestPath) {
 const EXPLICIT_TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || '').split(',').map((value) => value.trim()).filter(Boolean);
 const TEST_CLASSES = EXPLICIT_TEST_CLASSES.length ? EXPLICIT_TEST_CLASSES : manifestTestClasses(MANIFEST ? sourcePath : '');
 const TEST_LEVEL = process.env.FCOS_SALESFORCE_TEST_LEVEL
-  || (TEST_CLASSES.length ? 'RunSpecifiedTests' : 'RunLocalTests');
-if (!['RunLocalTests', 'RunSpecifiedTests'].includes(TEST_LEVEL)) {
-  throw new Error('FCOS_SALESFORCE_TEST_LEVEL must be RunLocalTests or RunSpecifiedTests.');
+  || (TEST_CLASSES.length ? 'RunSpecifiedTests' : manifestHasApex ? 'RunLocalTests' : 'RunRelevantTests');
+if (!['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'].includes(TEST_LEVEL)) {
+  throw new Error('FCOS_SALESFORCE_TEST_LEVEL must be RunLocalTests, RunSpecifiedTests, or RunRelevantTests.');
 }
-if (MANIFEST && /<name>Apex(?:Class|Trigger)<\/name>/u.test(readFileSync(sourcePath, 'utf8'))
-  && TEST_LEVEL === 'RunSpecifiedTests' && !TEST_CLASSES.length) {
+if (manifestHasApex && TEST_LEVEL === 'RunSpecifiedTests' && !TEST_CLASSES.length) {
   throw new Error('An Apex promotion manifest must include at least one *Test Apex class or set FCOS_SALESFORCE_TESTS.');
 }
 
@@ -120,7 +121,16 @@ function validate(environment) {
 
 function deploy(validation) {
   verify(validation.environment);
-  const result = sf(['project', 'deploy', 'quick', '--target-org', validation.environment.alias, '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json']).result;
+  const result = !manifestHasApex && MANIFEST
+    ? sf([
+        'project', 'deploy', 'start', '--target-org', validation.environment.alias,
+        '--manifest', relativeSource, '--test-level', 'RunRelevantTests',
+        '--wait', WAIT_MINUTES, '--json',
+      ]).result
+    : sf([
+        'project', 'deploy', 'quick', '--target-org', validation.environment.alias,
+        '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json',
+      ]).result;
   if (result?.status !== 'Succeeded') throw new Error(`${validation.environment.label} deployment did not succeed; later promotion stages were not started.`);
   return {
     environment: validation.environment.label,
@@ -129,6 +139,7 @@ function deploy(validation) {
     status: result.status,
     components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`,
     tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}`,
+    deploymentMode: !manifestHasApex && MANIFEST ? 'all-or-none-metadata' : 'validated-quick-deploy',
   };
 }
 
