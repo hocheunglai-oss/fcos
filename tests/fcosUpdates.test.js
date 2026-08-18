@@ -153,6 +153,8 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
 
   assert.match(server, /function requireExpectedBatchRevision/);
   assert.match(server, /recoverInterruptedFcosUpdateDeliveries/);
+  assert.match(server, /let \[senderResult, recoveredBatchCount, itemsResult, batchesResult, recipientsResult, settings, generalManager\] = await Promise\.all/);
+  assert.match(server, /if \(recoveredBatchCount > 0\) batchesResult = await loadBatches\(\)/);
   assert.match(server, /rpc\('save_fcos_update_batch_with_recipients'/);
   assert.match(server, /rpc\('start_fcos_update_saved_delivery'/);
   assert.match(server, /rpc\('finalize_fcos_update_delivery'/);
@@ -180,6 +182,9 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
   assert.match(panel, /load\(\{ force: false, sync: false, blocking: true \}\)\.then\(\(\) => syncReleases\(\)\)/);
   assert.match(panel, /adminFcosUpdatesSync/);
   assert.match(panel, /The saved queue remains available/);
+  assert.match(panel, /const ITEMS_PER_PAGE = 50/);
+  assert.match(panel, /visibleItems\.map/);
+  assert.match(panel, /Page \{boundedItemPage\} of \{itemPageCount\}/);
   assert.doesNotMatch(panel, /load\(\{ force: true, sync: true \}\)/);
   assert.doesNotMatch(panel, />\s*(Submit|Approve|Return)\s*</);
 

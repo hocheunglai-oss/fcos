@@ -43,6 +43,7 @@ const VIEW_OPTIONS = [
   { id: 'sent', label: 'Sent' },
   { id: 'skipped', label: 'Skipped' },
 ];
+const ITEMS_PER_PAGE = 50;
 
 const CATEGORY_LABELS = {
   new_feature: 'New Feature',
@@ -194,6 +195,7 @@ export default function FcosUpdatesPanel() {
     activeRecipientCount: 0,
   });
   const [view, setView] = useState('pending');
+  const [itemPage, setItemPage] = useState(1);
   const [keyword, setKeyword] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -280,6 +282,12 @@ export default function FcosUpdatesPanel() {
     batch.updatedByEmail,
     ...(batch.items || []).flatMap((item) => [item.emailTitle, item.emailBody, item.source?.sourceVersion]),
   ], keyword)), [keyword, model.batches]);
+  const itemPageCount = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
+  const boundedItemPage = Math.min(itemPage, itemPageCount);
+  const visibleItems = useMemo(() => filteredItems.slice(
+    (boundedItemPage - 1) * ITEMS_PER_PAGE,
+    boundedItemPage * ITEMS_PER_PAGE,
+  ), [boundedItemPage, filteredItems]);
   const storedBatch = useMemo(
     () => (model.batches || []).find((batch) => batch.id === batchDraft.id) || null,
     [batchDraft.id, model.batches],
@@ -634,7 +642,7 @@ export default function FcosUpdatesPanel() {
               key={option.id}
               active={view === option.id}
               count={counts[option.id]}
-              onClick={() => setView(option.id)}
+              onClick={() => { setView(option.id); setItemPage(1); }}
             >
               {option.label}
             </ViewButton>
@@ -645,7 +653,7 @@ export default function FcosUpdatesPanel() {
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
+              onChange={(event) => { setKeyword(event.target.value); setItemPage(1); }}
               placeholder="Search version or update"
               className="pl-9"
             />
@@ -697,8 +705,9 @@ export default function FcosUpdatesPanel() {
           <StateBlock title="No email batches found" description="Create a batch from one or more pending release updates." />
         )
       ) : filteredItems.length ? (
-        <div className="divide-y divide-border">
-          {filteredItems.map((item) => (
+        <>
+          <div className="divide-y divide-border">
+            {visibleItems.map((item) => (
             <div key={item.id} className="grid gap-3 px-4 py-4 md:grid-cols-[28px_minmax(0,1fr)_auto]">
               <div className="pt-1">
                 {view === 'pending' ? (
@@ -760,8 +769,16 @@ export default function FcosUpdatesPanel() {
                 )}
               </div>
             </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          {itemPageCount > 1 ? <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-muted-foreground">
+            <span>Page {boundedItemPage} of {itemPageCount} · {filteredItems.length} updates</span>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={boundedItemPage === 1} onClick={() => setItemPage((page) => Math.max(1, page - 1))}>Previous</Button>
+              <Button type="button" size="sm" variant="outline" disabled={boundedItemPage === itemPageCount} onClick={() => setItemPage((page) => Math.min(itemPageCount, page + 1))}>Next</Button>
+            </div>
+          </div> : null}
+        </>
       ) : (
         <StateBlock
           title={`No ${view} updates found`}

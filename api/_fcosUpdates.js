@@ -467,23 +467,24 @@ const BATCH_SELECT = [
 ].join(',');
 
 export async function listFcosUpdates({ client, profile, sync = true }) {
-  const senderResult = await resolveGraphEmailSender(client, 'fcos_updates').catch((error) => ({ error }));
   let syncResult = null;
   if (sync) syncResult = await syncFcosUpdateItems({ client, profile });
-  await recoverInterruptedFcosUpdateDeliveries(client, profile);
 
-  const [itemsResult, batchesResult, recipientsResult, settings, generalManager] = await Promise.all([
+  const loadBatches = () => client
+    .from('fcos_update_batches')
+    .select(BATCH_SELECT)
+    .order('updated_at', { ascending: false })
+    .limit(200);
+  let [senderResult, recoveredBatchCount, itemsResult, batchesResult, recipientsResult, settings, generalManager] = await Promise.all([
+    resolveGraphEmailSender(client, 'fcos_updates').catch((error) => ({ error })),
+    recoverInterruptedFcosUpdateDeliveries(client, profile),
     client
       .from('fcos_update_items')
       .select(ITEM_SELECT)
       .order('source_release_date', { ascending: false })
       .order('source_version', { ascending: false })
       .order('source_change_index', { ascending: true }),
-    client
-      .from('fcos_update_batches')
-      .select(BATCH_SELECT)
-      .order('updated_at', { ascending: false })
-      .limit(200),
+    loadBatches(),
     client
       .from('user_profiles')
       .select('id,email,full_name')
@@ -493,6 +494,7 @@ export async function listFcosUpdates({ client, profile, sync = true }) {
     loadSettings(client),
     isGeneralManager(client, profile),
   ]);
+  if (recoveredBatchCount > 0) batchesResult = await loadBatches();
   if (itemsResult.error) throwUpdateSchemaError(itemsResult.error);
   if (batchesResult.error) throwUpdateSchemaError(batchesResult.error);
   if (recipientsResult.error) throw recipientsResult.error;
@@ -952,6 +954,7 @@ async function recoverInterruptedFcosUpdateDeliveries(client, profile) {
       metadata: summary,
     });
   }
+  return staleBatches?.length || 0;
 }
 
 async function processFcosUpdateDeliveries({

@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.178',
+    releasedAt: '2026-08-18',
+    title: 'Open FCOS Updates faster',
+    changes: [
+      'Runs independent FCOS Updates database reads concurrently while re-reading batches only when interrupted-delivery recovery changes live state.',
+      'Displays pending, sent, and skipped updates in compact 50-row pages instead of rendering the complete release archive at once.',
+    ],
+  },
+  {
     version: '2.0.177',
     releasedAt: '2026-08-18',
     title: 'Tighten Dashboard filters and accelerate FCOS Updates',
