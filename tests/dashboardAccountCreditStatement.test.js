@@ -641,8 +641,9 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(dashboard, /lazy\(\(\) => import\('@\/components\/dashboard\/AccountCreditDirectory'\)\)/);
   assert.match(insight, /lazy\(\(\) => import\('@\/components\/dashboard\/AccountCreditStatement'\)\)/);
   assert.match(insight, /account\.initialTab === 'credit'/);
-  assert.match(directory, /onOpen\(\{ \.\.\.identity, role: statementRole \}, 'credit'\)/);
-  assert.match(dashboard, /navigate\(`\/accounts\/\$\{encodeURIComponent\(account\.accountId\)\}/);
+  assert.match(directory, /onOpen\(\{ \.\.\.identity, role: statementRole \}, 'credit', event\.currentTarget\)/);
+  assert.match(dashboard, /next\.set\('insightAccountId', account\.accountId\)/);
+  assert.match(dashboard, /<AccountInsightModal/);
   assert.match(directory, /dashboardAccountCreditDirectory/);
   assert.match(directory, /filters: directoryFilters/);
   assert.match(dashboard, /AccountCreditDirectory counterparty=\{filterPayload\.counterparty\}/);

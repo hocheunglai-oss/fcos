@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.183',
+    releasedAt: '2026-08-18',
+    title: 'Preserve Account results around Insight',
+    changes: [
+      'Opens Account Insight over the live Dashboard so closing it preserves the Account page, exposure results, filters, scroll position, and keyboard focus without another directory request.',
+      'Places the Both, Buyer, and Supplier selector inside every USD credit forecast and keeps unavailable directions visible but disabled.',
+      'Removes repeated exposure explanations from Account results while retaining the combined Credit Statement risk warning.',
+    ],
+  },
+  {
     version: '2.0.182',
     releasedAt: '2026-08-18',
     title: 'Correct combined buyer exposure currency',

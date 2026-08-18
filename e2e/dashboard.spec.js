@@ -52,16 +52,26 @@ test.describe('Dashboard', () => {
 
     await page.getByRole('tab', { name: 'Accounts', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toHaveAttribute('data-state', 'active');
-    await expect(page.getByRole('heading', { name: 'Account Statements' })).toBeVisible();
-    const statementSearch = page.getByRole('search').getByLabel('Search Account Statements');
-    await statementSearch.fill('FORTUNE RISE');
-    await page.getByRole('search').getByRole('button', { name: 'Search' }).click();
-    await expect(page.getByText('FORTUNE RISE SHIPPING CO LTD').first()).toBeVisible();
-    await page.getByRole('button', { name: /^(Open statement|Statement)$/ }).first().click();
+    await expect(page.getByRole('heading', { name: 'Accounts', exact: true })).toBeVisible();
+    await expect(page.getByText('Netting may conceal gross receivable and payable risk.')).toHaveCount(0);
+    const statementButton = page.getByRole('button', { name: 'Statement', exact: true }).first();
+    await expect(statementButton).toBeVisible();
+    const directoryRequests = [];
+    page.on('request', (request) => {
+      if (/dashboardAccount(?:CreditDirectory|ExposureBatch)/.test(request.url())) directoryRequests.push(request.url());
+    });
+    const scrollTop = await page.evaluate(() => window.scrollY);
+    await statementButton.click();
     await expect(page.getByRole('tab', { name: 'Credit Statement' })).toHaveAttribute('data-state', 'active');
-    await expect(page.getByTestId('account-credit-statement')).toBeVisible();
-    await expect(page.getByText('Buyer-leg Credit Statement')).toBeVisible();
-    await expect(page.getByText(/Individual: (Reconciled|Projection hidden)/)).toBeVisible();
+    await expect(page.getByText('Buyer receivable and supplier payable are reported separately by currency.')).toHaveCount(0);
+    const sideToggle = page.getByLabel('Credit statement view');
+    await expect(sideToggle).toBeVisible();
+    for (const side of ['Both', 'Buyer', 'Supplier']) await expect(sideToggle.getByRole('button', { name: side, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('heading', { name: 'Accounts', exact: true })).toBeVisible();
+    await expect(statementButton).toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollTop);
+    expect(directoryRequests).toEqual([]);
     expect(failures).toEqual([]);
   });
 });
