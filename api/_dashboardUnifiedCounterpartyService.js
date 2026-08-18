@@ -1,7 +1,7 @@
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
-import { selectUltimateCreditGroup } from './_dashboardAccountCreditStatement.js';
+import { CREDIT_EXPOSURE_DELIVERY_START, selectUltimateCreditGroup } from './_dashboardAccountCreditStatement.js';
 import { estimateUninvoicedSupplierChild } from './_dashboardSupplierCreditStatement.js';
 
 const ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
@@ -347,7 +347,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   const allIds = [...new Set(identities.flatMap((row) => row.memberAccountIds))];
   const [stemDescribe, invoiceDescribe, lineDescribe, extraDescribe] = await Promise.all([describe('STEM__c', force), describe('Supplier_Invoice__c', force), describe('STEM_Line_Item__c', force), describe('STEM_Extra_Cost__c', force)]);
   const stemMap = map(stemDescribe); const invoiceMap = map(invoiceDescribe); const lineMap = map(lineDescribe); const extraMap = map(extraDescribe); const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields); const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields);
-  if (!stemMap.has('Account__c') || !stemMap.has('QLIK_Receivable_Balance__c') || !invoiceMap.has('Supplier__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
+  if (!stemMap.has('Account__c') || !stemMap.has('QLIK_Receivable_Balance__c') || !stemMap.has('Delivery_Date__c') || !stemMap.has('Expected_Delivery_Date__c') || !invoiceMap.has('Supplier__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
   const filters = normalizedFilters(body.filters); const scoped = await scopeWhere(filters, stemMap, force);
   const relatedStemScope = stemChildScope(scoped);
   const lineSelect = ['STEM__c', lineLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => lineMap.has(field));
@@ -355,8 +355,9 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   const buyerSelect = ['Id', 'Account__c', 'CurrencyIsoCode', 'QLIK_Receivable_Balance__c'].filter((field) => stemMap.has(field));
   const invoiceSelect = ['Id', 'STEM__c', 'Supplier__c', 'CurrencyIsoCode', 'Payable_Balance__c'].filter((field) => invoiceMap.has(field));
   const accountChunks = chunkIds(allIds);
+  const buyerExposureScope = `((Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}))`;
   const [buyerStemChunks, invoiceChunks, unbilledLineChunks, unbilledExtraChunks] = await Promise.all([
-    Promise.all(accountChunks.map((part) => all(`SELECT ${buyerSelect.join(',')} FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0${scoped ? ` AND ${scoped}` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${buyerSelect.join(',')} FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0 AND ${buyerExposureScope}${scoped ? ` AND ${scoped}` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${lineLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${extraLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
@@ -392,7 +393,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
 export async function loadDashboardAccountExposureBatch({ body = {}, accessContext, force = false }) {
   const entities = (Array.isArray(body.entities) ? body.entities : []).map((row) => ({ entityType: row?.entityType, entityId: row?.entityId }));
   const cached = await getOrLoadRuntimeCache({
-    namespace: 'salesforce-dashboard-account-exposure-batch', version: '1', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    namespace: 'salesforce-dashboard-account-exposure-batch', version: '2', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { entities, filters: normalizedFilters(body.filters) }, ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:supplier-invoice', 'salesforce:line-item', 'salesforce:extra-cost', 'salesforce:account-credit'], force,
     loader: () => loadDashboardAccountExposureBatchUncached({ body, accessContext, force }),

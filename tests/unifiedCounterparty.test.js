@@ -37,6 +37,10 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.doesNotMatch(source, /replaceAll\('Delivery_Date__c'/);
   assert.match(source, /const buyerSelect = .*\.filter\(\(field\) => stemMap\.has\(field\)\)/);
   assert.match(source, /const invoiceSelect = .*\.filter\(\(field\) => invoiceMap\.has\(field\)\)/);
+  assert.match(source, /CREDIT_EXPOSURE_DELIVERY_START/);
+  assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
+  assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
+  assert.match(source, /salesforce-dashboard-account-exposure-batch', version: '2'/);
   assert.doesNotMatch(source, /SELECT Id,Account__c,CurrencyIsoCode/);
 });
 
