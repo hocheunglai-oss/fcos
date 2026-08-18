@@ -50,6 +50,7 @@ test('dashboard defaults and resets to year to date', async () => {
   assert.match(bar, /filters\.datePreset !== 'year_to_date'/);
   assert.match(bar, /set\(\{ datePreset: 'year_to_date' \}\)/);
   assert.match(bar, /label="Port or COUNTRY"/);
+  assert.match(bar, /data-testid="dashboard-keyword-filter-group"[\s\S]*label="Company or GROUP"[\s\S]*label="Port or COUNTRY"/);
 });
 
 test('combined pickers retain GROUP and country results when ordinary matches fill the limit', () => {

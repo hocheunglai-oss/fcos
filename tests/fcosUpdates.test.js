@@ -177,6 +177,10 @@ test('FCOS update workflow protects saved revisions and interrupted delivery', a
   assert.match(panel, /current\.status !== 'Draft'/);
   assert.match(panel, /disabled=\{Boolean\(working\) \|\| batchIsDirty\}/);
   assert.match(panel, /Discard unsaved changes\?/);
+  assert.match(panel, /load\(\{ force: false, sync: false, blocking: true \}\)\.then\(\(\) => syncReleases\(\)\)/);
+  assert.match(panel, /adminFcosUpdatesSync/);
+  assert.match(panel, /The saved queue remains available/);
+  assert.doesNotMatch(panel, /load\(\{ force: true, sync: true \}\)/);
   assert.doesNotMatch(panel, />\s*(Submit|Approve|Return)\s*</);
 
   assert.match(recipientMigration, /create table if not exists public\.fcos_update_batch_recipients/);

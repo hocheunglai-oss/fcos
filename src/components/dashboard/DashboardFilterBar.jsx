@@ -78,14 +78,16 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], g
         <div className="flex flex-wrap gap-1">{MONTHS.map((month) => <button type="button" key={month.value} onClick={() => set({ datePreset: 'custom', selectedMonths: filters.selectedMonths.includes(month.value) ? (filters.selectedMonths.length > 1 ? filters.selectedMonths.filter((value) => value !== month.value) : filters.selectedMonths) : [...filters.selectedMonths, month.value] })} className={`rounded border px-2 py-1 text-xs ${filters.selectedMonths.includes(month.value) ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground'}`}>{month.label}</button>)}</div>
       </div> : null}
 
-      <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-3 xl:items-start">
-        <div className="flex rounded-md border border-border p-0.5"><button type="button" onClick={() => set({ counterpartyMode: 'buyer', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'buyer' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Buyer</button><button type="button" onClick={() => set({ counterpartyMode: 'supplier', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'supplier' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Supplier</button></div>
-        <Picker id="dashboard-counterparty" label="Company or GROUP" value={filters.group || filters.company} onCommit={(option) => option?.kind === 'group'
-          ? set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })
-          : set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyGroupOptions} placeholder={filters.counterpartyMode === 'buyer' ? 'Company or GROUP' : 'Supplier company'} />
-        <Picker id="dashboard-location" label="Port or COUNTRY" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
-          ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '' })
-          : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or COUNTRY" />
+      <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-start">
+        <div className="flex rounded-md border border-border p-0.5 sm:w-48 sm:shrink-0"><button type="button" onClick={() => set({ counterpartyMode: 'buyer', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'buyer' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Buyer</button><button type="button" onClick={() => set({ counterpartyMode: 'supplier', company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] })} className={`flex-1 rounded px-2 py-1 text-xs font-semibold ${filters.counterpartyMode === 'supplier' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}>Supplier</button></div>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start" data-testid="dashboard-keyword-filter-group">
+          <Picker id="dashboard-counterparty" label="Company or GROUP" value={filters.group || filters.company} onCommit={(option) => option?.kind === 'group'
+            ? set({ group: optionLabel(option), groupId: option?.id || optionValue(option), groupAccountIds: option?.accountIds || [], company: '', companyId: '' })
+            : set({ company: optionLabel(option), companyId: option?.id || optionValue(option), group: '', groupId: '', groupAccountIds: [] })} options={companyGroupOptions} placeholder={filters.counterpartyMode === 'buyer' ? 'Company or GROUP' : 'Supplier company'} />
+          <Picker id="dashboard-location" label="Port or COUNTRY" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
+            ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '' })
+            : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or COUNTRY" />
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5" aria-live="polite">

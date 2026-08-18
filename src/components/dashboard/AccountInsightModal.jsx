@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { AlertTriangle, Calculator, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
@@ -135,7 +135,6 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   const [exporting, setExporting] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [accountWide, setAccountWide] = useState(dashboardScope?.mode === 'account_wide');
-  const [showCalculation, setShowCalculation] = useState(false);
   const [readySelection, setReadySelection] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const requestSequence = useRef(0);
@@ -189,7 +188,6 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     setActiveTab(account.initialTab === 'credit' ? 'credit' : 'overview');
     setSections({});
     setAccountWide(dashboardScope?.mode === 'account_wide');
-    setShowCalculation(false);
     setError(null);
     setSelectedStemId(null);
     setReadySelection(selectionKey);
@@ -350,11 +348,6 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                       </div>
                     </Section>
                   </div>
-                  <div><Button type="button" size="sm" variant="outline" aria-expanded={showCalculation} onClick={() => setShowCalculation((visible) => !visible)}><Calculator className="mr-1.5 h-3.5 w-3.5" />{showCalculation ? 'Hide calculation' : 'Explain these figures'}</Button></div>
-                  {showCalculation ? <Section title="Calculation evidence" description="The displayed formula and its currency-separated inputs">
-                    <div className="grid gap-3 text-xs md:grid-cols-2 xl:grid-cols-3">{financialRows.map((row) => <div key={row.currency} className="rounded-md border border-border bg-background p-3"><div className="font-semibold">{row.currency}</div><div className="mt-1 tabular-nums">{formatMoney(row.turnover, row.currency)} − {formatMoney(row.supplierSpend, row.currency)} − {formatMoney(row.brokerCommissions, row.currency)} = <strong>{formatMoney(row.grossProfit, row.currency)}</strong></div><div className="mt-1 text-muted-foreground">Gross margin: {formatPercent(row.grossMarginPct)} · {formatNumber(kpis.stemCount)} STEMs</div></div>)}</div>
-                    <div className="mt-3 grid gap-3 text-xs text-muted-foreground md:grid-cols-3"><p><strong className="text-foreground">Buyer and GROUP:</strong> complete STEM turnover, costs, commissions, volume and profit are attributed to the buyer.</p><p><strong className="text-foreground">Supplier:</strong> direct revenue and cost are assigned first. Shared commissions and unassigned costs use revenue share, then cost share, then equal share.</p><p><strong className="text-foreground">Volume:</strong> L, KL and CBM are converted to approximate MT for statistics only. These conversions never affect price comparisons.</p></div>
-                  </Section> : null}
                 </TabsContent>
 
                 <TabsContent value="trading" className="mt-0 space-y-5">

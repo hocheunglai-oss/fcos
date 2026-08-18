@@ -197,6 +197,7 @@ export default function FcosUpdatesPanel() {
   const [keyword, setKeyword] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -209,28 +210,50 @@ export default function FcosUpdatesPanel() {
   const [discardConfirmation, setDiscardConfirmation] = useState(false);
   const [addRecipientId, setAddRecipientId] = useState('');
 
-  const load = async ({ force = false, sync = true } = {}) => {
-    setLoading(true);
+  const applyModel = (nextModel) => {
+    setModel(nextModel || {});
+    setSelectedIds((current) => current.filter((id) => (
+      nextModel?.items || []
+    ).some((item) => item.id === id && item.status === 'Pending' && !item.assignedBatchId)));
+  };
+
+  const load = async ({ force = false, sync = false, blocking = false } = {}) => {
+    if (blocking) setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('adminFcosUpdatesList', { sync }, {
-      cache: true,
-      force,
-      cacheKey: `adminFcosUpdatesList:${sync ? 'sync' : 'read'}`,
-    });
-    if (response.data?.error) {
-      setError(response.data.error);
-    } else {
-      setModel(response.data || {});
-      setSelectedIds((current) => current.filter((id) => (
-        response.data?.items || []
-      ).some((item) => item.id === id && item.status === 'Pending' && !item.assignedBatchId)));
+    try {
+      const response = await appClient.functions.invoke('adminFcosUpdatesList', { sync }, {
+        cache: true,
+        force,
+        cacheKey: `adminFcosUpdatesList:${sync ? 'sync' : 'read'}`,
+      });
+      if (response.data?.error) setError(response.data.error);
+      else applyModel(response.data);
+    } catch (loadError) {
+      setError(loadError.message || 'FCOS updates could not be loaded.');
+    } finally {
+      if (blocking) setLoading(false);
     }
-    setLoading(false);
+  };
+
+  const syncReleases = async ({ announce = false } = {}) => {
+    setSyncing(true);
+    if (announce) clearFeedback();
+    try {
+      const response = await appClient.functions.invoke('adminFcosUpdatesSync', {}, { cache: false });
+      if (response.data?.error) setError(response.data.error);
+      else {
+        applyModel(response.data);
+        if (announce) setMessage('Release queue is up to date.');
+      }
+    } catch (syncError) {
+      setError(syncError.message || 'The release check could not be completed. The saved queue remains available.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
   useEffect(() => {
-    load({ force: true, sync: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    load({ force: false, sync: false, blocking: true }).then(() => syncReleases());
   }, []);
 
   const pendingItems = useMemo(() => (model.items || []).filter((item) => (
@@ -588,11 +611,11 @@ export default function FcosUpdatesPanel() {
             <Button
               size="sm"
               variant="outline"
-              disabled={loading || Boolean(working)}
-              onClick={() => load({ force: true, sync: true })}
+              disabled={loading || syncing || Boolean(working)}
+              onClick={() => syncReleases({ announce: true })}
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Check releases
+              {loading || syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {syncing ? 'Checking releases' : 'Check releases'}
             </Button>
           </div>
       </div>
@@ -637,7 +660,7 @@ export default function FcosUpdatesPanel() {
       </div>
 
       {loading ? (
-        <StateBlock icon={Loader2} title="Loading FCOS updates..." description="Synchronizing the controlled release queue." />
+        <StateBlock icon={Loader2} title="Loading FCOS updates..." description="Opening the saved release queue." />
       ) : view === 'batches' ? (
         filteredBatches.length ? (
           <div className="divide-y divide-border">

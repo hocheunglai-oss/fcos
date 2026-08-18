@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.177',
+    releasedAt: '2026-08-18',
+    title: 'Tighten Dashboard filters and accelerate FCOS Updates',
+    changes: [
+      'Places the Company or GROUP and Port or COUNTRY searches together as one compact Dashboard filter group.',
+      'Removes the calculation-explanation control from Account Insight.',
+      'Opens the saved FCOS Updates queue immediately, checks release notes in the background, and keeps the queue usable during synchronization.',
+    ],
+  },
+  {
     version: '2.0.174',
     releasedAt: '2026-08-17',
     title: 'Emphasize expected invoice copy details',
