@@ -26,7 +26,7 @@ const interoffice = (context) => context?.profile?.user_type === 'interoffice';
 async function all(soql) { const result = await sfQuery(soql, { clean: true, limit: Number.MAX_SAFE_INTEGER }); return result.records || []; }
 async function describe(name, force) {
   const result = await getOrLoadRuntimeCache({ namespace: 'salesforce-unified-counterparty-describe', version: '1', accessScope: 'schema', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`, payload: { name }, ttlSeconds: 21_600, tags: ['salesforce:schema'], force,
-    loader: async () => { const data = await sfRequest(`/sobjects/${encodeURIComponent(name)}/describe/`, { readOnly: true }); return { fields: (data.fields || []).map((field) => ({ name: field.name, relationshipName: field.relationshipName || null, referenceTo: field.referenceTo || [] })) }; } });
+    loader: async () => { const data = await sfRequest(`/sobjects/${encodeURIComponent(name)}/describe/`, { readOnly: true }); return { fields: (data.fields || []).map((field) => ({ name: field.name, label: field.label || null, type: field.type || null, relationshipName: field.relationshipName || null, referenceTo: field.referenceTo || [] })) }; } });
   return result.value;
 }
 const map = (describeResult) => new Map((describeResult?.fields || []).map((field) => [field.name, field]));

@@ -22,6 +22,8 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /scopedSupplierStemCount/);
   assert.match(source, /dateWindows, disputeOnly/);
   assert.match(source, /scopeWhereValue/);
+  assert.match(source, /type: field\.type \|\| null/);
+  assert.match(source, /label: field\.label \|\| null/);
 });
 
 test('unified handlers and the both-side credit statement are registered as server reads', async () => {
