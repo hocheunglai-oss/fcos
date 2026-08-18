@@ -22,6 +22,7 @@ const q = (value) => text(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const values = (rows) => rows.map((row) => `'${q(row)}'`).join(',');
 const currency = (value) => text(value).toUpperCase() || 'USD';
 const interoffice = (context) => context?.profile?.user_type === 'interoffice';
+const stemChildScope = (scope) => text(scope).replace(/\b(Expected_Delivery_Date__c|Delivery_Date__c|Port__c)\b/g, 'STEM__r.$1');
 
 async function all(soql) { const result = await sfQuery(soql, { clean: true, limit: Number.MAX_SAFE_INTEGER }); return result.records || []; }
 async function describe(name, force) {
@@ -71,7 +72,7 @@ async function descendants(roots, fields) {
 async function roleCounts(accountIds, lineLookup, extraLookup, scopeWhere = '') {
   if (!accountIds.length) return new Map();
   const output = new Map(accountIds.map((id) => [key(id), { buyerStemCount: 0, supplierStemCount: 0 }]));
-  const childScope = scopeWhere ? ` AND ${scopeWhere.replaceAll('Delivery_Date__c', 'STEM__r.Delivery_Date__c').replaceAll('Expected_Delivery_Date__c', 'STEM__r.Expected_Delivery_Date__c').replaceAll('Port__c', 'STEM__r.Port__c')}` : '';
+  const childScope = scopeWhere ? ` AND ${stemChildScope(scopeWhere)}` : '';
   const chunks = chunkIds(accountIds);
   const [buyerChunks, lineChunks, extraChunks] = await Promise.all([
     Promise.all(chunks.map((part) => all(`SELECT Account__c,COUNT(Id) FROM STEM__c WHERE Account__c IN (${values(part)})${scopeWhere ? ` AND (${scopeWhere})` : ''} GROUP BY Account__c`))),
@@ -348,7 +349,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   const stemMap = map(stemDescribe); const invoiceMap = map(invoiceDescribe); const lineMap = map(lineDescribe); const extraMap = map(extraDescribe); const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields); const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields);
   if (!stemMap.has('QLIK_Receivable_Balance__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
   const filters = normalizedFilters(body.filters); const scoped = await scopeWhere(filters, stemMap, force);
-  const relatedStemScope = scoped ? scoped.replaceAll('Delivery_Date__c', 'STEM__r.Delivery_Date__c').replaceAll('Expected_Delivery_Date__c', 'STEM__r.Expected_Delivery_Date__c').replaceAll('Port__c', 'STEM__r.Port__c') : '';
+  const relatedStemScope = stemChildScope(scoped);
   const lineSelect = ['STEM__c', lineLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => lineMap.has(field));
   const extraSelect = ['STEM__c', extraLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Cost__c', 'Line_Total_Buy__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => extraMap.has(field));
   const accountChunks = chunkIds(allIds);
