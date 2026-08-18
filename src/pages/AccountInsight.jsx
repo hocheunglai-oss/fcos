@@ -11,7 +11,7 @@ export default function AccountInsight() {
   const { accountId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const role = ['buyer', 'supplier', 'group'].includes(searchParams.get('role')) ? searchParams.get('role') : 'buyer';
+  const role = ['buyer', 'supplier', 'group', 'both'].includes(searchParams.get('role')) ? searchParams.get('role') : 'buyer';
   const initialTab = ['overview', 'trading', 'payments', 'risk', 'stems', 'credit', 'children'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'overview';
   const current = new Date();
   const selectedYears = numbers(searchParams.get('years'), [current.getFullYear()]);
@@ -35,5 +35,5 @@ export default function AccountInsight() {
     next.set('role', nextRole); next.set('tab', tab); next.set('period', periodMode); next.set('scope', accountWide ? 'account_wide' : 'dashboard');
     setSearchParams(next, { replace: true });
   };
-  return <main className="min-h-[70vh]"><AccountInsightModal account={{ accountId, name: searchParams.get('name') || 'Account', role, initialTab }} open onClose={() => navigate('/?tab=accounts')} selectedYears={selectedYears} selectedMonths={selectedMonths} dashboardScope={dashboardScope} initialPeriodMode={searchParams.get('period') || 'dashboard_period'} onViewChange={updateView} /></main>;
+  return <main className="min-h-[70vh]"><AccountInsightModal account={{ accountId, name: searchParams.get('name') || 'Account', role, entityType: searchParams.get('entityType') === 'group' ? 'group' : 'account', initialTab }} open onClose={() => navigate('/?tab=accounts')} selectedYears={selectedYears} selectedMonths={selectedMonths} dashboardScope={dashboardScope} initialPeriodMode={searchParams.get('period') || 'dashboard_period'} onViewChange={updateView} /></main>;
 }

@@ -18,6 +18,7 @@ import {
   loadDashboardSupplierCreditDirectory,
   loadDashboardSupplierCreditStatement,
 } from './_dashboardSupplierCreditStatementService.js';
+import { loadDashboardUnifiedCreditDirectory } from './_dashboardUnifiedCounterpartyService.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -206,6 +207,9 @@ async function loadDirectoryAccountChains(accounts, accountFields) {
 }
 
 export async function loadDashboardAccountCreditDirectory({ body = {}, accessContext, force = false }) {
+  if (['both', 'buyer', 'supplier'].includes(body.direction) || body.role === 'both') {
+    return loadDashboardUnifiedCreditDirectory({ body, accessContext, force });
+  }
   if (body.role === 'supplier') return loadDashboardSupplierCreditDirectory({ body, accessContext, force });
   const startedAt = Date.now();
   const query = text(body.query).slice(0, 100);
@@ -788,9 +792,52 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   };
 }
 
+function combinedExposurePoints(buyer, supplier, currencyCode, entityType) {
+  const buyerPoints = Array.isArray(buyer?.chart?.points) ? buyer.chart.points : [];
+  const supplierSeries = (supplier?.chart?.currencies || []).find((row) => row.currency === currencyCode);
+  const supplierPoints = entityType === 'group' ? supplierSeries?.group?.points : supplierSeries?.account?.points;
+  if (!buyerPoints.length || !Array.isArray(supplierPoints) || !supplierPoints.length) return [];
+  const dates = [...new Set([...buyerPoints.map((row) => row.date), ...supplierPoints.map((row) => row.date)].filter(Boolean))].sort();
+  let buyerValue = null; let supplierValue = null; let buyerIndex = 0; let supplierIndex = 0;
+  return dates.map((date) => {
+    while (buyerIndex < buyerPoints.length && buyerPoints[buyerIndex].date <= date) {
+      buyerValue = entityType === 'group' ? buyerPoints[buyerIndex].groupExposure : buyerPoints[buyerIndex].individualExposure;
+      buyerIndex += 1;
+    }
+    while (supplierIndex < supplierPoints.length && supplierPoints[supplierIndex].date <= date) { supplierValue = supplierPoints[supplierIndex].remaining; supplierIndex += 1; }
+    return buyerValue == null || supplierValue == null ? { date, buyer: buyerValue, supplier: supplierValue, net: null } : { date, buyer: buyerValue, supplier: supplierValue, net: buyerValue - supplierValue };
+  });
+}
+
 export async function loadDashboardAccountCreditStatement({ body = {}, accessContext, force = false }) {
+  const entityType = body.entityType === 'group' ? 'group' : 'account';
+  const entityId = body.entityId || body.accountId;
+  if (body.side === 'both') {
+    const accountId = salesforceId(entityId);
+    const [buyer, supplier] = await Promise.all([
+      loadDashboardAccountCreditStatement({ body: { ...body, side: 'buyer', entityType, entityId: accountId, accountId }, accessContext, force }),
+      loadDashboardSupplierCreditStatement({ body: { ...body, side: 'supplier', entityType, entityId: accountId, accountId, includeGroup: entityType === 'group' || body.includeGroup === true }, accessContext, force }),
+    ]);
+    const buyerByCurrency = new Map(Object.entries(buyer.exposureByCurrency || {}).map(([code, value]) => [code, Number((entityType === 'group' ? value.group : value.individual) ?? 0)]));
+    const supplierByCurrency = new Map((supplier.chart?.currencies || []).map((row) => [row.currency, entityType === 'group' ? row.group?.opening : row.account?.opening]));
+    const currencies = [...new Set([...buyerByCurrency.keys(), ...supplierByCurrency.keys()])].sort().map((code) => {
+      const buyerOpening = buyerByCurrency.get(code) ?? 0;
+      const supplierOpening = supplierByCurrency.get(code);
+      const evidenceComplete = buyer.meta?.complete === true && supplier.meta?.complete === true && supplierOpening != null;
+      const buyerChartMatchesCurrency = Array.isArray(buyer.currencies) && buyer.currencies.length === 1 && buyer.currencies[0] === code;
+      return { currency: code, buyerOpening, supplierOpening: supplierOpening ?? null, netOpening: evidenceComplete ? buyerOpening - supplierOpening : null, points: evidenceComplete && buyerChartMatchesCurrency ? combinedExposurePoints(buyer, supplier, code, entityType) : [] };
+    });
+    return {
+      side: 'both',
+      identity: { accountId, entityType, name: buyer.identity?.name || supplier.identity?.name || accountId, clKey: buyer.identity?.clKey || supplier.identity?.clKey || null },
+      roles: ['buyer', 'supplier'], buyer, supplier,
+      combined: { currencies, warning: currencies.every((row) => row.netOpening != null) ? null : 'Combined net exposure is suppressed where either buyer or supplier evidence is incomplete.' },
+      complete: buyer.meta?.complete === true && supplier.meta?.complete === true,
+      meta: { redacted: true, cache: buyer.meta?.cache || supplier.meta?.cache || null },
+    };
+  }
   if (body.side === 'supplier') return loadDashboardSupplierCreditStatement({ body, accessContext, force });
-  const accountId = salesforceId(body.accountId);
+  const accountId = salesforceId(entityId);
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
@@ -803,7 +850,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
     ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment', 'salesforce:invoice', 'salesforce:account-credit', `salesforce:account:${idKey(accountId)}`],
     force,
-    loader: () => loadAccountCreditStatementUncached({ body: { ...body, accountId, scope, limit }, accessContext, force }),
+    loader: () => loadAccountCreditStatementUncached({ body: { ...body, accountId, entityType, scope, limit }, accessContext, force }),
   });
   return {
     ...cache.value,

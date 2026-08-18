@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.181',
+    releasedAt: '2026-08-18',
+    title: 'Unify Account and GROUP exposure search',
+    changes: [
+      'Combines Buyer and Supplier Account discovery into one exact-ID Company/GROUP search with lifetime role badges and GROUP-first results.',
+      'Adds one Accounts directory with Both, Buyer, and Supplier views, currency-separated receivable, payable, informational net exposure, and period gross profit.',
+      'Adds a combined Account or GROUP statement with separate buyer and supplier forecasts, fail-closed netting, and direct access to each authoritative directional statement.',
+    ],
+  },
+  {
     version: '2.0.180',
     releasedAt: '2026-08-18',
     title: 'Add Supplier payable statements',

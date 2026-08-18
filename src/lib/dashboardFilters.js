@@ -148,6 +148,19 @@ export function normalizeDashboardFilters(input = {}) {
     selectedMonths: months.length ? months : [THIS_MONTH],
     disputeOnly: input.disputeOnly === true,
     counterpartyMode: input.counterpartyMode === 'supplier' ? 'supplier' : 'buyer',
+    counterparty: input.counterparty && typeof input.counterparty === 'object' && input.counterparty.entityId
+      ? {
+        entityKey: String(input.counterparty.entityKey || ''),
+        entityType: input.counterparty.entityType === 'group' ? 'group' : 'account',
+        entityId: String(input.counterparty.entityId),
+        name: String(input.counterparty.name || ''),
+        clKey: String(input.counterparty.clKey || ''),
+        groupName: String(input.counterparty.groupName || ''),
+        roles: [...new Set((Array.isArray(input.counterparty.roles) ? input.counterparty.roles : []).filter((role) => role === 'buyer' || role === 'supplier'))],
+        buyerStemCount: Number(input.counterparty.buyerStemCount || 0),
+        supplierStemCount: Number(input.counterparty.supplierStemCount || 0),
+      }
+      : null,
     company: String(input.company ?? input.companyKeyword ?? '').trim(),
     companyId: String(input.companyId ?? '').trim(),
     group: String(input.group ?? '').trim(),
@@ -162,17 +175,18 @@ export function normalizeDashboardFilters(input = {}) {
 
 export function dashboardFilterPayload(input = {}) {
   const filters = normalizeDashboardFilters(input);
-  const accountIds = filters.counterpartyMode === 'buyer'
+  const legacyAccountIds = filters.counterpartyMode === 'buyer'
     ? filters.groupAccountIds.length ? filters.groupAccountIds : filters.companyId ? [filters.companyId] : []
     : [];
-  const supplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
+  const legacySupplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
   const countryCodes = filters.countryCode ? [filters.countryCode] : [];
   const portIds = filters.portId ? [filters.portId] : [];
   return {
     dateWindows: buildDashboardDateWindows(filters.selectedYears, filters.selectedMonths),
     disputeOnly: filters.disputeOnly,
     counterpartyMode: filters.counterpartyMode,
-    filters: { accountIds, supplierIds, portIds, countryCodes },
+    counterparty: filters.counterparty ? { entityType: filters.counterparty.entityType, entityId: filters.counterparty.entityId } : null,
+    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes },
   };
 }
 

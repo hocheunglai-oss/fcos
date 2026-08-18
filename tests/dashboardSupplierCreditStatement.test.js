@@ -203,7 +203,8 @@ test('Supplier Credit Statement wiring preserves buyer compatibility, access sco
   assert.match(supplierService, /loadAccountChain\(account\.Id, accountMap\)/);
   assert.match(supplierService, /isInterofficeExcluded/);
   assert.match(supplierService, /SUPPLIER_CREDIT_SCOPE_LIMIT/);
-  assert.match(directory, /Supplier statements/);
+  assert.match(directory, /\['both', 'Both'\]/);
+  assert.match(directory, /Supplier payable/);
   assert.doesNotMatch(directory, /Search Accounts|placeholder="Search Account/);
   assert.match(modal, /SupplierCreditStatement/);
   assert.match(modal, /dashboardScope\?\.filters/);

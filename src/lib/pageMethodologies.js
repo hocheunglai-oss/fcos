@@ -143,7 +143,7 @@ export const DASHBOARD_METHODOLOGY = {
   sections: [
     {
       title: 'Record period',
-      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. The combined Company or GROUP and Port or COUNTRY keyword searches show GROUP and COUNTRY results first while retaining exact Salesforce Account and Port identifiers or canonical country values. The Account Statements directory follows those buyer Account/GROUP and Port/COUNTRY selections. Supplier scope includes both line-item and extra-cost suppliers. Inactive Salesforce Accounts are excluded from every Account directory, picker, ranking, and Account Insight entry point; historical STEM financial amounts remain in scope without exposing the inactive Account as a selectable or linked identity.',
+      body: 'The selected period uses actual Delivery Date when present and Expected Delivery Date otherwise. One server-side Company or GROUP search shows GROUP results first, preserves same-name Account IDs separately, and labels each identity as Buyer, Supplier, or Buyer & Supplier using lifetime exact-ID STEM activity. The Port or COUNTRY search keeps exact Salesforce Port identifiers or canonical country values. The Accounts directory inherits both selections and offers its own Both, Buyer, and Supplier exposure view without changing the Overview or STEM financial perspective. Supplier scope includes both line-item and extra-cost suppliers. Inactive Salesforce Accounts are excluded from every Account directory, picker, ranking, and Account Insight entry point; historical STEM financial amounts remain in scope without exposing the inactive Account as a selectable or linked identity.',
     },
     {
       title: 'Currency-safe financial calculations',
@@ -155,7 +155,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Completeness and navigation',
-      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs tab is server-paginated and sorted. Accounts combines Buyer and Supplier Statements with complete period buyer/supplier rankings. It inherits Company or GROUP and Port or COUNTRY selections from the Dashboard filter bar instead of maintaining a second search scope. Account Insight has a linkable Account route, loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs and Account identity lists are server-paginated and sorted. Accounts merges exact-ID Buyer receivable and Supplier payable exposure by currency and computes period buyer/supplier gross profit through the same complete Dashboard calculation. Informational receivable-minus-payable net is hidden whenever either direction is incomplete and never nets currencies; netting may conceal gross receivable and payable risk. Account Insight has a linkable Account or GROUP route, loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
     },
     {
       title: 'Buyer-leg credit statements',
@@ -171,7 +171,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Caching and refresh',
-      body: 'The shell, summary, first STEM page, analytics, and Account directory load independently. Overview and Accounts reuse the same analytics response rather than rebuilding it. Named saved views retain filter specifications in the current browser only and never store Salesforce financial records. Normal loads may reuse short targeted caches while preserving visible results during refresh. Refresh bypasses Dashboard browser and server caches only; consequential workflows continue to revalidate live Salesforce data separately.',
+      body: 'The shell, summary, first STEM page, analytics, Account identities, and visible-page exposures load independently. Account exposure is batched for the visible page and merged locally without per-Account requests or a full Dashboard reload. Named saved views retain filter specifications in the current browser only and never store Salesforce financial records. Normal loads may reuse short targeted caches while preserving visible results during refresh. Refresh bypasses Dashboard browser and server caches only; consequential workflows continue to revalidate live Salesforce data separately.',
     },
   ],
 };

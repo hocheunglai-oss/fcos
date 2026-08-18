@@ -50,7 +50,19 @@ test('dashboard defaults and resets to year to date', async () => {
   assert.match(bar, /filters\.datePreset !== 'year_to_date'/);
   assert.match(bar, /set\(\{ datePreset: 'year_to_date' \}\)/);
   assert.match(bar, /label="Port or COUNTRY"/);
-  assert.match(bar, /data-testid="dashboard-keyword-filter-group"[\s\S]*label="Company or GROUP"[\s\S]*label="Port or COUNTRY"/);
+  assert.match(bar, /dashboardCounterpartySearch/);
+  assert.match(bar, /data-testid="dashboard-unified-counterparty-search"/);
+  assert.match(bar, /label="Port or COUNTRY"/);
+});
+
+test('unified counterparty selection retains the selected identity and sends only its canonical type and ID', () => {
+  const payload = dashboardFilterPayload({
+    selectedYears: [2026], selectedMonths: [8], counterpartyMode: 'supplier',
+    counterparty: { entityKey: 'group:001', entityType: 'group', entityId: '001123456789012AAA', name: 'GROUP A', roles: ['buyer', 'supplier'] },
+  });
+  assert.deepEqual(payload.counterparty, { entityType: 'group', entityId: '001123456789012AAA' });
+  assert.deepEqual(payload.filters.accountIds, []);
+  assert.deepEqual(payload.filters.supplierIds, []);
 });
 
 test('combined pickers retain GROUP and country results when ordinary matches fill the limit', () => {

@@ -75,7 +75,7 @@ test('complete Account directory rankings retain Achieve Bunker outside the Top 
   assert.equal(suppliers.some((row) => row.name === 'ACHIEVE BUNKER LTD'), true);
 });
 
-test('Dashboard reuses complete rankings without attention or explanation panels and Account Insight stays linkable and lazy', async () => {
+test('Dashboard keeps complete unified Account rankings without attention or explanation panels and Account Insight stays linkable and lazy', async () => {
   const [dashboard, dashboardKpis, account, app, directory, api] = await Promise.all([
     readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/dashboard/DashboardKpis.jsx', import.meta.url), 'utf8'),
@@ -92,8 +92,12 @@ test('Dashboard reuses complete rankings without attention or explanation panels
   assert.match(account, /section: activeTab/);
   assert.match(account, /Dashboard scope/);
   assert.doesNotMatch(account, /Explain these figures|Live calculation evidence|Calculation evidence/);
-  assert.match(directory, /inherited from the Dashboard filters above/);
+  assert.match(directory, /One merged identity per Account or GROUP/);
   assert.doesNotMatch(directory, /Search Accounts|placeholder="Search Account/);
-  assert.match(directory, /directoryRankings\?\.buyers/);
-  assert.match(api, /directoryRankings: \{ buyers: accountDirectoryRankings, suppliers: supplierDirectoryRankings \}/);
+  assert.match(directory, /Buyer period GP/);
+  assert.match(directory, /Supplier period GP/);
+  assert.match(dashboard, /counterparty=\{filterPayload\.counterparty\}/);
+  assert.match(api, /dashboard-unified-account-directory-financials-v1/);
+  assert.match(api, /dashboardAccountRankings\(scope\.rows, 'account'\)/);
+  assert.match(api, /dashboardAccountRankings\(scope\.rows, 'supplier'\)/);
 });

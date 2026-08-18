@@ -16,9 +16,17 @@ const PERIODS = [
   { value: 'all_history', label: 'All History' },
 ];
 
-const ROLE_LABELS = { buyer: 'Buyer', supplier: 'Supplier', group: 'GROUP' };
+const ROLE_LABELS = { buyer: 'Buyer', supplier: 'Supplier', group: 'GROUP', both: 'Both' };
 const AccountCreditStatement = lazy(() => import('@/components/dashboard/AccountCreditStatement'));
 const SupplierCreditStatement = lazy(() => import('@/components/dashboard/SupplierCreditStatement'));
+const CombinedAccountStatement = lazy(() => import('@/components/dashboard/CombinedAccountStatement'));
+
+function initialStatementSide(account) {
+  const roles = Array.isArray(account?.roles) ? account.roles : [];
+  if (account?.role === 'both' || (roles.includes('buyer') && roles.includes('supplier'))) return 'both';
+  if (account?.role === 'supplier' || roles.includes('supplier') && !roles.includes('buyer')) return 'supplier';
+  return 'buyer';
+}
 
 function number(value) {
   if (value == null || value === '') return null;
@@ -128,7 +136,11 @@ function Comparison({ value, suffix = '%' }) {
 export default function AccountInsightModal({ account, open, onClose, selectedYears, selectedMonths, dashboardScope = null, initialPeriodMode = 'dashboard_period', onViewChange }) {
   const safeInitialPeriod = PERIODS.some((period) => period.value === initialPeriodMode) ? initialPeriodMode : 'dashboard_period';
   const [periodMode, setPeriodMode] = useState(safeInitialPeriod);
-  const [role, setRole] = useState(account?.role || 'buyer');
+  // `dashboardAccountInsight` is deliberately a single-side view.  A combined
+  // identity therefore keeps a real side here and selects Both only inside its
+  // credit-statement tab.
+  const [role, setRole] = useState(account?.role === 'both' ? 'buyer' : account?.role || 'buyer');
+  const [statementSide, setStatementSide] = useState(initialStatementSide(account));
   const [sections, setSections] = useState({});
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -143,6 +155,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
 
   const payload = useMemo(() => ({
     accountId: account?.accountId,
+    entityType: account?.entityType || 'account',
     contextRole: role,
     periodMode,
     selectedYears,
@@ -185,8 +198,9 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     if (readySelection === selectionKey) return;
     setPeriodMode(safeInitialPeriod);
     requestSequence.current += 1;
-    setRole(account.role || 'buyer');
-    setActiveTab(account.initialTab === 'credit' ? 'credit' : 'overview');
+    setRole(account.role === 'both' ? 'buyer' : account.role || 'buyer');
+    setStatementSide(initialStatementSide(account));
+    setActiveTab(account.role === 'both' || account.initialTab === 'credit' ? 'credit' : 'overview');
     setSections({});
     setAccountWide(dashboardScope?.mode === 'account_wide');
     setError(null);
@@ -246,6 +260,11 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   const creditUtilization = buyerPayments?.byCurrency?.length === 1 && identity.currency && buyerPayments.byCurrency[0].currency === identity.currency && number(identity.creditLimit) > 0
     ? (number(buyerPayments.byCurrency[0].receivable) / number(identity.creditLimit)) * 100
     : null;
+  const normalRoles = [...new Set((Array.isArray(data?.availableRoles) ? data.availableRoles : (Array.isArray(data?.roles) ? data.roles : [role])).filter((availableRole) => availableRole === 'buyer' || availableRole === 'supplier'))];
+  const statementSides = account?.role === 'both' || (Array.isArray(account?.roles) && account.roles.includes('buyer') && account.roles.includes('supplier')) || (Array.isArray(data?.roles) && data.roles.includes('buyer') && data.roles.includes('supplier'))
+    ? ['both', 'buyer', 'supplier']
+    : [role === 'supplier' ? 'supplier' : 'buyer'];
+  const displayedRole = activeTab === 'credit' && statementSide === 'both' ? 'both' : (data?.activeRole || role);
 
   return (
     <>
@@ -256,16 +275,16 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
             <div className="min-w-0">
               <div className="mb-1 flex flex-wrap items-center gap-2">
                 <span className="rounded-sm bg-sky-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-sky-800">Account Insight</span>
-                <span className="rounded-sm border border-border px-2 py-0.5 text-[11px] font-semibold">{ROLE_LABELS[data?.activeRole || role]}</span>
+                <span className="rounded-sm border border-border px-2 py-0.5 text-[11px] font-semibold">{ROLE_LABELS[displayedRole] || displayedRole}</span>
                 {meta ? <DataStatus meta={meta} label="Salesforce" /> : null}
               </div>
               <DialogTitle className="truncate text-xl">{identity.name || account?.name || 'Account'}</DialogTitle>
               <DialogDescription>{identity.clKey ? `CL Key ${identity.clKey}` : 'CL Key not set'} · {data?.period?.label || PERIODS.find((item) => item.value === periodMode)?.label}</DialogDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {(data?.availableRoles || [role]).length > 1 ? (
+              {normalRoles.length > 1 ? (
                 <div className="flex rounded-md border border-border bg-muted/30 p-1">
-                  {data.availableRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setSections({}); setRole(availableRole); if (availableRole === 'supplier') setActiveTab('overview'); onViewChange?.({ role: availableRole, tab: availableRole === 'supplier' ? 'overview' : activeTab, periodMode, accountWide }); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
+                  {normalRoles.map((availableRole) => <button type="button" key={availableRole} onClick={() => { if (availableRole !== role) { setSections({}); setRole(availableRole); setStatementSide(availableRole); onViewChange?.({ role: availableRole, tab: activeTab, periodMode, accountWide }); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
                 </div>
               ) : null}
               {activeTab !== 'credit' ? <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true, section: activeTab })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button> : null}
@@ -292,7 +311,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                   <TabsTrigger value="payments">Payments</TabsTrigger>
                   <TabsTrigger value="risk">Risk & Workflow</TabsTrigger>
                   <TabsTrigger value="stems">STEMs</TabsTrigger>
-                  <TabsTrigger value="credit">{(data?.activeRole || role) === 'supplier' ? 'Supplier Credit Statement' : 'Credit Statement'}</TabsTrigger>
+                  <TabsTrigger value="credit">Credit Statement</TabsTrigger>
                   {data?.activeRole === 'group' ? <TabsTrigger value="children">Children</TabsTrigger> : null}
                 </TabsList>
               </div>
@@ -300,7 +319,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
               <div className="mx-auto max-w-[1440px] p-5 sm:p-6">
                 {data?.warnings?.length && activeTab !== 'credit' ? <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data warnings</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{data.warnings.slice(0, 6).map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}
 
-                <TabsContent value="credit" className="mt-0"><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}>{(data?.activeRole || role) === 'supplier' ? <SupplierCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} filters={accountWide ? {} : dashboardScope?.filters} onStemClick={setSelectedStemId} /> : <AccountCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} onStemClick={setSelectedStemId} />}</Suspense></TabsContent>
+                <TabsContent value="credit" className="mt-0"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Credit Statement</h3><p className="mt-0.5 text-xs text-muted-foreground">Buyer receivable and supplier payable are reported separately by currency.</p></div>{statementSides.length > 1 ? <div className="flex rounded-md border border-border bg-muted/30 p-1" aria-label="Credit statement view">{statementSides.map((side) => <button type="button" key={side} aria-pressed={statementSide === side} onClick={() => { if (side !== statementSide) { setStatementSide(side); onViewChange?.({ role: side, tab: 'credit', periodMode, accountWide }); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${statementSide === side ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[side]}</button>)}</div> : null}</div><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}>{statementSide === 'both' ? <CombinedAccountStatement accountId={account?.accountId} entityType={account?.entityType} active={activeTab === 'credit'} dashboardScope={accountWide ? { mode: 'account_wide' } : dashboardScope} onStemClick={setSelectedStemId} /> : statementSide === 'supplier' ? <SupplierCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} filters={accountWide ? {} : dashboardScope?.filters} onStemClick={setSelectedStemId} /> : <AccountCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} onStemClick={setSelectedStemId} />}</Suspense></TabsContent>
 
                 <TabsContent value="overview" className="mt-0 space-y-5">
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">

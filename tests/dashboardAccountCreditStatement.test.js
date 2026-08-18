@@ -614,11 +614,12 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(dashboard, /lazy\(\(\) => import\('@\/components\/dashboard\/AccountCreditDirectory'\)\)/);
   assert.match(insight, /lazy\(\(\) => import\('@\/components\/dashboard\/AccountCreditStatement'\)\)/);
   assert.match(insight, /account\.initialTab === 'credit'/);
-  assert.match(directory, /onOpen\(account, 'credit'\)/);
+  assert.match(directory, /onOpen\(\{ \.\.\.identity, role: statementRole \}, 'credit'\)/);
   assert.match(dashboard, /navigate\(`\/accounts\/\$\{encodeURIComponent\(account\.accountId\)\}/);
   assert.match(directory, /dashboardAccountCreditDirectory/);
   assert.match(directory, /filters: directoryFilters/);
-  assert.match(dashboard, /AccountCreditDirectory filters=\{filterPayload\.filters\}/);
+  assert.match(dashboard, /AccountCreditDirectory counterparty=\{filterPayload\.counterparty\}/);
+  assert.match(dashboard, /filters=\{filterPayload\.filters\}/);
   assert.match(api, /dashboardAccountCreditDirectory/);
   const service = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
   assert.match(service, /directoryFilters\(body\.filters\)/);

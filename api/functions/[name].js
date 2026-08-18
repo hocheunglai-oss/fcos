@@ -14,6 +14,7 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { loadDashboardAccountExposureBatch, loadDashboardCounterpartySearch, resolveUnifiedCounterpartyMemberIds } from '../_dashboardUnifiedCounterpartyService.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderCandidateByAccount, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
@@ -1452,6 +1453,8 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountInsight: ['dashboard'],
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
+  dashboardCounterpartySearch: ['dashboard'],
+  dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
@@ -8134,6 +8137,12 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   } catch (error) {
     throw appError(error.message, 400, 'DASHBOARD_FILTER_INVALID');
   }
+  if (body.counterparty) {
+    const memberIds = await resolveUnifiedCounterpartyMemberIds(body.counterparty, { accessContext, force });
+    const mode = body.counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
+    if (mode === 'supplier') filters = { ...filters, supplierIds: [...new Set([...filters.supplierIds, ...memberIds])] };
+    else filters = { ...filters, accountIds: [...new Set([...filters.accountIds, ...memberIds])] };
+  }
   const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe, accountDescribe] = await Promise.all([
     salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
     salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
@@ -9522,11 +9531,70 @@ async function dashboardAccountInsight(body = {}, req = null, accessContext = nu
 
 async function dashboardAccountCreditDirectory(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardAccountCreditDirectory({
+  const directory = await loadDashboardAccountCreditDirectory({
     body,
     accessContext: context,
     force: requestForcesRefresh(body, req),
   });
+  if (!['both', 'buyer', 'supplier'].includes(body.direction) || !directory?.accounts?.length) return directory;
+
+  const financialFilters = {
+    portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
+    countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
+  };
+  const cached = await cachedSalesforceValue({
+    namespace: 'dashboard-unified-account-directory-financials-v1',
+    ttlSeconds: 60,
+    payload: {
+      dateWindows: body.dateWindows || [],
+      disputeOnly: body.disputeOnly === true,
+      filters: financialFilters,
+    },
+    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:line-item', 'salesforce:extra-cost'],
+    body,
+    req,
+    accessContext: context,
+    loader: async () => {
+      const scope = await loadDecisionDashboardScope({
+        dateWindows: body.dateWindows || [],
+        disputeOnly: body.disputeOnly === true,
+        counterpartyMode: 'buyer',
+        filters: financialFilters,
+      }, req, context);
+      return {
+        complete: scope.completeness.complete === true,
+        buyers: dashboardAccountRankings(scope.rows, 'account'),
+        suppliers: dashboardAccountRankings(scope.rows, 'supplier'),
+      };
+    },
+  });
+  const financials = cached.value;
+  const aggregate = (rankings, memberAccountIds) => {
+    const members = new Set((memberAccountIds || []).map((id) => String(id || '').slice(0, 15)));
+    const byCurrency = new Map();
+    for (const ranking of rankings || []) {
+      if (!members.has(String(ranking.accountId || '').slice(0, 15))) continue;
+      const currency = String(ranking.currency || 'USD').toUpperCase();
+      byCurrency.set(currency, (byCurrency.get(currency) || 0) + Number(ranking.grossProfit ?? ranking.netPnl ?? 0));
+    }
+    return [...byCurrency.entries()]
+      .map(([currency, grossProfit]) => ({ currency, grossProfit }))
+      .sort((left, right) => left.currency.localeCompare(right.currency));
+  };
+  return {
+    ...directory,
+    accounts: directory.accounts.map((account) => ({
+      ...account,
+      buyerGrossProfitByCurrency: financials.complete ? aggregate(financials.buyers, account.memberAccountIds) : [],
+      supplierGrossProfitByCurrency: financials.complete ? aggregate(financials.suppliers, account.memberAccountIds) : [],
+      financialsComplete: financials.complete,
+    })),
+    meta: {
+      ...directory.meta,
+      financialsComplete: financials.complete,
+      financialsCache: cached.cache?.status || null,
+    },
+  };
 }
 
 async function dashboardAccountCreditStatement(body = {}, req = null, accessContext = null) {
@@ -9536,6 +9604,16 @@ async function dashboardAccountCreditStatement(body = {}, req = null, accessCont
     accessContext: context,
     force: requestForcesRefresh(body, req),
   });
+}
+
+async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadDashboardCounterpartySearch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
+}
+
+async function dashboardAccountExposureBatch(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadDashboardAccountExposureBatch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
 }
 
 async function dashboardAccountInsightExport(body = {}, req, res, accessContext = null) {
@@ -18508,6 +18586,8 @@ const handlers = {
   dashboardAccountInsight,
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
+  dashboardCounterpartySearch,
+  dashboardAccountExposureBatch,
   dashboardAiSearch,
   dashboardAiSettingsGet,
   dashboardAiSettingsSave,
