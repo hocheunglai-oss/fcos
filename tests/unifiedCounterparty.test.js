@@ -6,7 +6,8 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   const source = await readFile(new URL('../api/_dashboardUnifiedCounterpartyService.js', import.meta.url), 'utf8');
   assert.match(source, /selectUltimateCreditGroup/);
   assert.match(source, /supplierStemIds/);
-  assert.match(source, /for \(const row of \[\.\.\.lines, \.\.\.extras\]\)/);
+  assert.match(source, /for \(const row of lines\)/);
+  assert.match(source, /for \(const row of extras\)/);
   assert.match(source, /Inactive_Suspended__c = false/);
   assert.match(source, /INTEROFFICE|interoffice/);
   assert.match(source, /ttlSeconds: 60/);
@@ -25,6 +26,8 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /type: field\.type \|\| null/);
   assert.match(source, /label: field\.label \|\| null/);
   assert.match(source, /salesforce-unified-counterparty-describe', version: '2'/);
+  assert.doesNotMatch(source, /SELECT Account__c accountId/);
+  assert.doesNotMatch(source, /fieldName} accountId/);
 });
 
 test('unified handlers and the both-side credit statement are registered as server reads', async () => {

@@ -74,14 +74,15 @@ async function roleCounts(accountIds, lineLookup, extraLookup, scopeWhere = '') 
   const childScope = scopeWhere ? ` AND ${scopeWhere.replaceAll('Delivery_Date__c', 'STEM__r.Delivery_Date__c').replaceAll('Expected_Delivery_Date__c', 'STEM__r.Expected_Delivery_Date__c').replaceAll('Port__c', 'STEM__r.Port__c')}` : '';
   const chunks = chunkIds(accountIds);
   const [buyerChunks, lineChunks, extraChunks] = await Promise.all([
-    Promise.all(chunks.map((part) => all(`SELECT Account__c accountId,COUNT(Id) count FROM STEM__c WHERE Account__c IN (${values(part)})${scopeWhere ? ` AND (${scopeWhere})` : ''} GROUP BY Account__c`))),
-    Promise.all(chunks.map((part) => all(`SELECT ${lineLookup.fieldName} accountId,STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false AND ${lineLookup.fieldName} IN (${values(part)})${childScope}`))),
-    Promise.all(chunks.map((part) => all(`SELECT ${extraLookup.fieldName} accountId,STEM__c FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND ${extraLookup.fieldName} IN (${values(part)})${childScope}`))),
+    Promise.all(chunks.map((part) => all(`SELECT Account__c,COUNT(Id) count FROM STEM__c WHERE Account__c IN (${values(part)})${scopeWhere ? ` AND (${scopeWhere})` : ''} GROUP BY Account__c`))),
+    Promise.all(chunks.map((part) => all(`SELECT ${lineLookup.fieldName},STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false AND ${lineLookup.fieldName} IN (${values(part)})${childScope}`))),
+    Promise.all(chunks.map((part) => all(`SELECT ${extraLookup.fieldName},STEM__c FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND ${extraLookup.fieldName} IN (${values(part)})${childScope}`))),
   ]);
   const buyers = buyerChunks.flat(); const lines = lineChunks.flat(); const extras = extraChunks.flat();
-  buyers.forEach((row) => { const current = output.get(key(row.accountId)); if (current) current.buyerStemCount = Number(row.count || 0); });
+  buyers.forEach((row) => { const current = output.get(key(row.Account__c)); if (current) current.buyerStemCount = Number(row.count || 0); });
   const supplierStemIds = new Map(accountIds.map((id) => [key(id), new Set()]));
-  for (const row of [...lines, ...extras]) supplierStemIds.get(key(row.accountId))?.add(key(row.STEM__c));
+  for (const row of lines) supplierStemIds.get(key(row[lineLookup.fieldName]))?.add(key(row.STEM__c));
+  for (const row of extras) supplierStemIds.get(key(row[extraLookup.fieldName]))?.add(key(row.STEM__c));
   for (const [accountId, stemIds] of supplierStemIds) output.get(accountId).supplierStemCount = stemIds.size;
   return output;
 }
