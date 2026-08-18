@@ -40,7 +40,12 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /CREDIT_EXPOSURE_DELIVERY_START/);
   assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
   assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
-  assert.match(source, /salesforce-dashboard-account-exposure-batch', version: '2'/);
+  assert.match(source, /salesforce-dashboard-account-exposure-batch', version: '3'/);
+  assert.match(source, /findDashboardUomField/);
+  assert.match(source, /resolveSupplierInvoiceIdentity/);
+  assert.match(source, /linkedSupplierIdsByInvoice/);
+  assert.match(source, /issuedWithoutLinkedChild/);
+  assert.match(source, /Math\.abs\(Number\(row\.estimate\.amount \|\| 0\)\) > 0\.005/);
   assert.doesNotMatch(source, /SELECT Id,Account__c,CurrencyIsoCode/);
 });
 

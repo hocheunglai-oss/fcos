@@ -2,7 +2,8 @@ import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
 import { CREDIT_EXPOSURE_DELIVERY_START, selectUltimateCreditGroup } from './_dashboardAccountCreditStatement.js';
-import { estimateUninvoicedSupplierChild } from './_dashboardSupplierCreditStatement.js';
+import { estimateUninvoicedSupplierChild, resolveSupplierInvoiceIdentity } from './_dashboardSupplierCreditStatement.js';
+import { findDashboardUomField } from './_dashboardVolume.js';
 
 const ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const MAX_IDENTITIES = 100;
@@ -350,29 +351,55 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   if (!stemMap.has('Account__c') || !stemMap.has('QLIK_Receivable_Balance__c') || !stemMap.has('Delivery_Date__c') || !stemMap.has('Expected_Delivery_Date__c') || !invoiceMap.has('Supplier__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
   const filters = normalizedFilters(body.filters); const scoped = await scopeWhere(filters, stemMap, force);
   const relatedStemScope = stemChildScope(scoped);
-  const lineSelect = ['STEM__c', lineLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => lineMap.has(field));
-  const extraSelect = ['STEM__c', extraLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Cost__c', 'Line_Total_Buy__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => extraMap.has(field));
+  const lineUom = findDashboardUomField([...lineMap.values()], 'lineItem');
+  const extraUom = findDashboardUomField([...extraMap.values()], 'lineItem');
+  const lineSelect = ['Id', 'STEM__c', lineLookup.fieldName, 'Supplier_Invoice__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', lineUom, 'CurrencyIsoCode'].filter((field) => field && lineMap.has(field));
+  const extraSelect = ['Id', 'STEM__c', extraLookup.fieldName, 'Supplier_Invoice__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Cost__c', 'Lumpsum_Cost__c', 'Line_Total_Buy__c', extraUom, 'CurrencyIsoCode'].filter((field) => field && extraMap.has(field));
   const buyerSelect = ['Id', 'Account__c', 'CurrencyIsoCode', 'QLIK_Receivable_Balance__c'].filter((field) => stemMap.has(field));
   const invoiceSelect = ['Id', 'STEM__c', 'Supplier__c', 'CurrencyIsoCode', 'Payable_Balance__c'].filter((field) => invoiceMap.has(field));
   const accountChunks = chunkIds(allIds);
   const buyerExposureScope = `((Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}))`;
-  const [buyerStemChunks, invoiceChunks, unbilledLineChunks, unbilledExtraChunks] = await Promise.all([
+  const [buyerStemChunks, directInvoiceChunks, lineChunks, extraChunks] = await Promise.all([
     Promise.all(accountChunks.map((part) => all(`SELECT ${buyerSelect.join(',')} FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0 AND ${buyerExposureScope}${scoped ? ` AND ${scoped}` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${lineLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${extraLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND ${lineLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND ${extraLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
   ]);
-  const buyerStems = buyerStemChunks.flat(); const invoices = invoiceChunks.flat();
-  const unbilledLines = unbilledLineChunks.flat(); const unbilledExtras = unbilledExtraChunks.flat();
+  const buyerStems = buyerStemChunks.flat(); const lines = lineChunks.flat(); const extras = extraChunks.flat();
+  const linkedSupplierIdsByInvoice = new Map();
+  for (const [rows, lookup] of [[lines, lineLookup], [extras, extraLookup]]) for (const row of rows) {
+    if (!row.Supplier_Invoice__c) continue;
+    const linked = linkedSupplierIdsByInvoice.get(key(row.Supplier_Invoice__c)) || new Set();
+    linked.add(row[lookup.fieldName]); linkedSupplierIdsByInvoice.set(key(row.Supplier_Invoice__c), linked);
+  }
+  const linkedInvoiceIds = [...linkedSupplierIdsByInvoice.keys()];
+  const linkedInvoiceChunks = linkedInvoiceIds.length
+    ? (await Promise.all(chunkIds(linkedInvoiceIds).map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Id IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`)))).flat()
+    : [];
+  const invoicesById = new Map([...directInvoiceChunks.flat(), ...linkedInvoiceChunks].map((row) => [key(row.Id), row]));
+  const conflictingOwnerIds = new Set();
+  const invoices = [];
+  for (const invoice of invoicesById.values()) {
+    const linkedSupplierAccountIds = [...(linkedSupplierIdsByInvoice.get(key(invoice.Id)) || [])];
+    const identity = resolveSupplierInvoiceIdentity({ invoice, linkedSupplierAccountIds, selectedAccountIds: allIds });
+    if (identity.status === 'included') invoices.push({ ...invoice, _supplierAccountId: identity.supplierAccountId });
+    else if (identity.status === 'conflict') for (const accountId of [invoice.Supplier__c, ...linkedSupplierAccountIds]) if (allIds.some((candidate) => key(candidate) === key(accountId))) conflictingOwnerIds.add(key(accountId));
+  }
   const bucket = (rows, amountField, idsFor) => { const result = new Map(); for (const row of rows) for (const owner of idsFor(row)) { const entry = result.get(owner) || new Map(); const code = currency(row.CurrencyIsoCode); const current = entry.get(code) || { currency: code, exposure: 0, openStemIds: new Set() }; current.exposure += Number(row[amountField] || 0); if (row.STEM__c || row.Id) current.openStemIds.add(row.STEM__c || row.Id); entry.set(code, current); result.set(owner, entry); } return result; };
   const ownerKeys = (row, field) => identities.filter((identity) => identity.memberAccountIds.some((id) => key(id) === key(row[field]))).map((identity) => identity.entityKey);
   const buyer = bucket(buyerStems, 'QLIK_Receivable_Balance__c', (row) => ownerKeys(row, 'Account__c'));
-  const supplier = bucket(invoices, 'Payable_Balance__c', (row) => ownerKeys(row, 'Supplier__c'));
+  const supplier = bucket(invoices, 'Payable_Balance__c', (row) => ownerKeys(row, '_supplierAccountId'));
+  const issuedWithoutLinkedChild = new Set(invoices
+    .filter((invoice) => ![...(linkedSupplierIdsByInvoice.get(key(invoice.Id)) || [])].some((accountId) => key(accountId) === key(invoice._supplierAccountId)))
+    .map((invoice) => `${key(invoice.STEM__c)}:${key(invoice._supplierAccountId)}`));
   const uninvoicedEstimates = [
-    ...unbilledLines.map((row) => ({ ownerId: row[lineLookup.fieldName], stemId: row.STEM__c, estimate: estimateUninvoicedSupplierChild({ ...row, _uom: row.UOM__c }, 'line_item') })),
-    ...unbilledExtras.map((row) => ({ ownerId: row[extraLookup.fieldName], stemId: row.STEM__c, estimate: estimateUninvoicedSupplierChild({ ...row, _uom: row.UOM__c }, 'extra_cost') })),
-  ];
-  const incompleteSuppliers = new Set(uninvoicedEstimates.filter((row) => !row.estimate.complete).flatMap((row) => identities.filter((identity) => identity.memberAccountIds.some((member) => key(member) === key(row.ownerId))).map((identity) => identity.entityKey)));
+    ...lines.filter((row) => !row.Supplier_Invoice__c).map((row) => ({ ownerId: row[lineLookup.fieldName], stemId: row.STEM__c, estimate: estimateUninvoicedSupplierChild({ ...row, _uom: lineUom ? row[lineUom] : null, _ambiguousInvoiceLinkage: issuedWithoutLinkedChild.has(`${key(row.STEM__c)}:${key(row[lineLookup.fieldName])}`) }, 'line_item') })),
+    ...extras.filter((row) => !row.Supplier_Invoice__c).map((row) => ({ ownerId: row[extraLookup.fieldName], stemId: row.STEM__c, estimate: estimateUninvoicedSupplierChild({ ...row, _uom: extraUom ? row[extraUom] : null, _ambiguousInvoiceLinkage: issuedWithoutLinkedChild.has(`${key(row.STEM__c)}:${key(row[extraLookup.fieldName])}`) }, 'extra_cost') })),
+  ].filter((row) => !row.estimate.complete || Math.abs(Number(row.estimate.amount || 0)) > 0.005);
+  const incompleteSuppliers = new Set([
+    ...identities.filter((identity) => identity.memberAccountIds.some((member) => conflictingOwnerIds.has(key(member)))).map((identity) => identity.entityKey),
+    ...uninvoicedEstimates.filter((row) => !row.estimate.complete).flatMap((row) => identities.filter((identity) => identity.memberAccountIds.some((member) => key(member) === key(row.ownerId))).map((identity) => identity.entityKey)),
+  ]);
   const exposures = identities.map((identity) => {
     const buyerRows = [...(buyer.get(identity.entityKey)?.values() || [])].map((row) => ({ currency: row.currency, exposure: row.exposure, openStemCount: row.openStemIds.size }));
     const supplierComplete = !incompleteSuppliers.has(identity.entityKey);
@@ -393,7 +420,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
 export async function loadDashboardAccountExposureBatch({ body = {}, accessContext, force = false }) {
   const entities = (Array.isArray(body.entities) ? body.entities : []).map((row) => ({ entityType: row?.entityType, entityId: row?.entityId }));
   const cached = await getOrLoadRuntimeCache({
-    namespace: 'salesforce-dashboard-account-exposure-batch', version: '2', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    namespace: 'salesforce-dashboard-account-exposure-batch', version: '3', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { entities, filters: normalizedFilters(body.filters) }, ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:supplier-invoice', 'salesforce:line-item', 'salesforce:extra-cost', 'salesforce:account-credit'], force,
     loader: () => loadDashboardAccountExposureBatchUncached({ body, accessContext, force }),
