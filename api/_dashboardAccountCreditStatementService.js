@@ -14,6 +14,10 @@ import {
   resolveCreditSnapshotCandidate,
   selectUltimateCreditGroup,
 } from './_dashboardAccountCreditStatement.js';
+import {
+  loadDashboardSupplierCreditDirectory,
+  loadDashboardSupplierCreditStatement,
+} from './_dashboardSupplierCreditStatementService.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -202,6 +206,7 @@ async function loadDirectoryAccountChains(accounts, accountFields) {
 }
 
 export async function loadDashboardAccountCreditDirectory({ body = {}, accessContext, force = false }) {
+  if (body.role === 'supplier') return loadDashboardSupplierCreditDirectory({ body, accessContext, force });
   const startedAt = Date.now();
   const query = text(body.query).slice(0, 100);
   const limit = Math.min(Math.max(Number(body.limit) || 25, 1), 100);
@@ -784,6 +789,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
 }
 
 export async function loadDashboardAccountCreditStatement({ body = {}, accessContext, force = false }) {
+  if (body.side === 'supplier') return loadDashboardSupplierCreditStatement({ body, accessContext, force });
   const accountId = salesforceId(body.accountId);
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);

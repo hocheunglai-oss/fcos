@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.180',
+    releasedAt: '2026-08-18',
+    title: 'Add Supplier payable statements',
+    changes: [
+      'Adds exact-Account Supplier Credit Statements with issued payable balances, conservative uninvoiced estimates, currency-safe KPIs, and descending payment forecasts.',
+      'Adds optional active-GROUP scope, invoice and supplier-child evidence, selectable copy details, and fail-closed identity or completeness safeguards.',
+      'Adds a server-paginated Supplier statements directory and makes the Accounts tab inherit Dashboard Company/GROUP and Port/COUNTRY filters without a second search box.',
+    ],
+  },
+  {
     version: '2.0.179',
     releasedAt: '2026-08-18',
     title: 'Split FCOS Updates queue from preparation',

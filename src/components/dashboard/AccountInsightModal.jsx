@@ -18,6 +18,7 @@ const PERIODS = [
 
 const ROLE_LABELS = { buyer: 'Buyer', supplier: 'Supplier', group: 'GROUP' };
 const AccountCreditStatement = lazy(() => import('@/components/dashboard/AccountCreditStatement'));
+const SupplierCreditStatement = lazy(() => import('@/components/dashboard/SupplierCreditStatement'));
 
 function number(value) {
   if (value == null || value === '') return null;
@@ -291,7 +292,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                   <TabsTrigger value="payments">Payments</TabsTrigger>
                   <TabsTrigger value="risk">Risk & Workflow</TabsTrigger>
                   <TabsTrigger value="stems">STEMs</TabsTrigger>
-                  {(data?.activeRole || role) !== 'supplier' ? <TabsTrigger value="credit">Credit Statement</TabsTrigger> : null}
+                  <TabsTrigger value="credit">{(data?.activeRole || role) === 'supplier' ? 'Supplier Credit Statement' : 'Credit Statement'}</TabsTrigger>
                   {data?.activeRole === 'group' ? <TabsTrigger value="children">Children</TabsTrigger> : null}
                 </TabsList>
               </div>
@@ -299,7 +300,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
               <div className="mx-auto max-w-[1440px] p-5 sm:p-6">
                 {data?.warnings?.length && activeTab !== 'credit' ? <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data warnings</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{data.warnings.slice(0, 6).map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}
 
-                <TabsContent value="credit" className="mt-0"><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}><AccountCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} onStemClick={setSelectedStemId} /></Suspense></TabsContent>
+                <TabsContent value="credit" className="mt-0"><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}>{(data?.activeRole || role) === 'supplier' ? <SupplierCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} filters={accountWide ? {} : dashboardScope?.filters} onStemClick={setSelectedStemId} /> : <AccountCreditStatement accountId={account?.accountId} active={activeTab === 'credit'} onStemClick={setSelectedStemId} />}</Suspense></TabsContent>
 
                 <TabsContent value="overview" className="mt-0 space-y-5">
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">

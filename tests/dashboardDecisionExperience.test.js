@@ -92,7 +92,8 @@ test('Dashboard reuses complete rankings without attention or explanation panels
   assert.match(account, /section: activeTab/);
   assert.match(account, /Dashboard scope/);
   assert.doesNotMatch(account, /Explain these figures|Live calculation evidence|Calculation evidence/);
-  assert.match(directory, /One searchable table/);
+  assert.match(directory, /inherited from the Dashboard filters above/);
+  assert.doesNotMatch(directory, /Search Accounts|placeholder="Search Account/);
   assert.match(directory, /directoryRankings\?\.buyers/);
   assert.match(api, /directoryRankings: \{ buyers: accountDirectoryRankings, suppliers: supplierDirectoryRankings \}/);
 });

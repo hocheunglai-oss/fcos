@@ -91,12 +91,14 @@ export default function DashboardSettings() {
     if (filters.disputeOnly) params.set('disputeOnly', '1');
     if (filterPayload.filters.portIds.length) params.set('portIds', filterPayload.filters.portIds.join(','));
     if (filterPayload.filters.countryCodes.length) params.set('countryCodes', filterPayload.filters.countryCodes.join(','));
+    if (filterPayload.filters.accountIds.length) params.set('accountIds', filterPayload.filters.accountIds.join(','));
+    if (filterPayload.filters.supplierIds.length) params.set('supplierIds', filterPayload.filters.supplierIds.join(','));
     if (filters.company) params.set('company', filters.company);
     if (filters.group) params.set('group', filters.group);
     if (filters.port) params.set('port', filters.port);
     if (filters.country) params.set('country', filters.country);
     navigate(`/accounts/${encodeURIComponent(account.accountId)}?${params.toString()}`);
-  }, [filterPayload.filters.countryCodes, filterPayload.filters.portIds, filters.company, filters.country, filters.disputeOnly, filters.group, filters.port, filters.selectedMonths, filters.selectedYears, navigate]);
+  }, [filterPayload.filters.accountIds, filterPayload.filters.countryCodes, filterPayload.filters.portIds, filterPayload.filters.supplierIds, filters.company, filters.country, filters.disputeOnly, filters.group, filters.port, filters.selectedMonths, filters.selectedYears, navigate]);
   const refresh = () => { if (aiSearchActive) skipNextAutoLoadRef.current = true; setAiSearchActive(false); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
 
   return <main className={`mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'max-w-none' : 'max-w-[1600px]'}`}><PageHeader icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Salesforce" /> : <span>Loading current decision data</span>}{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />

@@ -20,6 +20,8 @@ export default function AccountInsight() {
     mode: searchParams.get('scope') === 'account_wide' ? 'account_wide' : 'dashboard',
     disputeOnly: searchParams.get('disputeOnly') === '1',
     filters: {
+      accountIds: String(searchParams.get('accountIds') || '').split(',').filter(Boolean),
+      supplierIds: String(searchParams.get('supplierIds') || '').split(',').filter(Boolean),
       portIds: String(searchParams.get('portIds') || '').split(',').filter(Boolean),
       countryCodes: String(searchParams.get('countryCodes') || '').split(',').filter(Boolean),
     },
