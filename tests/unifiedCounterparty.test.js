@@ -28,6 +28,9 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /salesforce-unified-counterparty-describe', version: '2'/);
   assert.doesNotMatch(source, /SELECT Account__c accountId/);
   assert.doesNotMatch(source, /fieldName} accountId/);
+  assert.match(source, /SELECT Account__c,COUNT\(Id\) FROM STEM__c/);
+  assert.match(source, /row\.expr0/);
+  assert.doesNotMatch(source, /COUNT\(Id\) count/);
 });
 
 test('unified handlers and the both-side credit statement are registered as server reads', async () => {
