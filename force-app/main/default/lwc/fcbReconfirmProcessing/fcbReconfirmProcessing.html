@@ -1,0 +1,99 @@
+<template>
+    <lightning-card title="Reconfirm" icon-name="custom:custom18">
+        <template if:true={actionExecuting}>
+            <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+        </template>
+        <template if:true={showStemSection}>
+            <template for:each={stems} for:item="stem">
+                <div key={stem.Id} class="slds-m-around_small">
+                    <lightning-textarea type="text" variant="label-stacked" value={stem.Message__c} 
+                        data-id={stem.Id} onchange={handleChangeMessage} disabled={disabledMessage}>
+                    </lightning-textarea>
+                </div>
+            </template>
+            <div class="slds-grid slds-grid_align-center slds-m-vertical_medium">
+                <template if:true={disabledMessage}>
+                    <lightning-button onclick={editMessages} variant="brand" label="Edit">
+                    </lightning-button>
+                </template>
+                <template if:false={disabledMessage}>
+                    <lightning-button onclick={saveMessages} variant="brand" label="Save">
+                    </lightning-button>
+            
+                    <lightning-button onclick={cancel} variant="brand" label="Cancel" class="slds-m-left_small">
+                    </lightning-button>
+                </template>
+            </div>
+            <hr style="margin: 0;" />
+        </template>
+        
+        <div class="slds-m-around_medium">
+            <lightning-datatable
+                key-field="key"
+                data={supplierCIArecords}
+                columns={columns}
+                onsave={handleSave}
+                draft-values={draftValues}
+            >
+            </lightning-datatable>
+        </div>
+        <template if:true={showVariableChargeSection}>
+            <hr style="margin: 0;" />
+            <section class="slds-m-around_medium" aria-labelledby="final-supplier-charge-heading">
+                <div class="slds-grid slds-wrap slds-grid_vertical-align-center slds-grid_align-spread slds-m-bottom_small">
+                    <div>
+                        <h3 id="final-supplier-charge-heading" class="slds-text-heading_small">Final Supplier Charges Verification</h3>
+                        <p class="slds-text-body_small slds-text-color_weak">
+                            Select non-agent suppliers whose final charges must be verified by their Supplier Trader before Supplier Invoice creation. Is Agent suppliers are always included.
+                        </p>
+                    </div>
+                    <lightning-button variant="brand" label="Save supplier requirements"
+                        onclick={saveVariableChargeRequirements} disabled={variableChargeBusy}>
+                    </lightning-button>
+                </div>
+                <template if:true={variableChargeBusy}>
+                    <lightning-spinner size="small" alternative-text="Checking Variable Charges"></lightning-spinner>
+                </template>
+                <div class="slds-scrollable_x">
+                    <table class="slds-table slds-table_cell-buffer slds-table_bordered" aria-label="Final Supplier Charges Verification">
+                        <thead>
+                            <tr class="slds-line-height_reset">
+                                <th scope="col">STEM</th>
+                                <th scope="col">Supplier</th>
+                                <th scope="col">Supplier Trader</th>
+                                <th scope="col">Require verification</th>
+                                <th scope="col">Source</th>
+                                <th scope="col">Stage</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template for:each={variableChargeRows} for:item="row">
+                                <tr key={row.key}>
+                                    <td>{row.stemName}</td>
+                                    <td>
+                                        <div>{row.supplierName}</div>
+                                        <div class="slds-text-body_small slds-text-color_weak">{row.lineItemCount} product · {row.extraCostCount} extra cost</div>
+                                    </td>
+                                    <td>
+                                        <div class={row.assignmentClass}>{row.supplierTraderName}</div>
+                                        <template if:true={row.assignmentMessage}>
+                                            <div class="slds-text-body_small slds-text-color_error">{row.assignmentMessage}</div>
+                                        </template>
+                                    </td>
+                                    <td>
+                                        <lightning-input type="checkbox" variant="label-hidden" label="Require verification"
+                                            data-key={row.key} checked={row.effectiveRequired}
+                                            disabled={row.requirementLocked} onchange={handleVariableChargeRequirement}>
+                                        </lightning-input>
+                                    </td>
+                                    <td>{row.requirementSource}</td>
+                                    <td>{row.supplierStatus}</td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </template>
+    </lightning-card>
+</template>

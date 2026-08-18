@@ -15,7 +15,7 @@ trigger StemLineItemTrigger on STEM_Line_Item__c (before insert, before update, 
         }
 
         if((Trigger.isInsert || Trigger.isUpdate) && Trigger.IsAfter) {
-            ShipAgentInvoiceReadinessService.invalidateForLineItemChanges(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
+            VariableChargeInvoiceReadinessService.invalidateForLineItemChanges(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
             if(Trigger.isInsert){
                 StemLineItemTriggerHandler.createNomination(Trigger.newMap);
             }
@@ -51,7 +51,7 @@ trigger StemLineItemTrigger on STEM_Line_Item__c (before insert, before update, 
             StemLineItemTriggerHandler.deprecateNomination(Trigger.oldMap);
         }
         if(Trigger.isDelete && Trigger.isAfter){
-            ShipAgentInvoiceReadinessService.invalidateForLineItemChanges(null, Trigger.oldMap);
+            VariableChargeInvoiceReadinessService.invalidateForLineItemChanges(null, Trigger.oldMap);
             StemLineItemTriggerHandler.updateUninvoicedPayments(Trigger.new, Trigger.oldMap, Trigger.operationType);
             StemLineItemTriggerHandler.deleteDepositPayments(Trigger.old);
         }

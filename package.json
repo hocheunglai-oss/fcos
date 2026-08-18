@@ -17,6 +17,7 @@
     "reconcile:email-router": "node scripts/reconcile-email-router.mjs",
     "migrate:account-managers": "node --env-file=.env.local scripts/migrate-account-managers.mjs",
     "migrate:special-term-clauses": "node scripts/migrate-special-term-clause-bank.mjs",
+    "migrate:variable-charges": "node scripts/backfill-variable-charges.mjs",
     "salesforce:deploy:all": "node scripts/deploy-salesforce-environments.mjs",
     "salesforce:validate:all": "node scripts/deploy-salesforce-environments.mjs --check-only",
     "salesforce:mirror:verify": "node scripts/sync-salesforce-shared-repository.mjs --check",

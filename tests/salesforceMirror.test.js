@@ -12,6 +12,10 @@ test('Salesforce mirror inventory owns the complete authoritative metadata tree'
   assert.ok(inventory.files.includes('classes/ShipAgentInvoiceReadinessServiceTest.cls'));
   assert.ok(inventory.files.includes('objects/STEM__c/fields/Ship_Agent_Charges_Confirmed__c.field-meta.xml'));
   assert.ok(inventory.files.includes('permissionsets/FCOS_Ship_Agent_Integration.permissionset-meta.xml'));
+  assert.ok(inventory.files.includes('classes/VariableChargeInvoiceReadinessService.cls'));
+  assert.ok(inventory.files.includes('objects/Account/fields/Is_Agent__c.field-meta.xml'));
+  assert.ok(inventory.files.includes('objects/STEM__c/fields/Variable_Charges_Confirmed__c.field-meta.xml'));
+  assert.ok(inventory.files.includes('permissionsets/FCOS_Variable_Charges_Integration.permissionset-meta.xml'));
   assert.ok(inventory.files.includes('triggers/InvoiceTrigger.trigger'));
 });
 

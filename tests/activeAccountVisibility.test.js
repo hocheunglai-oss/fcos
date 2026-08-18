@@ -13,7 +13,7 @@ test('Account discovery surfaces require active Salesforce Accounts', async () =
     source('api/_dashboardAccountInsightService.js'),
     source('api/_unofficialCompensationService.js'),
     source('api/_specialTerms.js'),
-    source('api/_shipAgentCharges.js'),
+    source('api/_variableCharges.js'),
   ]);
 
   assert.match(handlers, /dashboard-filter-options-v2/);

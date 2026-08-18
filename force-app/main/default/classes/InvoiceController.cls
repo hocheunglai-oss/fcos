@@ -1,7 +1,13 @@
 public class InvoiceController {
     @AuraEnabled(cacheable=false)
-    public static ShipAgentInvoiceReadinessService.Readiness getShipAgentInvoiceReadiness(String stemId) {
-        return ShipAgentInvoiceReadinessService.getReadiness(stemId);
+    public static VariableChargeInvoiceReadinessService.Readiness getVariableChargeInvoiceReadiness(String stemId) {
+        return VariableChargeInvoiceReadinessService.getBuyerReadiness(stemId);
+    }
+
+    // Compatibility wrapper for the previous production LWC during the controlled cutover.
+    @AuraEnabled(cacheable=false)
+    public static VariableChargeInvoiceReadinessService.Readiness getShipAgentInvoiceReadiness(String stemId) {
+        return getVariableChargeInvoiceReadiness(stemId);
     }
 
     @AuraEnabled
@@ -45,7 +51,7 @@ public class InvoiceController {
     @AuraEnabled
     public static Invoice__c createInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate){
         if (createProforma != true && isCreditNote != true) {
-            ShipAgentInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(Id.valueOf(stemId));
+            VariableChargeInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(Id.valueOf(stemId));
         }
            STEM__c stem = [SELECT Id, KeyStem__c, Invoice_Date__c, Total__c, Mailing_Requirement__c, Acknowledge_Receipt__c,
                         (SELECT Id, Refcode_Index__c FROM Invoices__r ORDER By Refcode_Index__c)
@@ -152,9 +158,14 @@ public class InvoiceController {
                 for (User user : [SELECT Id, Name FROM User WHERE IsActive = true]) {
                     userIdMap.put(user.Name, user.Id);
                 }
-                Nomination__c confirmation = [SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c
+                List<Nomination__c> confirmations = [SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c
                                        FROM Nomination__c WHERE STEM__c =: stem.Id
-                                       AND Deprecated__c = false AND RecordTypeId =: FCBStatic.BUYER_NOMINATION_RT_ID];
+                                       AND Deprecated__c = false AND RecordTypeId =: FCBStatic.BUYER_NOMINATION_RT_ID
+                                       ORDER BY LastModifiedDate DESC LIMIT 1];
+                Id taskOwnerId;
+                if (!confirmations.isEmpty()) taskOwnerId = userIdMap.get(confirmations[0].Buyer_Supplier_Trader__c);
+                if (taskOwnerId == null) taskOwnerId = runningInASandbox ? userIdMap.get('Production Support') : userIdMap.get('Accounts');
+                if (taskOwnerId == null) taskOwnerId = UserInfo.getUserId();
                 String description = stem.Mailing_Requirement__c.contains('-1a')
                     ? 'For this Buyer, we require their acknowledgement by Email'
                     : stem.Mailing_Requirement__c.contains('-1b')
@@ -169,7 +180,7 @@ public class InvoiceController {
                               ActivityDate = invoice.Invoice_Date__c,
                              ReminderDateTime = Date.today(),
                              Description = description,
-                             OwnerId = runningInASandbox ? userIdMap.get('Production Support') : userIdMap.get('Accounts')
+                             OwnerId = taskOwnerId
                 );
                 insert task;
             }
@@ -188,7 +199,7 @@ public class InvoiceController {
 
     @AuraEnabled
     public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma){
-        ShipAgentInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
+        VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         ContentVersion contentVersion = new ContentVersion();
         contentVersion.PathOnClient = '/' + invoiceVersionName + '.pdf';
         contentVersion.Title = invoiceVersionName + '.pdf';

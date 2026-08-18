@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Variable_Charges_Confirmed__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>Set only after every required supplier stage and the final Buyer Trader stage have been verified in FCOS.</description>
+    <label>Variable Charges Confirmed</label>
+    <trackTrending>false</trackTrending>
+    <type>Checkbox</type>
+</CustomField>

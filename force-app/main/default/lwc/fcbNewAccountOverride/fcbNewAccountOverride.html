@@ -1,0 +1,226 @@
+<template>
+    <div class="slds-modal__container">
+        <div class="slds-modal__header">
+            <h2 class="slds-text-heading--medium">New Account</h2>
+        </div>
+        <div class="slds-modal__content slds-p-around--medium">
+            <lightning-record-edit-form object-api-name="Account" onsubmit={handleSubmit} onsuccess={handleSuccess} onerror={handleError} onchange={handleChange}>
+                <div class="slds-grid">
+                    <div class="slds-col">
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Name" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="RecordTypeId" variant="label-stacked" disabled="true" value={recordType}></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Is_Agent__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Is_Broker__c" variant="label-stacked" value={isBroker} disabled={isDisabledBroker}></lightning-input-field>
+                        </div>
+                        <template if:true={isBroker}>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Hidden_Broker__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Email_Invoice__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Invoice_Format__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Email_Nomination__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Nomination_Format__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Email_Confirmation__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                            <div class="slds-p-horizontal_x-small">
+                                <lightning-input-field field-name="Confirmation_Format__c" variant="label-stacked"></lightning-input-field>
+                            </div>
+                        </template>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Total_Quoted_Exposure_c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Type" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Website" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Description" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Company_Code__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Website" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="ParentId" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Phone" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Website" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Industry" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Main_Office__c" value="HK" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="NumberOfEmployees" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Imported_Particulars__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Imported_Address__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="PDDC__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                    </div>
+                    <div class="slds-col">
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Category__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Individual__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Special__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Group__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Special_Group__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Used_Customer__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="CL_Used_Group__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Group_Name__c" disabled="true" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Default_Pricebook__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Inactive_Suspended__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Entity_Selection_Notice__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Banking_Preference__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Chop_Type__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Buyer_Payment_Term__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Supplier_Payment_Term__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Email_Address__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input-field field-name="Bank_Details__c" variant="label-stacked"></lightning-input-field>
+                        </div>
+                    </div>
+                </div>
+                <div class="slds-grid slds-grid_align-spread">
+                    <div class="slds-col">
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input type="checkbox" name="disableAddresses"
+                                onchange={copyShippingAddress} label="Same as Shipping Address" class="disableBilling"></lightning-input>
+                            <lightning-input-address
+                                    class="billingAddress"
+                                    address-label="Billing Address"
+                                    street-label="Street"
+                                    city-label="City"
+                                    country-label="Country"
+                                    province-label="Province"
+                                    postal-code-label="PostalCode"
+                                    street={billingAddress.street}
+                                    city={billingAddress.city}
+                                    country={billingAddress.country}
+                                    province={billingAddress.province}
+                                    postal-code={billingAddress.postalCode}
+                                    country-options={getCountryOptions}
+                                    province-options={getBillingProvinceOptions}
+                                    disabled={billingDisabled}
+                                    onchange={handleBillingAddressChange}
+                                    show-address-lookup>
+                            </lightning-input-address>
+                            <!-- <template if:true={renderBillingAddress}>
+                                <lightning-input-field field-name="BillingAddress" variant="label-stacked"
+                                disabled={disabledBillingAddress} class="billingAddress"></lightning-input-field>    
+                            </template> -->
+                            
+                        </div>
+                    </div>
+                    <div class="slds-col">
+                        <div class="slds-p-horizontal_x-small">
+                            <lightning-input type="checkbox" name="disableAddresses"
+                                onchange={copyBillingAddress} label="Same as Billing Address" class="disableShipping"></lightning-input>
+                            <lightning-input-address
+                                class="shippingAddress"
+                                address-label="Shipping Address"
+                                street-label="Street"
+                                city-label="City"
+                                country-label="Country"
+                                province-label="Province"
+                                postal-code-label="PostalCode"
+                                street={shippingAddress.street}
+                                city={shippingAddress.city}
+                                country={shippingAddress.country}
+                                province={shippingAddress.province}
+                                postal-code={shippingAddress.postalCode}
+                                country-options={getCountryOptions}
+                                province-options={getShippingProvinceOptions}
+                                disabled={shippingDisabled}
+                                onchange={handleShippingAddressChange}
+                                show-address-lookup>
+                            </lightning-input-address>
+                            <!-- <template if:true={renderShippingAddress}>
+                                <lightning-input-field field-name="ShippingAddress" variant="label-stacked"
+                                    disabled={disabledShippingAddress} class="shippingAddress"></lightning-input-field>    
+                            </template> -->
+                            
+                        </div>
+                    </div>
+                </div>
+                <lightning-button type="submit" class="slds-hidden"></lightning-button>
+            </lightning-record-edit-form>
+        </div>    
+        <div class="slds-modal__footer">
+            <div class="slds-grid slds-gutters slds-grid_align-end">
+                <div class="slds-col">
+                    <lightning-button variant="neutral" data-name="cancelId" label="Cancel" onclick={closeModal}></lightning-button>
+                </div>
+                <div class="slds-col">
+                    <lightning-button data-name="saveAndNewId" variant="neutral" label="Save &amp; New"
+                    onclick={saveRecord}></lightning-button>
+                </div>
+                <div class="slds-col">
+                    <lightning-button data-name="saveId" variant="brand" label="Save"
+                    onclick={saveRecord}></lightning-button>
+                </div>
+            </div>
+        </div>
+    </div>  
+</template>

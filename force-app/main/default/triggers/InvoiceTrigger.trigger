@@ -2,9 +2,9 @@ trigger InvoiceTrigger on Invoice__c (before insert, before update, after update
     if(!ContextManager.avoidInvoiceFiring){
         if(Trigger.isBefore && (Trigger.isInsert || Trigger.isUpdate)){
             if (Trigger.isInsert) {
-                ShipAgentInvoiceReadinessService.assertInvoiceRecordsAllowed(Trigger.new);
+                VariableChargeInvoiceReadinessService.assertInvoiceRecordsAllowed(Trigger.new);
             } else {
-                ShipAgentInvoiceReadinessService.assertInvoiceTransitionsAllowed(Trigger.newMap, Trigger.oldMap);
+                VariableChargeInvoiceReadinessService.assertInvoiceTransitionsAllowed(Trigger.newMap, Trigger.oldMap);
             }
         }
         if(Trigger.isUpdate && Trigger.isAfter){

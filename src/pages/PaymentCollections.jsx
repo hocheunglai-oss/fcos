@@ -25,13 +25,13 @@ import StemDetailLink from '@/components/common/StemDetailLink';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
-import ShipAgentCharges from '@/components/payments/ShipAgentCharges';
+import VariableCharges from '@/components/payments/VariableCharges';
 
 const TABS = [
   { id: 'collections', label: 'Collection Queue', icon: ListChecks, moduleId: 'buyer_invoices' },
   { id: 'incoming', label: 'Incoming Payments', icon: Banknote, moduleId: 'incoming_payments' },
   { id: 'reconciliation', label: 'Reconciliation Exceptions', icon: Scale, moduleIds: ['buyer_invoices', 'incoming_payments'] },
-  { id: 'ship-agent-charges', label: 'Ship-Agent Charges', icon: ClipboardCheck, moduleIds: ['buyer_invoices', 'incoming_payments'] },
+  { id: 'variable-charges', label: 'Variable Charges', icon: ClipboardCheck, moduleIds: ['buyer_invoices', 'incoming_payments'] },
 ];
 
 function money(value) {
@@ -79,7 +79,8 @@ export default function PaymentCollections() {
   const availableTabs = useMemo(() => TABS.filter((tab) => (
     tab.moduleIds ? tab.moduleIds.some((moduleId) => hasModuleAccess(moduleId)) : hasModuleAccess(tab.moduleId)
   )), [hasModuleAccess]);
-  const requestedTab = searchParams.get('tab');
+  const requestedTabValue = searchParams.get('tab');
+  const requestedTab = requestedTabValue === 'ship-agent-charges' ? 'variable-charges' : requestedTabValue;
   const defaultTab = hasModuleAccess('buyer_invoices') ? 'collections' : 'incoming';
   const activeTab = availableTabs.some((tab) => tab.id === requestedTab) ? requestedTab : defaultTab;
   const activeMethodology = PAYMENT_COLLECTIONS_METHODOLOGIES[activeTab] || PAYMENT_COLLECTIONS_METHODOLOGIES.collections;
@@ -93,6 +94,13 @@ export default function PaymentCollections() {
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [overrideError, setOverrideError] = useState('');
   const [collectionDataRefreshToken, setCollectionDataRefreshToken] = useState(0);
+
+  useEffect(() => {
+    if (requestedTabValue !== 'ship-agent-charges') return;
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'variable-charges');
+    setSearchParams(next, { replace: true });
+  }, [requestedTabValue, searchParams, setSearchParams]);
 
   const changeTab = (tab) => {
     const next = new URLSearchParams(searchParams);
@@ -202,7 +210,7 @@ export default function PaymentCollections() {
 
       {activeTab === 'collections' && <BuyerInvoices defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
       {activeTab === 'incoming' && <IncomingPayments reconciliationItems={reconciliation?.items || []} />}
-      {activeTab === 'ship-agent-charges' && <ShipAgentCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} />}
+      {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} />}
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">
           <div className="flex flex-wrap items-start justify-between gap-3">

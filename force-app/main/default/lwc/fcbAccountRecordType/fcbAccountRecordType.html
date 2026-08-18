@@ -1,0 +1,122 @@
+<template>
+    <lightning-card title="Record Type" icon-name="custom:custom18">
+        <template if:true={actionExecuting}>
+            <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+        </template>
+        <div class="slds-grid slds-gutters">
+            <div class="slds-col slds-size_1-of-4">
+                <div class="slds-p-horizontal_x-small">
+                    <lightning-combobox name="recordType" label="Record Type" placeholder="Select Record Type"
+                        value={recordTypeId} options={recordTypeIds} onchange={handleChangeRecordType}>
+                    </lightning-combobox>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-4">
+                <div class="slds-p-horizontal_x-small">
+                    <lightning-input name="isAgent" type="checkbox" label="Is Agent" variant="label-stacked"
+                        checked={isAgent} onchange={handleChangeRecordType}>
+                    </lightning-input>
+                </div>
+            </div>
+            <template if:false={isBrokerRecordType}>
+                <div class="slds-col slds-size_1-of-4">
+                    <div class="slds-p-horizontal_x-small">
+                        <lightning-input name="isBroker" type="checkbox" label="Is Broker" variant="label-stacked"
+                            checked={isBroker} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                </div>
+            </template>
+            <template if:true={isBroker}>
+                <div class="slds-col slds-size_1-of-4">
+                    <div class="slds-p-horizontal_x-small">
+                        <lightning-input name="hiddenBroker" type="checkbox" label="Hidden Broker Individual" variant="label-stacked"
+                            checked={hiddenBroker} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                </div>
+                <div class="slds-col slds-size_1-of-4">
+                    <div class="slds-p-horizontal_x-small">
+                        <lightning-input name="hiddenBrokerCompany" type="checkbox" label="Hidden Broker Company" variant="label-stacked"
+                            checked={hiddenBrokerCompany} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div>
+            <lightning-input name="invoicingRequirement" type="text" label="Invoicing Requirement" variant="label-stacked"
+                            value={invoicingRequirement} onchange={handleChangeInvoicingRequirement}>
+            </lightning-input>
+        </div>
+        <template if:true={isBroker}>
+            <div class="slds-grid slds-gutters"> 
+                <div class="slds-col slds-size_1-of-4">
+                    <div class="slds-p-horizontal_x-small">
+                        <lightning-radio-group 
+                            label="Confirmation Format"
+                            options={confirmationFormatOptions}
+                            value={selectedConfirmationFormat}
+                            onchange={handleConfirmationFormatChange}
+                            disabled={disabledRadioButtons}>
+                        </lightning-radio-group>    
+                    </div>
+                </div>
+                <div class="slds-col slds-size_1-of-4">
+                    <lightning-radio-group 
+                        label="Confirmation Email"
+                        options={emailConfirmationOptions}
+                        value={selectedEmailConfirmation}
+                        onchange={handleEmailConfirmationChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                </div> 
+                <div class="slds-col slds-size_1-of-4">
+                    <lightning-radio-group 
+                        label="Nomination Format"
+                        options={nominationFormatOptions}
+                        value={selectedNominationFormat}
+                        onchange={handleNominationFormatChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                </div>
+                <div class="slds-col slds-size_1-of-4 slds-p-horizontal_x-small">
+                    <lightning-radio-group 
+                        label="Nomination Email"
+                        options={emailNominationOptions}
+                        value={selectedEmailNomination}
+                        onchange={handleEmailNominationChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                </div>
+            </div>
+            <div class="slds-grid slds-gutters">
+                <div class="slds-col slds-size_1-of-4">
+                    <div class="slds-p-horizontal_x-small">
+                        <lightning-radio-group 
+                            label="Invoice Format"
+                            options={invoiceFormatOptions}
+                            value={selectedInvoiceFormat}
+                            onchange={handleInvoiceFormatChange}
+                            disabled={disabledRadioButtons}>
+                        </lightning-radio-group>
+                    </div>
+                </div>
+                <div class="slds-col slds-size_1-of-4">
+                    <lightning-radio-group 
+                        label="Invoice Email"
+                        options={emailInvoiceOptions}
+                        value={selectedEmailInvoice}
+                        onchange={handleEmailInvoiceChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>    
+                </div>
+            </div>
+        </template>
+        <template if:true={isShowedSavedButton}>
+            <div class="slds-align_absolute-center slds-m-top_x-small">
+                <lightning-button variant="brand" label="Save" onclick={saveRecord}></lightning-button>
+            </div>
+        </template>
+    </lightning-card>
+</template>

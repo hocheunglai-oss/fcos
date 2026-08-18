@@ -99,13 +99,21 @@ import { reportSystemError, resolveRecoveredSystemErrorHandler, resolveSystemErr
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import {
   getShipAgentChargeDetail,
+  getVariableChargeDetail,
+  confirmVariableChargeBuyer,
   listShipAgentCharges,
+  listVariableCharges,
   overrideShipAgentChargeAssignment,
+  overrideVariableChargeAssignment,
   resolveShipAgentPostInvoiceChange,
+  resolveVariableChargePostInvoiceChange,
   saveAndConfirmShipAgentCharges,
   shipAgentChargeOptions,
+  variableChargeOptions,
   syncShipAgentCharges,
-} from '../_shipAgentCharges.js';
+  syncVariableCharges,
+  verifyVariableChargeSupplier,
+} from '../_variableCharges.js';
 import {
   improvementAttachmentComplete as improvementAttachmentCompleteService,
   improvementAttachmentDelete as improvementAttachmentDeleteService,
@@ -1505,6 +1513,14 @@ const HANDLER_MODULE_ACCESS = {
   shipAgentChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
   shipAgentChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
   shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
+  variableChargesList: ['buyer_invoices', 'incoming_payments'],
+  variableChargesDetail: ['buyer_invoices', 'incoming_payments'],
+  variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
+  variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
+  variableChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
+  variableChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSync: ['buyer_invoices', 'incoming_payments'],
   buyerInvoicePostingReminderOverrideSave: ['incoming_payments'],
   buyerInvoiceEmailSettingsGet: ['buyer_invoices'],
   buyerInvoiceEmailSettingsSave: ['buyer_invoices'],
@@ -2637,15 +2653,15 @@ async function universalAuditTrail(body, req) {
       summary: compactAuditSummary([row.previous_provider, row.next_provider, `Revision ${row.resulting_revision}`]),
       metadata: { previousProvider: row.previous_provider, nextProvider: row.next_provider, revision: row.resulting_revision },
     })),
-    safeAuditRows(client.from('ship_agent_charge_events').select('id,event_type,summary,metadata,actor_email,created_at,ship_agent_charge_cases(stem_id,stem_name)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+    safeAuditRows(client.from('variable_charge_events').select('id,event_type,summary,metadata,actor_email,created_at,variable_charge_cases(stem_id,stem_name)').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `ship-agent-charge:${row.id}`,
-      source: 'Ship-Agent Charges',
+      source: 'Variable Charges',
       module: 'Payment Collections',
       action: normalizedAuditAction(row.event_type),
       createdAt: row.created_at,
       actor: row.actor_email || 'System',
-      target: row.ship_agent_charge_cases?.stem_name || row.ship_agent_charge_cases?.stem_id || 'Ship-Agent case',
-      summary: row.summary || 'Ship-Agent workflow event.',
+      target: row.variable_charge_cases?.stem_name || row.variable_charge_cases?.stem_id || 'Variable Charges case',
+      summary: row.summary || 'Variable Charges workflow event.',
       metadata: {
         caseState: row.metadata?.caseState || null,
         previousState: row.metadata?.previousState || null,
@@ -4787,45 +4803,108 @@ async function requireShipAgentStemAccess(body, context) {
   return stemId;
 }
 
+async function recordLegacyVariableChargeTraffic(context, handler) {
+  const { error } = await context.client.from('variable_charge_legacy_traffic').insert({
+    handler,
+    actor_user_id: context.profile?.id || null,
+  });
+  if (error && !/does not exist|schema cache/i.test(String(error.message || ''))) throw error;
+}
+
 async function shipAgentChargesList(body, req, accessContext = null) {
-  return listShipAgentCharges(body, await shipAgentChargesContext(req, accessContext));
+  const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesList');
+  return listShipAgentCharges(body, context);
 }
 
 async function shipAgentChargesDetail(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesDetail');
   await requireShipAgentStemAccess(body, context);
   return getShipAgentChargeDetail(body, context);
 }
 
 async function shipAgentChargesOptions(body, req, accessContext = null) {
-  return shipAgentChargeOptions(body, await shipAgentChargesContext(req, accessContext));
+  const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesOptions');
+  return shipAgentChargeOptions(body, context);
 }
 
 async function shipAgentChargesSaveConfirm(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesSaveConfirm');
   await requireShipAgentStemAccess(body, context);
   return saveAndConfirmShipAgentCharges(body, context);
 }
 
 async function shipAgentChargesGmOverride(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesGmOverride');
   await requireShipAgentStemAccess(body, context);
   return overrideShipAgentChargeAssignment(body, context);
 }
 
 async function shipAgentChargesPostInvoiceResolve(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesPostInvoiceResolve');
   await requireShipAgentStemAccess(body, context);
   return resolveShipAgentPostInvoiceChange(body, context);
 }
 
 async function shipAgentChargesSync(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
+  await recordLegacyVariableChargeTraffic(context, 'shipAgentChargesSync');
   const stemIds = Array.isArray(body?.stemIds) ? body.stemIds : null;
   if (stemIds?.length) {
     for (const stemId of stemIds) await requireShipAgentStemAccess({ stemId }, context);
   }
   return syncShipAgentCharges(context, { stemIds });
+}
+
+async function variableChargesList(body, req, accessContext = null) {
+  return listVariableCharges(body, await shipAgentChargesContext(req, accessContext));
+}
+
+async function variableChargesDetail(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return getVariableChargeDetail(body, context);
+}
+
+async function variableChargesOptions(body, req, accessContext = null) {
+  return variableChargeOptions(body, await shipAgentChargesContext(req, accessContext));
+}
+
+async function variableChargesSupplierVerify(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  if (!isSalesforceId(String(body?.supplierId || '').trim())) throw appError('A valid exact Supplier Account is required.', 400);
+  return verifyVariableChargeSupplier(body, context);
+}
+
+async function variableChargesBuyerConfirm(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return confirmVariableChargeBuyer(body, context);
+}
+
+async function variableChargesGmOverride(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return overrideVariableChargeAssignment(body, context);
+}
+
+async function variableChargesPostInvoiceResolve(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return resolveVariableChargePostInvoiceChange(body, context);
+}
+
+async function variableChargesSync(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  const stemIds = Array.isArray(body?.stemIds) ? body.stemIds : null;
+  if (stemIds?.length) for (const stemId of stemIds) await requireShipAgentStemAccess({ stemId }, context);
+  return syncVariableCharges(context, { stemIds });
 }
 
 async function buyerInvoicePostingReminderOverrideSave(body, req, accessContext = null) {
@@ -18617,6 +18696,14 @@ const handlers = {
   shipAgentChargesGmOverride,
   shipAgentChargesPostInvoiceResolve,
   shipAgentChargesSync,
+  variableChargesList,
+  variableChargesDetail,
+  variableChargesOptions,
+  variableChargesSupplierVerify,
+  variableChargesBuyerConfirm,
+  variableChargesGmOverride,
+  variableChargesPostInvoiceResolve,
+  variableChargesSync,
   buyerInvoicePostingReminderOverrideSave,
   paymentCollectionsReconcileCron,
   buyerInvoiceEmailSettingsGet,

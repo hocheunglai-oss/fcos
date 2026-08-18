@@ -16,7 +16,7 @@ trigger StemExtraCostTrigger on STEM_Extra_Cost__c(before insert ,before update,
         }
 
         if((Trigger.IsInsert || Trigger.IsUpdate) && Trigger.IsAfter){
-            ShipAgentInvoiceReadinessService.invalidateForExtraCostChanges(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
+            VariableChargeInvoiceReadinessService.invalidateForExtraCostChanges(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
             if(Trigger.IsInsert){
                 StemExtraCostTriggerHandler.createNomination(Trigger.newMap);
             }
@@ -43,7 +43,7 @@ trigger StemExtraCostTrigger on STEM_Extra_Cost__c(before insert ,before update,
             StemExtraCostTriggerHandler.deprecateNomination(Trigger.oldMap);
         }
         if(Trigger.isAfter && Trigger.isDelete){
-            ShipAgentInvoiceReadinessService.invalidateForExtraCostChanges(null, Trigger.oldMap);
+            VariableChargeInvoiceReadinessService.invalidateForExtraCostChanges(null, Trigger.oldMap);
             StemExtraCostTriggerHandler.deleteDepositPayments(Trigger.old);
             StemExtraCostTriggerHandler.deleteCashflows(Trigger.oldMap);
             StemExtraCostTriggerHandler.setTotalSellBuyAt(Trigger.oldMap);

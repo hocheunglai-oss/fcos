@@ -171,7 +171,7 @@ function sortCommitments(left, right) {
 export async function workCommitmentsList(_body = {}, accessContext) {
   const { client, profile, capabilities = {} } = accessContext;
   const today = hongKongDate();
-  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, shipAgentCasesResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
+  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, variableChargeCasesResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
     client
       .from("collaboration_items")
       .select(
@@ -215,7 +215,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
       : Promise.resolve({ data: [], error: null }),
     capabilities.paymentCollections
       ? client
-          .from('ship_agent_charge_cases')
+          .from('variable_charge_cases')
           .select('id,stem_id,stem_name,workflow_status,due_date,assigned_buyer_user_id,revision,updated_at')
           .eq('assigned_buyer_user_id', profile.id)
           .in('workflow_status', ['needs_action', 'post_invoice_change'])
@@ -264,7 +264,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   const goals = ensureResult(goalsResult);
   const relationships = ensureResult(relationshipsResult);
   const collections = ensureResult(collectionsResult);
-  const shipAgentCases = ensureResult(shipAgentCasesResult);
+  const variableChargeCases = ensureResult(variableChargeCasesResult);
   const disputes = ensureResult(disputesResult);
   const hedgeCloses = ensureResult(hedgeClosesResult);
   const improvementTickets = ensureResult(improvementTicketsResult);
@@ -517,22 +517,22 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     );
   }
 
-  for (const item of shipAgentCases) {
+  for (const item of variableChargeCases) {
     const postInvoice = item.workflow_status === 'post_invoice_change';
     commitments.push(
       normalizeCommitment(
         {
-          id: `ship-agent-charges:${item.id}:${item.revision}`,
+          id: `variable-charges:${item.id}:${item.revision}`,
           source: 'payment_collections',
-          kind: 'ship_agent_charges',
-          title: `${item.stem_name || item.stem_id} · Ship-agent charges`,
+          kind: 'variable_charges',
+          title: `${item.stem_name || item.stem_id} · Variable Charges`,
           subtitle: postInvoice
             ? 'Urgent post-invoice change · Document a resolution'
             : 'Row-by-row review and confirmation required',
           status: postInvoice ? 'Post-Invoice Change' : 'Needs Action',
           dueAt: item.due_date,
           urgency: postInvoice ? 'needs_action' : null,
-          link: `/payment-collections?tab=ship-agent-charges&stemId=${encodeURIComponent(item.stem_id)}`,
+          link: `/payment-collections?tab=variable-charges&stemId=${encodeURIComponent(item.stem_id)}`,
           actionLabel: postInvoice ? 'Resolve change' : 'Review charges',
         },
         today,
@@ -624,9 +624,10 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   }
 
   for (const notification of notificationsResult.notifications || []) {
-    if (!['email_router', 'system_error', 'special_terms'].includes(notification.source)) continue;
+    if (!['email_router', 'system_error', 'special_terms', 'variable_charges'].includes(notification.source)) continue;
     if (notification.source === 'email_router' && !capabilities.emailRouter) continue;
     if (notification.source === 'special_terms' && !capabilities.specialTerms) continue;
+    if (notification.source === 'variable_charges' && (!capabilities.paymentCollections || !String(notification.type || '').startsWith('supplier_'))) continue;
     commitments.push(
       normalizeCommitment(
         {
@@ -637,13 +638,17 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           subtitle: notification.message || 'Review the recorded operational issue.',
           status: notification.source === 'special_terms'
             ? 'Approval required'
+            : notification.source === 'variable_charges'
+              ? 'Supplier verification required'
             : notification.source === 'system_error'
               ? 'Needs review'
               : 'Warning',
           dueAt: notification.createdAt,
           urgency: 'needs_action',
           link: notification.link || '/',
-          actionLabel: notification.source === 'special_terms' ? 'Review Special Term' : 'Review issue',
+          actionLabel: notification.source === 'special_terms'
+            ? 'Review Special Term'
+            : notification.source === 'variable_charges' ? 'Verify supplier charges' : 'Review issue',
         },
         today,
       ),

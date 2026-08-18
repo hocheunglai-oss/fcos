@@ -11,13 +11,14 @@ trigger StemTrigger on STEM__c(before insert, before update, after insert, after
         StemTriggerHandler.setPaymentDelayForHistoricalStem(Trigger.new);
     }
     if(Trigger.isUpdate && Trigger.IsBefore){
+        VariableChargeInvoiceReadinessService.assertBuyerConfirmationWriteAllowed(Trigger.new, Trigger.oldMap);
         StemTriggerHandler.setPaymentDelayForOriginatedStem(Trigger.new);
         StemTriggerHandler.setInvoiceStatus(Trigger.new);
         StemTriggerHandler.resetPsprs(Trigger.new, Trigger.oldMap);
         StemTriggerHandler.removeBuyerBrokerRefcodeIndex(Trigger.new, Trigger.oldMap);
     }
     if(Trigger.isUpdate && Trigger.IsAfter){
-        ShipAgentInvoiceReadinessService.invalidateForStemChanges(Trigger.new, Trigger.oldMap);
+        VariableChargeInvoiceReadinessService.invalidateForStemChanges(Trigger.new, Trigger.oldMap);
         StemTriggerHandler.deleteDisputes(Trigger.new);
         StemTriggerHandler.updateNominations(Trigger.newMap, Trigger.oldMap);
         StemTriggerHandler.updateConfirmationWhenBuyerIsChanged(Trigger.newMap, Trigger.oldMap);

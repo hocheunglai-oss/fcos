@@ -19,7 +19,7 @@ const SOURCE_LABELS = {
   growth: "Growth & Coaching",
   coaching: "Growth & Coaching",
   fcos_improvements: "FCOS Improvements",
-  ship_agent_charges: "Ship-Agent Charges",
+  variable_charges: "Variable Charges",
   email_router: "Email Router",
   system_error: "System",
   system: "System",
@@ -48,7 +48,7 @@ function sourceBadgeClass(source) {
   if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10";
   if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10";
   if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10";
-  if (source === "ship_agent_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10";
+  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10";
   return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10" : "bg-blue-50 text-blue-800 ring-blue-700/10";
 }
 
@@ -226,7 +226,7 @@ export default function WorkNotifications() {
               <SelectItem value="collaboration">Projects & Tasks</SelectItem>
               <SelectItem value="growth_coaching">Growth & Coaching</SelectItem>
               <SelectItem value="fcos_improvements">FCOS Improvements</SelectItem>
-              <SelectItem value="ship_agent_charges">Ship-Agent Charges</SelectItem>
+              <SelectItem value="variable_charges">Variable Charges</SelectItem>
               <SelectItem value="email_router">Email Router</SelectItem>
               <SelectItem value="system_error">System errors</SelectItem>
             </SelectContent>

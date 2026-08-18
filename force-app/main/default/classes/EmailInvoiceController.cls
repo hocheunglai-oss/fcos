@@ -189,7 +189,7 @@ public class EmailInvoiceController {
             }
             invoiceIds.add(invoice.Id);
         }
-        ShipAgentInvoiceReadinessService.assertPersistedInvoicesAllowed(invoiceIds);
+        VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(invoiceIds);
         STEM__c stem = [SELECT Id, KeyStem__c, Invoice_Date__c FROM STEM__c WHERE Id = :emailData.stemId LIMIT 1];
         List<String> invoicesIds = new List<String>();
         for(Invoice__c invoice: invoices){

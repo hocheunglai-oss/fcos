@@ -11,7 +11,7 @@ trigger AccountTrigger on Account (before insert, before update, after insert, a
         if(Trigger.isAfter && (Trigger.isInsert || Trigger.isUpdate)){
             //AccountTriggerHandler.setSharedCheckbox(Trigger.new);
             if(Trigger.isUpdate){
-                ShipAgentInvoiceReadinessService.invalidateForAccountChanges(Trigger.newMap, Trigger.oldMap);
+                VariableChargeInvoiceReadinessService.invalidateForAccountChanges(Trigger.newMap, Trigger.oldMap);
                 AccountTriggerHandler.populateMailingRequirement(Trigger.newMap, Trigger.oldMap);
             }
             AccountTriggerHandler.setDefaultContact(Trigger.new, Trigger.oldMap);

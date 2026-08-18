@@ -367,29 +367,29 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
     ],
   },
-  'ship-agent-charges': {
-    title: 'Ship-Agent Charges',
-    description: 'How final ship-agent costs are reviewed before a final buyer invoice can proceed.',
+  'variable-charges': {
+    title: 'Variable Charges',
+    description: 'How supplier costs and final buyer pricing are verified through the two-stage invoice gate.',
     sections: [
       {
         title: 'Live case detection',
-        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs, then treats an Account as a ship agent only when Imported Particulars contains Ship Agent case-insensitively. Salesforce financial rows remain authoritative and are re-read before every consequential action.',
+        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually in Final Supplier Charges Verification. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
       },
       {
-        title: 'Delivery and ownership',
-        body: 'A case becomes actionable only after its Salesforce Delivery Date and is due on the next Hong Kong business day. The active Buyer Confirmation Trader resolves to one active FCOS profile by normalized email first and unique normalized name only as a fallback.',
+        title: 'Delivery and two-stage ownership',
+        body: 'A case becomes actionable only after its Salesforce Delivery Date and is due on the next Hong Kong business day. Each exact supplier resolves its Supplier Trader from active Supplier Nominations by normalized email first and unique normalized name fallback. After every required supplier is verified, the Buyer Confirmation Trader completes buyer pricing.',
       },
       {
         title: 'Review and controlled changes',
-        body: 'Every current row requires an explicit review, buyer-charge decision, and a reference or Salesforce File. Existing line items are read-only. Existing ship-agent extra costs may be edited, new STEM Charge extra costs must use an active Product, the exact supplier Account, inherited payment terms and fixed or per-unit pricing, and cancellation always sets Cancelled without deleting history.',
+        body: 'Each Supplier Trader reviews their exact supplier rows and records a reference or note; Salesforce Files are optional. Existing line items are read-only. Supplier Traders control cost, pricing basis, quantity/UOM, description and supplier-side extra costs. The Buyer Trader then records buyer pricing and buyer-charge decisions. Cancellation always sets Cancelled without deleting history.',
       },
       {
         title: 'Permissions and overrides',
-        body: 'All Payment Collections users may view. Only the assigned Buyer Trader normally edits or confirms; Finance and Administrators remain read-only. The one active UUID-backed General Manager may temporarily reassign or override with a mandatory recorded reason.',
+        body: 'All Payment Collections users may view. Only each assigned Supplier Trader may verify their supplier and only the assigned Buyer Trader may complete the final stage. Finance and Administrators remain read-only. The one active UUID-backed General Manager may temporarily reassign or override with a mandatory recorded reason.',
       },
       {
         title: 'Invoice gate and later changes',
-        body: 'Final buyer invoice creation, generation and sending remain blocked until the live Salesforce readiness check passes. Proformas and credit notes bypass the gate. Relevant later changes invalidate confirmation; a change after invoicing becomes an urgent Post-Invoice Change resolved as no adjustment, revised invoice, or credit note with a reference.',
+        body: 'A required supplier invoice is blocked only until that exact Supplier Trader stage is Verified. Final buyer invoice creation, generation and sending remain blocked until every supplier stage and the Buyer Trader stage pass live Salesforce readiness. Proformas and credit notes bypass the buyer gate. Relevant later changes invalidate affected stages; changes after invoicing create an urgent Post-Invoice Change.',
       },
     ],
   },
@@ -626,7 +626,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       { title: 'Visible to every active user', body: 'All active FCOS users may inspect current service status, operational KPIs, provider links, and connection details. This visibility does not grant configuration or provider-dashboard write access.' },
       { title: 'Status meaning', body: 'Health states combine direct probes and provider telemetry. Monitoring unavailable is distinct from Online; missing or failed telemetry is never presented as healthy.' },
-      { title: 'Connection order', body: 'The Connection Checklist requires an approved CLI and version first, then exact non-secret account, team, project, repository, or organization identity plus live permission probes, then target-locked CLI use. DEVEE is the only Salesforce development/source environment. Each reviewed change manifest is deployed and verified in DEVEE, the complete current DEVEE-owned source is mirrored byte-for-byte to `ivanyk20/fcbhk`, and that same manifest is promoted to QAT and then Production—never in another order. Shared publication requires a fresh successful DEVEE deployment proof bound to the exact complete source-tree hash and the isolated `vincelessxai` GitHub identity; QAT and Production are never independent mirror sources. Mirror branches use an exact remote-head lease, and GitHub must map both commit author and committer to the pinned `vincelessxai` account ID. A provider connector or API remains preferred when capable; Chrome is allowed only for blocked authentication, using Otto for FCOS and Salesforce DEVEE/QAT, Vincent for Salesforce Production, or `vincexai` only for the shared Salesforce repository, followed by CLI reverification. FCOS records only these non-secret profile names and never browser credential or passkey material.' },
+      { title: 'Connection order', body: 'The Connection Checklist requires an approved CLI and version first, then exact non-secret account, team, project, repository, or organization identity plus live permission probes, then target-locked CLI use. DEVEE is the only Salesforce development/source environment. Each reviewed change manifest is deployed and verified in DEVEE, the complete current DEVEE-owned source is mirrored byte-for-byte to `ivanyk20/fcbhk`, and that same manifest is promoted to QAT and then Production—never in another order. Salesforce source is normalized to LF before testing. New schema uses a small bootstrap with relevant-test selection, followed by one complete local-test gate per environment. Successful validation and deployment job IDs remain bound to the exact source-tree hash, so an interrupted or downstream-failed promotion resumes at the unfinished environment instead of repeating successful DEVEE or QAT suites. A source-tree change restarts at DEVEE; application, documentation, or orchestration-only changes do not. Shared publication requires a fresh successful DEVEE deployment proof bound to the exact complete source-tree hash and the isolated `vincelessxai` GitHub identity; QAT and Production are never independent mirror sources. Mirror branches use an exact remote-head lease, and GitHub must map both commit author and committer to the pinned `vincelessxai` account ID. A provider connector or API remains preferred when capable; Chrome is allowed only for blocked authentication, using Otto for FCOS and Salesforce DEVEE/QAT, Vincent for Salesforce Production, or `vincexai` only for the shared Salesforce repository, followed by CLI reverification. FCOS records only these non-secret profile names and never browser credential or passkey material.' },
       { title: 'Durable isolation', body: 'GitHub uses its provider-supported secure store under an ignored repo-local config root. Vercel and Supabase use pinned project CLIs, dedicated non-synchronizing macOS Keychain items, and repo-local target pins. Salesforce does not expose an alternate authorization home, so FCOS retains its protected host session while isolating the target-org pin and revalidating the production organization live.' },
       { title: 'Signed secret-safe records', body: 'The workstation runs provider checks in parallel, sanitizes their output through the shared connection policy, signs the result with a dedicated Ed25519 key, and publishes it to a service-only immutable Supabase table. System Health and the Universal Audit Trail expose only fixed status fields, safe identifiers, versions, permission names, latency, lifecycle warnings, timestamps, and revisions; tokens, CLI output, passwords, and credential material are excluded.' },
       { title: 'Non-sending checks', body: 'Email health verifies configuration and Microsoft token exchange without sending a message. Mailbox-scoped send authorization is conclusively confirmed only by an actual controlled delivery.' },

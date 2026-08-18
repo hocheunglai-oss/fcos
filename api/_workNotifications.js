@@ -107,23 +107,42 @@ function systemErrorNotification(row, state = {}) {
   };
 }
 
-function shipAgentNotification(row, state = {}) {
+function variableChargeNotification(row, state = {}) {
   const notificationKey = `${row.id}:${row.revision}:${row.workflow_status}`;
   const postInvoice = row.workflow_status === 'post_invoice_change';
   const needsAction = row.workflow_status === 'needs_action';
   return {
-    id: `ship_agent_charges:${notificationKey}`,
-    source: 'ship_agent_charges',
+    id: `variable_charges:${notificationKey}`,
+    source: 'variable_charges',
     sourceId: row.id,
     type: postInvoice ? 'post_invoice_change' : row.workflow_status,
     severity: postInvoice ? 'critical' : 'warning',
-    title: postInvoice ? 'Urgent ship-agent post-invoice change' : needsAction ? 'Ship-agent charges need review' : 'Ship-agent charges ready for invoice',
+    title: postInvoice ? 'Urgent Variable Charges post-invoice change' : needsAction ? 'Variable Charges need review' : 'Variable Charges ready for invoice',
     message: postInvoice
       ? `${row.stem_name || row.stem_id} changed after its final buyer invoice and needs a documented resolution.`
       : needsAction
         ? `${row.stem_name || row.stem_id} is assigned to you for row-by-row review and confirmation.`
         : `${row.stem_name || row.stem_id} passed row review and is ready for Finance invoice processing.`,
-    link: `/payment-collections?tab=ship-agent-charges&stemId=${encodeURIComponent(row.stem_id)}`,
+    link: `/payment-collections?tab=variable-charges&stemId=${encodeURIComponent(row.stem_id)}`,
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: row.updated_at,
+  };
+}
+
+function variableChargeSupplierNotification(row, state = {}) {
+  const notificationKey = `${row.case_id}:supplier:${row.id}:${row.revision}:${row.status}`;
+  const invalidated = row.status === 'invalidated';
+  return {
+    id: `variable_charges:${notificationKey}`,
+    source: 'variable_charges',
+    sourceId: row.case_id,
+    type: invalidated ? 'supplier_reverification_required' : 'supplier_verification_required',
+    severity: invalidated ? 'critical' : 'warning',
+    title: invalidated ? 'Supplier charges need reverification' : 'Final supplier charges need verification',
+    message: `${row.variable_charge_cases?.stem_name || row.stem_id} requires your exact-supplier charge review before its Supplier Invoice can be created.`,
+    link: `/payment-collections?tab=variable-charges&stemId=${encodeURIComponent(row.stem_id)}&supplierId=${encodeURIComponent(row.supplier_account_id)}`,
     readAt: state.read_at || null,
     handledAt: state.handled_at || null,
     snoozedUntil: state.snoozed_until || null,
@@ -190,7 +209,7 @@ export async function workNotificationsList(body = {}, accessContext) {
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const router = client.schema('emailrouter');
-  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, shipAgentCases, shipAgentStates, generalManagerRoles, specialTermsQueue, specialTermsConsolidationQueue, specialTermsStates] = await Promise.all([
+  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, variableChargeCases, variableChargeSupplierStages, variableChargeStates, generalManagerRoles, specialTermsQueue, specialTermsConsolidationQueue, specialTermsStates] = await Promise.all([
     client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
     client.from('fcos_improvement_notifications').select('id,ticket_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
@@ -201,8 +220,9 @@ export async function workNotificationsList(body = {}, accessContext) {
     router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
     client.from('system_error_events').select('id,dedupe_key,handler,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
     client.from('system_error_notification_states').select('event_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
-    client.from('ship_agent_charge_cases').select('id,stem_id,stem_name,workflow_status,assigned_buyer_user_id,revision,due_date,updated_at').in('workflow_status', ['needs_action', 'ready_for_invoice', 'post_invoice_change']).order('updated_at', { ascending: false }).limit(queryLimit),
-    client.from('ship_agent_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
+    client.from('variable_charge_cases').select('id,stem_id,stem_name,workflow_status,assigned_buyer_user_id,revision,due_date,updated_at').in('workflow_status', ['needs_action', 'ready_for_invoice', 'post_invoice_change']).order('updated_at', { ascending: false }).limit(queryLimit),
+    client.from('variable_charge_supplier_stages').select('id,case_id,stem_id,supplier_account_id,status,revision,updated_at,variable_charge_cases(stem_name,due_date)').eq('assigned_supplier_user_id', profile.id).in('status', ['pending', 'invalidated']).order('updated_at', { ascending: false }).limit(queryLimit),
+    client.from('variable_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
     client.from('collaboration_roles').select('user_id').eq('role', 'general_manager').eq('active', true),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
     listSpecialTermClauseConsolidations({ includeClosed: false }).then((data) => ({ data: data.consolidations || [], error: null })).catch((error) => ({ data: [], error })),
@@ -235,11 +255,15 @@ export async function workNotificationsList(body = {}, accessContext) {
     unavailableSources.push('System');
   }
   if (systemStates.error && !unavailableTable(systemStates.error)) throw systemStates.error;
-  if (shipAgentCases.error) {
-    if (!unavailableTable(shipAgentCases.error)) throw shipAgentCases.error;
-    unavailableSources.push('Ship-Agent Charges');
+  if (variableChargeCases.error) {
+    if (!unavailableTable(variableChargeCases.error)) throw variableChargeCases.error;
+    unavailableSources.push('Variable Charges');
   }
-  if (shipAgentStates.error && !unavailableTable(shipAgentStates.error)) throw shipAgentStates.error;
+  if (variableChargeSupplierStages.error) {
+    if (!unavailableTable(variableChargeSupplierStages.error)) throw variableChargeSupplierStages.error;
+    if (!unavailableSources.includes('Variable Charges')) unavailableSources.push('Variable Charges');
+  }
+  if (variableChargeStates.error && !unavailableTable(variableChargeStates.error)) throw variableChargeStates.error;
   if (generalManagerRoles.error && !unavailableTable(generalManagerRoles.error)) throw generalManagerRoles.error;
   if (specialTermsQueue.error) unavailableSources.push('Special Terms');
   if (specialTermsConsolidationQueue.error && !unavailableSources.includes('Special Terms')) unavailableSources.push('Special Terms');
@@ -253,8 +277,8 @@ export async function workNotificationsList(body = {}, accessContext) {
   const isGeneralManager = profile.user_type === 'general_manager' && generalManagerIds.length === 1 && generalManagerIds[0] === profile.id;
   const readyRecipient = ['finance', 'administrator'].includes(profile.user_type) || isGeneralManager;
   const specialTermsApprover = profile.user_type === 'administrator' || isGeneralManager;
-  const shipAgentStateByKey = new Map((shipAgentStates.data || []).map((row) => [row.notification_key, row]));
-  const shipAgentNotifications = (shipAgentCases.data || [])
+  const variableChargeStateByKey = new Map((variableChargeStates.data || []).map((row) => [row.notification_key, row]));
+  const variableChargeNotifications = (variableChargeCases.data || [])
     .filter((row) => (
       (row.workflow_status === 'ready_for_invoice' && readyRecipient)
       || (['needs_action', 'post_invoice_change'].includes(row.workflow_status) && row.assigned_buyer_user_id === profile.id)
@@ -262,8 +286,12 @@ export async function workNotificationsList(body = {}, accessContext) {
     ))
     .map((row) => {
       const key = `${row.id}:${row.revision}:${row.workflow_status}`;
-      return shipAgentNotification(row, shipAgentStateByKey.get(key));
+      return variableChargeNotification(row, variableChargeStateByKey.get(key));
     });
+  const variableChargeSupplierNotifications = (variableChargeSupplierStages.data || []).map((row) => {
+    const key = `${row.case_id}:supplier:${row.id}:${row.revision}:${row.status}`;
+    return variableChargeSupplierNotification(row, variableChargeStateByKey.get(key));
+  });
   const specialTermsStateByKey = new Map((specialTermsStates.data || []).map((row) => [row.notification_key, row]));
   const specialTermsNotifications = specialTermsApprover
     ? (specialTermsQueue.data || []).map((row) => {
@@ -279,14 +307,14 @@ export async function workNotificationsList(body = {}, accessContext) {
       return specialTermsRelinkNotification(consolidation, term, specialTermsStateByKey.get(key));
     }));
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...shipAgentNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',
@@ -304,7 +332,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
   const improvementIds = ids.filter((value) => value.startsWith('fcos_improvements:')).map((value) => value.slice('fcos_improvements:'.length));
   let emailRouterIds = ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length));
   let systemErrorIds = ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length));
-  let shipAgentIds = ids.filter((value) => value.startsWith('ship_agent_charges:')).map((value) => value.slice('ship_agent_charges:'.length));
+  let variableChargeIds = ids.filter((value) => value.startsWith('variable_charges:')).map((value) => value.slice('variable_charges:'.length));
   let specialTermsIds = ids.filter((value) => value.startsWith('special_terms:')).map((value) => value.slice('special_terms:'.length));
   const readAt = new Date().toISOString();
 
@@ -328,7 +356,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
     if (systemResult.error && !unavailableTable(systemResult.error)) throw systemResult.error;
     emailRouterIds = (routerResult.data || []).map((row) => row.id);
     systemErrorIds = (systemResult.data || []).map((row) => row.id);
-    shipAgentIds = (currentNotifications.notifications || []).filter((row) => row.source === 'ship_agent_charges').map((row) => row.id.slice('ship_agent_charges:'.length));
+    variableChargeIds = (currentNotifications.notifications || []).filter((row) => row.source === 'variable_charges').map((row) => row.id.slice('variable_charges:'.length));
     specialTermsIds = (currentNotifications.notifications || []).filter((row) => row.source === 'special_terms').map((row) => row.id.slice('special_terms:'.length));
   }
   const markEmailRouterRead = async () => {
@@ -354,9 +382,9 @@ export async function workNotificationsRead(body = {}, accessContext) {
   };
 
   const markShipAgentRead = async () => {
-    for (const notificationKey of shipAgentIds) {
+    for (const notificationKey of variableChargeIds) {
       const caseId = notificationKey.split(':')[0];
-      const { error } = await client.rpc('set_ship_agent_charge_notification_state', {
+      const { error } = await client.rpc('set_variable_charge_notification_state', {
         p_notification_key: notificationKey,
         p_case_id: caseId,
         p_user_id: profile.id,
@@ -415,16 +443,16 @@ export async function workNotificationsState(body = {}, accessContext) {
     ['fcos_improvements', ids.filter((value) => value.startsWith('fcos_improvements:')).map((value) => value.slice('fcos_improvements:'.length))],
     ['email_router', ids.filter((value) => value.startsWith('email_router:')).map((value) => value.slice('email_router:'.length))],
     ['system_error', ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length))],
-    ['ship_agent_charges', ids.filter((value) => value.startsWith('ship_agent_charges:')).map((value) => value.slice('ship_agent_charges:'.length))],
+    ['variable_charges', ids.filter((value) => value.startsWith('variable_charges:')).map((value) => value.slice('variable_charges:'.length))],
     ['special_terms', ids.filter((value) => value.startsWith('special_terms:')).map((value) => value.slice('special_terms:'.length))],
   ];
   let updated = 0;
   for (const [source, sourceIds] of groups) {
     if (!sourceIds.length) continue;
-    if (source === 'ship_agent_charges') {
+    if (source === 'variable_charges') {
       for (const notificationKey of sourceIds) {
         const caseId = notificationKey.split(':')[0];
-        const { data, error } = await client.rpc('set_ship_agent_charge_notification_state', {
+        const { data, error } = await client.rpc('set_variable_charge_notification_state', {
           p_notification_key: notificationKey,
           p_case_id: caseId,
           p_user_id: profile.id,

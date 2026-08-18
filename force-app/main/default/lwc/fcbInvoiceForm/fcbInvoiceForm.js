@@ -15,7 +15,7 @@ import generateInvoicePDF from "@salesforce/apex/InvoiceController.generateInvoi
 import upsertLastInvoiceForm from "@salesforce/apex/InvoiceController.upsertLastInvoiceForm";
 import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64Strings";
 import updateStemDeliveryDate from "@salesforce/apex/InvoiceController.updateStemDeliveryDate";
-import getShipAgentInvoiceReadiness from "@salesforce/apex/InvoiceController.getShipAgentInvoiceReadiness";
+import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceController.getVariableChargeInvoiceReadiness";
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
 
@@ -51,7 +51,7 @@ export default class FcbInvoiceForm extends LightningElement {
     isProductLineItemExisting;
 
     @track showBalanceRows = false;
-    @track shipAgentReadiness;
+    @track variableChargeReadiness;
     invoiceNumber;
 
     @wire(CurrentPageReference) pageRef;
@@ -76,9 +76,9 @@ export default class FcbInvoiceForm extends LightningElement {
             this.actionExecuted = false;
             this.proforma = proforma;
             this.isCreditNote = false;
-            this.shipAgentReadiness = null;
+            this.variableChargeReadiness = null;
             this.isProductLineItemExisting = isProductLineItemExisting;
-            this.loadShipAgentReadiness();
+            this.loadVariableChargeReadiness();
             if(lastInvoiceForm){
                 getStemInfo({stemId: this.stemId}).then((stem) => {
                     this.stem = stem;
@@ -106,36 +106,36 @@ export default class FcbInvoiceForm extends LightningElement {
         }
     }
 
-    loadShipAgentReadiness() {
-        getShipAgentInvoiceReadiness({ stemId: this.stemId })
+    loadVariableChargeReadiness() {
+        getVariableChargeInvoiceReadiness({ stemId: this.stemId })
             .then((readiness) => {
-                this.shipAgentReadiness = readiness;
+                this.variableChargeReadiness = readiness;
             })
             .catch(() => {
-                this.shipAgentReadiness = {
+                this.variableChargeReadiness = {
                     ready: false,
-                    requiresShipAgentReview: true,
-                    reason: 'Ship-agent charge readiness could not be verified. Refresh and try again.',
-                    fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=ship-agent-charges&stemId=${this.stemId}`
+                    requiresVariableChargeReview: true,
+                    reason: 'Variable Charges readiness could not be verified. Refresh and try again.',
+                    fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${this.stemId}`
                 };
             });
     }
 
     get isFinalInvoiceBlocked() {
         if (this.proforma || this.isCreditNote) return false;
-        return !this.shipAgentReadiness || (this.shipAgentReadiness.requiresShipAgentReview && !this.shipAgentReadiness.ready);
+        return !this.variableChargeReadiness || (this.variableChargeReadiness.requiresVariableChargeReview && !this.variableChargeReadiness.ready);
     }
 
     get readinessBannerVisible() {
         return this.isFinalInvoiceBlocked;
     }
 
-    get shipAgentReadinessReason() {
-        return this.shipAgentReadiness?.reason || 'Verifying ship-agent charge readiness.';
+    get variableChargeReadinessReason() {
+        return this.variableChargeReadiness?.reason || 'Verifying Variable Charges readiness.';
     }
 
-    get shipAgentFcosUrl() {
-        return this.shipAgentReadiness?.fcosUrl || `https://fcos.fcuno.com/payment-collections?tab=ship-agent-charges&stemId=${this.stemId}`;
+    get variableChargeFcosUrl() {
+        return this.variableChargeReadiness?.fcosUrl || `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${this.stemId}`;
     }
 
     get isGenerateDisabled() {

@@ -175,7 +175,17 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /Apex promotion manifest must include at least one \*Test Apex class/);
   assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
   assert.match(source, /writeDeveeSourceState/);
-  assert.match(source, /TEST_CLASSES\.length \? 'RunSpecifiedTests' : 'RunLocalTests'/);
+  assert.match(source, /FCOS_SALESFORCE_TEST_LEVEL/);
+  assert.match(source, /\['RunLocalTests', 'RunSpecifiedTests'\]\.includes\(TEST_LEVEL\)/);
+  assert.match(source, /--schema-cutover/);
+  assert.match(source, /--schema-bootstrap/);
+  assert.match(source, /all-or-none-schema-bootstrap/);
+  assert.match(source, /'project', 'deploy', 'start'/);
+  assert.match(source, /FCOS_Variable_Charges_Integration/);
+  assert.match(source, /FCOS_Variable_Charges_API/);
+  assert.match(source, /assignPermission\(environment, VARIABLE_CHARGE_DATA_PERMISSION\)/);
+  assert.match(source, /environment\.isSandbox \? 'NoTestRun' : 'RunRelevantTests'/);
+  assert.match(source, /Salesforce source must use LF line endings/);
   assert.ok(
     source.indexOf('const deveeDeployment = deploy(deveeValidation)') < source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']"),
     'DEVEE must be deployed successfully before shared publication.',
