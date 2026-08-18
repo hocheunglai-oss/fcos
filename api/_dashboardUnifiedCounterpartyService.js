@@ -347,15 +347,17 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   const allIds = [...new Set(identities.flatMap((row) => row.memberAccountIds))];
   const [stemDescribe, invoiceDescribe, lineDescribe, extraDescribe] = await Promise.all([describe('STEM__c', force), describe('Supplier_Invoice__c', force), describe('STEM_Line_Item__c', force), describe('STEM_Extra_Cost__c', force)]);
   const stemMap = map(stemDescribe); const invoiceMap = map(invoiceDescribe); const lineMap = map(lineDescribe); const extraMap = map(extraDescribe); const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields); const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields);
-  if (!stemMap.has('QLIK_Receivable_Balance__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
+  if (!stemMap.has('Account__c') || !stemMap.has('QLIK_Receivable_Balance__c') || !invoiceMap.has('Supplier__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
   const filters = normalizedFilters(body.filters); const scoped = await scopeWhere(filters, stemMap, force);
   const relatedStemScope = stemChildScope(scoped);
   const lineSelect = ['STEM__c', lineLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => lineMap.has(field));
   const extraSelect = ['STEM__c', extraLookup.fieldName, 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Cost__c', 'Line_Total_Buy__c', 'UOM__c', 'CurrencyIsoCode'].filter((field) => extraMap.has(field));
+  const buyerSelect = ['Id', 'Account__c', 'CurrencyIsoCode', 'QLIK_Receivable_Balance__c'].filter((field) => stemMap.has(field));
+  const invoiceSelect = ['Id', 'STEM__c', 'Supplier__c', 'CurrencyIsoCode', 'Payable_Balance__c'].filter((field) => invoiceMap.has(field));
   const accountChunks = chunkIds(allIds);
   const [buyerStemChunks, invoiceChunks, unbilledLineChunks, unbilledExtraChunks] = await Promise.all([
-    Promise.all(accountChunks.map((part) => all(`SELECT Id,Account__c,CurrencyIsoCode,QLIK_Receivable_Balance__c FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0${scoped ? ` AND ${scoped}` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT Id,STEM__c,Supplier__c,CurrencyIsoCode,Payable_Balance__c FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${buyerSelect.join(',')} FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0${scoped ? ` AND ${scoped}` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${lineLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
     Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier_Invoice__c = null AND ${extraLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
   ]);

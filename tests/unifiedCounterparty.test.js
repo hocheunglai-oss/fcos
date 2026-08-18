@@ -35,6 +35,9 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /stemChildScope\(scopeWhere\)/);
   assert.match(source, /stemChildScope\(scoped\)/);
   assert.doesNotMatch(source, /replaceAll\('Delivery_Date__c'/);
+  assert.match(source, /const buyerSelect = .*\.filter\(\(field\) => stemMap\.has\(field\)\)/);
+  assert.match(source, /const invoiceSelect = .*\.filter\(\(field\) => invoiceMap\.has\(field\)\)/);
+  assert.doesNotMatch(source, /SELECT Id,Account__c,CurrencyIsoCode/);
 });
 
 test('unified handlers and the both-side credit statement are registered as server reads', async () => {
