@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.182',
+    releasedAt: '2026-08-18',
+    title: 'Correct combined buyer exposure currency',
+    changes: [
+      'Keeps buyer receivable exposure in Salesforce corporate USD when single-currency STEM records do not expose CurrencyIsoCode.',
+      'Makes the combined Buyer and Supplier statement agree with the authoritative buyer statement instead of defaulting the buyer side to zero.',
+    ],
+  },
+  {
     version: '2.0.181',
     releasedAt: '2026-08-18',
     title: 'Unify Account and GROUP exposure search',

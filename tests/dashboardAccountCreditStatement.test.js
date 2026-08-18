@@ -569,6 +569,33 @@ test('mixed currencies stay separate by row and suppress all combined projection
   assert.equal(statement.chart.exactEventCount, 0);
 });
 
+test('single-currency Salesforce STEMs inherit the corporate currency in combined exposure', () => {
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-18',
+    account: {
+      Id: accountId,
+      Name: 'ACHIEVE BUNKER LTD',
+      CL_Category__c: 'Individual',
+      CL_Individual__c: 5_000_000,
+      CL_Used_Customer__c: 4_661_214,
+    },
+    openStems: [
+      {
+        Id: 'a01000000000091AAA',
+        Account__c: accountId,
+        QLIK_Receivable_Balance__c: 4_661_214,
+        Invoice_Due_Date__c: '2026-09-01',
+      },
+    ],
+    statementStems: [],
+  });
+
+  assert.deepEqual(statement.currencies, ['USD']);
+  assert.deepEqual(statement.exposureByCurrency, {
+    USD: { individual: 4_661_214, group: 4_661_214 },
+  });
+});
+
 test('credit cursors reject malformed values and round-trip directory and statement state', () => {
   const directory = encodeAccountCreditCursor({ kind: 'directory', name: 'BUYER A', id: accountId });
   assert.deepEqual(decodeAccountCreditCursor(directory), { kind: 'directory', name: 'BUYER A', id: accountId });

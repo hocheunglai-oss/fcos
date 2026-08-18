@@ -687,8 +687,9 @@ export function buildAccountCreditStatement({
 } = {}) {
   const selectedAccountId = account?.Id;
   const snapshot = accountCreditSnapshot(creditAccount);
+  const stemCurrency = (stem) => text(stem?.CurrencyIsoCode) || snapshot.currency;
   const currencyLabels = [...new Set([...openStems, ...statementStems]
-    .map((stem) => text(stem.CurrencyIsoCode))
+    .map(stemCurrency)
     .filter(Boolean))].sort();
   const currencyConflict = currencyLabels.length > 1;
   const projectionComplete = complete && !currencyConflict;
@@ -705,10 +706,10 @@ export function buildAccountCreditStatement({
   const groupExposure = openStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
   const exposureByCurrency = Object.fromEntries(currencyLabels.map((currency) => [currency, {
     individual: openStems
-      .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId) && text(stem.CurrencyIsoCode) === currency)
+      .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId) && stemCurrency(stem) === currency)
       .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0),
     group: openStems
-      .filter((stem) => text(stem.CurrencyIsoCode) === currency)
+      .filter((stem) => stemCurrency(stem) === currency)
       .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0),
   }]));
   const individualReconciliation = reconcileCreditExposure(snapshot.usedCustomer, currencyConflict ? null : accountExposure, { complete: projectionComplete });
