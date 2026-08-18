@@ -58,6 +58,10 @@ export function normalizeSupplierCreditScope(scope) {
   return ['open', 'open_recent', 'all'].includes(scope) ? scope : 'open';
 }
 
+export function supplierOpenUninvoicedRows(rows = []) {
+  return rows.filter((row) => !row.exposureComplete || number(row.currentExposure) > MONEY_TOLERANCE);
+}
+
 export function resolveSupplierInvoiceIdentity({ invoice = {}, linkedSupplierAccountIds = [], selectedAccountIds = [] } = {}) {
   const actualSupplierId = text(invoice.Supplier__c || invoice.supplierAccountId);
   const linkedIds = unique(linkedSupplierAccountIds.map(text));

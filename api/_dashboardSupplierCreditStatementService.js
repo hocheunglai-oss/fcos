@@ -10,6 +10,7 @@ import {
   buildUninvoicedSupplierRows,
   normalizeSupplierCreditScope,
   resolveSupplierInvoiceIdentity,
+  supplierOpenUninvoicedRows,
 } from './_dashboardSupplierCreditStatement.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
@@ -613,10 +614,11 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
   timings.evidenceMs = Date.now() - stage;
 
   const recentStart = oneYearBefore(today);
-  const openRows = [...issuedRows.filter((row) => number(row.currentExposure) > 0.005), ...uninvoicedRows];
+  const openUninvoicedRows = supplierOpenUninvoicedRows(uninvoicedRows);
+  const openRows = [...issuedRows.filter((row) => number(row.currentExposure) > 0.005), ...openUninvoicedRows];
   const recentSettled = issuedRows.filter((row) => number(row.currentExposure) <= 0.005 && row.payments.some((payment) => payment.date >= recentStart));
   const scopedIssued = scope === 'all' ? issuedRows : scope === 'open_recent' ? [...openRows.filter((row) => row.rowType === 'issued'), ...recentSettled] : openRows.filter((row) => row.rowType === 'issued');
-  const scopedUninvoiced = scope === 'all' || scope === 'open_recent' || scope === 'open' ? uninvoicedRows : [];
+  const scopedUninvoiced = scope === 'all' ? uninvoicedRows : openUninvoicedRows;
   const complete = childrenResult.complete && invoicesResult.complete && paymentsResult.complete && cashflowsResult.complete;
   if (!complete) throw serviceError('The Supplier Credit Statement exceeds the complete Salesforce evidence limit. Narrow the Dashboard filters before calculating payable exposure.', 503, 'SUPPLIER_CREDIT_SCOPE_LIMIT');
   const model = buildSupplierCreditStatement({

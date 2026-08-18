@@ -8,6 +8,7 @@ import {
   estimateUninvoicedSupplierChild,
   normalizeSupplierCreditScope,
   resolveSupplierInvoiceIdentity,
+  supplierOpenUninvoicedRows,
 } from '../api/_dashboardSupplierCreditStatement.js';
 
 const accountId = '001000000000001AAA';
@@ -179,6 +180,15 @@ test('past-due issued payable remains as an unknown-date residual plateau', () =
   assert.equal(model.kpis.account[0].overdue, 300);
 });
 
+test('Open supplier scope excludes complete zero-value estimates but retains incomplete safeguards', () => {
+  const rows = supplierOpenUninvoicedRows([
+    { rowId: 'zero', exposureComplete: true, currentExposure: 0 },
+    { rowId: 'payable', exposureComplete: true, currentExposure: 125 },
+    { rowId: 'incomplete', exposureComplete: false, currentExposure: null },
+  ]);
+  assert.deepEqual(rows.map((row) => row.rowId), ['payable', 'incomplete']);
+});
+
 test('Supplier Credit Statement wiring preserves buyer compatibility, access scope, and inherited Dashboard filters', async () => {
   const [service, supplierService, directory, modal, ui, methodology] = await Promise.all([
     readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8'),
@@ -202,5 +212,6 @@ test('Supplier Credit Statement wiring preserves buyer compatibility, access sco
   assert.match(ui, /TOTAL PAYABLE EXPOSURE/);
   assert.match(ui, /BASIS MAX QTY/);
   assert.match(ui, /text\/html/);
+  assert.match(ui, /numeric\(row\.currentExposure\) > 0\.005/);
   assert.match(methodology, /Supplier Credit Statement/);
 });
