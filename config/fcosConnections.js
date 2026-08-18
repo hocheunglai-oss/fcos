@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 5,
+  policyVersion: 6,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -36,7 +36,7 @@ const connectionPolicy = {
     {
       id: 'browser_fallback',
       label: 'Use only the pinned browser profile for blocked authentication',
-      detail: 'Chrome remains locked unless the CLI cannot authenticate. Use Otto for FCOS and Salesforce, or vincexai only for the shared Salesforce GitHub account, then return to the CLI and publish a signed verification.',
+      detail: 'Chrome remains locked unless the CLI cannot authenticate. Use Otto for FCOS, DEVEE, and QAT; Vincent for Salesforce Production; or vincexai only for the shared Salesforce GitHub account. Then return to the CLI and publish a signed verification.',
     },
   ],
   providers: [
@@ -139,6 +139,9 @@ const connectionPolicy = {
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
+        { label: 'DEVEE browser authentication profile', value: 'Otto' },
+        { label: 'QAT browser authentication profile', value: 'Otto' },
+        { label: 'Production browser authentication profile', value: 'Vincent' },
         { label: 'Shared GitHub account', value: 'vincelessxai' },
         { label: 'Shared GitHub account ID', value: '304336732' },
         { label: 'Shared Salesforce repository', value: 'ivanyk20/fcbhk' },
@@ -182,9 +185,9 @@ const connectionPolicy = {
         publishCommand: 'npm run salesforce:mirror:publish',
       },
       environments: [
-        { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true },
-        { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent@cosulich.com.hk.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true },
-        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false },
+        { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true, browserProfile: 'Otto' },
+        { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent@cosulich.com.hk.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true, browserProfile: 'Otto' },
+        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false, browserProfile: 'Vincent' },
       ],
     },
   ],
@@ -204,6 +207,8 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requirePositiveInteger(value.policyVersion, 'policyVersion');
   requireString(value.profile, 'profile');
   requireString(value.browserProfile, 'browserProfile');
+  const approvedBrowserProfiles = new Set(['Otto', 'Vincent', 'vincexai']);
+  if (!approvedBrowserProfiles.has(value.browserProfile)) throw new Error('Connection policy browserProfile is not approved.');
   requireString(value.localStateDirectory, 'localStateDirectory');
   requireString(value.keychainHelper, 'keychainHelper');
   requireString(value.attestation?.endpoint, 'attestation.endpoint');
@@ -239,6 +244,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       if (provider.environments.map(({ key }) => key).join(',') !== 'devee,qat,production') {
         throw new Error('Salesforce environment order must be Devee, QAT, then Production.');
       }
+      const expectedSalesforceBrowserProfiles = { devee: 'Otto', qat: 'Otto', production: 'Vincent' };
       for (const environment of provider.environments) {
         requireString(environment.key, `salesforce.${environment.key}.key`);
         requireString(environment.label, `salesforce.${environment.key}.label`);
@@ -248,6 +254,13 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
           requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
         }
         requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
+        requireString(environment.browserProfile, `salesforce.${environment.key}.browserProfile`);
+        if (!approvedBrowserProfiles.has(environment.browserProfile)) {
+          throw new Error(`Salesforce ${environment.key} browserProfile is not approved.`);
+        }
+        if (environment.browserProfile !== expectedSalesforceBrowserProfiles[environment.key]) {
+          throw new Error(`Salesforce ${environment.key} browserProfile does not match the approved environment mapping.`);
+        }
         if (typeof environment.isSandbox !== 'boolean') throw new Error(`Salesforce ${environment.key} isSandbox must be Boolean.`);
       }
       requireString(provider.publication?.requiredAccount, 'salesforce.publication.requiredAccount');
@@ -263,6 +276,12 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       requireString(provider.publication?.manifestPath, 'salesforce.publication.manifestPath');
       requireString(provider.publication?.configPath, 'salesforce.publication.configPath');
       requireString(provider.publication?.browserProfile, 'salesforce.publication.browserProfile');
+      if (!approvedBrowserProfiles.has(provider.publication.browserProfile)) {
+        throw new Error('Salesforce publication browserProfile is not approved.');
+      }
+      if (provider.publication.browserProfile !== 'vincexai') {
+        throw new Error('Salesforce publication browserProfile must remain vincexai.');
+      }
       requireString(provider.publication?.sourceEnvironmentKey, 'salesforce.publication.sourceEnvironmentKey');
       requireString(provider.publication?.sourceStatePath, 'salesforce.publication.sourceStatePath');
       requirePositiveInteger(provider.publication?.sourceStateMaximumAgeSeconds, 'salesforce.publication.sourceStateMaximumAgeSeconds');

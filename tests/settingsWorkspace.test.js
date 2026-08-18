@@ -155,8 +155,13 @@ test('System Health includes a lazy, signed, secret-safe CLI-first Connection Ch
   assert.doesNotMatch(checklist, /localStorage|browser_authentication_completed/);
   assert.match(policy, /APPROVED_CONNECTION_BROWSER_PROFILE = FCOS_CONNECTION_POLICY\.browserProfile/);
   assert.match(sharedPolicy, /browserProfile: 'Otto'/);
+  assert.match(sharedPolicy, /Production browser authentication profile/);
+  assert.match(sharedPolicy, /browserProfile: 'Vincent'/);
+  assert.match(checklist, /Salesforce DEVEE, and Salesforce QAT/);
+  assert.match(checklist, /only for Salesforce Production authentication/);
   assert.match(sharedPolicy, /publicKeySpkiBase64/);
   assert.match(methodology, /The Connection Checklist requires an approved CLI and version first/);
+  assert.match(methodology, /Vincent for Salesforce Production/);
 });
 
 test('Settings uses unified AI cards, compact access tables, and atomic email route saving', async () => {

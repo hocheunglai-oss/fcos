@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.185',
+    releasedAt: '2026-08-18',
+    title: 'Pin Salesforce Production authentication profile',
+    changes: [
+      'Records Vincent as the non-secret Salesforce Production browser authentication profile while retaining Otto for FCOS, DEVEE, and QAT.',
+      'Requires an exact Salesforce environment and browser-profile acknowledgement before browser authentication guidance is shown.',
+      'Keeps vincexai isolated to the shared Salesforce GitHub repository and never records browser credential or passkey material.',
+    ],
+  },
+  {
     version: '2.0.184',
     releasedAt: '2026-08-18',
     title: 'Clarify Supplier Invoice evidence',

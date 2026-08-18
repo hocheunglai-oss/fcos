@@ -11,7 +11,9 @@ These connection identities are specific to this repository. Do not infer or reu
 - Salesforce QAT sandbox: `00D1s0000008lFEEAY` (alias `fcos-qat`, username `vincent@cosulich.com.hk.qat`)
 - Shared Salesforce GitHub repository: `ivanyk20/fcbhk` (`src/` mirror)
 - Required shared-repository GitHub account: `vincelessxai` (isolated config `.fcos-cli/github-vincelessxai`)
-- Primary GitHub/browser profile: `Otto`
+- Primary GitHub/FCOS browser profile: `Otto`
+- Salesforce DEVEE/QAT browser authentication profile: `Otto`
+- Salesforce Production browser authentication profile: `Vincent`
 - Shared Salesforce GitHub/browser profile: `vincexai`
 
 Before any GitHub mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials. Use the authorized GitHub connector for this repository or stop with a clear account-mismatch message.
@@ -19,6 +21,8 @@ Before any GitHub mutation, verify the authenticated GitHub identity. If the Git
 Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Fail closed on a mismatch.
 
 Before any Salesforce metadata mutation, verify the exact org ID, username where pinned, and sandbox flag. DEVEE is the only development/source environment. Make and verify every Salesforce code or configuration change in DEVEE first; do not develop independently in QAT or Production.
+
+Salesforce browser authentication is an environment-specific, authentication-only fallback after the CLI is blocked. Use `Otto` for DEVEE or QAT, `Vincent` for Production, and return immediately to CLI verification. Never store, inspect, export, or attest browser credentials or passkey material. The `vincexai` profile remains exclusive to the shared Salesforce GitHub repository and must not be used for Salesforce org login.
 
 The mandatory Salesforce promotion order is:
 

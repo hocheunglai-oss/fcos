@@ -15,6 +15,7 @@ import {
   connectionAttestationState,
   sanitizeConnectionAttestation,
 } from '../src/lib/connectionChecklist.js';
+import { resolveSalesforceBrowserAuthentication } from '../scripts/fcos-connections.mjs';
 
 const VERIFIED_AT = '2026-08-09T08:00:00.000Z';
 const EXPIRES_AT = '2026-08-10T08:00:00.000Z';
@@ -82,6 +83,9 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['QAT Org ID'], '00D1s0000008lFEEAY');
   assert.equal(targets.salesforce['Devee username'], 'vincent@cosulich.com.hk.devee');
   assert.equal(targets.salesforce['QAT username'], 'vincent@cosulich.com.hk.qat');
+  assert.equal(targets.salesforce['DEVEE browser authentication profile'], 'Otto');
+  assert.equal(targets.salesforce['QAT browser authentication profile'], 'Otto');
+  assert.equal(targets.salesforce['Production browser authentication profile'], 'Vincent');
   assert.equal(targets.salesforce['Shared GitHub account'], 'vincelessxai');
   assert.equal(targets.salesforce['Shared Salesforce repository'], 'ivanyk20/fcbhk');
   assert.equal(targets.salesforce['Shared browser fallback profile'], 'vincexai');
@@ -89,6 +93,7 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['Promotion order'], 'DEVEE → GitHub → QAT → Production');
   const salesforce = CONNECTION_TARGETS.find(({ id }) => id === 'salesforce');
   assert.deepEqual(salesforce.environments.map(({ key }) => key), ['devee', 'qat', 'production']);
+  assert.deepEqual(salesforce.environments.map(({ browserProfile }) => browserProfile), ['Otto', 'Otto', 'Vincent']);
   assert.equal(salesforce.profileName, 'fcos-devee');
   assert.equal(salesforce.publication.browserProfile, 'vincexai');
   assert.equal(salesforce.publication.sourceEnvironmentKey, 'devee');
@@ -98,6 +103,26 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
     ['supabase', 'macos_keychain'],
     ['salesforce', 'protected_host_store'],
   ]);
+});
+
+test('Salesforce browser authentication is environment-specific and fails closed on profile drift', () => {
+  assert.equal(resolveSalesforceBrowserAuthentication(['--environment', 'devee', '--browser-profile', 'Otto']).alias, 'fcos-devee');
+  assert.equal(resolveSalesforceBrowserAuthentication(['--environment=qat', '--browser-profile=Otto']).alias, 'fcos-qat');
+  assert.equal(resolveSalesforceBrowserAuthentication(['--environment', 'production', '--browser-profile', 'Vincent']).alias, 'source-salesforce');
+  assert.throws(
+    () => resolveSalesforceBrowserAuthentication(['--environment', 'production', '--browser-profile', 'Otto']),
+    /restricted to Chrome profile Vincent/,
+  );
+  assert.throws(
+    () => resolveSalesforceBrowserAuthentication(['--environment', 'devee', '--browser-profile', 'Vincent']),
+    /restricted to Chrome profile Otto/,
+  );
+  assert.throws(() => resolveSalesforceBrowserAuthentication([]), /requires --environment/);
+
+  const invalid = JSON.parse(JSON.stringify(FCOS_CONNECTION_POLICY));
+  invalid.providers.find(({ id }) => id === 'salesforce').environments[2].browserProfile = 'Otto';
+  assert.throws(() => validateFcosConnectionPolicy(invalid), /does not match the approved environment mapping/);
+  assert.doesNotMatch(JSON.stringify(FCOS_CONNECTION_POLICY), /passkey/i);
 });
 
 test('attestation sanitization retains only fixed non-secret fields', () => {

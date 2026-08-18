@@ -821,7 +821,8 @@ async function verifyCommand(args, { doctor = false } = {}) {
   const value = writeSafeStatus(reports, publication);
   printReports(value, args.includes('--json'));
   if (doctor) {
-    console.log(`Approved Chrome fallback: ${APPROVED_CONNECTION_BROWSER_PROFILE} (authentication only)`);
+    const salesforceProfiles = salesforceEnvironments().map(({ label, browserProfile }) => `${label}=${browserProfile}`).join(', ');
+    console.log(`Approved Chrome fallback: FCOS=${APPROVED_CONNECTION_BROWSER_PROFILE}; Salesforce ${salesforceProfiles}; shared Salesforce GitHub=${target('salesforce').publication.browserProfile} (authentication only)`);
     console.log(`Credential metadata: ${path.relative(REPO_ROOT, CREDENTIAL_METADATA_PATH)} (non-secret, mode 0600)`);
   }
   if (publication?.status === 'failed') return 5;
@@ -981,9 +982,32 @@ async function runCommand(args) {
   });
 }
 
+function optionValue(args, name) {
+  const inline = args.find((value) => value.startsWith(`${name}=`));
+  if (inline) return inline.slice(name.length + 1).trim();
+  const index = args.indexOf(name);
+  return index >= 0 ? String(args[index + 1] || '').trim() : '';
+}
+
+export function resolveSalesforceBrowserAuthentication(args = []) {
+  const environmentKey = optionValue(args, '--environment');
+  const requestedProfile = optionValue(args, '--browser-profile');
+  if (!environmentKey) throw new Error('Salesforce authentication requires --environment devee, qat, or production.');
+  const environment = salesforceEnvironments().find(({ key }) => key === environmentKey);
+  if (!environment) throw new Error(`Salesforce authentication environment ${environmentKey} is not approved.`);
+  if (!requestedProfile) throw new Error(`Salesforce ${environment.label} authentication requires --browser-profile ${environment.browserProfile}.`);
+  if (requestedProfile !== environment.browserProfile) {
+    throw new Error(`Salesforce ${environment.label} authentication is restricted to Chrome profile ${environment.browserProfile}.`);
+  }
+  return environment;
+}
+
 async function authCommand(args) {
   const providerId = args[0];
   if (!PROVIDER_IDS.has(providerId)) throw new Error('Choose one provider to authenticate.');
+  const salesforceEnvironment = providerId === 'salesforce'
+    ? resolveSalesforceBrowserAuthentication(args.slice(1))
+    : null;
   const current = await verifyProvider(providerId);
   writeSafeStatus([current]);
   if (providerOperational(current)) {
@@ -998,13 +1022,15 @@ async function authCommand(args) {
     console.error(`${providerId}: authentication cannot start from state ${current.identityStatus}.`);
     return exitCodeFor([current]);
   }
-  console.log(`Authentication is allowed only in Chrome profile ${APPROVED_CONNECTION_BROWSER_PROFILE}; immediately return to the CLI verifier afterward.`);
   const provider = target(providerId);
-  if (provider.credentialStorage === 'macos_keychain') {
+  if (providerId === 'salesforce') {
+    console.log(`Authentication is allowed only for Salesforce ${salesforceEnvironment.label} (${salesforceEnvironment.alias}) in Chrome profile ${salesforceEnvironment.browserProfile}.`);
+    console.log('Complete only the blocked web authentication, then immediately return to the CLI verifier. No browser credential material is recorded by FCOS.');
+  } else if (provider.credentialStorage === 'macos_keychain') {
+    console.log(`Authentication is allowed only in Chrome profile ${APPROVED_CONNECTION_BROWSER_PROFILE}; immediately return to the CLI verifier afterward.`);
     console.log(`Store the new credential with the hidden FCOS Keychain prompt: ${FCOS_CONNECTION_POLICY.keychainHelper} prompt-set ${FCOS_CONNECTION_POLICY.keychainAccount} ${provider.keychainService}`);
-  } else if (providerId === 'salesforce') {
-    console.log(`Use Salesforce web login only in ${APPROVED_CONNECTION_BROWSER_PROFILE}, with alias ${provider.profileName}.`);
   } else {
+    console.log(`Authentication is allowed only in Chrome profile ${APPROVED_CONNECTION_BROWSER_PROFILE}; immediately return to the CLI verifier afterward.`);
     console.log(`Start the ${providerId} CLI authorization without changing machine-wide credentials and complete only its URL in ${APPROVED_CONNECTION_BROWSER_PROFILE}.`);
   }
   return 2;
