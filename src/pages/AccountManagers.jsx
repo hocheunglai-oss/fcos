@@ -23,6 +23,8 @@ import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
+import BuyerPicReferences from '@/components/account-managers/BuyerPicReferences';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -148,6 +150,7 @@ export default function AccountManagers() {
   const [groupEditAccount, setGroupEditAccount] = useState(null);
   const [groupNoteEditAccount, setGroupNoteEditAccount] = useState(null);
   const nextDraftKey = useRef(0);
+  const [workspaceView, setWorkspaceView] = useState('managers');
 
   const loadAccounts = useCallback(async ({ background = false, force = background } = {}) => {
     if (background) setRefreshing(true);
@@ -410,6 +413,21 @@ export default function AccountManagers() {
     setCurrentPage(1);
   };
 
+  const workspaceViews = [
+    { id: 'managers', label: 'Account Managers', icon: UsersRound },
+    { id: 'buyer-pic-references', label: 'Buyer PIC References', icon: UsersRound },
+  ];
+
+  if (workspaceView === 'buyer-pic-references') {
+    return (
+      <BuyerPicReferences
+        activeView={workspaceView}
+        onViewChange={setWorkspaceView}
+        methodology={ACCOUNT_MANAGERS_METHODOLOGY}
+      />
+    );
+  }
+
   return (
     <div className="min-w-0 pb-8">
       <PageHeader
@@ -432,6 +450,13 @@ export default function AccountManagers() {
             </Button>
           </>
         )}
+      />
+
+      <WorkspaceViewBar
+        className="mb-5"
+        views={workspaceViews}
+        value={workspaceView}
+        onValueChange={setWorkspaceView}
       />
 
       <div className="mb-5 grid grid-cols-2 divide-x divide-y overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-4 sm:divide-y-0">

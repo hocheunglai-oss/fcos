@@ -18,6 +18,10 @@ export const ACCOUNT_MANAGERS_METHODOLOGY = {
       title: 'Synchronization and search',
       body: 'FCOS stores ordered user IDs and writes display names to Salesforce Account Manager. GROUP-family writes are all-or-none; drift and failures stay visible for retry. Search covers Account name, CL Key, GROUP relationships, Account type, manager identity, and the 255-character FCOS note.',
     },
+    {
+      title: 'Buyer PIC References',
+      body: 'Buyer PIC References are human-maintained tables for exact active Buyer or Buyer & Supplier Salesforce Accounts. Their five text columns preserve ordered regional and vessel references, including internal line breaks, but FCOS does not use them to route work, assign people, change Enquiries or STEMs, classify vessels, or map names to users or Contacts. Tables are stored service-side with revision checks and browser access revoked.',
+    },
   ],
 };
 

@@ -34,6 +34,14 @@ import {
   verifyPaymentReminderPreview,
 } from '../_paymentReminderOperations.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
+import {
+  ACCOUNT_PIC_MAX_CSV_BYTES,
+  accountPicDirectoryProjection,
+  accountPicPayloadHash,
+  normalizeAccountPicRows,
+  parseAccountPicCsv,
+  validAccountPicAccountId,
+} from '../_accountPicDirectories.js';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
 import { createHash } from 'node:crypto';
@@ -1562,6 +1570,11 @@ const HANDLER_MODULE_ACCESS = {
   accountManagersSave: ['buyers_administrator'],
   accountManagersSaveNote: ['buyers_administrator'],
   accountManagersRetrySync: ['buyers_administrator'],
+  accountPicDirectoryList: ['buyers_administrator'],
+  accountPicAccountOptions: ['buyers_administrator'],
+  accountPicDirectoryDetail: ['buyers_administrator'],
+  accountPicDirectorySave: ['buyers_administrator'],
+  accountPicDirectoryImport: ['buyers_administrator'],
   emailSenderStatus: ['settings'],
   emailSenderMailboxSave: ['admin'],
   emailSenderRouteSave: ['admin'],
@@ -3361,6 +3374,244 @@ async function accountManagersRetrySync(body = {}, req = null, accessContext = n
     req,
     accessContext,
   );
+}
+
+const ACCOUNT_PIC_ACCOUNT_FIELDS = ['Id', 'Name', 'Company_Code__c', 'RecordType.Name', 'Buyer_Payment_Term__c', 'Supplier_Payment_Term__c', 'Is_Broker__c', 'Inactive_Suspended__c'];
+const ACCOUNT_PIC_DIRECTORY_SELECT = 'salesforce_account_id,account_name,cl_key,account_role,row_count,revision,updated_at,updated_by_email';
+const ACCOUNT_PIC_ROW_SELECT = 'id,salesforce_account_id,sequence,port_region,responsible_personnel,team,reporting_supervision,vessel_types_covered';
+
+function accountPicStorageError(error) {
+  const message = String(error?.message || '');
+  if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_pic_directory/i.test(message)) {
+    return appError('Buyer PIC Reference storage is not ready. Apply the latest Supabase migration and try again.', 503);
+  }
+  if (error?.code === 'PGRST202' || (/save_account_pic_directory/i.test(message) && /schema cache|could not find/i.test(message))) {
+    return appError('Buyer PIC Reference storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
+  }
+  return error;
+}
+
+function accountPicRole(record = {}) {
+  if (record.Inactive_Suspended__c !== false || record.Is_Broker__c === true) return null;
+  if (String(record.RecordType?.Name || '').trim().toLowerCase() === 'group') return null;
+  if (!String(record.Buyer_Payment_Term__c || '').trim()) return null;
+  return String(record.Supplier_Payment_Term__c || '').trim() ? 'buyer_supplier' : 'buyer';
+}
+
+function accountPicAccountProjection(record = {}) {
+  const role = accountPicRole(record);
+  if (!role || !validAccountPicAccountId(record.Id)) return null;
+  return {
+    id: String(record.Id).trim(),
+    name: String(record.Name || '').trim(),
+    clKey: String(record.Company_Code__c || '').trim(),
+    role,
+  };
+}
+
+async function currentAccountPicAccount(accountId) {
+  const normalizedId = String(accountId || '').trim();
+  if (!validAccountPicAccountId(normalizedId)) throw appError('A valid Salesforce Account ID is required.', 400);
+  const rows = await queryRows(
+    `
+      SELECT ${ACCOUNT_PIC_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE Id = '${escapeSoql(normalizedId)}'
+      LIMIT 1
+    `,
+    { limit: 1 },
+  );
+  const account = accountPicAccountProjection(rows[0]);
+  if (!account) {
+    throw appError('This Account is not an active non-broker Buyer or Buyer & Supplier. Refresh and review the latest Salesforce Account record.', 409);
+  }
+  return account;
+}
+
+async function currentAccountPicAccounts(accountIds = []) {
+  const ids = [...new Set((accountIds || []).map((value) => String(value || '').trim()).filter(validAccountPicAccountId))];
+  if (!ids.length) return new Map();
+  const records = [];
+  for (const batch of chunkIds(ids, 100)) {
+    const rows = await queryRows(
+      `
+        SELECT ${ACCOUNT_PIC_ACCOUNT_FIELDS.join(', ')}
+        FROM Account
+        WHERE Id IN (${batch.map((id) => `'${escapeSoql(id)}'`).join(',')})
+      `,
+      { limit: 100 },
+    );
+    records.push(...rows);
+  }
+  return new Map(records.map(accountPicAccountProjection).filter(Boolean).map((account) => [account.id, account]));
+}
+
+function accountPicDirectoryResponse(directory, rows = []) {
+  return accountPicDirectoryProjection(directory, rows);
+}
+
+async function loadAccountPicDirectory(client, accountId, { revalidate = true } = {}) {
+  const result = await client
+    .from('account_pic_directories')
+    .select(ACCOUNT_PIC_DIRECTORY_SELECT)
+    .eq('salesforce_account_id', accountId)
+    .maybeSingle();
+  if (result.error) throw accountPicStorageError(result.error);
+  if (!result.data) throw appError('This Buyer PIC Reference table no longer exists.', 404);
+  const currentAccount = revalidate ? await currentAccountPicAccount(accountId) : null;
+  const rowsResult = await client
+    .from('account_pic_directory_rows')
+    .select(ACCOUNT_PIC_ROW_SELECT)
+    .eq('salesforce_account_id', accountId)
+    .order('sequence', { ascending: true });
+  if (rowsResult.error) throw accountPicStorageError(rowsResult.error);
+  return accountPicDirectoryResponse({
+    ...result.data,
+    ...(currentAccount ? {
+      account_name: currentAccount.name,
+      cl_key: currentAccount.clKey,
+      account_role: currentAccount.role,
+    } : {}),
+  }, rowsResult.data || []);
+}
+
+async function accountPicDirectoryList(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  const query = String(body.query || '').trim().toLocaleLowerCase('en-US');
+  const requestedLimit = Number(body.limit || 100);
+  const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 100)) : 100;
+  const storedResult = await client
+    .from('account_pic_directories')
+    .select(ACCOUNT_PIC_DIRECTORY_SELECT)
+    .order('account_name', { ascending: true })
+    .limit(1000);
+  if (storedResult.error) throw accountPicStorageError(storedResult.error);
+  const stored = storedResult.data || [];
+  const activeById = await currentAccountPicAccounts(stored.map((directory) => directory.salesforce_account_id));
+  const directories = stored
+    .filter((directory) => activeById.has(directory.salesforce_account_id))
+    .map((directory) => {
+      const currentAccount = activeById.get(directory.salesforce_account_id);
+      return accountPicDirectoryResponse({
+        ...directory,
+        account_name: currentAccount.name,
+        cl_key: currentAccount.clKey,
+        account_role: currentAccount.role,
+      });
+    })
+    .filter((directory) => !query || `${directory.accountName} ${directory.clKey}`.toLocaleLowerCase('en-US').includes(query))
+    .slice(0, limit)
+    .map((directory) => ({
+      accountId: directory.accountId,
+      accountName: directory.accountName,
+      clKey: directory.clKey,
+      revision: directory.revision,
+      rowCount: directory.rowCount,
+      updatedAt: directory.updatedAt,
+      updatedByEmail: directory.updatedByEmail,
+      isActive: true,
+    }));
+  return { directories, accounts: directories };
+}
+
+async function accountPicAccountOptions(body = {}, req = null, accessContext = null) {
+  const query = String(body.query || '').trim();
+  const requestedLimit = Number(body.limit || 50);
+  const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 100)) : 50;
+  const match = query ? ` AND (Name LIKE '%${escapeSoql(query)}%' OR Company_Code__c LIKE '%${escapeSoql(query)}%')` : '';
+  const rows = await queryRows(
+    `
+      SELECT ${ACCOUNT_PIC_ACCOUNT_FIELDS.join(', ')}
+      FROM Account
+      WHERE Inactive_Suspended__c = false
+        AND Is_Broker__c = false
+        AND Buyer_Payment_Term__c != null
+        AND RecordType.Name != 'Group'${match}
+      ORDER BY Name ASC, Id ASC
+      LIMIT ${limit}
+    `,
+    { limit },
+  );
+  const accounts = rows.map(accountPicAccountProjection).filter(Boolean).map((account) => ({
+    accountId: account.id,
+    accountName: account.name,
+    clKey: account.clKey,
+    role: account.role,
+  }));
+  return { accounts };
+}
+
+async function accountPicDirectoryDetail(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  const accountId = String(body.accountId || '').trim();
+  const directory = await loadAccountPicDirectory(client, accountId);
+  return { directory };
+}
+
+function accountPicIdempotencyKey(body = {}) {
+  const key = String(body.idempotencyKey || '').trim();
+  if (key.length < 16 || key.length > 200) {
+    throw appError('A valid Buyer PIC operation ID is required.', 400);
+  }
+  return key;
+}
+
+async function saveAccountPicDirectory(body = {}, accessContext = null, { operation = 'save' } = {}) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+  const account = await currentAccountPicAccount(body.accountId);
+  let rows;
+  try {
+    rows = normalizeAccountPicRows(body.rows || []);
+  } catch (error) {
+    throw appError(error.message, 400);
+  }
+  const idempotencyKey = accountPicIdempotencyKey(body);
+  const expectedRevision = Number(body.expectedRevision ?? body.revision ?? 0);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw appError('A valid expected revision is required.', 400);
+  }
+  const { error } = await client.rpc('save_account_pic_directory', {
+    p_salesforce_account_id: account.id,
+    p_account_name: account.name,
+    p_cl_key: account.clKey,
+    p_account_role: account.role,
+    p_rows: rows,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: expectedRevision,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: accountPicPayloadHash({ accountId: account.id, rows }),
+    p_operation: operation,
+  });
+  if (error) {
+    const storageError = accountPicStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened|idempotency key/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|invalid|cannot exceed|at most/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+  const directory = await loadAccountPicDirectory(client, account.id, { revalidate: false });
+  return { directory };
+}
+
+async function accountPicDirectorySave(body = {}, req = null, accessContext = null) {
+  return saveAccountPicDirectory(body, accessContext, { operation: 'save' });
+}
+
+async function accountPicDirectoryImport(body = {}, req = null, accessContext = null) {
+  if (typeof body.csvText === 'string' && Buffer.byteLength(body.csvText, 'utf8') > ACCOUNT_PIC_MAX_CSV_BYTES) {
+    throw appError('CSV is too large. Use a file smaller than 2 MB.', 413);
+  }
+  let rows;
+  try {
+    rows = typeof body.csvText === 'string'
+      ? parseAccountPicCsv(body.csvText)
+      : normalizeAccountPicRows(body.rows || [], { requireAtLeastOne: true });
+  } catch (error) {
+    throw appError(error.message, 400);
+  }
+  return saveAccountPicDirectory({ ...body, rows }, accessContext, { operation: 'import' });
 }
 
 const buyersAdministratorList = accountManagersList;
@@ -18769,6 +19020,11 @@ const handlers = {
   accountManagersSave,
   accountManagersSaveNote,
   accountManagersRetrySync,
+  accountPicDirectoryList,
+  accountPicAccountOptions,
+  accountPicDirectoryDetail,
+  accountPicDirectorySave,
+  accountPicDirectoryImport,
   emailSenderStatus,
   emailSenderMailboxSave,
   emailSenderRouteSave,
