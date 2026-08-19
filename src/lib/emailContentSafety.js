@@ -40,7 +40,15 @@ export function safeEmailImageSource(value) {
   }
   try {
     const url = new URL(source);
-    return ['blob:', 'https:'].includes(url.protocol) ? url.href : '';
+    if (url.protocol === 'blob:' || url.protocol === 'https:') return url.href;
+    if (url.protocol === 'http:') {
+      // Older email signatures frequently retain an HTTP logo URL even when
+      // the same host serves the asset over HTTPS. Upgrade it before rendering
+      // so the browser does not block mixed content on FCOS.
+      url.protocol = 'https:';
+      return url.href;
+    }
+    return '';
   } catch {
     return '';
   }

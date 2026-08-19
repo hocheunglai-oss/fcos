@@ -377,7 +377,7 @@ test('Email Router viewer preserves safe newsletter layout without unsafe active
   assert.equal(safeEmailImageSource('data:image/jpeg;base64,/9j/4AAQSkZJRg=='), 'data:image/jpeg;base64,/9j/4AAQSkZJRg==');
   assert.equal(safeEmailImageSource('data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4='), '');
   assert.equal(safeEmailImageSource('data:text/html;base64,PHNjcmlwdD4='), '');
-  assert.equal(safeEmailImageSource('http://prices.example.net/tracker.png'), '');
+  assert.equal(safeEmailImageSource('http://prices.example.net/chart.png'), 'https://prices.example.net/chart.png');
   assert.equal(safeEmailImageSource('javascript:alert(1)'), '');
 
   const style = sanitizeEmailInlineStyle('width: 680px; text-align: center; color: #174f86; position: fixed; background: url(https://tracker.example.net/pixel)');
