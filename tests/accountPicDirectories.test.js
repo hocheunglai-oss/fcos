@@ -12,6 +12,7 @@ import {
 } from '../api/_accountPicDirectories.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260819092105_account_pic_directories.sql', import.meta.url);
+const flexibleMigrationUrl = new URL('../supabase/migrations/20260819103109_account_pic_flexible_schema.sql', import.meta.url);
 const handlerUrl = new URL('../api/functions/[name].js', import.meta.url);
 const policyUrl = new URL('../api/_handlerPolicyRegistry.js', import.meta.url);
 
@@ -138,10 +139,28 @@ test('migration is atomic, revision-protected, service-role-only, and audits no 
   assert.doesNotMatch(auditBlock, /account_name|cl_key/i);
 });
 
+test('flexible schema is typed, service-only, revision-protected, and redacts cell contents', async () => {
+  const sql = await readFile(flexibleMigrationUrl, 'utf8');
+  assert.match(sql, /account_pic_directory_columns/);
+  assert.match(sql, /input_type in \('text', 'multiline_text', 'checkbox', 'number', 'buyer_trader', 'supplier_trader'\)/);
+  assert.match(sql, /column_kind in \('field', 'vessel_type'\)/);
+  assert.match(sql, /add column if not exists row_label/);
+  assert.match(sql, /add column if not exists cells jsonb/);
+  assert.match(sql, /create or replace function public\.save_account_pic_directory_v2/);
+  assert.match(sql, /security invoker/);
+  assert.match(sql, /pg_advisory_xact_lock/);
+  assert.match(sql, /revoke all on table public\.account_pic_directory_columns from public, anon, authenticated/);
+  assert.match(sql, /grant all on table public\.account_pic_directory_columns to service_role/);
+  assert.match(sql, /column_count/);
+  assert.match(sql, /cell_count/);
+  const auditBlock = sql.match(/insert into public\.admin_audit_logs[\s\S]*?return jsonb_build_object/s)?.[0] || '';
+  assert.doesNotMatch(auditBlock, /v_cell|v_cells|v_label|row_label/);
+});
+
 test('handlers are module-gated, revalidate Salesforce, return current detail after every mutation, and fail closed', async () => {
   const source = await readFile(handlerUrl, 'utf8');
   const policies = await readFile(policyUrl, 'utf8');
-  for (const name of ['accountPicDirectoryList', 'accountPicAccountOptions', 'accountPicDirectoryDetail', 'accountPicDirectorySave', 'accountPicDirectoryImport']) {
+  for (const name of ['accountPicDirectoryList', 'accountPicAccountOptions', 'accountPicTraderOptions', 'accountPicDirectoryDetail', 'accountPicDirectorySave', 'accountPicDirectoryImport']) {
     assert.match(source, new RegExp(`${name}: \\['buyers_administrator'\\]`));
     assert.match(policies, new RegExp(`${name}:`));
   }
@@ -150,6 +169,8 @@ test('handlers are module-gated, revalidate Salesforce, return current detail af
   assert.match(source, /RecordType\?\.Name.*group/);
   assert.match(source, /Buyer_Payment_Term__c/);
   assert.match(source, /parseAccountPicCsv\(body\.csvText\)/);
+  assert.match(source, /save_account_pic_directory_v2/);
+  assert.match(source, /One or more selected trader profiles are no longer active/);
   assert.match(source, /Buffer\.byteLength\(body\.csvText, 'utf8'\) > ACCOUNT_PIC_MAX_CSV_BYTES/);
   assert.match(source, /appError\('CSV is too large\. Use a file smaller than 2 MB\.', 413\)/);
   assert.match(source, /accountId: account\.id[\s\S]*accountName: account\.name/);

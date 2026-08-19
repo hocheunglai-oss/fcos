@@ -12,14 +12,17 @@ test('Account Managers exposes the two approved subpages', async () => {
   assert.match(source, /<BuyerPicReferences/);
 });
 
-test('Buyer PIC editor is reference-only, responsive, revisioned, and saves without a list reload', async () => {
+test('Buyer PIC editor is flexible, reference-only, responsive, revisioned, and saves without a list reload', async () => {
   const source = await readFile(componentUrl, 'utf8');
-  assert.match(source, /FCOS does not use these rows to route work, assign people, modify Enquiries\/STEMs, or classify vessels/);
+  assert.match(source, /do not route work, assign people, modify Enquiries\/STEMs, or classify vessels/);
   assert.match(source, /hidden overflow-x-auto md:block/);
   assert.match(source, /space-y-3 md:hidden/);
   assert.match(source, /expectedRevision: directory\.revision/);
-  assert.match(source, /idempotencyKey: operationKey\('save', draftRows\)/);
-  assert.match(source, /idempotencyKey: operationKey\('import', preview\.rows\)/);
-  assert.match(source, /mergeSummary\(nextDirectory\)/);
+  assert.match(source, /Add vessel type/);
+  assert.match(source, /Row header \(optional\)/);
+  assert.match(source, /buyer_trader/);
+  assert.match(source, /supplier_trader/);
+  assert.match(source, /idempotencyKey: operationKey\(kind, payload\)/);
+  assert.match(source, /mergeSummary\(next\)/);
   assert.doesNotMatch(source, /loadSummaries\(\{ background: true \}\).*saved/s);
 });

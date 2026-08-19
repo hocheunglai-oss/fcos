@@ -20,6 +20,17 @@ const PIC_FIELDS = Object.freeze(Object.values(FIELD_BY_HEADER));
 const SALESFORCE_ID_RE = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const MAX_ROWS = 500;
 const MAX_CELL_LENGTH = 4_000;
+const MAX_COLUMNS = 50;
+const MAX_CELLS = 25_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const ACCOUNT_PIC_INPUT_TYPES = Object.freeze([
+  'text',
+  'multiline_text',
+  'checkbox',
+  'number',
+  'buyer_trader',
+  'supplier_trader',
+]);
 export const ACCOUNT_PIC_MAX_CSV_BYTES = 2_000_000;
 
 function text(value) {
@@ -170,6 +181,138 @@ export function accountPicPayloadHash({ accountId, rows = [] } = {}) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+function normalizeTraderCell(value, position, label) {
+  if (value == null || value === '') return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Buyer PIC row ${position} column ${label} requires a trader profile.`);
+  }
+  const profileId = text(value.profileId ?? value.id).trim();
+  if (!UUID_RE.test(profileId)) throw new Error(`Buyer PIC row ${position} column ${label} requires a valid trader profile.`);
+  const name = normalizeAccountPicCell(value.name);
+  const email = normalizeAccountPicCell(value.email).toLowerCase();
+  if (name.length > 300 || email.length > 320) throw new Error('Buyer PIC trader labels are too long.');
+  return { profileId, name, email };
+}
+
+export function normalizeAccountPicColumns(columns) {
+  if (!Array.isArray(columns) || columns.length < 1 || columns.length > MAX_COLUMNS) {
+    throw new Error(`Buyer PIC columns must contain between 1 and ${MAX_COLUMNS} columns.`);
+  }
+  const labels = new Set();
+  const ids = new Set();
+  return columns.map((input, index) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(`Buyer PIC column ${index + 1} is invalid.`);
+    const id = text(input.id ?? input.columnId).trim();
+    const label = normalizeAccountPicCell(input.label);
+    const inputType = text(input.inputType ?? input.input_type).trim().toLowerCase();
+    const columnKind = text(input.columnKind ?? input.column_kind ?? 'field').trim().toLowerCase();
+    if (!UUID_RE.test(id)) throw new Error(`Buyer PIC column ${index + 1} requires a valid ID.`);
+    if (!label || label.length > 200) throw new Error(`Buyer PIC column ${index + 1} requires a header of at most 200 characters.`);
+    if (!ACCOUNT_PIC_INPUT_TYPES.includes(inputType)) throw new Error(`Buyer PIC column ${label} has an invalid input type.`);
+    if (!['field', 'vessel_type'].includes(columnKind)) throw new Error(`Buyer PIC column ${label} has an invalid column kind.`);
+    if (columnKind === 'vessel_type' && inputType !== 'checkbox') throw new Error('Vessel type columns must use checkboxes.');
+    const normalizedLabel = label.toLocaleLowerCase('en-US');
+    if (labels.has(normalizedLabel)) throw new Error('Buyer PIC column headers must be unique.');
+    if (ids.has(id)) throw new Error('Buyer PIC column IDs must be unique.');
+    labels.add(normalizedLabel);
+    ids.add(id);
+    return { id, position: index + 1, label, inputType, columnKind };
+  });
+}
+
+export function normalizeAccountPicFlexibleRows(rows, columns) {
+  if (!Array.isArray(rows)) throw new Error('Buyer PIC rows must be a list.');
+  if (rows.length > MAX_ROWS) throw new Error(`A Buyer PIC directory can contain at most ${MAX_ROWS} rows.`);
+  if (rows.length * columns.length > MAX_CELLS) throw new Error(`A Buyer PIC directory can contain at most ${MAX_CELLS} cells.`);
+  const rowIds = new Set();
+  const columnById = new Map(columns.map((column) => [column.id, column]));
+  return rows.map((input, index) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(`Buyer PIC row ${index + 1} is invalid.`);
+    const id = text(input.id ?? input.rowId).trim();
+    if (!UUID_RE.test(id) || rowIds.has(id)) throw new Error(`Buyer PIC row ${index + 1} requires a unique valid ID.`);
+    rowIds.add(id);
+    const rowLabel = normalizeAccountPicCell(input.rowLabel);
+    if (rowLabel.length > 300) throw new Error(`Buyer PIC row ${index + 1} header is too long.`);
+    const rawCells = input.cells && typeof input.cells === 'object' && !Array.isArray(input.cells) ? input.cells : {};
+    for (const key of Object.keys(rawCells)) {
+      if (!columnById.has(key)) throw new Error(`Buyer PIC row ${index + 1} contains an unknown column.`);
+    }
+    const cells = {};
+    for (const column of columns) {
+      const value = rawCells[column.id];
+      if (column.inputType === 'checkbox') {
+        cells[column.id] = value === true;
+      } else if (column.inputType === 'number') {
+        if (value == null || value === '') cells[column.id] = null;
+        else {
+          const number = Number(value);
+          if (!Number.isFinite(number)) throw new Error(`Buyer PIC row ${index + 1} column ${column.label} requires a number.`);
+          cells[column.id] = number;
+        }
+      } else if (column.inputType === 'buyer_trader' || column.inputType === 'supplier_trader') {
+        cells[column.id] = normalizeTraderCell(value, index + 1, column.label);
+      } else {
+        const cell = normalizeAccountPicCell(value);
+        if (cell.length > MAX_CELL_LENGTH) throw new Error(`Buyer PIC row ${index + 1} column ${column.label} is longer than ${MAX_CELL_LENGTH} characters.`);
+        cells[column.id] = cell;
+      }
+    }
+    return { id, position: index + 1, rowLabel, cells };
+  });
+}
+
+export function normalizeAccountPicGrid({ columns, rows } = {}) {
+  const normalizedColumns = normalizeAccountPicColumns(columns);
+  return {
+    columns: normalizedColumns,
+    rows: normalizeAccountPicFlexibleRows(rows, normalizedColumns),
+  };
+}
+
+export function accountPicFlexiblePayloadHash({ accountId, columns, rows } = {}) {
+  const grid = normalizeAccountPicGrid({ columns, rows });
+  return createHash('sha256').update(JSON.stringify({ accountId: text(accountId).trim(), ...grid })).digest('hex');
+}
+
+export function accountPicFlexibleDirectoryProjection(directory = {}, columns = [], rows = []) {
+  const normalizedColumns = (columns || []).slice()
+    .sort((left, right) => Number(left.sequence || left.position || 0) - Number(right.sequence || right.position || 0))
+    .map((column, index) => ({
+      id: text(column.id).trim(),
+      position: Number(column.sequence || column.position || index + 1),
+      label: normalizeAccountPicCell(column.label),
+      inputType: text(column.input_type ?? column.inputType).trim(),
+      columnKind: text(column.column_kind ?? column.columnKind ?? 'field').trim(),
+    }));
+  const columnIds = new Set(normalizedColumns.map((column) => column.id));
+  const normalizedRows = (rows || []).slice()
+    .sort((left, right) => Number(left.sequence || left.position || 0) - Number(right.sequence || right.position || 0))
+    .map((row, index) => {
+      const rawCells = row.cells && typeof row.cells === 'object' && !Array.isArray(row.cells) ? row.cells : {};
+      const cells = Object.fromEntries(Object.entries(rawCells).filter(([key]) => columnIds.has(key)));
+      return {
+        id: text(row.id).trim(),
+        position: Number(row.sequence || row.position || index + 1),
+        rowLabel: normalizeAccountPicCell(row.row_label ?? row.rowLabel),
+        cells,
+      };
+    });
+  return {
+    accountId: text(directory.salesforce_account_id ?? directory.accountId).trim(),
+    accountName: text(directory.account_name ?? directory.accountName).trim(),
+    clKey: text(directory.cl_key ?? directory.clKey).trim(),
+    role: text(directory.account_role ?? directory.role).trim(),
+    revision: Number(directory.revision || 0),
+    rowCount: Number(directory.row_count ?? normalizedRows.length),
+    columnCount: Number(directory.column_count ?? 0),
+    columnCount: Number(directory.column_count ?? normalizedColumns.length),
+    updatedAt: directory.updated_at ?? directory.updatedAt ?? null,
+    updatedByEmail: directory.updated_by_email ?? directory.updatedByEmail ?? null,
+    columns: normalizedColumns,
+    rows: normalizedRows,
+  };
+}
+
 export function accountPicDirectoryProjection(directory = {}, rows = []) {
   const normalizedRows = (rows || [])
     .slice()
@@ -203,4 +346,6 @@ export const accountPicDirectoryInternals = Object.freeze({
   PIC_FIELDS,
   MAX_ROWS,
   MAX_CELL_LENGTH,
+  MAX_COLUMNS,
+  MAX_CELLS,
 });

@@ -37,7 +37,10 @@ import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccount
 import {
   ACCOUNT_PIC_MAX_CSV_BYTES,
   accountPicDirectoryProjection,
+  accountPicFlexibleDirectoryProjection,
+  accountPicFlexiblePayloadHash,
   accountPicPayloadHash,
+  normalizeAccountPicGrid,
   normalizeAccountPicRows,
   parseAccountPicCsv,
   validAccountPicAccountId,
@@ -1572,6 +1575,7 @@ const HANDLER_MODULE_ACCESS = {
   accountManagersRetrySync: ['buyers_administrator'],
   accountPicDirectoryList: ['buyers_administrator'],
   accountPicAccountOptions: ['buyers_administrator'],
+  accountPicTraderOptions: ['buyers_administrator'],
   accountPicDirectoryDetail: ['buyers_administrator'],
   accountPicDirectorySave: ['buyers_administrator'],
   accountPicDirectoryImport: ['buyers_administrator'],
@@ -3377,15 +3381,16 @@ async function accountManagersRetrySync(body = {}, req = null, accessContext = n
 }
 
 const ACCOUNT_PIC_ACCOUNT_FIELDS = ['Id', 'Name', 'Company_Code__c', 'RecordType.Name', 'Buyer_Payment_Term__c', 'Supplier_Payment_Term__c', 'Is_Broker__c', 'Inactive_Suspended__c'];
-const ACCOUNT_PIC_DIRECTORY_SELECT = 'salesforce_account_id,account_name,cl_key,account_role,row_count,revision,updated_at,updated_by_email';
-const ACCOUNT_PIC_ROW_SELECT = 'id,salesforce_account_id,sequence,port_region,responsible_personnel,team,reporting_supervision,vessel_types_covered';
+const ACCOUNT_PIC_DIRECTORY_SELECT = 'salesforce_account_id,account_name,cl_key,account_role,row_count,column_count,revision,updated_at,updated_by_email';
+const ACCOUNT_PIC_COLUMN_SELECT = 'id,salesforce_account_id,sequence,label,input_type,column_kind';
+const ACCOUNT_PIC_ROW_SELECT = 'id,salesforce_account_id,sequence,row_label,cells,port_region,responsible_personnel,team,reporting_supervision,vessel_types_covered';
 
 function accountPicStorageError(error) {
   const message = String(error?.message || '');
   if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_pic_directory/i.test(message)) {
     return appError('Buyer PIC Reference storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
-  if (error?.code === 'PGRST202' || (/save_account_pic_directory/i.test(message) && /schema cache|could not find/i.test(message))) {
+  if (error?.code === 'PGRST202' || (/save_account_pic_directory(?:_v2)?/i.test(message) && /schema cache|could not find/i.test(message))) {
     return appError('Buyer PIC Reference storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
   }
   return error;
@@ -3446,7 +3451,8 @@ async function currentAccountPicAccounts(accountIds = []) {
   return new Map(records.map(accountPicAccountProjection).filter(Boolean).map((account) => [account.id, account]));
 }
 
-function accountPicDirectoryResponse(directory, rows = []) {
+function accountPicDirectoryResponse(directory, rows = [], columns = []) {
+  if (columns.length) return accountPicFlexibleDirectoryProjection(directory, columns, rows);
   return accountPicDirectoryProjection(directory, rows);
 }
 
@@ -3459,12 +3465,12 @@ async function loadAccountPicDirectory(client, accountId, { revalidate = true } 
   if (result.error) throw accountPicStorageError(result.error);
   if (!result.data) throw appError('This Buyer PIC Reference table no longer exists.', 404);
   const currentAccount = revalidate ? await currentAccountPicAccount(accountId) : null;
-  const rowsResult = await client
-    .from('account_pic_directory_rows')
-    .select(ACCOUNT_PIC_ROW_SELECT)
-    .eq('salesforce_account_id', accountId)
-    .order('sequence', { ascending: true });
+  const [rowsResult, columnsResult] = await Promise.all([
+    client.from('account_pic_directory_rows').select(ACCOUNT_PIC_ROW_SELECT).eq('salesforce_account_id', accountId).order('sequence', { ascending: true }),
+    client.from('account_pic_directory_columns').select(ACCOUNT_PIC_COLUMN_SELECT).eq('salesforce_account_id', accountId).order('sequence', { ascending: true }),
+  ]);
   if (rowsResult.error) throw accountPicStorageError(rowsResult.error);
+  if (columnsResult.error) throw accountPicStorageError(columnsResult.error);
   return accountPicDirectoryResponse({
     ...result.data,
     ...(currentAccount ? {
@@ -3472,7 +3478,7 @@ async function loadAccountPicDirectory(client, accountId, { revalidate = true } 
       cl_key: currentAccount.clKey,
       account_role: currentAccount.role,
     } : {}),
-  }, rowsResult.data || []);
+  }, rowsResult.data || [], columnsResult.data || []);
 }
 
 async function accountPicDirectoryList(body = {}, req = null, accessContext = null) {
@@ -3541,6 +3547,27 @@ async function accountPicAccountOptions(body = {}, req = null, accessContext = n
   return { accounts };
 }
 
+async function accountPicTraderOptions(body = {}, req = null, accessContext = null) {
+  const client = accessContext?.client || supabaseAdminClient();
+  const query = String(body.query || '').trim().toLocaleLowerCase('en-US');
+  const { data, error } = await client
+    .from('user_profiles')
+    .select('id,email,full_name,user_type,active')
+    .eq('active', true)
+    .order('full_name', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  const profiles = (data || [])
+    .map((profile) => ({
+      profileId: profile.id,
+      name: String(profile.full_name || profile.email || '').trim(),
+      email: String(profile.email || '').trim().toLowerCase(),
+      userType: String(profile.user_type || '').trim(),
+    }))
+    .filter((profile) => !query || `${profile.name} ${profile.email} ${profile.userType}`.toLocaleLowerCase('en-US').includes(query));
+  return { profiles };
+}
+
 async function accountPicDirectoryDetail(body = {}, req = null, accessContext = null) {
   const client = accessContext?.client || supabaseAdminClient();
   const accountId = String(body.accountId || '').trim();
@@ -3595,11 +3622,70 @@ async function saveAccountPicDirectory(body = {}, accessContext = null, { operat
   return { directory };
 }
 
+async function saveFlexibleAccountPicDirectory(body = {}, accessContext = null, { operation = 'save' } = {}) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+  const account = await currentAccountPicAccount(body.accountId);
+  let grid;
+  try {
+    grid = normalizeAccountPicGrid({ columns: body.columns, rows: body.rows });
+  } catch (error) {
+    throw appError(error.message, 400);
+  }
+
+  const selectedProfileIds = [...new Set(grid.columns
+    .filter((column) => column.inputType === 'buyer_trader' || column.inputType === 'supplier_trader')
+    .flatMap((column) => grid.rows.map((row) => row.cells[column.id]?.profileId).filter(Boolean)))];
+  if (selectedProfileIds.length) {
+    const { data, error } = await client.from('user_profiles').select('id,email,full_name,active').in('id', selectedProfileIds).eq('active', true);
+    if (error) throw error;
+    const profiles = new Map((data || []).map((entry) => [entry.id, entry]));
+    if (profiles.size !== selectedProfileIds.length) throw appError('One or more selected trader profiles are no longer active.', 409);
+    grid.rows = grid.rows.map((row) => ({
+      ...row,
+      cells: Object.fromEntries(grid.columns.map((column) => {
+        const value = row.cells[column.id];
+        if (!value?.profileId) return [column.id, value];
+        const current = profiles.get(value.profileId);
+        return [column.id, { profileId: current.id, name: String(current.full_name || current.email || '').trim(), email: String(current.email || '').trim().toLowerCase() }];
+      })),
+    }));
+  }
+
+  const idempotencyKey = accountPicIdempotencyKey(body);
+  const expectedRevision = Number(body.expectedRevision ?? body.revision ?? 0);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw appError('A valid expected revision is required.', 400);
+  const { error } = await client.rpc('save_account_pic_directory_v2', {
+    p_salesforce_account_id: account.id,
+    p_account_name: account.name,
+    p_cl_key: account.clKey,
+    p_account_role: account.role,
+    p_columns: grid.columns,
+    p_rows: grid.rows,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: expectedRevision,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: accountPicFlexiblePayloadHash({ accountId: account.id, ...grid }),
+    p_operation: operation,
+  });
+  if (error) {
+    const storageError = accountPicStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened|idempotency key|no longer active/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|invalid|cannot exceed|at most|must contain|unique/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+  return { directory: await loadAccountPicDirectory(client, account.id, { revalidate: false }) };
+}
+
 async function accountPicDirectorySave(body = {}, req = null, accessContext = null) {
+  if (Array.isArray(body.columns)) return saveFlexibleAccountPicDirectory(body, accessContext, { operation: 'save' });
   return saveAccountPicDirectory(body, accessContext, { operation: 'save' });
 }
 
 async function accountPicDirectoryImport(body = {}, req = null, accessContext = null) {
+  if (Array.isArray(body.columns)) return saveFlexibleAccountPicDirectory(body, accessContext, { operation: 'import' });
   if (typeof body.csvText === 'string' && Buffer.byteLength(body.csvText, 'utf8') > ACCOUNT_PIC_MAX_CSV_BYTES) {
     throw appError('CSV is too large. Use a file smaller than 2 MB.', 413);
   }
@@ -19022,6 +19108,7 @@ const handlers = {
   accountManagersRetrySync,
   accountPicDirectoryList,
   accountPicAccountOptions,
+  accountPicTraderOptions,
   accountPicDirectoryDetail,
   accountPicDirectorySave,
   accountPicDirectoryImport,

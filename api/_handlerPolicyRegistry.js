@@ -280,6 +280,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   accountManagersRetrySync: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectoryList: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicAccountOptions: readPolicy({"cache":"none","externalAction":false,"capability":null}),
+  accountPicTraderOptions: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectoryDetail: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectorySave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectoryImport: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
