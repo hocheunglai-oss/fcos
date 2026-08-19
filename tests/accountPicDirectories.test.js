@@ -105,12 +105,14 @@ test('hashes the exact normalized revision without exposing it in the directory 
     cl_key: 'EXAMPLE',
     account_role: 'buyer',
     row_count: 1,
+    column_count: 5,
     revision: 2,
     updated_at: '2026-08-19T00:00:00Z',
     updated_by_email: 'editor@example.test',
   }, [{ id: 'a', sequence: 1, port_region: 'Region', responsible_personnel: 'Person', team: 'Team', reporting_supervision: '', vessel_types_covered: 'Container' }]);
   assert.equal(projection.rows[0].position, 1);
   assert.equal(projection.rowCount, 1);
+  assert.equal(projection.columnCount, 5);
   assert.equal(projection.rows[0].responsiblePersonnel, 'Person');
 });
 
