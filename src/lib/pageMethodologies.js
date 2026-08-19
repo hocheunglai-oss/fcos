@@ -377,7 +377,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Delivery and two-stage ownership',
-        body: 'A case becomes actionable only after its Salesforce Delivery Date and is due on the next Hong Kong business day. Each exact supplier resolves its Supplier Trader from active Supplier Nominations by normalized email first and unique normalized name fallback. After every required supplier is verified, the Buyer Confirmation Trader completes buyer pricing.',
+        body: 'A product-bearing STEM becomes actionable one calendar day after its required Salesforce Delivery Date and is due on the next Hong Kong business day. An extra-cost-only STEM instead becomes actionable one calendar day after the latest ETA, ETB, ETCD, or ETD range date; if every schedule date is missing, its Hong Kong Enquiry Created Date is the basis. Extra-cost-only cases have no Variable Charges due date. Each exact supplier resolves its Supplier Trader from active Supplier Nominations by normalized email first and unique normalized name fallback. After every required supplier is verified, the Buyer Confirmation Trader completes buyer pricing.',
       },
       {
         title: 'Review and controlled changes',

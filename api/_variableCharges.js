@@ -14,6 +14,12 @@ const CASE_SELECT = [
   'post_invoice_resolution', 'post_invoice_reference', 'created_at', 'updated_at',
 ].join(',');
 const HK_HOLIDAY_CACHE = new Map();
+const VARIABLE_CHARGE_SCHEDULE_FIELDS = [
+  'ETA_Start_Date__c', 'ETA_End_Date__c',
+  'ETB_Start_Date__c', 'ETB_End_Date__c',
+  'ETCD_Start_Date__c', 'ETCD_End_Date__c',
+  'ETD_Start_Date__c', 'ETD_End_Date__c',
+];
 
 function httpError(message, status = 400, code = 'VARIABLE_CHARGE_ERROR', details) {
   const error = new Error(message);
@@ -102,6 +108,65 @@ function hongKongToday(now = new Date()) {
   }).format(now);
 }
 
+function hongKongDateOnly(value) {
+  const dateOnly = isoDate(value);
+  if (dateOnly) return dateOnly;
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(instant).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  return parts.year && parts.month && parts.day ? `${parts.year}-${parts.month}-${parts.day}` : null;
+}
+
+export function variableChargeActionability(liveCase, today = hongKongToday()) {
+  const stem = liveCase?.stem || liveCase || {};
+  const hasProductLineItems = liveCase?.hasProductLineItems === true
+    || (Array.isArray(liveCase?.allLineItems) && liveCase.allLineItems.length > 0);
+  if (hasProductLineItems) {
+    const basisDate = isoDate(stem.Delivery_Date__c);
+    const actionableOn = basisDate ? addUtcDays(basisDate, 1) : null;
+    return {
+      hasProductLineItems: true,
+      deliveryRequired: true,
+      actionBasis: 'delivery_date',
+      actionBasisDate: basisDate,
+      actionableOn,
+      ready: Boolean(actionableOn && today >= actionableOn),
+    };
+  }
+  const scheduleDates = VARIABLE_CHARGE_SCHEDULE_FIELDS
+    .map((field) => isoDate(stem[field]))
+    .filter(Boolean)
+    .sort();
+  const latestScheduleDate = scheduleDates.at(-1) || null;
+  const basisDate = latestScheduleDate || hongKongDateOnly(stem.CreatedDate);
+  const actionableOn = basisDate ? addUtcDays(basisDate, 1) : null;
+  return {
+    hasProductLineItems: false,
+    deliveryRequired: false,
+    actionBasis: latestScheduleDate ? 'latest_schedule_date' : 'enquiry_created_date',
+    actionBasisDate: basisDate,
+    actionableOn,
+    ready: Boolean(actionableOn && today >= actionableOn),
+  };
+}
+
+function assertLiveActionable(liveCase) {
+  const actionability = variableChargeActionability(liveCase);
+  if (actionability.ready) return actionability;
+  if (actionability.deliveryRequired) {
+    throw httpError('Product-bearing Variable Charges become actionable only after the Salesforce Delivery Date.', 409, 'DELIVERY_NOT_COMPLETE');
+  }
+  throw httpError(
+    actionability.actionableOn
+      ? `Extra-cost-only Variable Charges become actionable on ${actionability.actionableOn}, one calendar day after the latest schedule basis.`
+      : 'Extra-cost-only Variable Charges readiness could not be calculated from the schedule or Enquiry Created Date.',
+    409,
+    'SCHEDULE_NOT_COMPLETE',
+  );
+}
+
 function isWeekend(value) {
   const day = new Date(`${value}T00:00:00.000Z`).getUTCDay();
   return day === 0 || day === 6;
@@ -184,6 +249,8 @@ function liveFingerprint(liveCase) {
   return sha256({
     stemId: liveCase.stem.Id,
     deliveryDate: liveCase.stem.Delivery_Date__c || null,
+    schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
+    productLinePresence: (liveCase.allLineItems || []).map((row) => row.Id).sort(),
     stemFinancials: {
       accountId: liveCase.stem.Account__c || null,
       paymentTerm: liveCase.stem.Payment_Term__c || null,
@@ -204,6 +271,11 @@ function liveFingerprint(liveCase) {
 
 function supplierLiveFingerprint(liveCase, supplierId) {
   return sha256({
+    readiness: {
+      deliveryDate: liveCase.stem.Delivery_Date__c || null,
+      schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
+      productLinePresence: (liveCase.allLineItems || []).map((row) => row.Id).sort(),
+    },
     account: liveCase.accounts.filter((row) => row.Id === supplierId).map((row) => ({
       id: row.Id,
       isAgent: row.Is_Agent__c === true,
@@ -359,7 +431,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const requested = stemIds ? [...new Set(stemIds.filter((id) => SALESFORCE_ID.test(String(id || ''))))] : null;
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
   const [allLineItems, allExtraCosts] = await Promise.all([
-    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND Original_Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
     queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
@@ -379,7 +451,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, CreatedDate, Delivery_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, supplierNominations, invoices] = await Promise.all([
@@ -388,11 +460,12 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c, Proforma__c, Sent__c, File__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
   ]);
   const result = stemRows.map((stem) => {
+    const stemLineItems = allLineItems.filter((row) => row.STEM__c === stem.Id);
     const lineItems = relevantLines.filter((row) => row.STEM__c === stem.Id);
     const extraCosts = relevantExtras.filter((row) => row.STEM__c === stem.Id);
     const usedAccountIds = new Set([...lineItems.map((row) => row.Original_Supplier__c), ...extraCosts.map((row) => row.Supplier__c)]);
     const entry = {
-      stem, lineItems, extraCosts,
+      stem, lineItems, extraCosts, allLineItems: stemLineItems,
       accounts: [...usedAccountIds].map((id) => accountMap.get(id)).filter(Boolean),
       nominations: nominations.filter((row) => row.STEM__c === stem.Id),
       supplierNominations: supplierNominations.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Account__c)),
@@ -400,6 +473,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
       invoices: invoices.filter((row) => row.STEM__c === stem.Id),
       hasVariableCharges: lineItems.length > 0 || extraCosts.length > 0,
       hasShipAgent: lineItems.length > 0 || extraCosts.length > 0,
+      hasProductLineItems: stemLineItems.length > 0,
     };
     entry.fingerprint = liveFingerprint(entry);
     return entry;
@@ -454,7 +528,7 @@ function deriveStatus(live, stored, today = hongKongToday()) {
     && !sourceChanged;
   if (finals.length && (sourceChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
   if (!live.hasVariableCharges) return 'completed';
-  if (!live.stem.Delivery_Date__c || today <= live.stem.Delivery_Date__c) return 'awaiting_delivery';
+  if (!variableChargeActionability(live, today).ready) return 'awaiting_delivery';
   if ((live.supplierRequirements || []).some((row) => row.assignmentStatus !== 'resolved' || row.status !== 'Verified')) return 'needs_action';
   if (live.assignment?.status !== 'resolved') return 'needs_action';
   if (finals.length) return confirmed || stored?.post_invoice_resolution ? 'completed' : 'post_invoice_changes';
@@ -484,6 +558,7 @@ function serializeLiveRow(row, kind) {
 
 function serializeCase(live, stored, profile, gm, dueDate) {
   const status = deriveStatus(live, stored);
+  const actionability = variableChargeActionability(live);
   const assignee = effectiveAssignee(stored || {});
   const supplierAccounts = live.accounts.map((row) => ({
     id: row.Id,
@@ -509,9 +584,15 @@ function serializeCase(live, stored, profile, gm, dueDate) {
   baseCapabilities.canBuyerConfirm = baseCapabilities.canConfirm && verifiedSupplierCount === supplierRequirements.length;
   return {
     id: stored?.id || null, stemId: live.stem.Id,
-    stemName: live.stem.KeyStem__c || live.stem.Name || live.stem.Id,
+    stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
+    stemReference: live.stem.KeyStem__c || null,
     createdDate: live.stem.CreatedDate || null,
     deliveryDate: live.stem.Delivery_Date__c || null, dueDate, status,
+    hasProductLineItems: actionability.hasProductLineItems,
+    deliveryRequired: actionability.deliveryRequired,
+    actionBasis: actionability.actionBasis,
+    actionBasisDate: actionability.actionBasisDate,
+    actionableOn: actionability.actionableOn,
     salesforceStemLastModifiedAt: live.stem.LastModifiedDate || null,
     revision: Number(stored?.revision || 0), fingerprint: live.fingerprint,
     confirmed: live.stem.Variable_Charges_Confirmed__c === true,
@@ -553,7 +634,7 @@ async function serializeCases(client, liveCases, profile) {
   const gm = await activeGeneralManager(client, profile?.id);
   const cases = [];
   for (const live of liveCases) {
-    const dueDate = live.stem.Delivery_Date__c ? await dueDateForDelivery(live.stem.Delivery_Date__c) : null;
+    const dueDate = live.hasProductLineItems && live.stem.Delivery_Date__c ? await dueDateForDelivery(live.stem.Delivery_Date__c) : null;
     cases.push(serializeCase(live, storedMap.get(live.stem.Id), profile, gm, dueDate));
   }
   return { cases, gm };
@@ -902,7 +983,7 @@ export async function saveAndConfirmVariableCharges(body, context) {
   if (reservation?.status === 'succeeded') return reservation.result || reservation.result_payload || {};
   if (reservation?.status === 'uncertain') throw httpError('This operation has an uncertain Salesforce outcome. Refresh the live case before taking another action.', 409, 'OPERATION_UNCERTAIN');
   if (reservation?.status === 'failed') throw httpError('This operation already failed. Refresh the live case and submit a new confirmation.', 409, 'OPERATION_FAILED');
-  if (!liveBefore.stem.Delivery_Date__c || hongKongToday() <= liveBefore.stem.Delivery_Date__c) throw httpError('Variable Charges charges become actionable after the Salesforce Delivery Date.', 409, 'DELIVERY_NOT_COMPLETE');
+  assertLiveActionable(liveBefore);
   let reviews;
   if (reservation?.status === 'salesforce_written') {
     const writtenFingerprint = text(reservation?.result?.sourceFingerprint, 128);
@@ -1014,9 +1095,7 @@ export async function verifyVariableChargeSupplier(body, context) {
     if (gm.isGeneralManager) throw httpError('A General Manager override reason of at least 5 characters is required.', 400, 'GM_REASON_REQUIRED');
     throw httpError('Only the assigned Supplier Trader may verify this supplier stage.', 403, 'ASSIGNED_SUPPLIER_TRADER_REQUIRED');
   }
-  if (!live.stem.Delivery_Date__c || hongKongToday() <= live.stem.Delivery_Date__c) {
-    throw httpError('Final supplier charges may be verified only after the Salesforce Delivery Date.', 409, 'DELIVERY_NOT_COMPLETE');
-  }
+  assertLiveActionable(live);
   if (text(body?.expectedStemLastModifiedAt, 80) !== text(live.stem.LastModifiedDate, 80)) {
     throw httpError('The Salesforce STEM changed after this supplier stage was opened.', 409, 'STEM_LAST_MODIFIED_CONFLICT');
   }
@@ -1168,7 +1247,7 @@ function syncPayload(live, stored, dueDate) {
   const status = deriveStatus(live, stored);
   return {
     stemId: live.stem.Id,
-    stemName: live.stem.KeyStem__c || live.stem.Name || live.stem.Id,
+    stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
     workflowStatus: status === 'post_invoice_changes' ? 'post_invoice_change' : status,
     deliveryDate: live.stem.Delivery_Date__c || null,
     dueDate,
@@ -1202,7 +1281,7 @@ export async function syncVariableCharges(context, { stemIds = null } = {}) {
   const storedMap = new Map(existing.map((row) => [row.stem_id, row]));
   const results = [];
   for (const entry of live) {
-    const dueDate = entry.stem.Delivery_Date__c ? await dueDateForDelivery(entry.stem.Delivery_Date__c) : null;
+    const dueDate = entry.hasProductLineItems && entry.stem.Delivery_Date__c ? await dueDateForDelivery(entry.stem.Delivery_Date__c) : null;
     const payload = syncPayload(entry, storedMap.get(entry.stem.Id), dueDate);
     if (context.profile?.id) {
       payload.actorUserId = context.profile.id;
@@ -1272,6 +1351,7 @@ export const variableChargeInternals = {
   normalizedEmail,
   normalizedName,
   nextHongKongBusinessDay,
+  variableChargeActionability,
   sha256,
   SHIP_AGENT_STEM_CREATED_FROM: VARIABLE_CHARGE_STEM_CREATED_FROM,
   VARIABLE_CHARGE_STEM_CREATED_FROM,

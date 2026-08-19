@@ -52,6 +52,16 @@ public class InvoiceController {
     public static Invoice__c createInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate){
         if (createProforma != true && isCreditNote != true) {
             VariableChargeInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(Id.valueOf(stemId));
+            if (invoiceDueDate == null) {
+                throw new AuraHandledException('Enter the Invoice Due Date before creating the final Buyer Invoice.');
+            }
+            Integer productLineCount = [
+                SELECT COUNT() FROM STEM_Line_Item__c
+                WHERE STEM__c = :stemId AND Cancelled__c = false
+            ];
+            if (productLineCount > 0 && deliveryDate == null) {
+                throw new AuraHandledException('A product-bearing STEM requires its Delivery Date before the final Buyer Invoice can be created.');
+            }
         }
            STEM__c stem = [SELECT Id, KeyStem__c, Invoice_Date__c, Total__c, Mailing_Requirement__c, Acknowledge_Receipt__c,
                         (SELECT Id, Refcode_Index__c FROM Invoices__r ORDER By Refcode_Index__c)

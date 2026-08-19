@@ -353,6 +353,11 @@
                                 variant="label-stacked" value={invoiceDueDateValue} onchange={handleChangeInvoiceDueDate} required
                                 disabled={dueDateDisabled}>
                             </lightning-input>
+                            <template if:true={showCancellationChargeDueDateHint}>
+                                <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small" role="note">
+                                    {cancellationChargeDueDateHint}
+                                </div>
+                            </template>
                         </div>
                         <template if:true={fcbsReferenceVisible}>
                             <div class="slds-col slds-size_1-of-3">

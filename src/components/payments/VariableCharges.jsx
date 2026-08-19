@@ -34,7 +34,7 @@ import { cn } from '@/lib/utils';
 
 const VIEWS = [
   { id: 'needs_action', label: 'Needs Action', tone: 'border-amber-300 bg-amber-50 text-amber-900' },
-  { id: 'awaiting_delivery', label: 'Awaiting Delivery', tone: 'border-sky-300 bg-sky-50 text-sky-900' },
+  { id: 'awaiting_delivery', label: 'Awaiting Delivery / Schedule', tone: 'border-sky-300 bg-sky-50 text-sky-900' },
   { id: 'ready_for_invoice', label: 'Ready for Invoice', tone: 'border-emerald-300 bg-emerald-50 text-emerald-900' },
   { id: 'post_invoice_changes', label: 'Post-Invoice Changes', tone: 'border-rose-300 bg-rose-50 text-rose-900' },
   { id: 'completed', label: 'Completed', tone: 'border-slate-300 bg-slate-50 text-slate-800' },
@@ -94,6 +94,31 @@ function caseStemId(caseRow) {
 
 function caseStemName(caseRow) {
   return text(valueOf(caseRow, ['stemName', 'stem_name', 'stemNumber', 'stem_number'])) || caseStemId(caseRow) || 'STEM';
+}
+
+function caseStemReference(caseRow) {
+  const reference = text(valueOf(caseRow, ['stemReference', 'stem_reference', 'stemNumber', 'stem_number']));
+  return reference && reference !== caseStemName(caseRow) ? reference : '';
+}
+
+function actionBasisLabel(caseRow) {
+  const basis = text(valueOf(caseRow, ['actionBasis', 'action_basis']));
+  if (basis === 'delivery_date') return 'Delivery date';
+  if (basis === 'latest_schedule_date') return 'Latest ETA / ETB / ETCD / ETD';
+  if (basis === 'enquiry_created_date') return 'Enquiry created date';
+  return 'Action basis';
+}
+
+function Actionability({ caseRow, compact = false }) {
+  const basisDate = valueOf(caseRow, ['actionBasisDate', 'action_basis_date', 'deliveryDate', 'delivery_date']);
+  const actionableOn = valueOf(caseRow, ['actionableOn', 'actionable_on']);
+  return <div className={compact ? '' : 'min-w-[150px]'}><div className="font-medium">{actionBasisLabel(caseRow)} · {formatDate(basisDate)}</div><div className="mt-0.5 text-xs text-muted-foreground">Actionable {formatDate(actionableOn)}</div></div>;
+}
+
+function StemIdentity({ caseRow, onOpenStem }) {
+  const stemId = caseStemId(caseRow);
+  const reference = caseStemReference(caseRow);
+  return <div className="min-w-0"><StemDetailLink stemId={stemId} onOpen={onOpenStem}>{caseStemName(caseRow)}</StemDetailLink>{reference && <div className="mt-0.5 text-xs text-muted-foreground">Reference {reference}</div>}</div>;
 }
 
 function caseStatus(caseRow) {
@@ -541,7 +566,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
         <div>
           <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"><ClipboardCheck className="h-3.5 w-3.5" /> Payment Collections</div>
           <h1 className="mt-1 text-xl font-semibold text-foreground">Variable Charges</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Review each variable-charge cost after delivery before the final buyer invoice. Salesforce remains the financial record; FCOS preserves the review and invoice gate.</p>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Review each variable-charge cost after delivery, or after the schedule basis for an extra-cost-only STEM, before the final buyer invoice. Salesforce remains the financial record; FCOS preserves the review and invoice gate.</p>
         </div>
         <Button type="button" variant="outline" className="gap-2 self-start" onClick={() => loadCases({ force: true })} disabled={refreshing || loading}>
           <RefreshCw className={cn('h-4 w-4', (refreshing || loading) && 'animate-spin')} /> Refresh Salesforce
@@ -562,7 +587,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
 
       {error && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
 
-      {loading ? <StateBlock icon={Loader2} title="Loading variable charges" description="Checking the latest Salesforce delivery and charge status." /> : !error && !cases.length ? (
+      {loading ? <StateBlock icon={Loader2} title="Loading variable charges" description="Checking the latest Salesforce delivery, schedule, and charge status." /> : !error && !cases.length ? (
         <StateBlock icon={CheckCircle2} title={`No ${VIEWS.find((item) => item.id === view)?.label.toLowerCase() || 'variable charge'} cases`} description="Refresh to retrieve the latest Salesforce data." />
       ) : !error && (
         <>
@@ -572,7 +597,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
           <TableShell title="Variable-charge charge cases" meta={`${cases.length.toLocaleString()} cases`} bodyClassName="hidden p-0 md:block">
             <div className="overflow-auto">
               <table className="w-full min-w-[1040px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">STEM</th><th className="px-4 py-3">Variable Charges supplier</th><th className="px-4 py-3">Delivery</th><th className="px-4 py-3">Buyer Trader</th><th className="px-4 py-3">Due</th><th className="px-4 py-3">Status</th><th className="px-4 py-3"><span className="sr-only">Open</span></th></tr></thead>
+                <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">STEM</th><th className="px-4 py-3">Variable Charges supplier</th><th className="px-4 py-3">Readiness basis</th><th className="px-4 py-3">Buyer Trader</th><th className="px-4 py-3">Due</th><th className="px-4 py-3">Status</th><th className="px-4 py-3"><span className="sr-only">Open</span></th></tr></thead>
                 <tbody className="divide-y divide-border">{cases.map((caseRow) => <CaseRow key={caseStemId(caseRow)} caseRow={caseRow} onOpen={() => openDetail(caseRow)} onOpenStem={onOpenStem} />)}</tbody>
               </table>
             </div>
@@ -653,18 +678,15 @@ function viewTone(value) {
 }
 
 function CaseRow({ caseRow, onOpen, onOpenStem }) {
-  const stemId = caseStemId(caseRow);
-  return <tr className="bg-card align-middle"><td className="px-4 py-3"><StemDetailLink stemId={stemId} onOpen={onOpenStem}>{caseStemName(caseRow)}</StemDetailLink></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</td><td className="px-4 py-3">{formatDate(valueOf(caseRow, ['deliveryDate', 'delivery_date']))}</td><td className="px-4 py-3">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</td><td className="px-4 py-3">{formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</td><td className="px-4 py-3"><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>Review <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
+  return <tr className="bg-card align-middle"><td className="px-4 py-3"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</td><td className="px-4 py-3"><Actionability caseRow={caseRow} /></td><td className="px-4 py-3">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</td><td className="px-4 py-3">{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false ? <span className="text-muted-foreground">Not assigned</span> : formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</td><td className="px-4 py-3"><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>Review <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
 }
 
 function CaseCard({ caseRow, onOpen, onOpenStem }) {
-  const stemId = caseStemId(caseRow);
-  return <article className="rounded-xl border border-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><StemDetailLink stemId={stemId} onOpen={onOpenStem}>{caseStemName(caseRow)}</StemDetailLink><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], 'Variable Charges supplier')}</p></div><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Delivery</dt><dd className="mt-0.5 font-medium">{formatDate(valueOf(caseRow, ['deliveryDate', 'delivery_date']))}</dd></div><div><dt className="text-muted-foreground">Due</dt><dd className="mt-0.5 font-medium">{formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Buyer Trader</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>Review case <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
+  return <article className="rounded-xl border border-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], 'Variable Charges supplier')}</p></div><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div className="col-span-2"><dt className="text-muted-foreground">Readiness basis</dt><dd className="mt-0.5"><Actionability caseRow={caseRow} compact /></dd></div><div><dt className="text-muted-foreground">Due</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false ? 'Not assigned' : formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</dd></div><div><dt className="text-muted-foreground">Buyer Trader</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>Review case <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
 }
 
 function CaseSummary({ caseRow, onOpenStem }) {
-  const stemId = caseStemId(caseRow);
-  return <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="STEM"><StemDetailLink stemId={stemId} onOpen={onOpenStem}>{caseStemName(caseRow)}</StemDetailLink></SummaryField><SummaryField label="Variable Charges supplier">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</SummaryField><SummaryField label="Buyer Trader">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</SummaryField><SummaryField label="Delivery / due">{formatDate(valueOf(caseRow, ['deliveryDate', 'delivery_date']))} / {formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</SummaryField></div>;
+  return <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="STEM"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></SummaryField><SummaryField label="Variable Charges supplier">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</SummaryField><SummaryField label="Buyer Trader">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</SummaryField><SummaryField label="Readiness"><Actionability caseRow={caseRow} compact />{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false && <div className="mt-1 text-xs text-muted-foreground">No Variable Charges due date</div>}</SummaryField></div>;
 }
 
 function SummaryField({ label, children }) { return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-medium">{children}</div></div>; }

@@ -69,6 +69,58 @@ private class VariableChargeReadinessTest {
         Test.stopTest();
     }
 
+    @IsTest
+    static void actionabilityUsesDeliveryForProductsAndLatestScheduleForExtraCosts() {
+        STEM__c productStem = new STEM__c(Delivery_Date__c = Date.today().addDays(-1));
+        VariableChargeInvoiceReadinessService.Actionability productResult =
+            VariableChargeInvoiceReadinessService.calculateActionability(productStem, true);
+        System.assertEquals('delivery_date', productResult.actionBasis);
+        System.assertEquals(Date.today(), productResult.actionableOn);
+        System.assertEquals(true, productResult.deliveryRequired);
+        System.assertEquals(true, productResult.ready);
+
+        STEM__c extraOnlyStem = new STEM__c(
+            ETA_Start_Date__c = Date.today().addDays(-7),
+            ETA_End_Date__c = Date.today().addDays(-9),
+            ETB_End_Date__c = Date.today().addDays(-5),
+            ETCD_Start_Date__c = Date.today().addDays(-6),
+            ETD_Start_Date__c = Date.today().addDays(-8)
+        );
+        VariableChargeInvoiceReadinessService.Actionability extraResult =
+            VariableChargeInvoiceReadinessService.calculateActionability(extraOnlyStem, false);
+        System.assertEquals('latest_schedule_date', extraResult.actionBasis);
+        System.assertEquals(Date.today().addDays(-5), extraResult.actionBasisDate);
+        System.assertEquals(Date.today().addDays(-4), extraResult.actionableOn);
+        System.assertEquals(false, extraResult.deliveryRequired);
+        System.assertEquals(true, extraResult.ready);
+    }
+
+    @IsTest
+    static void extraCostOnlyActionabilityFallsBackToHongKongCreatedDate() {
+        STEM__c stem = [SELECT Id FROM STEM__c LIMIT 1];
+        Test.setCreatedDate(stem.Id, Datetime.newInstanceGMT(2026, 8, 1, 16, 30, 0));
+        STEM__c reloaded = [
+            SELECT Id, CreatedDate, Delivery_Date__c,
+                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
+                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c
+            FROM STEM__c WHERE Id = :stem.Id
+        ];
+        reloaded.Delivery_Date__c = null;
+        reloaded.ETA_Start_Date__c = null;
+        reloaded.ETA_End_Date__c = null;
+        reloaded.ETB_Start_Date__c = null;
+        reloaded.ETB_End_Date__c = null;
+        reloaded.ETCD_Start_Date__c = null;
+        reloaded.ETCD_End_Date__c = null;
+        reloaded.ETD_Start_Date__c = null;
+        reloaded.ETD_End_Date__c = null;
+        VariableChargeInvoiceReadinessService.Actionability result =
+            VariableChargeInvoiceReadinessService.calculateActionability(reloaded, false);
+        System.assertEquals('enquiry_created_date', result.actionBasis);
+        System.assertEquals(Date.newInstance(2026, 8, 2), result.actionBasisDate);
+        System.assertEquals(Date.newInstance(2026, 8, 3), result.actionableOn);
+    }
+
     private static void assertRequiredFlow(Map<String, Id> ids) {
         VariableChargeInvoiceReadinessService.Readiness supplier = VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier'));
         System.assertEquals(false, supplier.ready);
@@ -113,7 +165,7 @@ private class VariableChargeReadinessTest {
         } finally {
             ContextManager.skipTriggers = false;
         }
-        STEM_Line_Item__c line = [SELECT Id, STEM__c, Original_Supplier__c, Quantity__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') AND Original_Supplier__c = :ids.get('supplier') LIMIT 1];
+        STEM_Line_Item__c line = [SELECT Id, STEM__c, Original_Supplier__c, Cancelled__c, Quantity__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') AND Original_Supplier__c = :ids.get('supplier') LIMIT 1];
         STEM_Line_Item__c before = line.clone(true, true, false, false);
         line.Quantity__c = (line.Quantity__c == null ? 1 : line.Quantity__c) + 1;
         VariableChargeInvoiceReadinessService.invalidateForLineItemChanges(

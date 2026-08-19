@@ -213,6 +213,7 @@
         <members>fcbInvoiceForm</members>
         <members>fcbNewAccountOverride</members>
         <members>fcbReconfirmProcessing</members>
+        <members>fcbStemProcessing</members>
         <members>fcbSupplierInvoices</members>
         <name>LightningComponentBundle</name>
     </types>

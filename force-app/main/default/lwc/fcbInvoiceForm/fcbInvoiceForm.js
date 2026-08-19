@@ -14,7 +14,6 @@ import createInvoice from "@salesforce/apex/InvoiceController.createInvoice";
 import generateInvoicePDF from "@salesforce/apex/InvoiceController.generateInvoicePDF";
 import upsertLastInvoiceForm from "@salesforce/apex/InvoiceController.upsertLastInvoiceForm";
 import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64Strings";
-import updateStemDeliveryDate from "@salesforce/apex/InvoiceController.updateStemDeliveryDate";
 import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceController.getVariableChargeInvoiceReadiness";
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
@@ -49,6 +48,7 @@ export default class FcbInvoiceForm extends LightningElement {
     @track todayDateLabel;
     selectedProductInputs;
     isProductLineItemExisting;
+    @track serviceDeliveryDateValue;
 
     @track showBalanceRows = false;
     @track variableChargeReadiness;
@@ -78,6 +78,7 @@ export default class FcbInvoiceForm extends LightningElement {
             this.isCreditNote = false;
             this.variableChargeReadiness = null;
             this.isProductLineItemExisting = isProductLineItemExisting;
+            this.serviceDeliveryDateValue = null;
             this.loadVariableChargeReadiness();
             if(lastInvoiceForm){
                 getStemInfo({stemId: this.stemId}).then((stem) => {
@@ -89,7 +90,7 @@ export default class FcbInvoiceForm extends LightningElement {
             }else{
                 getStemInfo({stemId: this.stemId}).then((stem) => {
                     this.stem = stem;
-                    this.invoiceNumber = this.stem.KeyStem__c;-0
+                    this.invoiceNumber = this.stem.KeyStem__c;
                     getPaymentTerm({paymentTerm: stem.Payment_Term__c}).then(paymentTerm => {
                         getDBSInfo().then((dbs) => {
                             this.dbs = dbs
@@ -142,6 +143,10 @@ export default class FcbInvoiceForm extends LightningElement {
         return !this.actionExecuted || this.isFinalInvoiceBlocked;
     }
 
+    get isExtraCostOnly() {
+        return this.isProductLineItemExisting === false;
+    }
+
     fillLastForm(products){
         this.attn = JSON.parse(this.lastInvoiceForm.Attn__c);
         this.infoText = this.lastInvoiceForm.Info_Text__c?.toUpperCase();
@@ -154,6 +159,7 @@ export default class FcbInvoiceForm extends LightningElement {
         this.buyerName = this.lastInvoiceForm.Buyer_Name__c?.toUpperCase();
         this.brokerName = this.lastInvoiceForm.Broker_Name__c?.toUpperCase();
         this.address = this.lastInvoiceForm.Address__c?.toUpperCase();
+        if (this.isExtraCostOnly) this.infoText = this.buildExtraCostInfoText();
         this.isCreditNote = products.every(product => product.total < 0);
         this.invoiceNumberLabel = this.isCreditNote ? 'CREDIT NOTE NO.' : 'INVOICE NO.';
         this.todayDateLabel = this.stem.Mailing_Requirement__c?.includes('-3') && this.isProductLineItemExisting ? 'Date ( =Delivery Date)' : 'Date'
@@ -182,7 +188,7 @@ export default class FcbInvoiceForm extends LightningElement {
             : ''
         this.vesselText = 'M/V ' + this.stem.Vessel__r?.Name?.toUpperCase() + ' (IMO: ' + imo + ') & OWNER, CHARTERER &';
         this.buyerName = this.stem.Account__r.Name?.toUpperCase();
-        this.todayDate = this.stem.Mailing_Requirement__c?.includes('-3')
+        this.todayDate = this.stem.Mailing_Requirement__c?.includes('-3') && this.stem.Delivery_Date__c
             ? new Date(this.stem.Delivery_Date__c).toLocaleDateString('en-GB')
             : new Date().toLocaleDateString('en-GB');
         if(this.stem.Mailing_Requirement__c?.includes('-2')){
@@ -210,7 +216,9 @@ export default class FcbInvoiceForm extends LightningElement {
                         : this.stem.Contact__r.Name : ''
             };
         }
-        this.infoText = this.isCreditNote
+        this.infoText = this.isExtraCostOnly
+            ? this.buildExtraCostInfoText()
+            : this.isCreditNote
             ? 'RE M/V ' + this.stem.Vessel__r?.Name?.toUpperCase() + ' (IMO: ' + imo + ') AT ' + this.stem.Port__r.Name.toUpperCase() + ' ON ' + new Date(this.stem.Delivery_Date__c).toLocaleDateString('en-GB')
             : this.isProductLineItemExisting ?
                 this.stem.Delivery_Date__c
@@ -234,7 +242,7 @@ export default class FcbInvoiceForm extends LightningElement {
         this.inputs.push({id: this.makeId(7), label: "PAYMENT TERM", value: paymentTerm.Name !== 'CIA'
             ? paymentTerm.Name?.toUpperCase() + ' ' + paymentTerm.Description__c?.toUpperCase()
             : paymentTerm.Description__c?.toUpperCase() });
-        this.inputs.push({id: this.makeId(7), label: "DUE DATE", value: this.stem.Invoice_Due_Date__c ? new Date(this.stem.Invoice_Due_Date__c).toLocaleDateString('en-GB') : 'DELIVERY DATE IS MISSING'});
+        this.inputs.push({id: this.makeId(7), label: "DUE DATE", value: this.stem.Invoice_Due_Date__c ? new Date(`${this.stem.Invoice_Due_Date__c}T00:00:00`).toLocaleDateString('en-GB') : ''});
         this.inputs.push({id: this.makeId(7), label: "BENEFICIARY BANK", value: this.stem.Account__r.Banking_Preference__c == 'DBS' ? this.dbs.Beneficiary_Bank__c?.toUpperCase() : this.ubs.Beneficiary_Bank__c?.toUpperCase()});
         if(this.stem.Account__r.Banking_Preference__c !== 'DBS'){
             this.inputs.push({id: this.makeId(7), label: "INTERMEDIARY BANK", value: this.ubs.Intermediary_Bank__c?.toUpperCase()});
@@ -279,6 +287,25 @@ export default class FcbInvoiceForm extends LightningElement {
 
     handleChangeInfoText(event){
         this.infoText = event.detail.value.toUpperCase();
+    }
+
+    handleChangeServiceDeliveryDate(event) {
+        this.serviceDeliveryDateValue = event.detail.value || null;
+        this.infoText = this.buildExtraCostInfoText();
+    }
+
+    buildExtraCostInfoText() {
+        const vessel = String(this.stem?.Vessel__r?.Name || '').trim().toUpperCase();
+        const imo = String(this.stem?.Vessel__r?.IMO__c || '').trim().toUpperCase();
+        const port = String(this.stem?.Port__r?.Name || '').trim().toUpperCase();
+        let wording = 'CHARGES IN CONNECTION WITH';
+        if (vessel) wording += ` M/V ${vessel}`;
+        if (imo) wording += ` (IMO: ${imo})`;
+        if (port) wording += ` AT ${port}`;
+        if (this.serviceDeliveryDateValue) {
+            wording += ` ON ${new Date(`${this.serviceDeliveryDateValue}T00:00:00`).toLocaleDateString('en-GB')}`;
+        }
+        return wording;
     }
 
     handleChangeInputLabel(event){
@@ -596,7 +623,9 @@ export default class FcbInvoiceForm extends LightningElement {
                 invoiceDate: this.stem.Mailing_Requirement__c?.includes('-3')
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
                     : this._convertDate(new Date()),
-                deliveryDate: this.stem.Delivery_Date__c
+                deliveryDate: this.isExtraCostOnly
+                    ? this.serviceDeliveryDateValue
+                    : this.stem.Delivery_Date__c
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
                     : null,
                 invoiceDueDate: this._convertDate(new Date(this.stem.Invoice_Due_Date__c)),
@@ -637,9 +666,6 @@ export default class FcbInvoiceForm extends LightningElement {
                                 createProforma: this.proforma,
                             }).then(() => {
                                 upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                                    if(!this.isProductLineItemExisting){
-                                        updateStemDeliveryDate({stemId: this.stemId});
-                                    }
                                     this.closeModal();
                                     fireEvent(this.pageRef, "refreshInvoices", true);
                                 });
@@ -657,9 +683,6 @@ export default class FcbInvoiceForm extends LightningElement {
                         createProforma: this.proforma,
                     }).then(() => {
                         upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                            if(!this.isProductLineItemExisting){
-                                updateStemDeliveryDate({stemId: this.stemId});
-                            }
                             this.closeModal();
                             fireEvent(this.pageRef, "refreshInvoices", true);
                         });

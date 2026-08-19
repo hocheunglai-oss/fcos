@@ -26,6 +26,13 @@
                         <lightning-input class="slds-col slds-size_1-of-2" value={invoiceNumber} label={invoiceNumberLabel} onchange={handleChangeInvoiceNumber}></lightning-input>
                         <lightning-input class="slds-col slds-size_1-of-2" value={buyerName} label="Buyer" onchange={handleChangeBuyerName}></lightning-input>
                         <lightning-input class="slds-col slds-size_1-of-2" value={todayDate} label={todayDateLabel} onchange={handleChangeTodayDate}></lightning-input>
+                        <template if:true={isExtraCostOnly}>
+                            <lightning-input class="slds-col slds-size_1-of-2" type="date" date-style="short"
+                                value={serviceDeliveryDateValue} label="Service / Delivery Date (optional)"
+                                onchange={handleChangeServiceDeliveryDate}
+                                field-level-help="Used only on this Buyer Invoice and its PDF. It does not update the STEM Delivery Date or Variable Charges readiness.">
+                            </lightning-input>
+                        </template>
                         <template if:true={poVoyageNumberNeeded}>
                             <div class="slds-col slds-size_1-of-2"></div>
                             <lightning-input class="slds-col slds-size_1-of-2" value={poVoyageNumber} label="PO/Voyage Number" onchange={handleChangePoVoyageNumber}></lightning-input>

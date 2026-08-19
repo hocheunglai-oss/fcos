@@ -9,12 +9,15 @@ function liveCase(overrides = {}) {
   return {
     stem: {
       Id: 'a002x0000000001AAA',
+      CreatedDate: '2026-01-02T23:30:00.000Z',
       Delivery_Date__c: '2026-08-01',
       Variable_Charges_Confirmed__c: false,
     },
     accounts: [{ Id: '0012x0000000001AAA', Is_Agent__c: true }],
     nominations: [],
     lineItems: [{ Id: 'a012x0000000001AAA' }],
+    allLineItems: [{ Id: 'a012x0000000001AAA' }],
+    hasProductLineItems: true,
     extraCosts: [],
     invoices: [],
     hasVariableCharges: true,
@@ -65,6 +68,58 @@ test('status requires delivery to pass and reconfirmation after a live source ch
   }, '2026-08-08'), 'post_invoice_changes');
 });
 
+test('extra-cost-only readiness uses the latest normalized schedule date and has no delivery dependency', () => {
+  const readiness = variableChargeInternals.variableChargeActionability({
+    stem: {
+      CreatedDate: '2026-07-01T23:30:00.000Z',
+      ETA_Start_Date__c: '2026-08-10',
+      ETA_End_Date__c: '2026-08-08',
+      ETB_Start_Date__c: null,
+      ETB_End_Date__c: '2026-08-12',
+      ETCD_Start_Date__c: '2026-08-11',
+      ETCD_End_Date__c: null,
+      ETD_Start_Date__c: 'invalid',
+      ETD_End_Date__c: '2026-08-09',
+    },
+    allLineItems: [],
+    hasProductLineItems: false,
+  }, '2026-08-13');
+  assert.deepEqual(readiness, {
+    hasProductLineItems: false,
+    deliveryRequired: false,
+    actionBasis: 'latest_schedule_date',
+    actionBasisDate: '2026-08-12',
+    actionableOn: '2026-08-13',
+    ready: true,
+  });
+});
+
+test('extra-cost-only readiness falls back to the Hong Kong Enquiry Created Date', () => {
+  assert.deepEqual(variableChargeInternals.variableChargeActionability({
+    stem: { CreatedDate: '2026-08-01T16:30:00.000Z' },
+    allLineItems: [],
+    hasProductLineItems: false,
+  }, '2026-08-03'), {
+    hasProductLineItems: false,
+    deliveryRequired: false,
+    actionBasis: 'enquiry_created_date',
+    actionBasisDate: '2026-08-02',
+    actionableOn: '2026-08-03',
+    ready: true,
+  });
+});
+
+test('any non-cancelled product line keeps the STEM on Delivery Date readiness', () => {
+  const readiness = variableChargeInternals.variableChargeActionability({
+    stem: { Delivery_Date__c: null, CreatedDate: '2026-01-01T00:00:00.000Z', ETD_End_Date__c: '2026-01-02' },
+    allLineItems: [{ Id: 'a012x0000000001AAA' }],
+    hasProductLineItems: true,
+  }, '2026-08-19');
+  assert.equal(readiness.deliveryRequired, true);
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.actionBasis, 'delivery_date');
+});
+
 test('proformas and credit notes bypass final-invoice classification', () => {
   assert.equal(variableChargeInternals.finalInvoice({ Name: '00001T-P-1', Proforma__c: true }), false);
   assert.equal(variableChargeInternals.finalInvoice({ Name: '00001T-CN-1', Proforma__c: false }), false);
@@ -77,6 +132,7 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
     accounts: [],
     nominations: [],
     lineItems: [{ Id: 'a012x0000000001AAA', Buyer_Invoice__c: null, CurrencyIsoCode: 'USD' }],
+    allLineItems: [{ Id: 'a012x0000000001AAA', LastModifiedDate: '2026-08-01T00:00:00.000Z' }],
     extraCosts: [{ Id: 'a022x0000000001AAA', Description__c: 'Agency fee', Buyer_Invoice__c: null, CurrencyIsoCode: 'USD' }],
   };
   const original = variableChargeInternals.liveFingerprint(base);
@@ -92,6 +148,14 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
   assert.notEqual(variableChargeInternals.liveFingerprint({
     ...base,
     lineItems: [{ ...base.lineItems[0], CurrencyIsoCode: 'HKD' }],
+  }), original);
+  assert.notEqual(variableChargeInternals.liveFingerprint({
+    ...base,
+    stem: { ...base.stem, ETD_End_Date__c: '2026-08-20' },
+  }), original);
+  assert.notEqual(variableChargeInternals.liveFingerprint({
+    ...base,
+    allLineItems: [...base.allLineItems, { Id: 'a012x0000000002AAA', LastModifiedDate: '2026-08-02T00:00:00.000Z' }],
   }), original);
 });
 
@@ -126,6 +190,40 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.doesNotMatch(service, /sendOperationalMail|sendEmail|Graph/);
   assert.match(ui, /Row-by-row charge review/);
   assert.match(methodology, /'variable-charges'/);
+});
+
+test('Variable Charges UI shows complete STEM identity and explicit readiness basis', async () => {
+  const [service, ui, methodology] = await Promise.all([
+    repositoryFile('api/_variableCharges.js'),
+    repositoryFile('src/components/payments/VariableCharges.jsx'),
+    repositoryFile('src/lib/pageMethodologies.js'),
+  ]);
+  assert.match(service, /stemName: live\.stem\.Name \|\| live\.stem\.KeyStem__c/);
+  assert.match(service, /stemReference: live\.stem\.KeyStem__c/);
+  assert.match(service, /ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c/);
+  assert.match(ui, /Latest ETA \/ ETB \/ ETCD \/ ETD/);
+  assert.match(ui, /No Variable Charges due date/);
+  assert.match(methodology, /Extra-cost-only cases have no Variable Charges due date/);
+});
+
+test('extra-cost-only invoice wording uses an optional document date without updating STEM delivery', async () => {
+  const [form, formMarkup, processing, processingMarkup, controller] = await Promise.all([
+    repositoryFile('force-app/main/default/lwc/fcbInvoiceForm/fcbInvoiceForm.js'),
+    repositoryFile('force-app/main/default/lwc/fcbInvoiceForm/fcbInvoiceForm.html'),
+    repositoryFile('force-app/main/default/lwc/fcbStemProcessing/fcbStemProcessing.js'),
+    repositoryFile('force-app/main/default/lwc/fcbStemProcessing/fcbStemProcessing.html'),
+    repositoryFile('force-app/main/default/classes/InvoiceController.cls'),
+  ]);
+  assert.match(formMarkup, /Service \/ Delivery Date \(optional\)/);
+  assert.match(form, /CHARGES IN CONNECTION WITH/);
+  assert.match(form, /this\.serviceDeliveryDateValue/);
+  assert.doesNotMatch(form, /DELIVERY DATE IS MISSING/);
+  assert.doesNotMatch(form, /updateStemDeliveryDate/);
+  assert.match(processing, /CANCELLATION CHARGE/);
+  assert.match(processing, /Invoice Date \+ 7 calendar days/);
+  assert.match(processingMarkup, /cancellationChargeDueDateHint/);
+  assert.match(controller, /productLineCount > 0 && deliveryDate == null/);
+  assert.match(controller, /invoiceDueDate == null/);
 });
 
 test('database confirmation adopts the post-write fingerprint without storing financial rows', async () => {

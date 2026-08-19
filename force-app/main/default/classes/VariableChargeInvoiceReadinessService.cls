@@ -10,6 +10,10 @@ public without sharing class VariableChargeInvoiceReadinessService {
         @AuraEnabled public String fcosUrl { get; set; }
         @AuraEnabled public Id stemId { get; set; }
         @AuraEnabled public Id supplierId { get; set; }
+        @AuraEnabled public Boolean deliveryRequired { get; set; }
+        @AuraEnabled public String actionBasis { get; set; }
+        @AuraEnabled public Date actionBasisDate { get; set; }
+        @AuraEnabled public Date actionableOn { get; set; }
 
         public Readiness(Boolean ready, Boolean required, String reason, Id stemId, Id supplierId) {
             this.ready = ready;
@@ -21,12 +25,22 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }
     }
 
+    public class Actionability {
+        public Boolean hasProductLineItems;
+        public Boolean deliveryRequired;
+        public String actionBasis;
+        public Date actionBasisDate;
+        public Date actionableOn;
+        public Boolean ready;
+    }
+
     private class SupplierContext {
         public STEM__c stem;
         public Account supplier;
         public STEM_Variable_Charge_Supplier__c stage;
         public Boolean exactSupplier;
         public Boolean required;
+        public Boolean hasProductLineItems;
     }
 
     @AuraEnabled(cacheable=false)
@@ -58,8 +72,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context == null || context.stem == null) return blocked('The STEM could not be found.', stemId, supplierId, true);
         if (context.exactSupplier != true) return blocked('The selected Account is not an active exact supplier on this STEM.', stemId, supplierId, true);
         if (context.required != true) return new Readiness(true, false, null, stemId, supplierId);
-        if (context.stem.Delivery_Date__c == null || context.stem.Delivery_Date__c >= Date.today()) {
-            return blocked('Final supplier charges may be verified only after the STEM Delivery Date.', stemId, supplierId, true);
+        Actionability actionability = calculateActionability(context.stem, context.hasProductLineItems);
+        if (actionability.ready != true) {
+            return blockedForActionability(actionability, stemId, supplierId, true);
         }
         if (context.stage == null || context.stage.Supplier_Status__c != 'Verified') {
             return blocked('The assigned Supplier Trader must verify this supplier in Variable Charges before its Supplier Invoice can be created.', stemId, supplierId, true);
@@ -69,16 +84,19 @@ public without sharing class VariableChargeInvoiceReadinessService {
             || context.stage.Reviewed_Source_Fingerprint__c != currentFingerprint) {
             return blocked('Supplier charge data changed after verification. Reverify this supplier in Variable Charges.', stemId, supplierId, true);
         }
-        return new Readiness(true, true, null, stemId, supplierId);
+        return withActionability(new Readiness(true, true, null, stemId, supplierId), actionability);
     }
 
     public static Readiness evaluateBuyer(Id stemId) {
         List<STEM__c> stems = [
-            SELECT Id, CreatedDate, Delivery_Date__c, Variable_Charges_Confirmed__c,
+            SELECT Id, CreatedDate, Delivery_Date__c,
+                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
+                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c,
+                Variable_Charges_Confirmed__c,
                 (SELECT Original_Supplier__c, Original_Supplier__r.Is_Agent__c,
                     Original_Supplier__r.Inactive_Suspended__c
                  FROM STEM_Line_Items__r
-                 WHERE Cancelled__c = false AND Original_Supplier__c != null),
+                 WHERE Cancelled__c = false),
                 (SELECT Supplier__c, Supplier__r.Is_Agent__c,
                     Supplier__r.Inactive_Suspended__c
                  FROM STEM_Extra_Costs__r
@@ -90,9 +108,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (stems.isEmpty()) return blocked('The STEM could not be found.', stemId, null, true);
         STEM__c stem = stems[0];
         if (stem.CreatedDate.date() < STEM_CREATED_FROM) return new Readiness(true, false, null, stemId, null);
+        Boolean hasProductLineItems = !stem.STEM_Line_Items__r.isEmpty();
         Set<Id> exactIds = new Set<Id>();
         Set<Id> requiredIds = new Set<Id>();
         for (STEM_Line_Item__c lineItem : stem.STEM_Line_Items__r) {
+            if (lineItem.Original_Supplier__c == null) continue;
             if (lineItem.Original_Supplier__r?.Inactive_Suspended__c == true) continue;
             exactIds.add(lineItem.Original_Supplier__c);
             if (lineItem.Original_Supplier__r?.Is_Agent__c == true) requiredIds.add(lineItem.Original_Supplier__c);
@@ -106,8 +126,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (stage.Manual_Review_Required__c == true && exactIds.contains(stage.Supplier__c)) requiredIds.add(stage.Supplier__c);
         }
         if (requiredIds.isEmpty()) return new Readiness(true, false, null, stemId, null);
-        if (stem.Delivery_Date__c == null || stem.Delivery_Date__c >= Date.today()) {
-            return blocked('Variable Charges become actionable only after the STEM Delivery Date.', stemId, null, true);
+        Actionability actionability = calculateActionability(stem, hasProductLineItems);
+        if (actionability.ready != true) {
+            return blockedForActionability(actionability, stemId, null, true);
         }
         for (Id supplierId : requiredIds) {
             Readiness supplierReadiness = evaluateSupplier(stemId, supplierId);
@@ -116,7 +137,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (stem.Variable_Charges_Confirmed__c != true) {
             return blocked('The Buyer Trader must review buyer pricing and confirm the complete Variable Charges case.', stemId, null, true);
         }
-        return new Readiness(true, true, null, stemId, null);
+        return withActionability(new Readiness(true, true, null, stemId, null), actionability);
     }
 
     public static void assertFinalBuyerInvoiceAllowed(Id stemId) {
@@ -164,11 +185,18 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static void assertBuyerConfirmationWriteAllowed(List<STEM__c> newRecords, Map<Id, STEM__c> oldMap) {
         if (newRecords == null || oldMap == null) return;
+        Set<Id> confirmingIds = new Set<Id>();
+        for (STEM__c stem : newRecords) {
+            STEM__c oldStem = oldMap.get(stem.Id);
+            if (oldStem != null && oldStem.Variable_Charges_Confirmed__c != true && stem.Variable_Charges_Confirmed__c == true) confirmingIds.add(stem.Id);
+        }
+        Set<Id> productBearingIds = productBearingStemIds(confirmingIds);
         for (STEM__c stem : newRecords) {
             STEM__c oldStem = oldMap.get(stem.Id);
             if (oldStem == null || oldStem.Variable_Charges_Confirmed__c == true || stem.Variable_Charges_Confirmed__c != true) continue;
-            if (stem.Delivery_Date__c == null || stem.Delivery_Date__c >= Date.today()) {
-                stem.addError('Variable Charges may be confirmed only after the STEM Delivery Date.');
+            Actionability actionability = calculateActionability(stem, productBearingIds.contains(stem.Id));
+            if (actionability.ready != true) {
+                stem.addError(actionabilityReason(actionability));
                 continue;
             }
             for (Id supplierId : requiredSupplierIds(stem.Id)) {
@@ -183,6 +211,17 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static String supplierFingerprint(Id stemId, Id supplierId) {
         List<String> parts = new List<String>();
+        STEM__c readinessStem = [
+            SELECT Id, CreatedDate, Delivery_Date__c,
+                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
+                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
+        parts.add('S|' + JSON.serialize(readinessStem));
+        for (STEM_Line_Item__c row : [
+            SELECT Id FROM STEM_Line_Item__c
+            WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id
+        ]) parts.add('P|' + row.Id);
         for (Account row : [SELECT Id, Is_Agent__c, Supplier_Payment_Term__c, LastModifiedDate FROM Account WHERE Id = :supplierId]) {
             parts.add('A|' + row.Id + '|' + row.Is_Agent__c + '|' + row.Supplier_Payment_Term__c + '|' + row.LastModifiedDate.getTime());
         }
@@ -235,15 +274,22 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static void invalidateForLineItemChanges(List<STEM_Line_Item__c> newRecords, Map<Id, STEM_Line_Item__c> oldMap) {
         Set<String> pairs = new Set<String>();
+        Map<Id, Integer> activeCountDelta = new Map<Id, Integer>();
         if (newRecords != null) for (STEM_Line_Item__c row : newRecords) {
             STEM_Line_Item__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
+            addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? 1 : 0);
+            if (oldRow != null) addActiveCountDelta(activeCountDelta, oldRow.STEM__c, oldRow.Cancelled__c != true ? -1 : 0);
             if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Original_Supplier__c','Cancelled__c','Product__c','Payment_Term__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c','Unit_Sell_At__c','Unit_Buy_At__c','Total_Price__c','Total_Cost__c','Commission_Cost__c','CurrencyIsoCode'})) {
                 addPair(pairs, row.STEM__c, row.Original_Supplier__c);
                 if (oldRow != null) addPair(pairs, oldRow.STEM__c, oldRow.Original_Supplier__c);
             }
         }
-        if (newRecords == null && oldMap != null) for (STEM_Line_Item__c row : oldMap.values()) addPair(pairs, row.STEM__c, row.Original_Supplier__c);
+        if (newRecords == null && oldMap != null) for (STEM_Line_Item__c row : oldMap.values()) {
+            addPair(pairs, row.STEM__c, row.Original_Supplier__c);
+            addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? -1 : 0);
+        }
         invalidatePairs(pairs);
+        invalidateProductPresenceTransitions(activeCountDelta);
     }
 
     public static void invalidateForExtraCostChanges(List<STEM_Extra_Cost__c> newRecords, Map<Id, STEM_Extra_Cost__c> oldMap) {
@@ -303,18 +349,30 @@ public without sharing class VariableChargeInvoiceReadinessService {
     public static void invalidateForStemChanges(List<STEM__c> newRecords, Map<Id, STEM__c> oldMap) {
         if (newRecords == null || oldMap == null) return;
         Set<Id> stems = new Set<Id>();
+        Set<Id> readinessStems = new Set<Id>();
         for (STEM__c row : newRecords) {
             STEM__c oldRow = oldMap.get(row.Id);
             if (oldRow != null && changed(row, oldRow, new List<String>{'Delivery_Date__c','Payment_Term__c','Account__c','Total__c','Costs_Total__c','Total_Invoice_Amount__c','Receivable_Balance__c','Payable_Balance__c','CurrencyIsoCode'})) stems.add(row.Id);
+            if (oldRow != null && changed(row, oldRow, new List<String>{'Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c','ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c','ETD_Start_Date__c','ETD_End_Date__c'})) readinessStems.add(row.Id);
         }
+        stems.addAll(readinessStems);
+        invalidateAllStages(readinessStems);
         invalidateStems(stems);
     }
 
     private static SupplierContext loadSupplierContext(Id stemId, Id supplierId) {
-        List<STEM__c> stems = [SELECT Id, CreatedDate, Delivery_Date__c, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId LIMIT 1];
+        List<STEM__c> stems = [
+            SELECT Id, CreatedDate, Delivery_Date__c,
+                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
+                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c,
+                Variable_Charges_Confirmed__c,
+                (SELECT Id FROM STEM_Line_Items__r WHERE Cancelled__c = false LIMIT 1)
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
         if (stems.isEmpty()) return null;
         SupplierContext context = new SupplierContext();
         context.stem = stems[0];
+        context.hasProductLineItems = !context.stem.STEM_Line_Items__r.isEmpty();
         if (context.stem.CreatedDate.date() < STEM_CREATED_FROM) {
             context.exactSupplier = true; context.required = false; return context;
         }
@@ -335,6 +393,62 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     private static Readiness blocked(String reason, Id stemId, Id supplierId, Boolean required) {
         return new Readiness(false, required, reason, stemId, supplierId);
+    }
+
+    @TestVisible
+    private static Actionability calculateActionability(STEM__c stem, Boolean hasProductLineItems) {
+        Actionability result = new Actionability();
+        result.hasProductLineItems = hasProductLineItems == true;
+        result.deliveryRequired = result.hasProductLineItems;
+        if (result.hasProductLineItems) {
+            result.actionBasis = 'delivery_date';
+            result.actionBasisDate = stem == null ? null : stem.Delivery_Date__c;
+        } else {
+            Date latestScheduleDate;
+            if (stem != null) {
+                for (Date candidate : new List<Date>{
+                    stem.ETA_Start_Date__c, stem.ETA_End_Date__c,
+                    stem.ETB_Start_Date__c, stem.ETB_End_Date__c,
+                    stem.ETCD_Start_Date__c, stem.ETCD_End_Date__c,
+                    stem.ETD_Start_Date__c, stem.ETD_End_Date__c
+                }) if (candidate != null && (latestScheduleDate == null || candidate > latestScheduleDate)) latestScheduleDate = candidate;
+            }
+            result.actionBasis = latestScheduleDate == null ? 'enquiry_created_date' : 'latest_schedule_date';
+            result.actionBasisDate = latestScheduleDate;
+            if (result.actionBasisDate == null && stem?.CreatedDate != null) {
+                result.actionBasisDate = Date.valueOf(stem.CreatedDate.format('yyyy-MM-dd', 'Asia/Hong_Kong'));
+            }
+        }
+        result.actionableOn = result.actionBasisDate == null ? null : result.actionBasisDate.addDays(1);
+        result.ready = result.actionableOn != null && hongKongToday() >= result.actionableOn;
+        return result;
+    }
+
+    private static Date hongKongToday() {
+        return Date.valueOf(System.now().format('yyyy-MM-dd', 'Asia/Hong_Kong'));
+    }
+
+    private static String actionabilityReason(Actionability actionability) {
+        if (actionability == null || actionability.deliveryRequired == true) {
+            return 'Product-bearing Variable Charges may be verified only after the Salesforce Delivery Date.';
+        }
+        return actionability.actionableOn == null
+            ? 'Extra-cost-only Variable Charges readiness could not be calculated from the schedule or Enquiry Created Date.'
+            : 'Extra-cost-only Variable Charges become actionable on ' + String.valueOf(actionability.actionableOn)
+                + ', one calendar day after the latest schedule basis.';
+    }
+
+    private static Readiness withActionability(Readiness readiness, Actionability actionability) {
+        if (readiness == null || actionability == null) return readiness;
+        readiness.deliveryRequired = actionability.deliveryRequired;
+        readiness.actionBasis = actionability.actionBasis;
+        readiness.actionBasisDate = actionability.actionBasisDate;
+        readiness.actionableOn = actionability.actionableOn;
+        return readiness;
+    }
+
+    private static Readiness blockedForActionability(Actionability actionability, Id stemId, Id supplierId, Boolean required) {
+        return withActionability(blocked(actionabilityReason(actionability), stemId, supplierId, required), actionability);
     }
 
     private static Boolean isFinalBuyerInvoice(Invoice__c invoice) {
@@ -376,6 +490,60 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     private static void addPair(Set<String> pairs, Id stemId, Id supplierId) {
         if (stemId != null && supplierId != null) pairs.add(pairKey(stemId, supplierId));
+    }
+
+    private static void addActiveCountDelta(Map<Id, Integer> deltas, Id stemId, Integer delta) {
+        if (stemId == null || delta == null || delta == 0) return;
+        deltas.put(stemId, (deltas.containsKey(stemId) ? deltas.get(stemId) : 0) + delta);
+    }
+
+    private static Set<Id> productBearingStemIds(Set<Id> stemIds) {
+        Set<Id> result = new Set<Id>();
+        if (stemIds == null || stemIds.isEmpty()) return result;
+        for (AggregateResult aggregate : [
+            SELECT STEM__c stemId FROM STEM_Line_Item__c
+            WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c
+        ]) result.add((Id)aggregate.get('stemId'));
+        return result;
+    }
+
+    private static void invalidateProductPresenceTransitions(Map<Id, Integer> activeCountDelta) {
+        if (activeCountDelta == null || activeCountDelta.isEmpty()) return;
+        Set<Id> stemIds = activeCountDelta.keySet();
+        Map<Id, Integer> currentCounts = new Map<Id, Integer>();
+        for (AggregateResult aggregate : [
+            SELECT STEM__c stemId, COUNT(Id) itemCount FROM STEM_Line_Item__c
+            WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c
+        ]) currentCounts.put((Id)aggregate.get('stemId'), (Integer)aggregate.get('itemCount'));
+        Set<Id> transitioned = new Set<Id>();
+        for (Id stemId : stemIds) {
+            Integer currentCount = currentCounts.containsKey(stemId) ? currentCounts.get(stemId) : 0;
+            Integer previousCount = currentCount - activeCountDelta.get(stemId);
+            if ((currentCount > 0) != (previousCount > 0)) transitioned.add(stemId);
+        }
+        invalidateAllStages(transitioned);
+    }
+
+    private static void invalidateAllStages(Set<Id> stemIds) {
+        if (invalidationInProgress || stemIds == null || stemIds.isEmpty()) return;
+        List<STEM_Variable_Charge_Supplier__c> stages = [
+            SELECT Id, STEM__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c,
+                Reviewed_Source_Fingerprint__c, Revision__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c IN :stemIds
+        ];
+        invalidationInProgress = true;
+        try {
+            for (STEM_Variable_Charge_Supplier__c stage : stages) {
+                if (stage.Supplier_Status__c == 'Verified') stage.Supplier_Status__c = 'Invalidated';
+                stage.Verified_At__c = null;
+                stage.Verified_By_Email__c = null;
+                stage.Reviewed_Source_Fingerprint__c = null;
+            }
+            if (!stages.isEmpty()) update stages;
+            invalidateStems(stemIds);
+        } finally {
+            invalidationInProgress = false;
+        }
     }
 
     private static void invalidatePairs(Set<String> pairs) {

@@ -221,6 +221,22 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       ];
   }
 
+  get cancellationChargeDueDateHint() {
+    const hasCancellationCharge = Array.isArray(this.selectedProducts) && this.selectedProducts.some((product) =>
+      product?.objectName === 'STEM_Extra_Cost__c'
+      && product?.issued !== true
+      && String(product?.productName || '').trim().toUpperCase() === 'CANCELLATION CHARGE'
+    );
+    if (!hasCancellationCharge || this.isProductLineItemExisting) return '';
+    const suggested = new Date();
+    suggested.setDate(suggested.getDate() + 7);
+    return `Cancellation charge guidance: consider ${suggested.toLocaleDateString('en-GB')} (Invoice Date + 7 calendar days). Review and enter the appropriate Invoice Due Date manually.`;
+  }
+
+  get showCancellationChargeDueDateHint() {
+    return Boolean(this.cancellationChargeDueDateHint);
+  }
+
   @track fcbsReferenceVisible = false;
   @track fcbsReference;
 
