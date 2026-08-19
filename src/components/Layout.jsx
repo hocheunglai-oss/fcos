@@ -158,7 +158,7 @@ function normalizedNavigationPreferences(value = {}) {
 
 export default function Layout() {
   const location = useLocation();
-  const { user, logout, hasModuleAccess, authMode } = useAuth();
+  const { user, logout, hasModuleAccess, authMode, bootstrapPreferences } = useAuth();
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
@@ -237,9 +237,15 @@ export default function Layout() {
     };
     const load = async () => {
       const browserDocumentSettings = readDocumentSettings();
+      const bootstrapWorkspace = bootstrapPreferences?.workspace;
+      const bootstrapNavigation = bootstrapPreferences?.navigation;
       const [workspaceResponse, response] = await Promise.all([
-        appClient.functions.invoke('workspacePreferencesGet'),
-        appClient.functions.invoke('navigationPreferencesGet'),
+        bootstrapWorkspace
+          ? Promise.resolve({ data: { preferences: bootstrapWorkspace } })
+          : appClient.functions.invoke('workspacePreferencesGet'),
+        bootstrapNavigation
+          ? Promise.resolve({ data: { preferences: bootstrapNavigation } })
+          : appClient.functions.invoke('navigationPreferencesGet'),
       ]);
       if (!cancelled && workspaceResponse.data?.preferences) {
         let workspacePreferences = workspaceResponse.data.preferences;
@@ -267,7 +273,7 @@ export default function Layout() {
     };
     load();
     return () => { cancelled = true; };
-  }, [user]);
+  }, [bootstrapPreferences, user]);
 
   useEffect(() => {
     const openNavigationEditor = () => startNavigationEditing();

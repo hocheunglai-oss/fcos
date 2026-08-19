@@ -35,6 +35,7 @@ export function salesforceLimitFromBody(body = {}) {
   };
 }
 
+/** @param {{handler?: string, requestId?: string}} [options] */
 function initialTelemetry({ handler, requestId } = {}) {
   return {
     requestId: requestId || randomUUID(),
@@ -118,6 +119,7 @@ export function recordSupabaseRequest({ durationMs = 0, ok = true } = {}) {
   if (!ok) telemetry.supabase.failures += 1;
 }
 
+/** @param {{operation?: string, totalMs?: number, graphMs?: number, storageMs?: number, continuedInBackground?: boolean}} [options] */
 export function recordEmailRouterOperation({ operation, totalMs = 0, graphMs = 0, storageMs = 0, continuedInBackground = false } = {}) {
   const telemetry = currentRequestTelemetry();
   if (!telemetry) return;

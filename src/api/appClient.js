@@ -8,6 +8,17 @@ const functionResponseCache = new Map();
 const inFlightFunctionRequests = new Map();
 let functionCacheGeneration = 0;
 
+const DEDICATED_FUNCTION_ENDPOINTS = Object.freeze({
+  emailRouterBackgroundSync: '/api/email-router-background-sync',
+  workNotificationsList: '/api/work-notifications',
+  workNotificationsRead: '/api/work-notifications',
+  workNotificationsState: '/api/work-notifications',
+});
+
+function functionEndpoint(name) {
+  return DEDICATED_FUNCTION_ENDPOINTS[name] || `/api/functions/${name}`;
+}
+
 const storage = {
   get(key, fallback) {
     try {
@@ -146,11 +157,12 @@ function createEntityStore(name) {
 
 async function requestFunction(name, payload, options, cacheKey, authContext, cacheGeneration) {
   const headers = { 'content-type': 'application/json' };
+  if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
   let res;
   try {
-    res = await fetch(`/api/functions/${name}`, {
+    res = await fetch(functionEndpoint(name), {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -321,10 +333,11 @@ async function invoke(name, payload = {}, options = {}) {
 
 async function download(name, payload = {}, options = {}) {
   const headers = { 'content-type': 'application/json' };
+  if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   const authContext = await requestAuthContext();
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
-  const response = await fetch(`/api/functions/${name}`, {
+  const response = await fetch(functionEndpoint(name), {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),

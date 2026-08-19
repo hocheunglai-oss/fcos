@@ -56,7 +56,7 @@ import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionR
 import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
 import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
 import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExternalDisputeClosure } from '../_disputeWorkflowStatus.js';
-import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierAllocationFingerprint, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
+import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
@@ -194,7 +194,6 @@ import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyR
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
-  activateSpecialTermMigration,
   approveSpecialTermClause,
   getSpecialTermDetail,
   getSpecialTermMigrationInventory,
@@ -203,9 +202,7 @@ import {
   previewSpecialTermMigration,
   previewSpecialTermMigrationAll,
   retireSpecialTermClause,
-  rollbackSpecialTermMigration,
   saveSpecialTermClauseDraft,
-  saveSpecialTermComposition,
   saveAllSpecialTermMigrationReview,
   saveSpecialTermMigrationReview,
   saveSpecialTermRevision,
@@ -743,8 +740,22 @@ async function requireActiveUser(req) {
   return { client, authUser: userData.user, profile };
 }
 
+async function loadAuthBootstrapPreferences(client, userId) {
+  const { data, error } = await client
+    .from('user_navigation_preferences')
+    .select('user_id,section_orders,hidden_item_ids,sidebar_mode,table_density,document_show_only_relevant,document_source_groups,workspace_preferences_initialized,revision,updated_at')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) return null;
+  return {
+    navigationPreferences: serializeNavigationPreferences(data),
+    workspacePreferences: serializeWorkspacePreferences(data),
+  };
+}
+
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
+  const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
 
@@ -777,6 +788,7 @@ async function authContext(body, req, accessContext) {
     profile,
     moduleAccess,
   });
+  const bootstrapPreferences = await preferencesPromise;
   schedulePortalOutboxRetry(client);
 
   return {
@@ -795,6 +807,8 @@ async function authContext(body, req, accessContext) {
     },
     capabilities: capabilityValues,
     applications,
+    navigationPreferences: bootstrapPreferences?.navigationPreferences || null,
+    workspacePreferences: bootstrapPreferences?.workspacePreferences || null,
   };
 }
 

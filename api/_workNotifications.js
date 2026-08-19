@@ -202,32 +202,112 @@ function unavailableTable(error) {
   return error?.code === '42P01' || /does not exist|schema cache/i.test(String(error?.message || ''));
 }
 
+function unavailableSnapshotFunction(error) {
+  return unavailableTable(error)
+    || ['42883', '57014', 'PGRST202'].includes(String(error?.code || '').toUpperCase())
+    || /load_work_notification_snapshot/i.test(String(error?.message || ''));
+}
+
+async function loadLegacyDatabaseSnapshot(client, profileId, queryLimit, now, systemWindow) {
+  const router = client.schema('emailrouter');
+  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, variableChargeCases, variableChargeSupplierStages, variableChargeStates, generalManagerRoles, specialTermsStates] = await Promise.all([
+    client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profileId).order('created_at', { ascending: false }).limit(queryLimit),
+    client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profileId).order('created_at', { ascending: false }).limit(queryLimit),
+    client.from('fcos_improvement_notifications').select('id,ticket_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profileId).order('created_at', { ascending: false }).limit(queryLimit),
+    client.from('collaboration_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profileId).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
+    client.from('growth_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profileId).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
+    client.from('fcos_improvement_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profileId).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
+    router.from('alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(queryLimit),
+    router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profileId),
+    client.from('system_error_events').select('id,dedupe_key,handler,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
+    client.from('system_error_notification_states').select('event_id,read_at,handled_at,snoozed_until').eq('user_id', profileId),
+    client.from('variable_charge_cases').select('id,stem_id,stem_name,workflow_status,assigned_buyer_user_id,revision,due_date,updated_at').in('workflow_status', ['needs_action', 'ready_for_invoice', 'post_invoice_change']).order('updated_at', { ascending: false }).limit(queryLimit),
+    client.from('variable_charge_supplier_stages').select('id,case_id,stem_id,supplier_account_id,status,revision,updated_at,variable_charge_cases(stem_name,due_date)').eq('assigned_supplier_user_id', profileId).in('status', ['pending', 'invalidated']).order('updated_at', { ascending: false }).limit(queryLimit),
+    client.from('variable_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profileId),
+    client.from('collaboration_roles').select('user_id').eq('role', 'general_manager').eq('active', true),
+    client.from('special_terms_notification_states').select('notification_key,read_at,handled_at,snoozed_until').eq('user_id', profileId),
+  ]);
+  return {
+    collaborationResult,
+    growthResult,
+    improvementsResult,
+    collaborationCount,
+    growthCount,
+    improvementsCount,
+    emailRouterAlerts,
+    emailRouterStates,
+    systemEvents,
+    systemStates,
+    variableChargeCases,
+    variableChargeSupplierStages,
+    variableChargeStates,
+    generalManagerRoles,
+    specialTermsStates,
+  };
+}
+
+function snapshotRows(snapshot, key) {
+  return { data: Array.isArray(snapshot?.[key]) ? snapshot[key] : [], error: null };
+}
+
+async function loadDatabaseSnapshot(client, profileId, queryLimit, now, systemWindow) {
+  const { data, error } = await client.rpc('load_work_notification_snapshot', {
+    p_user_id: profileId,
+    p_query_limit: queryLimit,
+    p_now: now,
+    p_system_window: systemWindow,
+  });
+  if (error) {
+    if (!unavailableSnapshotFunction(error)) throw error;
+    return loadLegacyDatabaseSnapshot(client, profileId, queryLimit, now, systemWindow);
+  }
+  return {
+    collaborationResult: snapshotRows(data, 'collaboration'),
+    growthResult: snapshotRows(data, 'growth'),
+    improvementsResult: snapshotRows(data, 'improvements'),
+    collaborationCount: { count: Number(data?.collaborationUnread || 0), error: null },
+    growthCount: { count: Number(data?.growthUnread || 0), error: null },
+    improvementsCount: { count: Number(data?.improvementsUnread || 0), error: null },
+    emailRouterAlerts: snapshotRows(data, 'emailRouterAlerts'),
+    emailRouterStates: snapshotRows(data, 'emailRouterStates'),
+    systemEvents: snapshotRows(data, 'systemEvents'),
+    systemStates: snapshotRows(data, 'systemStates'),
+    variableChargeCases: snapshotRows(data, 'variableChargeCases'),
+    variableChargeSupplierStages: snapshotRows(data, 'variableChargeSupplierStages'),
+    variableChargeStates: snapshotRows(data, 'variableChargeStates'),
+    generalManagerRoles: snapshotRows(data, 'generalManagerRoles'),
+    specialTermsStates: snapshotRows(data, 'specialTermsStates'),
+  };
+}
+
 export async function workNotificationsList(body = {}, accessContext) {
   const { client, profile } = accessContext;
   const limit = Math.max(10, Math.min(Number(body.limit) || 50, 100));
   const queryLimit = Math.min(200, limit * 4);
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const router = client.schema('emailrouter');
-  const [collaborationResult, growthResult, improvementsResult, collaborationCount, growthCount, improvementsCount, emailRouterAlerts, emailRouterStates, systemEvents, systemStates, variableChargeCases, variableChargeSupplierStages, variableChargeStates, generalManagerRoles, specialTermsQueue, specialTermsConsolidationQueue, specialTermsStates] = await Promise.all([
-    client.from('collaboration_notifications').select('id,item_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
-    client.from('growth_notifications').select('id,source_type,source_id,notification_type,title,message,link,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
-    client.from('fcos_improvement_notifications').select('id,ticket_id,notification_type,title,message,read_at,handled_at,snoozed_until,created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(queryLimit),
-    client.from('collaboration_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
-    client.from('growth_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
-    client.from('fcos_improvement_notifications').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).is('read_at', null).is('handled_at', null).or(`snoozed_until.is.null,snoozed_until.lte.${now}`),
-    router.from('alerts').select('id,alert_code,severity,state,created_at').in('state', ['open', 'acknowledged']).order('created_at', { ascending: false }).limit(queryLimit),
-    router.from('alert_notification_states').select('alert_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
-    client.from('system_error_events').select('id,dedupe_key,handler,title,message,link,occurrence_count,last_request_id,created_at,last_seen_at').gte('last_seen_at', systemWindow).order('last_seen_at', { ascending: false }).limit(queryLimit),
-    client.from('system_error_notification_states').select('event_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
-    client.from('variable_charge_cases').select('id,stem_id,stem_name,workflow_status,assigned_buyer_user_id,revision,due_date,updated_at').in('workflow_status', ['needs_action', 'ready_for_invoice', 'post_invoice_change']).order('updated_at', { ascending: false }).limit(queryLimit),
-    client.from('variable_charge_supplier_stages').select('id,case_id,stem_id,supplier_account_id,status,revision,updated_at,variable_charge_cases(stem_name,due_date)').eq('assigned_supplier_user_id', profile.id).in('status', ['pending', 'invalidated']).order('updated_at', { ascending: false }).limit(queryLimit),
-    client.from('variable_charge_notification_states').select('notification_key,case_id,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
-    client.from('collaboration_roles').select('user_id').eq('role', 'general_manager').eq('active', true),
+  const [databaseSnapshot, specialTermsQueue, specialTermsConsolidationQueue] = await Promise.all([
+    loadDatabaseSnapshot(client, profile.id, queryLimit, now, systemWindow),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
     listSpecialTermClauseConsolidations({ includeClosed: false }).then((data) => ({ data: data.consolidations || [], error: null })).catch((error) => ({ data: [], error })),
-    client.from('special_terms_notification_states').select('notification_key,read_at,handled_at,snoozed_until').eq('user_id', profile.id),
   ]);
+  const {
+    collaborationResult,
+    growthResult,
+    improvementsResult,
+    collaborationCount,
+    growthCount,
+    improvementsCount,
+    emailRouterAlerts,
+    emailRouterStates,
+    systemEvents,
+    systemStates,
+    variableChargeCases,
+    variableChargeSupplierStages,
+    variableChargeStates,
+    generalManagerRoles,
+    specialTermsStates,
+  } = databaseSnapshot;
 
   const unavailableSources = [];
   if (collaborationResult.error) {

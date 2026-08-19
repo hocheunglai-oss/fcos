@@ -49,6 +49,8 @@ test('background synchronization is module-scoped and claims the mailbox before 
   assert.match(functions, /emailRouterBackgroundSync: \['email_router'\]/);
   assert.match(functions, /nativeEmailRouterBackgroundSync/);
   assert.match(handlers, /syncEmailRouterMailboxIfDue/);
+  assert.match(handlers, /folders: \['inbox'\]/);
+  assert.match(handlers, /maxPages: 1/);
   assert.match(core, /claimQuery[\s\S]*last_synced_at[\s\S]*claimed_elsewhere/);
   assert.match(core, /folders = \['inbox', 'sentitems', 'archive'\]/);
 });

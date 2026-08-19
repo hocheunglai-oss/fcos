@@ -62,4 +62,67 @@ export default [
       "react-hooks/rules-of-hooks": "error",
     },
   },
+  {
+    files: [
+      "src/lib/**/*.{js,mjs,cjs,jsx}",
+      "src/api/**/*.{js,mjs,cjs,jsx}",
+    ],
+    ...pluginJs.configs.recommended,
+    ...pluginReact.configs.flat.recommended,
+    languageOptions: {
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: "module",
+        ecmaFeatures: { jsx: true },
+      },
+    },
+    settings: { react: { version: "detect" } },
+    plugins: {
+      react: pluginReact,
+      "react-hooks": pluginReactHooks,
+      "unused-imports": pluginUnusedImports,
+    },
+    rules: {
+      "no-unused-vars": "off",
+      "react/jsx-uses-vars": "error",
+      "react/jsx-uses-react": "error",
+      "unused-imports/no-unused-imports": "error",
+      "unused-imports/no-unused-vars": ["warn", {
+        vars: "all",
+        varsIgnorePattern: "^_",
+        args: "after-used",
+        argsIgnorePattern: "^_",
+      }],
+      "react/prop-types": "off",
+      "react/react-in-jsx-scope": "off",
+      "react-hooks/rules-of-hooks": "error",
+    },
+  },
+  {
+    files: [
+      "api/**/*.{js,mjs,cjs}",
+      "scripts/**/*.{js,mjs,cjs}",
+      "tests/**/*.{js,mjs,cjs}",
+    ],
+    ...pluginJs.configs.recommended,
+    languageOptions: {
+      globals: globals.node,
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: "module",
+      },
+    },
+    plugins: { "unused-imports": pluginUnusedImports },
+    rules: {
+      "no-unused-vars": "off",
+      "unused-imports/no-unused-imports": "error",
+      "unused-imports/no-unused-vars": ["warn", {
+        vars: "all",
+        varsIgnorePattern: "^_",
+        args: "after-used",
+        argsIgnorePattern: "^_",
+      }],
+    },
+  },
 ];

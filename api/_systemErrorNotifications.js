@@ -110,12 +110,17 @@ export function systemErrorPublicDescriptor(handler) {
   };
 }
 
+/** @param {{handler?: string, error?: any, status?: number, occurredAt?: Date | string}} options */
 export function systemErrorDedupeKey({ handler, error, status }) {
   return createHash('sha256')
     .update(`${cleanHandler(handler)}|${Number(status) || 500}|${redactedErrorSignature(error)}`)
     .digest('hex');
 }
 
+/**
+ * @param {any} client
+ * @param {{handler?: string, error?: any, status?: number, requestId?: string | null, occurredAt?: Date | string, environment?: NodeJS.ProcessEnv}} [options]
+ */
 export async function reportSystemError(client, { handler, error, status = 500, requestId = null, occurredAt = new Date(), environment = process.env } = {}) {
   if (!client || !shouldNotifySystemError(status)) return { recorded: false, skipped: true };
   if (!shouldRecordSystemErrorEnvironment(environment)) return { recorded: false, skipped: true, reason: 'non-production' };

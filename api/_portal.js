@@ -356,9 +356,9 @@ export async function reconcilePortalEntitlementsForProfile(
   client,
   profile,
   actor = null,
-  { forceRevision = false } = {},
+  { forceRevision = false, catalog: preloadedCatalog = null } = {},
 ) {
-  const catalog = await loadPortalCatalog(client);
+  const catalog = preloadedCatalog || await loadPortalCatalog(client);
   const existing = await loadUserEntitlements(client, profile.id);
   const byApplication = new Map(existing.map((row) => [row.application_id, row]));
   const reconciled = [];
@@ -398,7 +398,7 @@ export async function listPortalApplicationsForUser({
   env = process.env,
 }) {
   const catalog = await loadPortalCatalog(client);
-  const reconciled = await reconcilePortalEntitlementsForProfile(client, profile);
+  const reconciled = await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
   const entitlementMap = new Map(reconciled.map((row) => [row.application_id, row]));
   const hasFcosAccess = ['administrator', 'general_manager'].includes(profile.user_type)
     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');

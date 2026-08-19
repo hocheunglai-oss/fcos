@@ -7,6 +7,7 @@ const checks = [
   ['Migration integrity', ['run', 'verify:migrations']],
   ['Graph-only production source', ['run', 'verify:graph-only']],
   ['Production build', ['run', 'build']],
+  ['Performance budgets', ['run', 'verify:performance']],
   ['Read-only browser smoke tests', ['run', 'test:e2e']],
 ];
 

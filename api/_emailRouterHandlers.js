@@ -68,9 +68,12 @@ export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependen
   return syncEmailRouterMailboxIfDue({
     client: value.client,
     mailbox: value.mailbox,
-    folders: ['inbox', 'sentitems', 'archive'],
+    // Foreground checks only catch up the visible inbox. Subscription renewal,
+    // Sent/Archive reconciliation, outbox work, directory sync, and learning
+    // remain in webhook/cron maintenance so a browser poll cannot fan out.
+    folders: ['inbox'],
     minimumIntervalMs: 28_000,
-    maxPages: 4,
+    maxPages: 1,
   }, dependencies);
 }
 

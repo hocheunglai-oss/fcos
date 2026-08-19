@@ -29,7 +29,6 @@ import {
   compileClauseList,
   hasMaterialDifference,
   hasTopLevelListMarker,
-  normalizeClauseEquivalence,
   normalizeClauseText,
   parseLegacyClauses,
   shortNameKey,

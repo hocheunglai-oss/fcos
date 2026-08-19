@@ -16,6 +16,7 @@ const DEFAULT_API_VERSION = 'v67.0';
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 let cachedInstanceUrl = null;
+let tokenRefreshPromise = null;
 
 export function sendJson(res, data, status = 200) {
   res.statusCode = status;
@@ -193,12 +194,12 @@ export function salesforceConfiguredAuthModes() {
 export async function getAccessToken({ forceRefresh = false } = {}) {
   if (hasJwtBearerConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
-    return jwtBearerAccessToken();
+    return sharedTokenRefresh(jwtBearerAccessToken);
   }
 
   if (hasRefreshTokenConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
-    return refreshAccessToken();
+    return sharedTokenRefresh(refreshAccessToken);
   }
 
   if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
@@ -209,6 +210,17 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
   }
 
   throw new Error('Missing Salesforce env vars. Configure Salesforce JWT bearer env vars or set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
+}
+
+async function sharedTokenRefresh(loader) {
+  if (tokenRefreshPromise) return tokenRefreshPromise;
+  const pending = Promise.resolve().then(loader);
+  tokenRefreshPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (tokenRefreshPromise === pending) tokenRefreshPromise = null;
+  }
 }
 
 export function cleanRecord(obj) {

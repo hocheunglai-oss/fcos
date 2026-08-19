@@ -78,6 +78,8 @@ async function loadSupabaseUser() {
     accessLevels: data.moduleAccessLevels || {},
     applications: data.applications || [],
     capabilities: data.capabilities || {},
+    navigationPreferences: data.navigationPreferences || null,
+    workspacePreferences: data.workspacePreferences || null,
     error: null,
   };
 }
@@ -88,6 +90,7 @@ export const AuthProvider = ({ children }) => {
   const [moduleAccessLevels, setModuleAccessLevels] = useState({});
   const [applications, setApplications] = useState([]);
   const [capabilities, setCapabilities] = useState({});
+  const [bootstrapPreferences, setBootstrapPreferences] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingPublicSettings] = useState(false);
@@ -101,6 +104,7 @@ export const AuthProvider = ({ children }) => {
     setModuleAccessLevels(fullAccessLevels());
     setApplications(LOCAL_APPLICATIONS);
     setCapabilities(FULL_CAPABILITIES);
+    setBootstrapPreferences(null);
     setIsAuthenticated(true);
     setAuthError(null);
     setAuthChecked(true);
@@ -121,6 +125,10 @@ export const AuthProvider = ({ children }) => {
       setModuleAccessLevels(result.accessLevels || {});
       setApplications(result.applications || []);
       setCapabilities(result.capabilities || {});
+      setBootstrapPreferences({
+        navigation: result.navigationPreferences || null,
+        workspace: result.workspacePreferences || null,
+      });
       setIsAuthenticated(Boolean(result.user));
       setAuthError(result.error);
       setAuthChecked(true);
@@ -132,6 +140,7 @@ export const AuthProvider = ({ children }) => {
       setModuleAccessLevels({});
       setApplications([]);
       setCapabilities({});
+      setBootstrapPreferences(null);
       setAuthError(nextError);
       setIsAuthenticated(false);
       setAuthChecked(true);
@@ -156,6 +165,7 @@ export const AuthProvider = ({ children }) => {
         setModuleAccessLevels({});
         setApplications([]);
         setCapabilities({});
+        setBootstrapPreferences(null);
         setIsAuthenticated(false);
         setAuthError({ type: 'auth_required' });
         setAuthChecked(true);
@@ -251,6 +261,7 @@ export const AuthProvider = ({ children }) => {
     setModuleAccessLevels({});
     setApplications([]);
     setCapabilities({});
+    setBootstrapPreferences(null);
     setIsAuthenticated(false);
     setAuthChecked(true);
     if (!isSupabaseConfigured) applyLocalAdmin();
@@ -277,6 +288,7 @@ export const AuthProvider = ({ children }) => {
     moduleAccessLevels,
     applications,
     capabilities,
+    bootstrapPreferences,
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
+import { getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { clauseHash, compileNumberedClauses } from './_specialTermClauseModel.js';
 

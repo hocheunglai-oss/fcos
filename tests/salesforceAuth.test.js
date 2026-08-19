@@ -27,6 +27,20 @@ function withSalesforceEnv(values, callback) {
   }
 }
 
+async function withSalesforceEnvAsync(values, callback) {
+  const previous = Object.fromEntries(AUTH_ENV_NAMES.map((name) => [name, process.env[name]]));
+  for (const name of AUTH_ENV_NAMES) delete process.env[name];
+  Object.assign(process.env, values);
+  try {
+    return await callback();
+  } finally {
+    for (const name of AUTH_ENV_NAMES) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  }
+}
+
 test('blank optional OAuth variables do not block the Salesforce access-token fallback', () => {
   withSalesforceEnv({
     SALESFORCE_ACCESS_TOKEN: 'active-session-token',
@@ -93,4 +107,35 @@ test('Salesforce REST routes use the correct versioned and Apex service roots', 
     salesforceServiceUrl('/apexrest/fcos/special-term-clauses/a01/publication-preview', instanceUrl, 'v67.0'),
     'https://example.my.salesforce.com/services/apexrest/fcos/special-term-clauses/a01/publication-preview',
   );
+});
+
+test('concurrent durable Salesforce authentication shares one token request', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    await withSalesforceEnvAsync({
+      SALESFORCE_CLIENT_ID: 'connected-app-id',
+      SALESFORCE_CLIENT_SECRET: 'connected-app-secret',
+      SALESFORCE_REFRESH_TOKEN: 'refresh-token',
+    }, async () => {
+      let requests = 0;
+      globalThis.fetch = async () => {
+        requests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: 'shared-token',
+            instance_url: 'https://example.my.salesforce.com',
+            issued_at: String(Date.now()),
+          }),
+        };
+      };
+      const salesforce = await import(`../api/_salesforce.js?token-dedup=${Date.now()}`);
+      const tokens = await Promise.all(Array.from({ length: 6 }, () => salesforce.getAccessToken()));
+      assert.deepEqual(tokens, Array(6).fill('shared-token'));
+      assert.equal(requests, 1);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

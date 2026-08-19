@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm test
@@ -20,6 +20,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run verify:graph-only
       - run: npm run build
+      - run: npm run verify:performance
       - uses: supabase/setup-cli@v1
         with:
           version: 2.113.0
@@ -38,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chrome
