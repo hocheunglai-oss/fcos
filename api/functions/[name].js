@@ -3513,6 +3513,7 @@ async function accountPicDirectoryList(body = {}, req = null, accessContext = nu
       clKey: directory.clKey,
       revision: directory.revision,
       rowCount: directory.rowCount,
+      columnCount: directory.columnCount,
       updatedAt: directory.updatedAt,
       updatedByEmail: directory.updatedByEmail,
       isActive: true,

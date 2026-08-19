@@ -181,4 +181,5 @@ test('handlers are module-gated, revalidate Salesforce, return current detail af
   assert.match(source, /cl_key: currentAccount\.clKey/);
   assert.match(source, /account_role: currentAccount\.role/);
   assert.match(source, /const currentAccount = activeById\.get\(directory\.salesforce_account_id\)/);
+  assert.match(source, /rowCount: directory\.rowCount,[\s\S]*columnCount: directory\.columnCount/);
 });
