@@ -6,10 +6,21 @@ export const EMAIL_ROUTER_BACKGROUND_SYNC_INTERVAL_MS = 30_000;
 const EMAIL_ROUTER_BACKGROUND_SYNC_LOCK = 'fcos:email-router-background-sync';
 const EMAIL_ROUTER_BACKGROUND_SYNC_CHANNEL = 'fcos:email-router-background-sync-events';
 const EMAIL_ROUTER_BACKGROUND_SYNC_SIGNAL = 'mailbox-synchronized';
+export const EMAIL_ROUTER_SYNC_STATE_KEY = 'fcos:email-router-sync-state';
+
+function publishSyncState(detail) {
+  let prior = {};
+  try { prior = JSON.parse(window.localStorage.getItem(EMAIL_ROUTER_SYNC_STATE_KEY) || '{}'); } catch { /* Ignore an invalid prior status snapshot. */ }
+  const state = { ...prior, ...detail, observedAt: new Date().toISOString() };
+  try { window.localStorage.setItem(EMAIL_ROUTER_SYNC_STATE_KEY, JSON.stringify(state)); } catch { /* Status remains available through the live event. */ }
+  window.dispatchEvent(new CustomEvent('fcos:email-router-sync-state', { detail: state }));
+  return state;
+}
 
 function notifyEmailRouterWorkspace(detail = {}) {
   appClient.functions.invalidateCache({ names: ['emailRouterList', 'emailRouterDetail'] });
-  window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail }));
+  const state = publishSyncState({ ...detail, status: detail.status || 'synchronized', lastSyncedAt: detail.lastSyncedAt || new Date().toISOString() });
+  window.dispatchEvent(new CustomEvent('fcos:email-router-synced', { detail: state }));
 }
 
 export default function EmailRouterBackgroundSync({ enabled }) {
@@ -38,10 +49,12 @@ export default function EmailRouterBackgroundSync({ enabled }) {
     if (!enabled || runningRef.current || document.visibilityState !== 'visible') return;
     runningRef.current = true;
     lastAttemptAtRef.current = Date.now();
+    publishSyncState({ status: 'synchronizing', lastAttemptAt: new Date().toISOString() });
     try {
       const run = async () => {
         const response = await emailRouter.backgroundSync({}, { cache: false, force: true });
         if (response.data?.error) {
+          publishSyncState({ status: 'failed', lastAttemptAt: new Date().toISOString(), reason: 'Mailbox synchronization is unavailable.' });
           window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
           return;
         }
@@ -58,10 +71,20 @@ export default function EmailRouterBackgroundSync({ enabled }) {
       } else {
         await run();
       }
+    } catch {
+      publishSyncState({ status: 'failed', lastAttemptAt: new Date().toISOString(), reason: 'Mailbox synchronization is unavailable.' });
+      window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
     } finally {
       runningRef.current = false;
     }
   }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const requested = () => synchronize();
+    window.addEventListener('fcos:email-router-sync-request', requested);
+    return () => window.removeEventListener('fcos:email-router-sync-request', requested);
+  }, [enabled, synchronize]);
 
   useEffect(() => {
     if (!enabled) return undefined;

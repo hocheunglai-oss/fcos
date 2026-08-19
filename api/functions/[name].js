@@ -227,6 +227,7 @@ import {
   emailRouterActionHandler as nativeEmailRouterAction,
   emailRouterActionStatusHandler as nativeEmailRouterActionStatus,
   emailRouterAdvisorHandler as nativeEmailRouterAdvisor,
+  emailRouterAttachmentTextHandler as nativeEmailRouterAttachmentText,
   emailRouterAttachmentUrlHandler as nativeEmailRouterAttachmentUrl,
   emailRouterBackgroundSyncHandler as nativeEmailRouterBackgroundSync,
   emailRouterDeltaHandler as nativeEmailRouterDelta,
@@ -240,6 +241,7 @@ import {
   emailRouterPresetsHandler as nativeEmailRouterPresets,
   emailRouterRetryHandler as nativeEmailRouterRetry,
   emailRouterFilingRetryHandler as nativeEmailRouterFilingRetry,
+  emailRouterHealthHandler as nativeEmailRouterHealth,
   emailRouterSettingsHandler as nativeEmailRouterSettings,
   emailRouterSettingsSaveHandler as nativeEmailRouterSettingsSave,
   emailRouterSubscriptionHandler as nativeEmailRouterSubscription,
@@ -1386,7 +1388,9 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterUndo: ['email_router'],
   emailRouterRetry: ['email_router'],
   emailRouterFilingRetry: ['email_router'],
+  emailRouterAttachmentText: ['email_router'],
   emailRouterAttachmentUrl: ['email_router'],
+  emailRouterHealth: ['email_router'],
   emailRouterAdvisor: ['email_router'],
   emailRouterSettings: ['email_router'],
   emailRouterSettingsSave: ['email_router'],
@@ -18827,6 +18831,14 @@ async function emailRouterAttachmentUrl(body = {}, req = null, accessContext = n
   return nativeEmailRouterAttachmentUrl(req, body, nativeEmailRouterDependencies(accessContext));
 }
 
+async function emailRouterAttachmentText(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterAttachmentText(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
+async function emailRouterHealth(body = {}, req = null, accessContext = null) {
+  return nativeEmailRouterHealth(req, body, nativeEmailRouterDependencies(accessContext));
+}
+
 async function emailRouterAdvisor(body = {}, req = null, accessContext = null) {
   return nativeEmailRouterAdvisor(req, body, nativeEmailRouterDependencies(accessContext));
 }
@@ -18951,6 +18963,8 @@ const handlers = {
   emailRouterRetry,
   emailRouterFilingRetry,
   emailRouterAttachmentUrl,
+  emailRouterAttachmentText,
+  emailRouterHealth,
   emailRouterAdvisor,
   emailRouterSettings,
   emailRouterSettingsSave,

@@ -110,6 +110,28 @@ test('Email Router visibility is controlled by module access without removing cu
   assert.match(server, /emailRouterSettingsSave: \['email_router'\]/);
 });
 
+test('Email Router enhancements remain authenticated, transient, and content-free in operations storage', async () => {
+  const [server, policy, handlers, workspace, messageSheet, operations] = await Promise.all([
+    readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_emailRouterHandlers.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterWorkspace.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailMessageSheet.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/email-router/EmailRouterOperationsDialog.jsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(server, /emailRouterAttachmentText: \['email_router'\]/);
+  assert.match(server, /emailRouterHealth: \['email_router'\]/);
+  assert.match(policy, /emailRouterAttachmentText: readPolicy/);
+  assert.match(policy, /emailRouterHealth: readPolicy/);
+  assert.match(handlers, /pdfParse\(await attachmentBuffer\(attachment\)\)/);
+  assert.match(handlers, /maximumBytes = 12 \* 1024 \* 1024/);
+  assert.doesNotMatch(operations, /\.subject|bodyHtml|bodyText|toRecipients|ccRecipients/);
+  assert.match(workspace, /selected for routing/);
+  assert.match(workspace, /Keyboard shortcuts/);
+  assert.match(messageSheet, /Always trust/);
+  assert.match(messageSheet, /Extract searchable text/);
+});
+
 test('Email Router destination profiles do not rely on cross-schema PostgREST embeds', async () => {
   const [core, configuration] = await Promise.all([
     readFile(new URL('../api/_emailRouterCore.js', import.meta.url), 'utf8'),
@@ -204,7 +226,7 @@ test('Email Router filing waits for Sent Items and retries only the source move'
   assert.doesNotMatch(workspace, /payload\.action === 'redirect'[\s\S]*setMessages\(\(current\) => current\.filter/);
   assert.match(workspace, /emailRouter\.directory[\s\S]*setPresets\(directoryResponse\.data\?\.presets/);
   assert.doesNotMatch(workspace, /emailRouter\.presets\(/);
-  assert.match(workspace, /\}, \[selectedId\]\);/);
+  assert.match(workspace, /\}, \[cacheDetail, selectedId\]\);/);
   assert.match(workspace, /attachment\.streamUrl/);
   assert.doesNotMatch(dialog, /archive:\s*\{/);
   assert.match(messageSheet, /Move immediately to Archive/);

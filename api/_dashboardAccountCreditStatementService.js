@@ -19,6 +19,7 @@ import {
   loadDashboardSupplierCreditStatement,
 } from './_dashboardSupplierCreditStatementService.js';
 import { loadDashboardUnifiedCreditDirectory } from './_dashboardUnifiedCounterpartyService.js';
+import { normalizeRequestedGroupAccountIds, resolveGroupAccountScope } from './_dashboardGroupAccountScope.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -448,9 +449,10 @@ async function queryPayments(stems, fields, config) {
   return { rows: rows.slice(0, MAX_EVIDENCE_ROWS).filter((payment) => validBuyerPayment(payment, config, accountByStem)), complete };
 }
 
-async function queryRecentPaymentStemIds(accountId, since, fields, config) {
+async function queryRecentPaymentStemIds(accountIds, since, fields, config) {
+  if (!accountIds.length) return { rows: [], complete: true };
   const select = paymentSelectFields(fields, config);
-  const conditions = [`Account__c = '${soql(accountId)}'`];
+  const conditions = [`Account__c IN (${accountIds.map((accountId) => `'${soql(accountId)}'`).join(',')})`];
   if (config.dateField === 'CreatedDate') conditions.push(`CreatedDate >= ${since}T00:00:00Z`);
   else conditions.push(`${config.dateField} >= ${since}`);
   for (const field of config.supplierInvoiceFields) conditions.push(`${field} = null`);
@@ -608,10 +610,13 @@ function compareStatementStems(left, right) {
   return String(right.CreatedDate || '').localeCompare(String(left.CreatedDate || '')) || String(right.Id).localeCompare(String(left.Id));
 }
 
-async function statementRows({ accountId, scope, cursor, limit, openStems, recentPayments, stemFields }) {
+async function statementRows({ accountIds = null, accountId = null, scope, cursor, limit, openStems, recentPayments, stemFields }) {
+  const scopedAccountIds = Array.isArray(accountIds) ? accountIds : [accountId].filter(Boolean);
+  if (!scopedAccountIds.length) return { rows: [], total: 0, nextCursor: null };
+  const accountIdSet = new Set(scopedAccountIds.map(idKey));
   if (scope === 'all') {
     if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c = '${soql(accountId)}' LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
+    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c IN (${scopedAccountIds.map((scopedAccountId) => `'${soql(scopedAccountId)}'`).join(',')}) LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
     if (result.records.length > MAX_GROUP_OPEN_STEMS) throw serviceError('The Account Statement exceeds the supported delivery-sorted history scope. Narrow the statement filter.', 503, 'ACCOUNT_CREDIT_STATEMENT_LIMIT');
     const sorted = mergeStems(result.records);
     const offset = cursor?.offset || 0;
@@ -623,11 +628,11 @@ async function statementRows({ accountId, scope, cursor, limit, openStems, recen
     };
   }
   if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-  const selectedOpen = openStems.filter((stem) => idKey(stem.Account__c) === idKey(accountId));
+  const selectedOpen = openStems.filter((stem) => accountIdSet.has(idKey(stem.Account__c)));
   let rows = selectedOpen;
   if (scope === 'open_recent') {
     const recentStemIds = unique(recentPayments.map((payment) => payment.STEM__c).filter((id) => SALESFORCE_ID.test(text(id))));
-    const recentStems = recentStemIds.length ? await queryStemsForAccountIds([accountId], stemFields, `Id IN (${recentStemIds.map((id) => `'${soql(id)}'`).join(',')})`, 50_000) : [];
+    const recentStems = recentStemIds.length ? await queryStemsForAccountIds(scopedAccountIds, stemFields, `Id IN (${recentStemIds.map((id) => `'${soql(id)}'`).join(',')})`, 50_000) : [];
     rows = mergeStems([...selectedOpen, ...recentStems]);
   } else rows = mergeStems(selectedOpen);
   const offset = cursor?.offset || 0;
@@ -643,6 +648,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const startedAt = Date.now();
   const timings = {};
   const accountId = salesforceId(body.accountId);
+  const entityType = body.entityType === 'group' ? 'group' : 'account';
+  const requestedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
   const cursor = decodeAccountCreditCursor(body.cursor);
@@ -684,7 +691,9 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const groupMembers = group ? await loadGroupMembers(group, accountFields) : [account];
   timings.hierarchyMs = Date.now() - stageStartedAt;
   if (!groupMembers.some((member) => idKey(member.Id) === idKey(account.Id))) groupMembers.push(account);
-  const groupAccountIds = unique(groupMembers.map((member) => member.Id));
+  const groupScope = resolveGroupAccountScope({ entityType, group, groupMembers, requestedAccountIds });
+  const groupAccountIds = entityType === 'group' ? groupScope.includedAccountIds : unique(groupMembers.map((member) => member.Id));
+  const statementAccountIds = entityType === 'group' ? groupScope.includedAccountIds : [accountId];
   stageStartedAt = Date.now();
   const openStemsRaw = await queryStemsForAccountIds(groupAccountIds, stemFields, `QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}`);
   const openStemScopeComplete = openStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
@@ -693,7 +702,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   let creditOpenStems = openStems;
   let creditResolution = null;
   const selectedReconciliation = creditScopeReconciles({ account, group, openStems, complete: openStemScopeComplete });
-  if (!selectedReconciliation.matches) {
+  if (!groupScope.partial && !selectedReconciliation.matches) {
     const duplicateScope = await loadSameNameCreditCandidates(account, accountFields, interoffice);
     const resolution = resolveCreditSnapshotCandidate({
       selectedAccount: account,
@@ -724,9 +733,9 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     }
   }
   const recentPayments = scope === 'open_recent'
-    ? await queryRecentPaymentStemIds(accountId, oneYearBefore(today), paymentFields, paymentConfig)
+    ? await queryRecentPaymentStemIds(statementAccountIds, oneYearBefore(today), paymentFields, paymentConfig)
     : { rows: [], complete: true };
-  const statement = await statementRows({ accountId, scope, cursor, limit, openStems, recentPayments: recentPayments.rows, stemFields });
+  const statement = await statementRows({ accountIds: statementAccountIds, scope, cursor, limit, openStems, recentPayments: recentPayments.rows, stemFields });
   timings.statementScopeMs = Date.now() - stageStartedAt;
   const relevantStems = mergeStems([...openStems, ...statement.rows]);
   stageStartedAt = Date.now();
@@ -756,6 +765,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     creditResolution,
     group,
     groupMembers,
+    groupScope,
     openStems: creditOpenStems,
     statementStems: statement.rows,
     paymentsByStem,
@@ -770,6 +780,13 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   });
   return {
     ...model,
+    groupScope: {
+      selectable: groupScope.selectable,
+      availableAccounts: groupScope.availableAccounts,
+      includedAccountIds: groupScope.includedAccountIds,
+      allSelected: groupScope.allSelected,
+      partial: groupScope.partial,
+    },
     scope,
     statement: {
       rows: model.rows,
@@ -831,6 +848,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
       side: 'both',
       identity: { accountId, entityType, name: buyer.identity?.name || supplier.identity?.name || accountId, clKey: buyer.identity?.clKey || supplier.identity?.clKey || null },
       roles: ['buyer', 'supplier'], buyer, supplier,
+      groupScope: buyer.groupScope || supplier.groupScope || null,
       combined: { currencies, warning: currencies.every((row) => row.netOpening != null) ? null : 'Combined net exposure is suppressed where either buyer or supplier evidence is incomplete.' },
       complete: buyer.meta?.complete === true && supplier.meta?.complete === true,
       meta: { redacted: true, cache: buyer.meta?.cache || supplier.meta?.cache || null },
@@ -838,19 +856,20 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   }
   if (body.side === 'supplier') return loadDashboardSupplierCreditStatement({ body, accessContext, force });
   const accountId = salesforceId(entityId);
+  const includedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '9',
+    version: '10',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { accountId: idKey(accountId), scope, cursor: body.cursor || null, limit },
+    payload: { accountId: idKey(accountId), entityType, includedAccountIds: includedAccountIds?.map(idKey).sort() || null, scope, cursor: body.cursor || null, limit },
     ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment', 'salesforce:invoice', 'salesforce:account-credit', `salesforce:account:${idKey(accountId)}`],
     force,
-    loader: () => loadAccountCreditStatementUncached({ body: { ...body, accountId, entityType, scope, limit }, accessContext, force }),
+    loader: () => loadAccountCreditStatementUncached({ body: { ...body, accountId, entityType, includedAccountIds, scope, limit }, accessContext, force }),
   });
   return {
     ...cache.value,
@@ -866,4 +885,5 @@ export const dashboardAccountCreditStatementServiceInternals = {
   finalBuyerInvoice,
   creditExposureDeliveryWhere,
   statementRows,
+  resolveGroupAccountScope,
 };

@@ -672,6 +672,7 @@ export function buildAccountCreditStatement({
   creditResolution = null,
   group,
   groupMembers = [],
+  groupScope = null,
   openStems = [],
   statementStems = [],
   paymentsByStem = {},
@@ -714,7 +715,18 @@ export function buildAccountCreditStatement({
   }]));
   const individualReconciliation = reconcileCreditExposure(snapshot.usedCustomer, currencyConflict ? null : accountExposure, { complete: projectionComplete });
   const groupReconciliation = group
-    ? reconcileCreditExposure(snapshot.usedGroup, currencyConflict ? null : groupExposure, { complete: projectionComplete })
+    ? groupScope?.partial
+      ? {
+        complete: projectionComplete,
+        matches: projectionComplete,
+        expected: null,
+        reconstructed: groupExposure,
+        difference: null,
+        tolerance: CREDIT_RECONCILIATION_TOLERANCE,
+        scoped: true,
+        explanation: 'Selected-account exposure is an operational subset and is not reconciled to Salesforce’s full GROUP used-credit snapshot.',
+      }
+      : reconcileCreditExposure(snapshot.usedGroup, currencyConflict ? null : groupExposure, { complete: projectionComplete })
     : { complete: true, matches: true, expected: snapshot.usedGroup, reconstructed: groupExposure, difference: 0, tolerance: CREDIT_RECONCILIATION_TOLERANCE, notApplicable: true };
   const chart = buildCreditReleaseChart({
     releases: projectionComplete ? releases : [],
@@ -804,6 +816,7 @@ export function buildAccountCreditStatement({
     ...warnings,
     ...(!individualReconciliation.matches ? ['Individual used credit does not reconcile to the selected Account’s current buyer-leg STEM exposure. The individual projection is hidden.'] : []),
     ...(group && !groupReconciliation.matches ? ['Group used credit does not reconcile to current buyer-leg STEM exposure across the Salesforce GROUP hierarchy. The group projection is hidden.'] : []),
+    ...(groupScope?.partial ? ['The GROUP forecast includes only the selected active Accounts. Salesforce’s effective available credit and used-credit fields still describe the full GROUP.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
     ...(currencyConflict ? [`Buyer-leg STEM exposure spans multiple currencies (${currencyLabels.join(', ')}). Values remain separated by row and projected balances are hidden.`] : []),
   ];

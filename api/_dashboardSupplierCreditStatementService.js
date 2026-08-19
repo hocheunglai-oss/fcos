@@ -12,6 +12,7 @@ import {
   resolveSupplierInvoiceIdentity,
   supplierOpenUninvoicedRows,
 } from './_dashboardSupplierCreditStatement.js';
+import { normalizeRequestedGroupAccountIds, resolveGroupAccountScope } from './_dashboardGroupAccountScope.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const MAX_ROWS = 50_000;
@@ -492,6 +493,8 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
   const startedAt = Date.now();
   const timings = {};
   const accountId = salesforceId(body.accountId);
+  const entityType = body.entityType === 'group' ? 'group' : 'account';
+  const requestedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
   const includeGroup = body.includeGroup === true;
   const scope = normalizeSupplierCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
@@ -531,9 +534,10 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
   if (account.Inactive_Suspended__c === true) throw serviceError('This Salesforce Account is inactive and is not available in FCOS.', 404, 'SUPPLIER_CREDIT_ACCOUNT_INACTIVE');
   ensureAccess(account, chain, interoffice);
   const group = selectUltimateCreditGroup(chain);
-  const groupMembers = includeGroup && group ? await loadActiveGroupMembers(group, accountMap) : [account];
+  const groupMembers = (includeGroup || entityType === 'group') && group ? await loadActiveGroupMembers(group, accountMap) : [account];
   if (!groupMembers.some((member) => idKey(member.Id) === idKey(account.Id))) groupMembers.push(account);
-  const targetAccounts = includeGroup ? groupMembers : [account];
+  const groupScope = resolveGroupAccountScope({ entityType, group, groupMembers, requestedAccountIds });
+  const targetAccounts = entityType === 'group' ? groupScope.includedMembers : includeGroup ? groupMembers : [account];
   const targetAccountIds = unique(targetAccounts.map((row) => row.Id));
   const accountById = new Map(targetAccounts.map((row) => [idKey(row.Id), row]));
   timings.hierarchyMs = Date.now() - stage;
@@ -623,12 +627,19 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
   if (!complete) throw serviceError('The Supplier Credit Statement exceeds the complete Salesforce evidence limit. Narrow the Dashboard filters before calculating payable exposure.', 503, 'SUPPLIER_CREDIT_SCOPE_LIMIT');
   const model = buildSupplierCreditStatement({
     account, group, groupMembers, issuedRows: scopedIssued, uninvoicedRows: scopedUninvoiced,
-    includeGroup, today, complete,
+    includeGroup: includeGroup || entityType === 'group', today, complete,
     warnings: conflicts.map((row) => `${row.invoiceName || 'Supplier Invoice'}: ${row.warning}`),
   });
   const statement = paginateRows(model.rows, scope, cursor, limit);
   return {
     ...model,
+    groupScope: {
+      selectable: groupScope.selectable,
+      availableAccounts: groupScope.availableAccounts,
+      includedAccountIds: groupScope.includedAccountIds,
+      allSelected: groupScope.allSelected,
+      partial: groupScope.partial,
+    },
     scope,
     statement: { ...statement, pageSize: limit },
     conflicts,
@@ -648,6 +659,8 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
 
 export async function loadDashboardSupplierCreditStatement({ body = {}, accessContext, force = false }) {
   const accountId = salesforceId(body.accountId);
+  const entityType = body.entityType === 'group' ? 'group' : 'account';
+  const includedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
   const scope = normalizeSupplierCreditScope(body.scope);
   const includeGroup = body.includeGroup === true;
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
@@ -655,10 +668,10 @@ export async function loadDashboardSupplierCreditStatement({ body = {}, accessCo
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-supplier-credit-statement',
-    version: '1',
+    version: '2',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { accountId: idKey(accountId), scope, includeGroup, cursor: body.cursor || null, limit, filters },
+    payload: { accountId: idKey(accountId), entityType, includedAccountIds: includedAccountIds?.map(idKey).sort() || null, scope, includeGroup, cursor: body.cursor || null, limit, filters },
     ttlSeconds: 60,
     tags: [
       'salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment',
@@ -666,7 +679,7 @@ export async function loadDashboardSupplierCreditStatement({ body = {}, accessCo
       `salesforce:account:${idKey(accountId)}`,
     ],
     force,
-    loader: () => loadSupplierCreditStatementUncached({ body: { ...body, accountId, scope, includeGroup, limit, filters }, accessContext, force }),
+    loader: () => loadSupplierCreditStatementUncached({ body: { ...body, accountId, entityType, includedAccountIds, scope, includeGroup, limit, filters }, accessContext, force }),
   });
   return { ...cache.value, meta: { ...cache.value.meta, cache: cache.cache?.status || null } };
 }

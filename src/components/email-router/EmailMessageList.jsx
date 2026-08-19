@@ -13,7 +13,7 @@ const EMPTY_COPY = {
 };
 
 export default function EmailMessageList({
-  messages, selectedId, loading, loadingMore, error, folder, hasPrevious, hasNext, onSelect, onPrevious, onNext,
+  messages, selectedId, selectedBatchIds = new Set(), loading, loadingMore, error, folder, hasPrevious, hasNext, onSelect, onToggleSelection, onPrefetch, onPrevious, onNext,
 }) {
   const empty = EMPTY_COPY[folder] || EMPTY_COPY.inbox;
   const EmptyIcon = empty.icon;
@@ -30,23 +30,23 @@ export default function EmailMessageList({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
         {messages.map((message) => (
-          <button
-            type="button"
-            key={message.id}
-            onClick={() => onSelect(message.id)}
-            className={cn(
-              'grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-4 py-3 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-              selectedId === message.id && 'bg-primary/8',
-              !message.isRead && 'bg-muted/30',
-            )}
-          >
-            <div className="min-w-0">
+          <div key={message.id} className={cn('grid grid-cols-[2rem_minmax(0,1fr)] transition-colors hover:bg-muted/55', selectedId === message.id && 'bg-primary/8', !message.isRead && 'bg-muted/30')}>
+            <label className="flex items-start justify-center pt-4" title="Select for batch routing"><input type="checkbox" className="h-4 w-4" checked={selectedBatchIds.has(message.id)} onChange={() => onToggleSelection?.(message.id)} aria-label={`Select ${message.subject} for batch routing`} /></label>
+            <button
+              type="button"
+              onClick={() => onSelect(message.id)}
+              onMouseEnter={() => onPrefetch?.(message)}
+              onFocus={() => onPrefetch?.(message)}
+              className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-3 py-3 pl-1 pr-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <div className="min-w-0">
               <div className="flex items-center gap-2"><span className={cn('truncate text-sm', !message.isRead && 'font-semibold')}>{message.from.name || message.from.email || 'Unknown sender'}</span>{message.isFlagged && <Star className="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" />}</div>
               <p className={cn('mt-0.5 truncate text-sm text-foreground', !message.isRead && 'font-medium')}>{message.subject}</p>
               <p className="mt-1 truncate text-xs text-muted-foreground">{message.preview || 'No preview available'}</p>
-            </div>
-            <div className="flex flex-col items-end gap-2 text-xs text-muted-foreground"><time>{formatEmailDate(message.sentAt)}</time>{message.hasAttachments && <Paperclip className="h-3.5 w-3.5" />}</div>
-          </button>
+              </div>
+              <div className="flex flex-col items-end gap-2 text-xs text-muted-foreground"><time>{formatEmailDate(message.sentAt)}</time>{message.hasAttachments && <Paperclip className="h-3.5 w-3.5" />}</div>
+            </button>
+          </div>
         ))}
       </div>
       <div className="flex h-10 shrink-0 items-center justify-end border-t border-border px-3">

@@ -191,6 +191,22 @@ test('statement separates selected-account and other-group releases and independ
   assert.equal(mismatched.chart.points[0].individualExposure, null);
 });
 
+test('a partial GROUP selection remains chartable without claiming full Salesforce GROUP reconciliation', () => {
+  const statement = buildAccountCreditStatement({
+    today: '2026-08-16',
+    account: { Id: groupId, Name: 'GROUP - GLOBAL', CL_Category__c: 'Group', CL_Group__c: 1_000, CL_Used_Customer__c: 0, CL_Used_Group__c: 900 },
+    group: { Id: groupId, Name: 'GROUP - GLOBAL' },
+    groupMembers: [{ Id: groupId }, { Id: accountId }, { Id: otherAccountId }],
+    groupScope: { partial: true },
+    openStems: [{ Id: 'a01000000000001AAA', Name: 'A', Account__c: accountId, QLIK_Receivable_Balance__c: 100, Invoice_Due_Date__c: '2026-09-01' }],
+  });
+  assert.equal(statement.reconciliation.group.scoped, true);
+  assert.equal(statement.reconciliation.group.matches, true);
+  assert.equal(statement.reconciliation.group.reconstructed, 100);
+  assert.equal(statement.chart.points[0].groupExposure, 100);
+  assert.match(statement.projectionWarnings.join(' '), /selected active Accounts/);
+});
+
 test('Achieve Bunker unique same-name snapshot produces the confirmed five-step exposure forecast', () => {
   const selected = {
     Id: accountId,
@@ -663,7 +679,7 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /showAssumptions \? <div/);
   assert.match(statement, /showAssumptions && result\.chart\?\.undatedGroupStemCount/);
   assert.match(statement, /CreditPositionPanel title="Selected Account"/);
-  assert.match(statement, /CreditPositionPanel title="GROUP"/);
+  assert.match(statement, /CreditPositionPanel title=\{entityType === 'group' \? 'Selected GROUP Accounts' : 'GROUP'\}/);
   assert.match(statement, /group_shared_uncapped/);
   assert.match(statement, /No individual cap/);
   assert.match(statement, /availableComparison\.materiallyDifferent/);
@@ -696,5 +712,5 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /result\?\.projectionWarnings \|\| result\?\.warnings/);
   assert.match(statement, /Outside current credit lineage window/);
   assert.match(statement, /\{result\.group \? <button type="button" aria-pressed=\{series\.group\}/);
-  assert.match(statement, /result\.group \? <CreditPositionPanel title="GROUP"/);
+  assert.match(statement, /result\.group \? <CreditPositionPanel title=\{entityType === 'group'/);
 });

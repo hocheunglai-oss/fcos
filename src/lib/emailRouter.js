@@ -289,6 +289,8 @@ export const emailRouter = {
   async undo(payload, options) { return invoke('emailRouterUndo', payload, options); },
   async retry(payload, options) { return invoke('emailRouterRetry', payload, options); },
   async retryFiling(payload, options) { return invoke('emailRouterFilingRetry', payload, options); },
+  async attachmentText(payload, options) { return invoke('emailRouterAttachmentText', payload, options); },
   async attachmentUrl(payload, options) { return invoke('emailRouterAttachmentUrl', payload, options); },
+  async health(payload = {}, options) { return invoke('emailRouterHealth', payload, options); },
   async advisor(payload, options) { return invoke('emailRouterAdvisor', payload, options); },
 };

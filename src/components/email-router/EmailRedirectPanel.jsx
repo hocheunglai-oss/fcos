@@ -30,6 +30,17 @@ export function advisorRecipientSelections(advisor, directory) {
   return result;
 }
 
+export function advisorTransparencySignals(advisor, message) {
+  if (!advisor) return [];
+  const sender = String(message?.from?.email || '').split('@').at(-1)?.toLowerCase() || null;
+  return [
+    sender ? `Sender domain: ${sender}` : null,
+    advisor.routingCategory ? `Routing category: ${String(advisor.routingCategory).replaceAll('_', ' ')}` : null,
+    `${Number(advisor.evidenceCount || 0)} previously confirmed matching routes`,
+    advisor.historyWarning ? 'Historical outcomes contain a warning' : 'Historical outcomes passed consistency review',
+  ].filter(Boolean);
+}
+
 function suggestionLabel(suggestion, index) {
   return `${String(suggestion.recipientKind || 'to').toUpperCase()} ${index + 1}: ${suggestion.label}`;
 }
@@ -42,6 +53,7 @@ function folderLabel(value, folders) {
 
 export default function EmailRedirectPanel({
   message,
+  batchMessages = [],
   directory,
   presets,
   folders = [],
@@ -56,6 +68,7 @@ export default function EmailRedirectPanel({
   actionResult = null,
   onAdvisor,
   onSubmit,
+  panelRef,
   className = '',
 }) {
   const [selections, setSelections] = useState([]);
@@ -69,8 +82,11 @@ export default function EmailRedirectPanel({
   const [body, setBody] = useState('');
   const presetOptions = useMemo(() => valueList(presets), [presets]);
   const approvedFolders = useMemo(() => (folders || []).filter((folder) => folder.active !== false && folder.approved !== false && !folder.system), [folders]);
-  const recommendedSelections = useMemo(() => advisorRecipientSelections(advisor, directory), [advisor, directory]);
-  const routeLocked = actionResult?.messageId === message?.id && actionResult?.status !== 'failed'
+  const batchSize = Math.max(1, batchMessages.length);
+  const effectiveAdvisor = batchSize === 1 ? advisor : null;
+  const recommendedSelections = useMemo(() => advisorRecipientSelections(effectiveAdvisor, directory), [effectiveAdvisor, directory]);
+  const batchBlocked = batchSize > 10;
+  const routeLocked = batchSize === 1 && actionResult?.messageId === message?.id && actionResult?.status !== 'failed'
     && ['redirect', 'forward'].includes(actionResult?.action);
 
   useEffect(() => {
@@ -87,19 +103,19 @@ export default function EmailRedirectPanel({
   }, [message?.id]);
 
   useEffect(() => {
-    if (folderTouched || (advisor?.preselectFolder && Number(advisor.folderConfidence) > PRESELECT_CONFIDENCE)) return;
+    if (folderTouched || (effectiveAdvisor?.preselectFolder && Number(effectiveAdvisor.folderConfidence) > PRESELECT_CONFIDENCE)) return;
     setPostAction(actionMode === 'redirect' ? 'archive' : 'keep_current');
-  }, [actionMode, advisor?.folderConfidence, advisor?.preselectFolder, folderTouched]);
+  }, [actionMode, effectiveAdvisor?.folderConfidence, effectiveAdvisor?.preselectFolder, folderTouched]);
 
   useEffect(() => {
-    if (!advisor) return;
+    if (!effectiveAdvisor) return;
     let applied = false;
-    if (advisor.preselectAction && Number(advisor.actionConfidence) > PRESELECT_CONFIDENCE && !actionTouched) {
-      onActionModeChange(advisor.suggestedAction);
+    if (effectiveAdvisor.preselectAction && Number(effectiveAdvisor.actionConfidence) > PRESELECT_CONFIDENCE && !actionTouched) {
+      onActionModeChange(effectiveAdvisor.suggestedAction);
       applied = true;
     }
-    if (advisor.preselectFolder && Number(advisor.folderConfidence) > PRESELECT_CONFIDENCE && !folderTouched) {
-      setPostAction(advisor.suggestedFolder);
+    if (effectiveAdvisor.preselectFolder && Number(effectiveAdvisor.folderConfidence) > PRESELECT_CONFIDENCE && !folderTouched) {
+      setPostAction(effectiveAdvisor.suggestedFolder);
       applied = true;
     }
     if (recommendedSelections.length && !recipientsTouched && !selections.length && presetId === 'none') {
@@ -108,7 +124,7 @@ export default function EmailRedirectPanel({
       applied = true;
     }
     if (applied) setAdvisorApplied(true);
-  }, [advisor, actionTouched, folderTouched, onActionModeChange, presetId, recipientsTouched, recommendedSelections, selections.length]);
+  }, [effectiveAdvisor, actionTouched, folderTouched, onActionModeChange, presetId, recipientsTouched, recommendedSelections, selections.length]);
 
   const selectedPreset = presetOptions.find((item) => String(item.id || item.value) === presetId);
   const selectedLeaveLabels = useMemo(() => {
@@ -122,7 +138,7 @@ export default function EmailRedirectPanel({
       return item.onLeave ? [item.label] : [];
     }))];
   }, [directory, selectedPreset, selections]);
-  const canSend = Boolean(message) && !directoryLoading && !submitting && !routeLocked && selections.length > 0
+  const canSend = Boolean(message) && !batchBlocked && !directoryLoading && !submitting && !routeLocked && selections.length > 0
     && (presetId === 'none' || Boolean(selectedPreset?.routeSnapshotToken));
   const selectPreset = (value) => {
     setPresetId(value);
@@ -142,9 +158,9 @@ export default function EmailRedirectPanel({
     if (!folderTouched) setPostAction(value === 'redirect' ? 'archive' : 'keep_current');
   };
   const applyAdvisor = () => {
-    if (!advisor) return;
-    if (advisor.preselectAction && Number(advisor.actionConfidence) > PRESELECT_CONFIDENCE) onActionModeChange(advisor.suggestedAction);
-    if (advisor.preselectFolder && Number(advisor.folderConfidence) > PRESELECT_CONFIDENCE) setPostAction(advisor.suggestedFolder);
+    if (!effectiveAdvisor) return;
+    if (effectiveAdvisor.preselectAction && Number(effectiveAdvisor.actionConfidence) > PRESELECT_CONFIDENCE) onActionModeChange(effectiveAdvisor.suggestedAction);
+    if (effectiveAdvisor.preselectFolder && Number(effectiveAdvisor.folderConfidence) > PRESELECT_CONFIDENCE) setPostAction(effectiveAdvisor.suggestedFolder);
     if (recommendedSelections.length) {
       setPresetId('none');
       setSelections(recommendedSelections);
@@ -169,14 +185,15 @@ export default function EmailRedirectPanel({
       postActionMode: postAction === 'keep_current' ? 'keep_current' : 'move',
       postActionFolderKey: postAction === 'archive' ? 'archive' : null,
       postActionFolderId: !['keep_current', 'archive'].includes(postAction) ? postAction : null,
-      advisorRecommendationId: advisor?.recommendationId || null,
+      advisorRecommendationId: effectiveAdvisor?.recommendationId || null,
     });
   };
 
-  return <aside className={`flex min-h-0 flex-col border-l border-border bg-background ${className}`} aria-label="Route message">
+  const transparencySignals = advisorTransparencySignals(effectiveAdvisor, message);
+  return <aside ref={panelRef} tabIndex={-1} className={`flex min-h-0 flex-col border-l border-border bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${className}`} aria-label="Route message">
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
       {!message ? <div className="flex min-h-48 flex-col items-center justify-center text-center text-sm text-muted-foreground"><Send className="mb-3 h-6 w-6" /><p className="font-medium text-foreground">Select a message</p><p className="mt-1 max-w-64">Forward and Redirect controls remain here while you review the mailbox.</p></div> : <div className="space-y-3">
-        <div className="space-y-0.5"><p className="text-[11px] font-medium text-muted-foreground">Selected message</p><p className="line-clamp-2 text-sm font-semibold">{message.subject || '(No subject)'}</p></div>
+        <div className="space-y-0.5"><p className="text-[11px] font-medium text-muted-foreground">{batchSize > 1 ? `${batchSize} selected messages` : 'Selected message'}</p><p className="line-clamp-2 text-sm font-semibold">{message.subject || '(No subject)'}</p>{batchSize > 1 ? <div className="mt-2 max-h-24 space-y-1 overflow-auto border-l-2 border-primary/30 pl-2 text-[11px] text-muted-foreground">{batchMessages.map((item) => <div key={item.id} className="truncate">{item.subject || '(No subject)'}</div>)}</div> : null}{batchBlocked ? <p className="mt-2 text-xs font-semibold text-red-700">Batch routing is limited to 10 messages. Remove {batchSize - 10} selection{batchSize - 10 === 1 ? '' : 's'}.</p> : batchSize > 1 ? <p className="mt-2 text-[11px] text-amber-800">Each message is submitted with its own idempotency key and Microsoft 365 confirmation. Definite failures remain selected; uncertain outcomes are never resent automatically.</p> : null}</div>
         <div className="grid grid-cols-2 gap-1 border border-border bg-muted/30 p-1" aria-label="Routing action">
           <Button type="button" size="sm" className="h-7 gap-1 px-2 text-[11px]" variant={actionMode === 'redirect' ? 'default' : 'ghost'} onClick={() => chooseAction('redirect')} disabled={routeLocked}><Send />Redirect</Button>
           <Button type="button" size="sm" className="h-7 gap-1 px-2 text-[11px]" variant={actionMode === 'forward' ? 'default' : 'ghost'} onClick={() => chooseAction('forward')} disabled={routeLocked}><Forward />Forward</Button>
@@ -214,22 +231,23 @@ export default function EmailRedirectPanel({
             </SelectContent>
           </Select>
         </div>
-        <Button className="h-8 w-full gap-1 px-3 text-xs" size="sm" onClick={submit} disabled={!canSend}>{submitting ? <Loader2 className="animate-spin" /> : routeLocked ? <CheckCircle2 /> : actionMode === 'forward' ? <Forward /> : <Send />}{submitting ? 'Preparing...' : routeLocked ? 'Routing queued' : actionMode === 'forward' ? 'Send Forward' : 'Send Redirect'}</Button>
+        <Button className="h-8 w-full gap-1 px-3 text-xs" size="sm" onClick={submit} disabled={!canSend}>{submitting ? <Loader2 className="animate-spin" /> : routeLocked ? <CheckCircle2 /> : actionMode === 'forward' ? <Forward /> : <Send />}{submitting ? `Preparing ${batchSize > 1 ? batchSize : ''}...` : routeLocked ? 'Routing queued' : actionMode === 'forward' ? `Send Forward${batchSize > 1 ? ` · ${batchSize}` : ''}` : `Send Redirect${batchSize > 1 ? ` · ${batchSize}` : ''}`}</Button>
         <section className="border-t border-border pt-3">
-          <div className="flex items-start justify-between gap-2"><div><h3 className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />Email Router Advisor</h3><p className="mt-0.5 text-xs text-muted-foreground">A choice is preselected only after three matching confirmed outcomes and confidence above 60%.</p></div><Button variant="outline" size="sm" className="h-7 shrink-0 gap-1 px-2 text-[11px]" onClick={onAdvisor} disabled={advisorLoading}>{advisorLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}{advisorLoading ? 'Reviewing' : advisor ? 'Review again' : 'Suggest'}</Button></div>
+          <div className="flex items-start justify-between gap-2"><div><h3 className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />Email Router Advisor</h3><p className="mt-0.5 text-xs text-muted-foreground">{batchSize > 1 ? 'Advisor suggestions are disabled for batch routing because each message requires its own evidence.' : 'A choice is preselected only after three matching confirmed outcomes and confidence above 60%.'}</p></div><Button variant="outline" size="sm" className="h-7 shrink-0 gap-1 px-2 text-[11px]" onClick={onAdvisor} disabled={advisorLoading || batchSize > 1}>{advisorLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}{advisorLoading ? 'Reviewing' : effectiveAdvisor ? 'Review again' : 'Suggest'}</Button></div>
           {advisorError && <p className="mt-3 text-sm text-destructive">{advisorError}</p>}
-          {advisor && <div className="mt-3 space-y-3 text-sm">
-            <p className="text-muted-foreground"><span className="font-semibold text-foreground">{String(advisor.routingCategory || 'other').replaceAll('_', ' ')}</span> · {advisor.evidenceCount || 0} matching confirmed outcomes. {advisor.rationale || 'No rationale provided.'}</p>
+          {effectiveAdvisor && <div className="mt-3 space-y-3 text-sm">
+            <p className="text-muted-foreground"><span className="font-semibold text-foreground">{String(effectiveAdvisor.routingCategory || 'other').replaceAll('_', ' ')}</span> · {effectiveAdvisor.evidenceCount || 0} matching confirmed outcomes. {effectiveAdvisor.rationale || 'No rationale provided.'}</p>
+            <div className="rounded-md border border-sky-200 bg-sky-50 p-2 text-xs text-sky-950"><div className="font-semibold">Why this was suggested</div><ul className="mt-1 space-y-0.5">{transparencySignals.map((signal) => <li key={signal}>• {signal}</li>)}</ul></div>
             <div className="flex flex-wrap gap-1.5">
-              <span className="border border-border bg-muted/40 px-2 py-1 text-xs">{advisor.suggestedAction === 'forward' ? 'Forward' : 'Redirect'} · {Math.round(Number(advisor.actionConfidence || 0) * 100)}%</span>
-              <span className="border border-border bg-muted/40 px-2 py-1 text-xs">{folderLabel(advisor.suggestedFolder, approvedFolders)} · {Math.round(Number(advisor.folderConfidence || 0) * 100)}%</span>
-              {(advisor.selections || []).map((suggestion, index) => <span key={`${suggestion.kind}:${suggestion.id}:${suggestion.recipientKind}`} className="border border-border bg-muted/40 px-2 py-1 text-xs">{suggestionLabel(suggestion, index)}</span>)}
+              <span className="border border-border bg-muted/40 px-2 py-1 text-xs">{effectiveAdvisor.suggestedAction === 'forward' ? 'Forward' : 'Redirect'} · {Math.round(Number(effectiveAdvisor.actionConfidence || 0) * 100)}%</span>
+              <span className="border border-border bg-muted/40 px-2 py-1 text-xs">{folderLabel(effectiveAdvisor.suggestedFolder, approvedFolders)} · {Math.round(Number(effectiveAdvisor.folderConfidence || 0) * 100)}%</span>
+              {(effectiveAdvisor.selections || []).map((suggestion, index) => <span key={`${suggestion.kind}:${suggestion.id}:${suggestion.recipientKind}`} className="border border-border bg-muted/40 px-2 py-1 text-xs">{suggestionLabel(suggestion, index)}</span>)}
             </div>
-            {(advisor.preselectAction || advisor.preselectFolder || recommendedSelections.length > 0) && !advisorApplied && <Button variant="secondary" size="sm" className="h-7 px-2 text-[11px]" onClick={applyAdvisor}>Apply confident suggestions</Button>}
+            {(effectiveAdvisor.preselectAction || effectiveAdvisor.preselectFolder || recommendedSelections.length > 0) && !advisorApplied && <Button variant="secondary" size="sm" className="h-7 px-2 text-[11px]" onClick={applyAdvisor}>Apply confident suggestions</Button>}
             {advisorApplied && <p className="text-xs font-medium text-emerald-700">Confident suggestions are preselected. Review every field before sending.</p>}
-            {!advisor.preselectAction && !advisor.preselectFolder && !advisor.preselectRecipients && <p className="text-xs text-amber-800">The evidence or confidence threshold was not met, so defaults remain unchanged.</p>}
-            {advisor.historyWarning && <p className="text-xs text-amber-800">{advisor.historyWarning}</p>}
-            {advisor.question && <p className="border-l-2 border-amber-400 pl-3 text-amber-900">{advisor.question}</p>}
+            {!effectiveAdvisor.preselectAction && !effectiveAdvisor.preselectFolder && !effectiveAdvisor.preselectRecipients && <p className="text-xs text-amber-800">The evidence or confidence threshold was not met, so defaults remain unchanged.</p>}
+            {effectiveAdvisor.historyWarning && <p className="text-xs text-amber-800">{effectiveAdvisor.historyWarning}</p>}
+            {effectiveAdvisor.question && <p className="border-l-2 border-amber-400 pl-3 text-amber-900">{effectiveAdvisor.question}</p>}
           </div>}
         </section>
       </div>}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, CalendarOff, CheckCircle2, Inbox, Loader2, Mail, Newspaper, RefreshCw, Search, Send, Settings2, ShieldAlert, ShieldCheck, Trash2, XCircle } from 'lucide-react';
+import { Activity, Archive, CalendarOff, CheckCircle2, Inbox, Keyboard, Loader2, Mail, Newspaper, RefreshCw, Search, Send, Settings2, ShieldAlert, ShieldCheck, Trash2, X, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -16,8 +16,10 @@ import EmailMessageSheet, { EmailMessageActions, EmailMessageDetail } from './Em
 import EmailRedirectPanel from './EmailRedirectPanel';
 import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
 import EmailRouterSettings from './EmailRouterSettings';
+import EmailRouterOperationsDialog, { EmailRouterFreshness } from './EmailRouterOperationsDialog';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { useAuth } from '@/lib/AuthContext';
+import { emailRouterShortcut, recordEmailRouterClientMetric } from '@/lib/emailRouterEnhancements';
 
 const LIMIT = 30;
 const ACTION_STATUS_POLL_DELAYS = [1_500, 2_500, 4_000, 6_000, 8_000, 10_000];
@@ -34,6 +36,7 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
     ...(server && typeof server === 'object' ? { server } : {}),
   };
   window.dispatchEvent(new CustomEvent('fcos:email-router-performance', { detail }));
+  recordEmailRouterClientMetric({ operation, durationMs: detail.durationMs, outcome: 'success' });
 }
 
 function ResultNotice({ result, compact = false }) {
@@ -61,6 +64,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState('');
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedBatchIds, setSelectedBatchIds] = useState(() => new Set());
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
@@ -77,9 +81,16 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   const [advisorLoading, setAdvisorLoading] = useState(false);
   const [advisorError, setAdvisorError] = useState('');
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
   const requestId = useRef(0);
   const loadListRef = useRef(null);
   const messagesRef = useRef([]);
+  const detailCacheRef = useRef(new Map());
+  const detailAbortRef = useRef(null);
+  const searchRef = useRef(null);
+  const routePanelRef = useRef(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -124,7 +135,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
           return;
         }
         if (next.filingNeedsReview !== true && (next.tracking === true || ['draft_created', 'submitted'].includes(next.status))) schedule();
-      } catch (error) {
+      } catch {
         if (!active) return;
         if (Date.now() - startedAt >= ACTION_STATUS_POLL_TIMEOUT_MS) {
           setActionResult((current) => current?.actionId === actionId ? {
@@ -207,6 +218,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
         const result = normaliseListResponse(response.data);
         setListError('');
         setMessages(result.messages);
+        setSelectedBatchIds((selected) => new Set([...selected].filter((messageId) => result.messages.some((message) => message.id === messageId))));
         setNextCursor(result.nextCursor);
         setCurrentCursor(cursor);
         setCursorStack(history);
@@ -234,6 +246,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
 
   useEffect(() => {
     const handleBackgroundSync = () => {
+      detailCacheRef.current.clear();
       loadListRef.current?.({ cursor: currentCursor, history: cursorStack, foreground: false, force: true, silent: true });
     };
     window.addEventListener('fcos:email-router-synced', handleBackgroundSync);
@@ -245,35 +258,62 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     return () => window.clearTimeout(handle);
   }, [folder, search]);
 
+  const cacheDetail = useCallback((message) => {
+    if (!message?.id) return;
+    const cache = detailCacheRef.current;
+    cache.delete(message.id);
+    cache.set(message.id, { message, expiresAt: Date.now() + 60_000 });
+    while (cache.size > 12) cache.delete(cache.keys().next().value);
+  }, []);
+
+  const prefetchMessage = useCallback((message) => {
+    if (!message?.id) return;
+    const cached = detailCacheRef.current.get(message.id);
+    if (cached?.expiresAt > Date.now()) return;
+    emailRouter.detail(
+      { messageId: message.id, hasAttachments: message.hasAttachments === true },
+      { cache: true, cacheTtlMs: 60_000, invalidateCache: false },
+    ).then((response) => {
+      if (!response.data?.error) cacheDetail(normaliseDetailResponse(response.data));
+    }).catch(() => null);
+  }, [cacheDetail]);
+
   useEffect(() => {
     if (!selectedId) return undefined;
+    detailAbortRef.current?.abort();
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
     let active = true;
-    setDetailLoading(true);
+    const cached = detailCacheRef.current.get(selectedId);
+    const cachedMessage = cached?.expiresAt > Date.now() ? cached.message : null;
+    setDetailLoading(!cachedMessage);
     setDetailError('');
     setAdvisor(null);
     setAdvisorError('');
     const fallback = messagesRef.current.find((message) => message.id === selectedId) || null;
-    setDetail(fallback);
+    setDetail(cachedMessage || fallback);
     const applyDetail = (response) => {
       if (!active) return;
       const error = messageError(response.data);
       if (error) setDetailError(error);
       else {
         setDetailError('');
-        setDetail(normaliseDetailResponse(response.data));
+        const normalized = normaliseDetailResponse(response.data);
+        cacheDetail(normalized);
+        setDetail(normalized);
       }
       setDetailLoading(false);
     };
     const startedAt = window.performance.now();
     emailRouter.detail(
       { messageId: selectedId, hasAttachments: fallback?.hasAttachments === true },
-      navigationCacheOptions('collaboration', applyDetail),
+      { ...navigationCacheOptions('collaboration', applyDetail), signal: controller.signal },
     ).then((response) => {
       applyDetail(response);
       recordEmailRouterTiming('message_detail', startedAt, response.data?.performance);
-    }).catch((error) => { if (active) setDetailError(error?.message || 'Message details are unavailable.'); }).finally(() => { if (active) setDetailLoading(false); });
-    return () => { active = false; };
-  }, [selectedId]);
+    }).catch((error) => { if (active && error?.name !== 'AbortError') { setDetailError(error?.message || 'Message details are unavailable.'); recordEmailRouterClientMetric({ operation: 'message_detail', outcome: 'failed' }); } }).finally(() => { if (active) setDetailLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [cacheDetail, selectedId]);
 
   const loadAdvisor = async () => {
     if (!detail) return;
@@ -402,6 +442,20 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     }
   }, [detail?.id]);
 
+  const extractAttachmentText = useCallback(async (attachment) => {
+    if (!detail?.id) return null;
+    const startedAt = window.performance.now();
+    try {
+      const response = await emailRouter.attachmentText({ messageId: detail.id, attachmentId: attachment.id || attachment.attachmentId }, { force: true, cache: false });
+      if (response.data?.error) throw new Error(response.data.error);
+      recordEmailRouterTiming('attachment_text_extract', startedAt, response.data?.performance);
+      return response.data;
+    } catch (error) {
+      recordEmailRouterClientMetric({ operation: 'attachment_text_extract', outcome: 'failed' });
+      return { error: error?.message || 'PDF text could not be extracted.' };
+    }
+  }, [detail?.id]);
+
   const downloadAttachment = async (attachment) => {
     const downloaded = await fetchAttachment(attachment);
     if (!downloaded) return;
@@ -429,8 +483,72 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   const selectMessage = (messageId) => {
     setSelectedId(messageId);
   };
+  const toggleBatchSelection = (messageId) => {
+    setBatchResult(null);
+    setSelectedBatchIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
+      return next;
+    });
+  };
+  const routeMessages = selectedBatchIds.size
+    ? messages.filter((message) => selectedBatchIds.has(message.id))
+    : detail ? [detail] : [];
+  const routeMessage = routeMessages[0] || detail;
+  const submitRoute = async (payload) => {
+    if (routeMessages.length <= 1) return submitAction(payload, routeMessage || detail);
+    if (routeMessages.length > 10 || submitting) return null;
+    setSubmitting(true);
+    setBatchResult(null);
+    const results = [];
+    const startedAt = window.performance.now();
+    for (const message of routeMessages) {
+      try {
+        const response = await emailRouter.action({ messageId: message.id, threadId: message.threadId || null, operationId: newOperationId(), ...payload });
+        results.push({ messageId: message.id, subject: message.subject, ...normaliseActionResult(response.data, payload.action) });
+      } catch (error) {
+        results.push({ messageId: message.id, subject: message.subject, status: isLikelyUncertain(error?.message) ? 'uncertain' : 'failed', action: payload.action, message: error?.message || 'The action did not complete.' });
+      }
+    }
+    const accepted = results.filter((result) => ['confirmed', 'draft_created', 'submitted'].includes(result.status));
+    const failed = results.filter((result) => result.status === 'failed');
+    const uncertain = results.filter((result) => result.status === 'uncertain');
+    setBatchResult({ results, accepted: accepted.length, failed: failed.length, uncertain: uncertain.length });
+    setSelectedBatchIds(new Set([...selectedBatchIds].filter((id) => !accepted.some((result) => result.messageId === id))));
+    setActionResult({
+      status: uncertain.length ? 'uncertain' : failed.length && !accepted.length ? 'failed' : 'draft_created',
+      action: payload.action,
+      message: `${accepted.length} of ${results.length} messages were accepted by the protected routing workflow.${failed.length ? ` ${failed.length} definite failure${failed.length === 1 ? '' : 's'} remain selected.` : ''}${uncertain.length ? ` ${uncertain.length} uncertain outcome${uncertain.length === 1 ? '' : 's'} require Sent Items verification.` : ''}`,
+    });
+    recordEmailRouterTiming('batch_route', startedAt);
+    setSubmitting(false);
+    return results;
+  };
+
+  useEffect(() => {
+    const keydown = (event) => {
+      const shortcut = emailRouterShortcut(event, { hasMessage: Boolean(detail) });
+      if (!shortcut) return;
+      event.preventDefault();
+      if (shortcut === 'focus_search') return searchRef.current?.focus();
+      if (shortcut === 'show_shortcuts') return setShortcutsOpen(true);
+      if (shortcut === 'focus_route') return routePanelRef.current?.focus();
+      if (shortcut === 'archive') return openAction('archive');
+      if (shortcut === 'market_report') return openAction('move_market_report');
+      if (shortcut === 'trash') return openAction('delete');
+      const index = messagesRef.current.findIndex((message) => message.id === selectedId);
+      const nextIndex = shortcut === 'next_message'
+        ? Math.min(messagesRef.current.length - 1, Math.max(0, index + 1))
+        : Math.max(0, index < 0 ? 0 : index - 1);
+      const nextMessage = messagesRef.current[nextIndex];
+      if (nextMessage) setSelectedId(nextMessage.id);
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, [detail, selectedId, submitting]);
   const redirectPanel = (className = '') => <EmailRedirectPanel
-    message={detail}
+    message={routeMessage}
+    batchMessages={routeMessages}
     directory={directory}
     presets={presets}
     folders={routingFolders}
@@ -444,15 +562,16 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     advisorError={advisorError}
     actionResult={actionResult}
     onAdvisor={loadAdvisor}
-    onSubmit={submitAction}
+    onSubmit={submitRoute}
+    panelRef={routePanelRef}
     className={className}
   />;
 
   return <div>
     <PageHeader
       title="Email Router"
-      status={<div className="flex items-center gap-2"><ResultNotice result={actionResult} compact />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
-      actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 /><span className="sm:hidden">Setup</span><span className="hidden sm:inline">Routing Setup</span></Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff /><span className="sm:hidden">Leave</span><span className="hidden sm:inline">Routing Leave</span></Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
+      status={<div className="flex flex-wrap items-center gap-2"><ResultNotice result={actionResult} compact /><EmailRouterFreshness onOpenOperations={() => setOperationsOpen(true)} />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
+      actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 /><span className="sm:hidden">Setup</span><span className="hidden sm:inline">Routing Setup</span></Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff /><span className="sm:hidden">Leave</span><span className="hidden sm:inline">Routing Leave</span></Button><Button size="icon" variant="outline" aria-label="Email Router operations" title="Email Router operations" onClick={() => setOperationsOpen(true)}><Activity /></Button><Button size="icon" variant="outline" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)}><Keyboard /></Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
       compact
       className="mb-3"
     />
@@ -462,18 +581,22 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
         <span className="h-7 shrink-0 border-l border-border" aria-hidden="true" />
         <span className="shrink-0 text-[11px] font-semibold uppercase text-blue-700">Actions</span>
         <EmailMessageActions message={detail} actionResult={actionResult} actionPending={submitting} onAction={openAction} />
+        {selectedBatchIds.size > 0 ? <div className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-900"><span>{selectedBatchIds.size} selected for routing</span><button type="button" onClick={() => setSelectedBatchIds(new Set())} className="rounded-full p-0.5 hover:bg-sky-100" aria-label="Clear batch selection"><X className="h-3.5 w-3.5" /></button></div> : null}
       </div>
+      {batchResult ? <div className={`shrink-0 border-b px-3 py-2 text-xs ${batchResult.failed || batchResult.uncertain ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>{batchResult.accepted} accepted · {batchResult.failed} failed · {batchResult.uncertain} uncertain. Definite failures remain selected; uncertain messages must be verified in Sent Items before any retry.</div> : null}
       <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
         <div className="flex min-h-0 w-full flex-col border-b border-border xl:w-[340px] xl:shrink-0 xl:border-b-0 xl:border-r">
-          <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
-          <EmailMessageList messages={messages} selectedId={selectedId} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onPrevious={previous} onNext={next} />
+          <div className="border-b border-border p-3"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input ref={searchRef} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, or content" className="pl-9" /></div></div>
+          <EmailMessageList messages={messages} selectedId={selectedId} selectedBatchIds={selectedBatchIds} loading={loading} loadingMore={loadingMore} error={listError} folder={folder} hasPrevious={cursorStack.length > 0} hasNext={Boolean(nextCursor)} onSelect={selectMessage} onToggleSelection={toggleBatchSelection} onPrefetch={prefetchMessage} onPrevious={previous} onNext={next} />
         </div>
-        {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} showActions={false} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
+        {!useDetailSheet && <><div className="min-h-0 min-w-0 flex-1 overflow-y-auto"><EmailMessageDetail message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onExtractAttachmentText={extractAttachmentText} onDownloadAttachment={downloadAttachment} showActions={false} /></div>{redirectPanel('w-[390px] shrink-0')}</>}
       </div>
     </section>
-    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
+    {useDetailSheet && <EmailMessageSheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)} message={detail} loading={detailLoading} error={detailError} actionResult={actionResult} actionPending={submitting} onAction={openAction} onFetchAttachment={fetchAttachment} onExtractAttachmentText={extractAttachmentText} onDownloadAttachment={downloadAttachment} redirectPanel={redirectPanel('border-l-0 border-t')} />}
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} submitting={submitting} onSubmit={submitAction} />
     <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} canManageAll={isAdministrator} />
+    <EmailRouterOperationsDialog open={operationsOpen} onOpenChange={setOperationsOpen} />
+    <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}><DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Keyboard shortcuts</DialogTitle><DialogDescription>Shortcuts are disabled while typing or while a dialog is open.</DialogDescription></DialogHeader><div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><kbd className="rounded border bg-muted px-2 py-0.5">J / ↓</kbd><span>Next message</span><kbd className="rounded border bg-muted px-2 py-0.5">K / ↑</kbd><span>Previous message</span><kbd className="rounded border bg-muted px-2 py-0.5">/ or S</kbd><span>Search mailbox</span><kbd className="rounded border bg-muted px-2 py-0.5">R</kbd><span>Focus routing panel</span><kbd className="rounded border bg-muted px-2 py-0.5">E</kbd><span>Archive selected message</span><kbd className="rounded border bg-muted px-2 py-0.5">M</kbd><span>Move to Market Report</span><kbd className="rounded border bg-muted px-2 py-0.5">Delete / #</kbd><span>Review move to Trash</span><kbd className="rounded border bg-muted px-2 py-0.5">?</kbd><span>Show shortcuts</span></div></DialogContent></Dialog>
     {isAdministrator && <Dialog open={settingsOpen} onOpenChange={onSettingsOpenChange}>
       <DialogContent className="grid h-[min(92dvh,58rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 sm:max-w-[min(96vw,92rem)]">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">

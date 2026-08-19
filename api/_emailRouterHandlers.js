@@ -1,4 +1,5 @@
 import {
+  EMAIL_ROUTER_STORAGE,
   createEmailRouterAttachmentToken,
   createEmailRouterServiceClient,
   currentEmailRouterMailbox,
@@ -28,6 +29,7 @@ import { runEmailRouterAdvisor } from './_emailRouterAdvisor.js';
 import { discoverEmailRouterFolders, listEmailRouterRoutingFolders } from './_emailRouterFolders.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
 import { waitUntil } from '@vercel/functions';
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 function runtimeEmailRouterDependencies(dependencies) {
   return typeof dependencies.defer === 'function' ? dependencies : { ...dependencies, defer: waitUntil };
@@ -77,6 +79,80 @@ export async function emailRouterBackgroundSyncHandler(req, _body = {}, dependen
   }, dependencies);
 }
 
+export async function emailRouterHealthHandler(req, _body = {}, dependencies = {}) {
+  const value = await context(req, dependencies, { allowCachedMailbox: true });
+  const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+  const table = (name) => value.client.schema('emailrouter').from(name);
+  const [mailbox, subscriptions, alerts, actions, delta] = await Promise.all([
+    table(EMAIL_ROUTER_STORAGE.mailboxes).select('last_synced_at,updated_at').eq('id', value.mailbox.id).maybeSingle(),
+    table(EMAIL_ROUTER_STORAGE.subscriptions).select('resource_key,state,expires_at,lifecycle_event,updated_at').eq('mailbox_id', value.mailbox.id),
+    table(EMAIL_ROUTER_STORAGE.alerts).select('severity,state,alert_code,created_at').eq('mailbox_id', value.mailbox.id).in('state', ['open', 'acknowledged']).limit(100),
+    table(EMAIL_ROUTER_STORAGE.actions).select('state,action_type,created_at,messages!mail_actions_message_id_fkey!inner(mailbox_id)').eq('messages.mailbox_id', value.mailbox.id).gte('created_at', since).limit(2_000),
+    table(EMAIL_ROUTER_STORAGE.deltaState).select('folder_key,sync_state,failure_code,updated_at').eq('mailbox_id', value.mailbox.id),
+  ]);
+  const failed = [mailbox, subscriptions, alerts, actions, delta].find((result) => result.error);
+  if (failed?.error) throw Object.assign(new Error('Email Router operational status is unavailable.'), { status: 503, code: 'EMAIL_ROUTER_HEALTH_UNAVAILABLE' });
+  const actionCounts = {};
+  for (const row of actions.data || []) actionCounts[row.state] = (actionCounts[row.state] || 0) + 1;
+  const alertCounts = {};
+  for (const row of alerts.data || []) alertCounts[row.severity] = (alertCounts[row.severity] || 0) + 1;
+  const now = Date.now();
+  return {
+    mailbox: { lastSyncedAt: mailbox.data?.last_synced_at || null, updatedAt: mailbox.data?.updated_at || null },
+    subscriptions: {
+      total: subscriptions.data?.length || 0,
+      ready: (subscriptions.data || []).filter((row) => row.state === 'active' && new Date(row.expires_at || 0).getTime() > now).length,
+      expiringWithin24Hours: (subscriptions.data || []).filter((row) => {
+        const expires = new Date(row.expires_at || 0).getTime();
+        return expires > now && expires - now <= 24 * 60 * 60_000;
+      }).length,
+    },
+    alerts: { total: alerts.data?.length || 0, counts: alertCounts },
+    actions: { periodHours: 24, total: actions.data?.length || 0, counts: actionCounts },
+    folders: (delta.data || []).map((row) => ({ folder: row.folder_key, state: row.sync_state, failed: Boolean(row.failure_code), updatedAt: row.updated_at })),
+    redacted: true,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function attachmentBuffer(attachment, maximumBytes = 12 * 1024 * 1024) {
+  const declared = Number(attachment.contentLength || 0);
+  if (declared > maximumBytes) throw Object.assign(new Error('This PDF is too large for temporary text extraction.'), { status: 413, code: 'EMAIL_ROUTER_ATTACHMENT_TEXT_TOO_LARGE' });
+  const reader = attachment.body?.getReader?.();
+  if (!reader) throw Object.assign(new Error('Attachment content is unavailable.'), { status: 503, code: 'EMAIL_ROUTER_ATTACHMENT_BODY_UNAVAILABLE' });
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maximumBytes) {
+      await reader.cancel().catch(() => null);
+      throw Object.assign(new Error('This PDF is too large for temporary text extraction.'), { status: 413, code: 'EMAIL_ROUTER_ATTACHMENT_TEXT_TOO_LARGE' });
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, size);
+}
+
+export async function emailRouterAttachmentTextHandler(req, body = {}, dependencies = {}) {
+  const startedAt = Date.now();
+  const value = await context(req, dependencies);
+  const attachment = await streamEmailRouterAttachment({ mailbox: value.mailbox, messageId: body.messageId, attachmentId: body.attachmentId }, dependencies);
+  if (!/^application\/pdf(?:;|$)/i.test(String(attachment.contentType || ''))) {
+    throw Object.assign(new Error('Temporary text extraction is available only for PDF attachments.'), { status: 400, code: 'EMAIL_ROUTER_ATTACHMENT_TEXT_PDF_ONLY' });
+  }
+  const parsed = await pdfParse(await attachmentBuffer(attachment));
+  const extracted = String(parsed?.text || '').replace(/\u0000/g, '').trim();
+  recordEmailRouterOperation({ operation: 'attachment_text_extract', totalMs: Date.now() - startedAt });
+  return {
+    text: extracted.slice(0, 250_000),
+    truncated: extracted.length > 250_000,
+    pages: Math.max(0, Number(parsed?.numpages) || 0),
+    redactedAudit: true,
+  };
+}
+
 export async function emailRouterDetailHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies, { allowCachedMailbox: true });
   const runtimeDependencies = runtimeEmailRouterDependencies(dependencies);
@@ -119,7 +195,7 @@ export async function emailRouterDirectoryHandler(req, body = {}, dependencies =
   return { directory, presets, folders };
 }
 
-export async function emailRouterPresetsHandler(req, body = {}, dependencies = {}) {
+export async function emailRouterPresetsHandler(req, _body = {}, dependencies = {}) {
   const value = await context(req, dependencies, { allowCachedMailbox: true });
   return { presets: await listEmailRouterPresets(value.client, { profileId: value.profile.id, env: dependencies.env || process.env }) };
 }

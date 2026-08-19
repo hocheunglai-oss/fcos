@@ -38,6 +38,7 @@ export const EMAIL_ROUTER_STORAGE = Object.freeze({
   presets: 'routing_presets',
   subscriptions: 'mailbox_subscriptions',
   deltaState: 'mailbox_delta_state',
+  alerts: 'alerts',
 });
 
 function routerTable(client, table) {
