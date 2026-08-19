@@ -1,0 +1,53 @@
+<template>
+  <lightning-card>
+    <h3 slot="title">{stemLineItem.Product__r.Name}</h3>
+    <div class="slds-p-horizontal_small">
+      <lightning-record-edit-form class="stem-line-item-form" onsuccess={handleSuccess} onsubmit={handleSubmit} onchange={handleChange} onerror={handleError}
+        record-id={stemLineItem.Id} object-api-name="STEM_Line_Item__c">
+        <div class="slds-grid slds-wrap slds-grid_align-space slds-gutters">
+          <lightning-messages></lightning-messages>
+          <div class="slds-col slds-size_1-of-2">
+            <template if:true={stemLineItem.Original_Supplier__c}>
+              <lightning-output-field field-name="Original_Supplier__c">
+              </lightning-output-field>
+            </template>
+            <lightning-input-field field-name="BDN_Number__c" variant="label-inline"></lightning-input-field>
+            <lightning-input class="bdn-delivery-date" label="BDN Delivery Date" type="date" date-style="short" variant="label-inline" value={bdnDeliveryDateValue} onchange={handleChangeBdnDeliveryDate}>
+            </lightning-input>
+            <lightning-input-field field-name="Quantity_Delivered_Per_BDN__c" variant="label-inline">
+            </lightning-input-field>
+            <lightning-output-field field-name="Unit_of_Measure__c">
+            </lightning-output-field>
+            <c-fcb-file-upload-binder related-to={stemLineItem.Id} uploader-label="BDN" uploader-value="BDN" onchange={handleChange}></c-fcb-file-upload-binder>
+            <c-fcb-file-upload-binder related-to={stemLineItem.Id} uploader-label="Supporting documents" uploader-value="Supporting" onchange={handleChange}></c-fcb-file-upload-binder>
+            <input type="submit" class="hidden" />
+          </div>
+          <div class="slds-col slds-size_1-of-2">
+            <lightning-datatable hide-checkbox-column key-field="fieldName" data={stemLineItemData} columns={stemLineItemColumns}></lightning-datatable>
+          </div>
+        </div>
+      </lightning-record-edit-form>  
+    </div>
+    <div class="slds-p-horizontal_small">
+      <lightning-input class="slds-m-left_xx-small slds-m-top_small" type="checkbox" label="CF" value={valueCF} onchange={showConsultationForm}></lightning-input>
+        <div class="slds-grid slds-gutters slds-wrap slds-m-top_small">
+          <div class="slds-col slds-size_1-of-2">
+            <template if:true={valueCF}>
+              <lightning-record-edit-form class="consultation-form" object-api-name="Consultation__c" onsubmit={handleConsultationSubmit} onsuccess={handleConsultationSuccess}>
+                <lightning-input-field class="consultation-field" field-name="Consultant__c" required></lightning-input-field>
+                <lightning-input-field class="consultation-field" field-name="Fee__c" required></lightning-input-field>
+                <div class="slds-align_absolute-center slds-m-bottom_small">
+                  <lightning-button variant="brand" type="submit" label="Save Consultation"></lightning-button>
+                </div>
+              </lightning-record-edit-form>
+            </template>
+            <template if:true={showConsultationTable}>
+              <lightning-datatable key-field="Id" data={consultations} columns={consultationColumns} onrowaction={handleRowAction}></lightning-datatable>
+            </template>
+          </div>
+        </div>
+    </div>
+    <br/>
+    <hr></hr>
+  </lightning-card>
+</template>

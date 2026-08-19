@@ -8,7 +8,7 @@ export default [
   {
     // Salesforce LWC decorators are compiled and validated by the Salesforce
     // deployment compiler; the FCOS web ESLint parser does not understand them.
-    ignores: ["force-app/**"],
+    ignores: ["force-app/**", ".fcos-cli/**"],
   },
   {
     files: [
