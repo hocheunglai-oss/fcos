@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.186',
+    releasedAt: '2026-08-19',
+    title: 'Configure Buyer PIC row colours',
+    changes: [
+      'Adds ordered row-colour rules to Buyer PIC References, with the first exact match determining each desktop row and mobile card tint.',
+      'Allows any text, multi-line, checkbox, number, Buyer Trader, or Supplier Trader column to drive a colour condition instead of limiting colours to Team.',
+      'Saves colour rules independently with live Account revalidation, revision conflict checks, idempotency, and service-only storage.',
+    ],
+  },
+  {
     version: '2.0.185',
     releasedAt: '2026-08-18',
     title: 'Pin Salesforce Production authentication profile',

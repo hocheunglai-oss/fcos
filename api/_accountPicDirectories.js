@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { normalizeAccountPicRowColorRules } from '../src/lib/accountPicRowColors.js';
 
 export const ACCOUNT_PIC_CSV_HEADERS = Object.freeze([
   'Port / Region',
@@ -274,6 +275,11 @@ export function accountPicFlexiblePayloadHash({ accountId, columns, rows } = {})
   return createHash('sha256').update(JSON.stringify({ accountId: text(accountId).trim(), ...grid })).digest('hex');
 }
 
+export function accountPicRowColorPayloadHash({ accountId, rules, columns } = {}) {
+  const normalizedRules = normalizeAccountPicRowColorRules(rules, columns, { strict: true });
+  return createHash('sha256').update(JSON.stringify({ accountId: text(accountId).trim(), rules: normalizedRules })).digest('hex');
+}
+
 export function accountPicFlexibleDirectoryProjection(directory = {}, columns = [], rows = []) {
   const normalizedColumns = (columns || []).slice()
     .sort((left, right) => Number(left.sequence || left.position || 0) - Number(right.sequence || right.position || 0))
@@ -297,6 +303,7 @@ export function accountPicFlexibleDirectoryProjection(directory = {}, columns = 
         cells,
       };
     });
+  const rowColorRules = normalizeAccountPicRowColorRules(directory.row_color_rules ?? directory.rowColorRules ?? [], normalizedColumns);
   return {
     accountId: text(directory.salesforce_account_id ?? directory.accountId).trim(),
     accountName: text(directory.account_name ?? directory.accountName).trim(),
@@ -309,6 +316,7 @@ export function accountPicFlexibleDirectoryProjection(directory = {}, columns = 
     updatedByEmail: directory.updated_by_email ?? directory.updatedByEmail ?? null,
     columns: normalizedColumns,
     rows: normalizedRows,
+    rowColorRules,
   };
 }
 
@@ -337,6 +345,7 @@ export function accountPicDirectoryProjection(directory = {}, rows = []) {
     columnCount: Number(directory.column_count ?? 0),
     updatedAt: directory.updated_at ?? directory.updatedAt ?? null,
     updatedByEmail: directory.updated_by_email ?? directory.updatedByEmail ?? null,
+    rowColorRules: [],
     rows: normalizedRows,
   };
 }

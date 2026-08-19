@@ -40,11 +40,13 @@ import {
   accountPicFlexibleDirectoryProjection,
   accountPicFlexiblePayloadHash,
   accountPicPayloadHash,
+  accountPicRowColorPayloadHash,
   normalizeAccountPicGrid,
   normalizeAccountPicRows,
   parseAccountPicCsv,
   validAccountPicAccountId,
 } from '../_accountPicDirectories.js';
+import { normalizeAccountPicRowColorRules } from '../../src/lib/accountPicRowColors.js';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
 import { createHash } from 'node:crypto';
@@ -1579,6 +1581,7 @@ const HANDLER_MODULE_ACCESS = {
   accountPicDirectoryDetail: ['buyers_administrator'],
   accountPicDirectorySave: ['buyers_administrator'],
   accountPicDirectoryImport: ['buyers_administrator'],
+  accountPicRowColorsSave: ['buyers_administrator'],
   emailSenderStatus: ['settings'],
   emailSenderMailboxSave: ['admin'],
   emailSenderRouteSave: ['admin'],
@@ -3381,7 +3384,7 @@ async function accountManagersRetrySync(body = {}, req = null, accessContext = n
 }
 
 const ACCOUNT_PIC_ACCOUNT_FIELDS = ['Id', 'Name', 'Company_Code__c', 'RecordType.Name', 'Buyer_Payment_Term__c', 'Supplier_Payment_Term__c', 'Is_Broker__c', 'Inactive_Suspended__c'];
-const ACCOUNT_PIC_DIRECTORY_SELECT = 'salesforce_account_id,account_name,cl_key,account_role,row_count,column_count,revision,updated_at,updated_by_email';
+const ACCOUNT_PIC_DIRECTORY_SELECT = 'salesforce_account_id,account_name,cl_key,account_role,row_count,column_count,row_color_rules,revision,updated_at,updated_by_email';
 const ACCOUNT_PIC_COLUMN_SELECT = 'id,salesforce_account_id,sequence,label,input_type,column_kind';
 const ACCOUNT_PIC_ROW_SELECT = 'id,salesforce_account_id,sequence,row_label,cells,port_region,responsible_personnel,team,reporting_supervision,vessel_types_covered';
 
@@ -3390,7 +3393,7 @@ function accountPicStorageError(error) {
   if (error?.code === '42P01' || error?.code === 'PGRST205' || /account_pic_directory/i.test(message)) {
     return appError('Buyer PIC Reference storage is not ready. Apply the latest Supabase migration and try again.', 503);
   }
-  if (error?.code === 'PGRST202' || (/save_account_pic_directory(?:_v2)?/i.test(message) && /schema cache|could not find/i.test(message))) {
+  if (error?.code === 'PGRST202' || (/save_account_pic_(?:directory(?:_v2)?|row_color_rules)/i.test(message) && /schema cache|could not find/i.test(message))) {
     return appError('Buyer PIC Reference storage is not ready. Refresh the Supabase schema cache after applying the latest migration.', 503);
   }
   return error;
@@ -3699,6 +3702,39 @@ async function accountPicDirectoryImport(body = {}, req = null, accessContext = 
     throw appError(error.message, 400);
   }
   return saveAccountPicDirectory({ ...body, rows }, accessContext, { operation: 'import' });
+}
+
+async function accountPicRowColorsSave(body = {}, req = null, accessContext = null) {
+  const { client, profile } = accessContext || {};
+  if (!client || !profile) throw appError('Sign-in required.', 401);
+  const account = await currentAccountPicAccount(body.accountId);
+  const current = await loadAccountPicDirectory(client, account.id, { revalidate: false });
+  let rules;
+  try {
+    rules = normalizeAccountPicRowColorRules(body.rules || [], current.columns || [], { strict: true });
+  } catch (error) {
+    throw appError(error.message, 400);
+  }
+  const expectedRevision = Number(body.expectedRevision ?? body.revision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) throw appError('A valid expected revision is required.', 400);
+  const idempotencyKey = accountPicIdempotencyKey(body);
+  const { error } = await client.rpc('save_account_pic_row_color_rules', {
+    p_salesforce_account_id: account.id,
+    p_rules: rules,
+    p_actor_user_id: profile.id,
+    p_actor_email: profile.email,
+    p_expected_revision: expectedRevision,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: accountPicRowColorPayloadHash({ accountId: account.id, rules, columns: current.columns }),
+  });
+  if (error) {
+    const storageError = accountPicStorageError(error);
+    if (storageError !== error) throw storageError;
+    if (/changed after it was opened|idempotency key|no longer exists/i.test(error.message || '')) throw appError(error.message, 409);
+    if (/required|invalid|no more than|unavailable column|only one/i.test(error.message || '')) throw appError(error.message, 400);
+    throw error;
+  }
+  return { directory: await loadAccountPicDirectory(client, account.id, { revalidate: false }) };
 }
 
 const buyersAdministratorList = accountManagersList;
@@ -19113,6 +19149,7 @@ const handlers = {
   accountPicDirectoryDetail,
   accountPicDirectorySave,
   accountPicDirectoryImport,
+  accountPicRowColorsSave,
   emailSenderStatus,
   emailSenderMailboxSave,
   emailSenderRouteSave,

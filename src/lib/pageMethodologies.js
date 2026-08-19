@@ -20,7 +20,7 @@ export const ACCOUNT_MANAGERS_METHODOLOGY = {
     },
     {
       title: 'Buyer PIC References',
-      body: 'Buyer PIC References are flexible, human-maintained tables for exact active Buyer or Buyer & Supplier Salesforce Accounts. Editors may rename, reorder, add, or remove columns and rows; column inputs support text, multi-line text, checkboxes, numbers, and active FCOS Buyer or Supplier Trader references. Vessel types are independent checkbox columns and may be added or removed. Optional row headers are display labels only. FCOS does not use these tables to route work, assign people, change Enquiries or STEMs, or classify vessels. Tables are stored service-side with atomic revision checks and browser access revoked.',
+      body: 'Buyer PIC References are flexible, human-maintained tables for exact active Buyer or Buyer & Supplier Salesforce Accounts. Editors may rename, reorder, add, or remove columns and rows; column inputs support text, multi-line text, checkboxes, numbers, and active FCOS Buyer or Supplier Trader references. Vessel types are independent checkbox columns and may be added or removed. Ordered Row colours rules may match an exact value in any column; the first matching rule supplies the desktop-row and mobile-card tint. Optional row headers and colours are display aids only. FCOS does not use these tables to route work, assign people, change Enquiries or STEMs, or classify vessels. Tables are stored service-side with atomic revision checks and browser access revoked.',
     },
   ],
 };

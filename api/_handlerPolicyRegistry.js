@@ -284,6 +284,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   accountPicDirectoryDetail: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectorySave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   accountPicDirectoryImport: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
+  accountPicRowColorsSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailSenderStatus: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailSenderMailboxSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   emailSenderRouteSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
