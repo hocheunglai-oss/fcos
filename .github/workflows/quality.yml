@@ -22,7 +22,7 @@ jobs:
       - run: npm run build
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.113.0
       - run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
 
