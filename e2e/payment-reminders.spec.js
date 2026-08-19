@@ -30,7 +30,7 @@ test.describe('Fast verified payment reminders', () => {
         return rect.top >= 0 && rect.bottom <= window.innerHeight;
       })).toBe(true);
       await expect(dialog.getByRole('button', { name: /next|back/i })).toHaveCount(0);
-      await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
       await expect(dialog).toHaveCount(0);
     }
 
