@@ -517,6 +517,22 @@ test('range-midpoint replay correction is limited to exact reviewed delivered ev
   assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
 });
 
+test('printed-zero replay correction is bound to the exact reviewed MGZSD00 evidence', () => {
+  const migration = read('supabase/migrations/20260820204700_reconcile_printed_zero_market_change.sql');
+  assert.match(migration, /SOURCE_PRINTED_ZERO_DAY_CHANGE_OVERRIDE/);
+  assert.match(migration, /cce2dce7fcb825e0fce366c8e7aa2dd217366a3181c41a4f73132e4cefd4c2b1/);
+  assert.match(migration, /p_report_date = date '2026-05-26'/);
+  assert.match(migration, /sourceSymbol'\)\) = 'MGZSD00'/);
+  assert.match(migration, /\(v_item->>'price'\)::numeric = 1150/);
+  assert.match(migration, /\(v_item->>'dayChange'\)::numeric = 0/);
+  assert.match(migration, /v_evidence\.day_change = -50/);
+  assert.match(migration, /set day_change = 0/);
+  assert.match(migration, /market_parser_correction_events/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
+});
+
 test('five authenticated handler names and fail-closed policies are wired', () => {
   const handler = read('api/functions/[name].js');
   const policy = read('api/_handlerPolicyRegistry.js');
