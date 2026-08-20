@@ -472,11 +472,16 @@ function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDa
   const contractualDate = contractual.date || contractual.missedDate;
   const modeledDate = addDays(contractualDate, paymentModel.predictedDelayDays || 0);
   const adjusted = adjustCreditForecastBusinessDay(modeledDate, today, blockedDates);
+  const forecastLabel = paymentModel.conservativeness && paymentModel.percentileLabel
+    ? `${paymentModel.conservativeness.charAt(0).toUpperCase()}${paymentModel.conservativeness.slice(1)} ${paymentModel.percentileLabel} payment forecast`
+    : 'Payment-performance forecast';
   return {
     date: adjusted.date,
     missedDate: null,
-    source: contractual.source,
-    sourceLabel: contractual.sourceLabel,
+    source: 'payment_performance_forecast',
+    sourceLabel: forecastLabel,
+    contractualSource: contractual.source,
+    contractualSourceLabel: contractual.sourceLabel,
     contractualDate,
     modeledDate,
     predictedDelayDays: paymentModel.predictedDelayDays || 0,

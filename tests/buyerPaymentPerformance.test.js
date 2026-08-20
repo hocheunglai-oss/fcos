@@ -116,6 +116,10 @@ test('floors overdue modeled dates and applies business-day blocks', () => {
   });
   assert.equal(release.releaseDate, '2026-08-21');
   assert.equal(release.forecastEvents[0].contractualDate, '2026-08-15');
+  assert.equal(release.forecastEvents[0].source, 'payment_performance_forecast');
+  assert.equal(release.forecastEvents[0].sourceLabel, 'Cautious P75 payment forecast');
+  assert.equal(release.forecastEvents[0].contractualSource, 'past_due_unknown');
+  assert.equal(release.forecastEvents[0].contractualSourceLabel, 'Past due — release unknown');
   assert.equal(release.forecastEvents[0].modelLevel, 'Buyer');
   assert.equal(release.forecastEvents[0].percentileLabel, 'P75');
 });
