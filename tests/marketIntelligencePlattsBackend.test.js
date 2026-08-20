@@ -473,6 +473,21 @@ test('the reviewed SGO midpoint parser correction is exact, fail closed, and aud
   assert.match(migration, /if not found then\s+return;/i);
 });
 
+test('archive replay reconciles only source-bound explicit zero daily changes', () => {
+  const migration = read('supabase/migrations/20260820192313_reconcile_explicit_zero_market_changes.sql');
+  assert.match(migration, /SOURCE_EXPLICIT_ZERO_DAY_CHANGE/);
+  assert.match(migration, /source_document_type = p_source_document_type[\s\S]*source_hash = p_source_hash[\s\S]*report_date = p_report_date/i);
+  assert.match(migration, /v_evidence\.price = v_price/);
+  assert.match(migration, /v_evidence\.day_change is null/);
+  assert.match(migration, /v_evidence\.source_page is not distinct from/i);
+  assert.match(migration, /jsonb_set\(v_item, '\{dayChange\}', 'null'::jsonb/i);
+  assert.match(migration, /set day_change = 0[\s\S]*and day_change is null/i);
+  assert.match(migration, /market_parser_correction_events/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all on function[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
+});
+
 test('five authenticated handler names and fail-closed policies are wired', () => {
   const handler = read('api/functions/[name].js');
   const policy = read('api/_handlerPolicyRegistry.js');

@@ -18,6 +18,13 @@ const REVIEWED_ARCHIVE = Object.freeze({
   duplicateFileCount: 1,
   driveFingerprint: 'c8a92a76efc0f9ccadf4a2aed0389e1650100e8dc2c2e328fca928ca8e396ed2',
 });
+// Two Bunkerwire PDFs use a DD/MM-derived filename even though the licensed
+// document itself prints the authoritative report date. Bind each exception to
+// the exact parsed PDF hash; no filename-wide or date-only relaxation is used.
+const REVIEWED_REPORT_DATE_OVERRIDES = Object.freeze({
+  dd1256645b3ddeb9802a6641f03eb9cf597f618d6e157569f8aee6d6f7847a98: '2025-09-03',
+  '6125cef18b20e75df9ca893bd3f900eba8c8bdbf7118c2ab64a02edb00df3913': '2025-09-05',
+});
 
 function syncError(message, code = 'MARKET_DRIVE_SYNC_FAILED', statusCode = 502) {
   const error = new Error(message);
@@ -198,6 +205,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
   processDerived = processMarketIntelligenceDate,
   config = CONNECTION_INTEGRATIONS.googleDriveMarketReports,
   reviewedArchive = REVIEWED_ARCHIVE,
+  reviewedReportDateOverrides = REVIEWED_REPORT_DATE_OVERRIDES,
 } = {}) {
   if (!client || !accessToken) throw syncError('Market archive replay authorization is unavailable.', 'MARKET_ARCHIVE_AUTH_UNAVAILABLE', 503);
   await verifyDriveAuthority(fetchImpl, accessToken, config);
@@ -218,7 +226,8 @@ export async function runMarketReportArchiveReplayBatch(client, {
     const md5 = createHash('md5').update(buffer).digest('hex');
     if (md5 !== file.md5) throw syncError('A reviewed market report checksum changed during replay.', 'MARKET_DRIVE_CHECKSUM_MISMATCH', 409);
     const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name });
-    if (parsed.reportDate !== file.reportDate) throw syncError('A reviewed report date does not match its archive manifest.', 'MARKET_ARCHIVE_REPORT_DATE_MISMATCH', 409);
+    const reviewedReportDate = reviewedReportDateOverrides[parsed.sourceHash] || file.reportDate;
+    if (parsed.reportDate !== reviewedReportDate) throw syncError('A reviewed report date does not match its archive manifest.', 'MARKET_ARCHIVE_REPORT_DATE_MISMATCH', 409);
     return { file, parsed };
   });
 

@@ -187,6 +187,36 @@ test('reviewed archive replay binds the Drive manifest and derives deterministic
   assert.deepEqual(derivedCalls, [{ reportDate: '2026-08-19', commentaryContexts: [], publishAlerts: false, recordShadow: false, reconcileDerived: true }]);
 });
 
+test('reviewed archive permits only exact source-hash-bound printed date overrides', async () => {
+  const pdf = Buffer.from('%PDF-reviewed-date-override');
+  const { createHash } = await import('node:crypto');
+  const md5 = createHash('md5').update(pdf).digest('hex');
+  const sourceHash = 'd'.repeat(64);
+  const fingerprintRows = [{ md5, documentType: 'bunkerwire', reportDate: '2025-03-09' }];
+  const driveFingerprint = createHash('sha256').update(JSON.stringify(fingerprintRows)).digest('hex');
+  const file = { id: 'revieweddate12345', name: 'BW_20250309.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2025-09-03T09:00:00Z', documentType: 'bunkerwire' };
+  const drive = driveFetch({ files: [file], pdf });
+  const options = {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config,
+    reviewedArchive: {
+      startDate: '2025-01-01', endDate: '2025-12-31', sourceFileCount: 1,
+      uniqueReportCount: 1, duplicateFileCount: 0, driveFingerprint,
+    },
+    parseReport: async () => ({ sourceHash, reportDate: '2025-09-03', observations: [{ sourceSymbol: 'MFSPD00', price: 554 }] }),
+    processDerived: async () => ({ status: 'completed' }),
+  };
+  await assert.rejects(
+    runMarketReportArchiveReplayBatch(clientMock(), { ...options, reviewedReportDateOverrides: {} }),
+    (error) => error.code === 'MARKET_ARCHIVE_REPORT_DATE_MISMATCH',
+  );
+  const result = await runMarketReportArchiveReplayBatch(clientMock(), {
+    ...options,
+    reviewedReportDateOverrides: { [sourceHash]: '2025-09-03' },
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.briefCompletedCount, 1);
+});
+
 test('reviewed archive drift reports only safe aggregate evidence', async () => {
   const pdf = Buffer.from('%PDF-reviewed-archive-drift');
   const { createHash } = await import('node:crypto');
