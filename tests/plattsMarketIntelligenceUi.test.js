@@ -188,7 +188,8 @@ test('licensed archive reconciliation is administrator-only, batched, and no-ref
   const policies = read('api/_handlerPolicyRegistry.js');
   assert.match(drivers, /if \(result\.complete\) break/);
   assert.match(drivers, /result\.nextCursor/);
-  assert.match(drivers, /855-file manifest/);
+  assert.match(drivers, /832-file Drive manifest/);
+  assert.match(drivers, /831 unique PDFs and one byte duplicate/);
   assert.match(drivers, /PDF bytes and report prose are never stored/);
   assert.match(dispatcher, /marketIntelligenceArchiveReplay[\s\S]*requireCapability\([\s\S]*'hedge_admin'/);
   assert.match(dispatcher, /runMarketReportArchiveReplayBatch/);

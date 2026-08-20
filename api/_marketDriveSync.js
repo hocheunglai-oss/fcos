@@ -7,13 +7,16 @@ const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 const DRIVE_PDF_MIME_TYPE = 'application/pdf';
 const DEFAULT_IMPORT_LIMIT = 25;
+// The licensed local audit inspected 855 downloaded files, including 23 extra
+// local copies. The governed Drive replay is pinned to the files that actually
+// exist in the two approved Drive folders: 832 PDFs, with one byte duplicate.
 const REVIEWED_ARCHIVE = Object.freeze({
   startDate: '2025-01-01',
   endDate: '2026-08-19',
-  sourceFileCount: 855,
-  uniqueReportCount: 832,
-  duplicateFileCount: 23,
-  driveFingerprint: 'b3b8d1b9b94c6085cbe4ea6e34ee1616027c6f344ce5644e699592e29ffafbfa',
+  sourceFileCount: 832,
+  uniqueReportCount: 831,
+  duplicateFileCount: 1,
+  driveFingerprint: '024231542fbbbcac3cffe1aba78f97dd6770ffc401b41f758037fa8524680200',
 });
 
 function syncError(message, code = 'MARKET_DRIVE_SYNC_FAILED', statusCode = 502) {

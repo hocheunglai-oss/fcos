@@ -211,7 +211,7 @@ export function MarketDriversAlerts({ readOnly }) {
         {archiveError ? <InlineError error={archiveError} /> : null}
         {archiveProgress ? <div className="app-callout app-callout--neutral"><FileSearch size={15} /> {archiveProgress.nextCursor} of {archiveProgress.uniqueReportCount} unique reports reconciled · {archiveProgress.duplicateFileCount} byte duplicates retained as lineage · {archiveProgress.briefCompletedCount} deterministic dates in the latest batch.</div> : null}
         <div className="market-alert-rule-footer">
-          <div><ShieldAlert size={15} /> The exact Google account, folders, 855-file manifest and zero-conflict MOPS ledger are revalidated before every batch.</div>
+          <div><ShieldAlert size={15} /> The exact Google account, folders, 832-file Drive manifest (831 unique PDFs and one byte duplicate), and zero-conflict MOPS ledger are revalidated before every batch.</div>
           <Button variant="primary" icon={RefreshCw} onClick={reconcileArchive} disabled={archiveBusy}>{archiveBusy ? 'Reconciling archive…' : 'Reconcile licensed archive'}</Button>
         </div>
       </Panel> : null}
