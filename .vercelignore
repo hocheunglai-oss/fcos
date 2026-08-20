@@ -1,0 +1,15 @@
+.env
+.env.*
+.fcos-cli/
+.sf/
+.sfdx/
+.vercel/
+node_modules/
+dist/
+output/
+reports/
+tmp/
+playwright-report/
+test-results/
+supabase/.temp/
+*.docx
