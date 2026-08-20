@@ -17,6 +17,7 @@ import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64
 import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceController.getVariableChargeInvoiceReadiness";
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
+import { buildInvoiceVesselText, normalizeInvoiceVesselText } from './invoiceVesselText';
 
 export default class FcbInvoiceForm extends LightningElement {
     stemId
@@ -154,7 +155,7 @@ export default class FcbInvoiceForm extends LightningElement {
         this.productInputs = JSON.parse(this.lastInvoiceForm.Products__c);
         this.selectedProductInputs = JSON.parse(JSON.stringify(this.productInputs))
         this.inputs = JSON.parse(this.lastInvoiceForm.Inputs__c);
-        this.vesselText = this.lastInvoiceForm.Vessel_Text__c?.toUpperCase();
+        this.vesselText = normalizeInvoiceVesselText(this.lastInvoiceForm.Vessel_Text__c?.toUpperCase());
         this.todayDate = this.lastInvoiceForm.Today_Date__c?.toUpperCase();
         this.buyerName = this.lastInvoiceForm.Buyer_Name__c?.toUpperCase();
         this.brokerName = this.lastInvoiceForm.Broker_Name__c?.toUpperCase();
@@ -186,7 +187,7 @@ export default class FcbInvoiceForm extends LightningElement {
                 ? this.stem.Vessel__r.IMO__c
                 : 'N/A'
             : ''
-        this.vesselText = 'M/V ' + this.stem.Vessel__r?.Name?.toUpperCase() + ' (IMO: ' + imo + ') & OWNER, CHARTERER &';
+        this.vesselText = buildInvoiceVesselText(this.stem.Vessel__r?.Name?.toUpperCase(), imo);
         this.buyerName = this.stem.Account__r.Name?.toUpperCase();
         this.todayDate = this.stem.Mailing_Requirement__c?.includes('-3') && this.stem.Delivery_Date__c
             ? new Date(this.stem.Delivery_Date__c).toLocaleDateString('en-GB')
@@ -419,6 +420,7 @@ export default class FcbInvoiceForm extends LightningElement {
     handleGeneratePDF(event) {
         try {
             if (this.isGenerateDisabled) return;
+            this.vesselText = normalizeInvoiceVesselText(this.vesselText);
             this.actionExecuted = false;
             const { jsPDF } = window.jspdf;
             let doc = new jsPDF('p', 'pt', 'a4', true);
