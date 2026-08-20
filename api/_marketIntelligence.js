@@ -272,7 +272,7 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
         sourceUnit: benchmark.unit,
         usdMtFactor: benchmark.usdMtFactor,
       } : null,
-      deliveredPremium: row.latest?.priceDate === latestSpread?.date ? latestSpread.spread : null,
+      deliveredPremium: latestSpread && row.latest?.priceDate === latestSpread.date ? latestSpread.spread : null,
       latestSpread,
       spreadHistory,
       horizonStats: calculateMarketHorizonStats(spreadHistory, endDate),

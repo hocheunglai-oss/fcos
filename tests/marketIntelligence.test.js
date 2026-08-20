@@ -112,6 +112,18 @@ test('market snapshot calculates port relative value and cargo premium without a
   assert.equal(result.signals.relativeValue.find((row) => row.productKey === 'vlsfo').spread, 12);
 });
 
+test('market snapshot keeps unpublished delivered rows unavailable without dereferencing a missing spread', () => {
+  const series = [
+    { id: 'west-korea-delivered', market_family: 'delivered', port_key: 'south-korea-west', port_label: 'South Korea (West)', product_key: 'hsfo380', product_label: 'HSFO 380', source_symbol: 'UNAVAILABLE', source_name: 'Not published', source_type: 'unavailable', currency_code: 'USD', unit: 'USD/MT', display_order: 1 },
+    { id: 'mops-hsfo', market_family: 'cargo', port_key: 'singapore', port_label: 'Singapore', product_key: 'hsfo380', product_label: 'S380 MOPS', source_symbol: 'PPXDK00', source_name: 'European Marketscan', source_type: 'assessment', currency_code: 'USD', unit: 'USD/MT', display_order: 2 },
+  ];
+  const result = buildMarketIntelligenceSnapshot(series, [], { today: new Date('2026-08-20T00:00:00Z') });
+  const unavailable = result.delivered[0];
+  assert.equal(unavailable.latest, null);
+  assert.equal(unavailable.latestSpread, null);
+  assert.equal(unavailable.deliveredPremium, null);
+});
+
 test('market horizon statistics use exact matched dates and report movement rather than interpolation', () => {
   const stats = calculateMarketHorizonStats([
     { date: '2026-08-13', spread: 10 },
