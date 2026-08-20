@@ -501,6 +501,22 @@ test('non-publication MOPS evidence remains an incomplete gap rather than a conf
   assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
 });
 
+test('range-midpoint replay correction is limited to exact reviewed delivered evidence', () => {
+  const migration = read('supabase/migrations/20260820195126_reconcile_range_midpoint_market_changes.sql');
+  assert.match(migration, /SOURCE_RANGE_MIDPOINT_PARSER_CORRECTION/);
+  assert.match(migration, /p_source_document_type = 'bunkerwire'/);
+  assert.match(migration, /v_series\.market_family = 'delivered'/);
+  assert.match(migration, /v_series\.source_type = 'assessment'/);
+  assert.match(migration, /v_evidence\.source_page is not distinct from/i);
+  assert.match(migration, /v_incoming_price - v_evidence\.price = 0\.5/);
+  assert.match(migration, /v_evidence\.day_change is null/);
+  assert.match(migration, /set price = \(v_item->>'correctedPrice'\)::numeric,[\s\S]*day_change = 0/i);
+  assert.match(migration, /market_parser_correction_events/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
+});
+
 test('five authenticated handler names and fail-closed policies are wired', () => {
   const handler = read('api/functions/[name].js');
   const policy = read('api/_handlerPolicyRegistry.js');
