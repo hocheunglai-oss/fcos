@@ -488,6 +488,19 @@ test('archive replay reconciles only source-bound explicit zero daily changes', 
   assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
 });
 
+test('non-publication MOPS evidence remains an incomplete gap rather than a conflict', () => {
+  const migration = read('supabase/migrations/20260820194143_classify_nonpublication_mops_gaps.sql');
+  assert.match(migration, /publish_market_mops_from_import_canonical_core/);
+  assert.match(migration, /NON_PUBLICATION_DAY_REPRINT/);
+  assert.match(migration, /publication\.outcome = 'conflict'/);
+  assert.match(migration, /conflict_code is distinct from 'NON_PUBLICATION_DAY_REPRINT'/);
+  assert.match(migration, /set mops_publication_status = 'incomplete'/);
+  assert.match(migration, /'nonPublicationGap', true/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /security definer|pdf_bytes|report_text/i);
+});
+
 test('five authenticated handler names and fail-closed policies are wired', () => {
   const handler = read('api/functions/[name].js');
   const policy = read('api/_handlerPolicyRegistry.js');
