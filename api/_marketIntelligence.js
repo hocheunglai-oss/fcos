@@ -29,6 +29,8 @@ const DOCUMENT_SYMBOLS = Object.freeze({
   ],
 });
 
+const SIGNED_VALUE_SYMBOLS = new Set(['FQLSM01', 'FQLSM02']);
+
 function marketError(message, statusCode = 400, code = 'MARKET_INTELLIGENCE_INVALID') {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -66,9 +68,10 @@ function detectedDocumentType(text, requested = null, filename = '') {
 function symbolObservation(text, symbol, documentType) {
   const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
   const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const exact = new RegExp(`${escaped}\\s+(?:\\d+(?:\\.\\d+)?\\s*-\\s*\\d+(?:\\.\\d+)?\\s+)?(\\d+(?:\\.\\d+)?)\\s+([+-]\\d+(?:\\.\\d+)?)`, 'i').exec(text);
+  const pricePattern = SIGNED_VALUE_SYMBOLS.has(symbol) ? '[+-]?\\d+(?:\\.\\d+)?' : '\\d+(?:\\.\\d+)?';
+  const exact = new RegExp(`${escaped}\\s+(?:\\d+(?:\\.\\d+)?\\s*-\\s*\\d+(?:\\.\\d+)?\\s+)?(${pricePattern})\\s+([+-]\\d+(?:\\.\\d+)?)`, 'i').exec(text);
   if (exact) return { sourceSymbol: symbol, price: Number(exact[1]), dayChange: Number(exact[2]), sourcePage: sourcePage || null };
-  const posted = new RegExp(`${escaped}\\s+(\\d+(?:\\.\\d+)?)`, 'i').exec(text);
+  const posted = new RegExp(`${escaped}\\s+(${pricePattern})`, 'i').exec(text);
   if (posted) return { sourceSymbol: symbol, price: Number(posted[1]), dayChange: null, sourcePage: sourcePage || null };
   return null;
 }
@@ -91,33 +94,44 @@ export function parseMarketReportText(rawText, { documentType = null, filename =
   };
 }
 
-function decodeReport(base64) {
-  if (!base64 || typeof base64 !== 'string') throw marketError('Choose a PDF report.', 400, 'MARKET_REPORT_FILE_REQUIRED');
-  let buffer;
-  try {
-    buffer = Buffer.from(base64.replace(/^data:application\/pdf;base64,/, ''), 'base64');
-  } catch {
-    throw marketError('The PDF report could not be decoded.', 400, 'MARKET_REPORT_INVALID_FILE');
-  }
+function validatedReportBuffer(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value || []);
   if (!buffer.length || buffer.length > MAX_REPORT_BYTES) throw marketError('The PDF report must be no larger than 5 MB.', 413, 'MARKET_REPORT_TOO_LARGE');
   if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') throw marketError('Only a valid PDF report can be imported.', 400, 'MARKET_REPORT_INVALID_FILE');
   return buffer;
 }
 
-export async function previewMarketReport(body = {}) {
-  const buffer = decodeReport(body.fileBase64);
+function decodeReport(base64) {
+  if (!base64 || typeof base64 !== 'string') throw marketError('Choose a PDF report.', 400, 'MARKET_REPORT_FILE_REQUIRED');
+  try {
+    return validatedReportBuffer(Buffer.from(base64.replace(/^data:application\/pdf;base64,/, ''), 'base64'));
+  } catch (error) {
+    if (error?.code) throw error;
+    throw marketError('The PDF report could not be decoded.', 400, 'MARKET_REPORT_INVALID_FILE');
+  }
+}
+
+export async function parseMarketReportPdf(buffer, { documentType = null, filename = '' } = {}) {
+  const validated = validatedReportBuffer(buffer);
   let parsed;
   try {
-    parsed = await pdfParse(buffer);
+    parsed = await pdfParse(validated);
   } catch {
     throw marketError('The PDF text could not be read. Use an unlocked Bunkerwire or European Marketscan report.', 400, 'MARKET_REPORT_UNREADABLE');
   }
-  const preview = parseMarketReportText(parsed.text, { documentType: body.documentType, filename: body.fileName });
+  const preview = parseMarketReportText(parsed.text, { documentType, filename });
   return {
     ...preview,
-    sourceHash: createHash('sha256').update(buffer).digest('hex'),
-    sourceBytes: buffer.length,
+    sourceHash: createHash('sha256').update(validated).digest('hex'),
+    sourceBytes: validated.length,
   };
+}
+
+export async function previewMarketReport(body = {}) {
+  return parseMarketReportPdf(decodeReport(body.fileBase64), {
+    documentType: body.documentType,
+    filename: body.fileName,
+  });
 }
 
 function numeric(value) {
@@ -162,6 +176,7 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
       sourceType: row.source_type,
       currencyCode: row.currency_code,
       unit: row.unit,
+      valueKind: row.value_kind || 'absolute',
       basisNote: row.basis_note,
       displayOrder: row.display_order,
       latest: latest ? { ...latest, staleDays, stale: staleDays > 3 } : null,

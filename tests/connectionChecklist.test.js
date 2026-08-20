@@ -5,6 +5,7 @@ import { FCOS_CONNECTION_POLICY, validateFcosConnectionPolicy } from '../config/
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
   CONNECTION_ATTESTATION_POLICY,
+  CONNECTION_INTEGRATIONS,
   CONNECTION_CHECKLIST_SEQUENCE,
   CONNECTION_LOCAL_STATE_DIRECTORY,
   CONNECTION_POLICY_VERSION,
@@ -68,6 +69,13 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
   assert.equal(CONNECTION_VERIFY_COMMAND, 'npm run connections:verify');
+  assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail, 'vince.less@gmail.com');
+  assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile, 'Vincent');
+  assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, '1wzRycxzPAb42EvfhjPV22mkFwliXZv8d');
+  assert.deepEqual(CONNECTION_INTEGRATIONS.googleDriveMarketReports.folders.map(({ documentType, folderId }) => [documentType, folderId]), [
+    ['bunkerwire', '19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7'],
+    ['european_marketscan', '14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1'],
+  ]);
 
   const targets = Object.fromEntries(CONNECTION_TARGETS.map((target) => [
     target.id,

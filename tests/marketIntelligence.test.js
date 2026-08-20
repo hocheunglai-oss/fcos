@@ -34,6 +34,21 @@ test('European Marketscan parser supports BM, M1/M2 and East-West symbols', () =
   assert.equal(result.observations.find((row) => row.sourceSymbol === 'FQLSM01').dayChange, -1);
 });
 
+test('European Marketscan parser preserves zero and negative East-West spreads', () => {
+  const zero = parseMarketReportText(`
+    European Marketscan Aug 12, 2025
+    FQLSM01 0.000 NANA FQLSM02 5.500 +0.250
+  `, { documentType: 'european_marketscan' });
+  assert.equal(zero.observations.find((row) => row.sourceSymbol === 'FQLSM01').price, 0);
+
+  const negative = parseMarketReportText(`
+    European Marketscan Aug 13, 2025
+    FQLSM01 -2.250 -1.000 FQLSM02 -0.500 +0.250
+  `, { documentType: 'european_marketscan' });
+  assert.equal(negative.observations.find((row) => row.sourceSymbol === 'FQLSM01').price, -2.25);
+  assert.equal(negative.observations.find((row) => row.sourceSymbol === 'FQLSM02').price, -0.5);
+});
+
 test('report header date overrides a misleading archive filename', () => {
   const result = parseMarketReportText(`
     Bunkerwire September 5, 2025
@@ -69,6 +84,27 @@ test('service-only migration pins Kaohsiung product terminology and hardens brow
   assert.match(migration, /'kaohsiung'.*'hsfo380'.*'HSFO 380'.*'MF-380'.*'CB3AN00'.*'posted'/);
   assert.match(migration, /alter table public\.market_price_observations enable row level security/i);
   assert.match(migration, /revoke all on table public\.market_price_observations from public, anon, authenticated/i);
+  assert.match(migration, /security invoker/i);
+  assert.doesNotMatch(migration, /security definer/i);
+});
+
+test('spread-value migration permits signed spreads without weakening absolute-price validation', () => {
+  const migration = read('supabase/migrations/20260820092817_market_intelligence_spread_values.sql');
+  assert.match(migration, /value_kind text not null default 'absolute'/i);
+  assert.match(migration, /source_symbol in \('FQLSM01', 'FQLSM02'\)/i);
+  assert.match(migration, /v_series\.value_kind <> 'spread'.*v_price <= 0/is);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all on function public\.validate_market_observation_value\(\) from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /security definer/i);
+});
+
+test('report replay migration reconciles parser improvements without duplicate audit events', () => {
+  const migration = read('supabase/migrations/20260820093157_market_report_replay_reconciliation.sql');
+  assert.match(migration, /for update/i);
+  assert.match(migration, /MARKET_REPORT_REPLAY_CONFLICT/);
+  assert.match(migration, /set observation_count = jsonb_array_length\(p_observations\)/i);
+  assert.match(migration, /on conflict \(series_id, price_date\) do update/i);
+  assert.match(migration, /if v_replayed then\s+update public\.market_intelligence_events/is);
   assert.match(migration, /security invoker/i);
   assert.doesNotMatch(migration, /security definer/i);
 });

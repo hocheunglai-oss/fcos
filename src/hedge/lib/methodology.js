@@ -10,6 +10,7 @@ export const PAGE_METHODOLOGIES = {
       "Cargo & Forward retains the controlled MOPS publication workflow and separately shows licensed cargo, BM, M1, M2, East-West and gasoil observations.",
       "Trading Signals calculates transparent port spreads, delivered premiums, curve structure and quote differences. It never makes or executes a trading decision.",
       "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores structured values plus a source hash rather than the report or its text.",
+      "FCOS checks the approved Bunkerwire and European Marketscan Google Drive folders hourly through the pinned vince.less@gmail.com server authorization. It imports only unseen checksums and refreshes an open Markets page shortly after each scheduled check. If browser reauthorization is required, use only the Vincent profile; normal scheduled processing uses the server OAuth refresh token.",
       "Delivered, cargo, forward and compliance observations never write to hedge_market_prices and therefore cannot alter MOPS averages, hedge expiry or settlement.",
     ],
     sources: [

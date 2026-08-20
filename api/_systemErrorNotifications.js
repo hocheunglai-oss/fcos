@@ -46,6 +46,11 @@ const HANDLER_CONTEXT = {
     message: 'The Hedge Desk Salesforce mapping could not be refreshed. The error has been recorded for follow-up.',
     link: '/hedge-desk',
   },
+  marketReportDriveSyncCron: {
+    title: 'Market report synchronization failed',
+    message: 'The hourly Google Drive market-report check did not complete. Existing verified market prices remain available while the error is reviewed.',
+    link: '/markets',
+  },
   emailRouterMaintenanceCron: {
     title: 'Email Router maintenance failed',
     message: 'Scheduled Email Router maintenance did not complete. The error has been recorded for follow-up.',

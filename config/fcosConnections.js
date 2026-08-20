@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 6,
+  policyVersion: 7,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -39,6 +39,18 @@ const connectionPolicy = {
       detail: 'Chrome remains locked unless the CLI cannot authenticate. Use Otto for FCOS, DEVEE, and QAT; Vincent for Salesforce Production; or vincexai only for the shared Salesforce GitHub account. Then return to the CLI and publish a signed verification.',
     },
   ],
+  integrations: {
+    googleDriveMarketReports: {
+      accountEmail: 'vince.less@gmail.com',
+      browserProfile: 'Vincent',
+      rootFolderId: '1wzRycxzPAb42EvfhjPV22mkFwliXZv8d',
+      syncSchedule: '0 * * * *',
+      folders: [
+        { documentType: 'bunkerwire', folderId: '19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7', label: 'Bunkerwire' },
+        { documentType: 'european_marketscan', folderId: '14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1', label: 'European Marketscan' },
+      ],
+    },
+  },
   providers: [
     {
       id: 'github',
@@ -218,6 +230,25 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requirePositiveInteger(value.attestation?.staleSeconds, 'attestation.staleSeconds');
   if (value.attestation.staleSeconds <= value.attestation.freshnessSeconds) {
     throw new Error('Connection policy staleSeconds must exceed freshnessSeconds.');
+  }
+  requireString(value.integrations?.googleDriveMarketReports?.accountEmail, 'integrations.googleDriveMarketReports.accountEmail');
+  requireString(value.integrations?.googleDriveMarketReports?.browserProfile, 'integrations.googleDriveMarketReports.browserProfile');
+  if (value.integrations.googleDriveMarketReports.browserProfile !== 'Vincent') {
+    throw new Error('Google Drive market-report browser authentication must use Vincent.');
+  }
+  requireString(value.integrations?.googleDriveMarketReports?.rootFolderId, 'integrations.googleDriveMarketReports.rootFolderId');
+  requireString(value.integrations?.googleDriveMarketReports?.syncSchedule, 'integrations.googleDriveMarketReports.syncSchedule');
+  if (!Array.isArray(value.integrations?.googleDriveMarketReports?.folders)
+      || value.integrations.googleDriveMarketReports.folders.length !== 2) {
+    throw new Error('Google Drive market reports require exactly two source folders.');
+  }
+  const expectedMarketDocumentTypes = ['bunkerwire', 'european_marketscan'];
+  for (const [index, folder] of value.integrations.googleDriveMarketReports.folders.entries()) {
+    if (folder.documentType !== expectedMarketDocumentTypes[index]) {
+      throw new Error('Google Drive market-report source folders are not in the approved order.');
+    }
+    requireString(folder.folderId, `integrations.googleDriveMarketReports.folders.${index}.folderId`);
+    requireString(folder.label, `integrations.googleDriveMarketReports.folders.${index}.label`);
   }
   const expectedProviders = ['github', 'vercel', 'supabase', 'salesforce'];
   if (!Array.isArray(value.providers) || value.providers.length !== expectedProviders.length) {

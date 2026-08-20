@@ -8,8 +8,8 @@ const GATE_DEFINITIONS = Object.freeze({
   google_drive: {
     envName: 'FCOS_DISABLE_GOOGLE_DRIVE',
     defaultEnabled: true,
-    label: 'Google Drive archive',
-    description: 'Google Drive report upload, download, rename, restore, and trash actions.',
+    label: 'Google Drive reports',
+    description: 'Google Drive report archive actions and read-only licensed market-report synchronization.',
   },
   email_delivery: {
     envName: 'FCOS_DISABLE_EMAIL_DELIVERY',

@@ -11,6 +11,7 @@ export const CONNECTION_CHECKLIST_SEQUENCE = FCOS_CONNECTION_POLICY.sequence;
 export const CONNECTION_TARGETS = FCOS_CONNECTION_POLICY.providers;
 export const CONNECTION_POLICY_VERSION = FCOS_CONNECTION_POLICY.policyVersion;
 export const CONNECTION_ATTESTATION_POLICY = FCOS_CONNECTION_POLICY.attestation;
+export const CONNECTION_INTEGRATIONS = FCOS_CONNECTION_POLICY.integrations;
 
 const PROVIDER_IDS = new Set(CONNECTION_TARGETS.map(({ id }) => id));
 const IDENTITY_STATES = new Set(['verified', 'mismatch', 'authentication_blocked', 'unavailable', 'error']);

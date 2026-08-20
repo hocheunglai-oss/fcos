@@ -9,6 +9,8 @@ import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
 const EMPTY = { mops: [], mopsMonthVerifications: [], marketIntelligence: {}, settings: {}, capabilities: {} };
+const MARKET_DRIVE_REFRESH_OFFSET_MS = 2 * 60 * 1000;
+const MARKET_DRIVE_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export default function Markets() {
   const [snapshot, setSnapshot] = useState(EMPTY);
@@ -41,6 +43,22 @@ export default function Markets() {
   }, []);
 
   useEffect(() => { reload().catch(() => {}); }, [reload]);
+
+  useEffect(() => {
+    let intervalId = null;
+    const refreshVisibleMarkets = () => {
+      if (document.visibilityState === 'visible') reload({ silent: true, force: true }).catch(() => {});
+    };
+    const millisecondsIntoHour = Date.now() % MARKET_DRIVE_REFRESH_INTERVAL_MS;
+    const timeoutId = window.setTimeout(() => {
+      refreshVisibleMarkets();
+      intervalId = window.setInterval(refreshVisibleMarkets, MARKET_DRIVE_REFRESH_INTERVAL_MS);
+    }, MARKET_DRIVE_REFRESH_INTERVAL_MS - millisecondsIntoHour + MARKET_DRIVE_REFRESH_OFFSET_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId != null) window.clearInterval(intervalId);
+    };
+  }, [reload]);
 
   const settings = useMemo(() => ({
     general: { ...DEFAULT_GENERAL, ...(snapshot.settings?.general || {}) },

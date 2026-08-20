@@ -15,10 +15,15 @@ These connection identities are specific to this repository. Do not infer or reu
 - Salesforce DEVEE/QAT browser authentication profile: `Otto`
 - Salesforce Production browser authentication profile: `Vincent`
 - Shared Salesforce GitHub/browser profile: `vincexai`
+- Google Drive market-report account: `vince.less@gmail.com`
+- Google Drive market-report browser authentication profile: `Vincent`
+- Google Drive market-report root: `1wzRycxzPAb42EvfhjPV22mkFwliXZv8d` (`Bunkerwire`: `19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7`; `European Marketscan`: `14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1`)
 
 Before any GitHub mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials. Use the authorized GitHub connector for this repository or stop with a clear account-mismatch message.
 
 Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Fail closed on a mismatch.
+
+Google Drive market reports use the pinned server OAuth refresh token for normal scheduled reads. Use Chrome profile `Vincent` only when CLI/API authentication cannot be renewed without browser interaction, verify `vince.less@gmail.com` before authorizing, and return immediately to server/API verification. Never store or expose Drive credential material.
 
 Before any Salesforce metadata mutation, verify the exact org ID, username where pinned, and sandbox flag. DEVEE is the only development/source environment. Make and verify every Salesforce code or configuration change in DEVEE first; do not develop independently in QAT or Production.
 

@@ -65,7 +65,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
-import { connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
+import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
 import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
 import {
@@ -197,6 +197,7 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
+import { runMarketReportDriveSync } from '../_marketDriveSync.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
@@ -1332,7 +1333,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'emailRouterMaintenanceCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'emailRouterMaintenanceCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -1418,6 +1419,7 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskAssistant: ['hedge_desk'],
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
+  marketReportDriveSyncCron: [],
   specialTermsWorkspace: ['special_terms'],
   specialTermsSummaryList: ['special_terms'],
   specialTermsPdfExport: ['special_terms'],
@@ -6940,24 +6942,57 @@ async function googleDriveHealthRow() {
             }),
           });
           if (!token.access_token) throw new Error('Google OAuth did not return an access token.');
+          const marketConfig = CONNECTION_INTEGRATIONS.googleDriveMarketReports;
+          const about = await fetchJsonWithTimeout('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          });
+          if (String(about.user?.emailAddress || '').trim().toLowerCase() !== marketConfig.accountEmail.toLowerCase()) {
+            throw new Error('Google Drive market-report authorization does not match the approved account.');
+          }
+          const marketRootFields = encodeURIComponent('id,name,mimeType,trashed');
+          const marketRoot = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(marketConfig.rootFolderId)}?fields=${marketRootFields}`, {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          });
+          if (marketRoot.id !== marketConfig.rootFolderId
+              || marketRoot.mimeType !== 'application/vnd.google-apps.folder'
+              || marketRoot.trashed === true) {
+            throw new Error('Google Drive market-report root does not match the approved folder.');
+          }
           const fields = encodeURIComponent('id,name,mimeType,trashed');
           const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
             headers: { Authorization: `Bearer ${token.access_token}` },
           });
+          const marketFolders = [];
+          for (const marketFolder of marketConfig.folders) {
+            const marketFields = encodeURIComponent('id,name,mimeType,trashed,parents');
+            const marketMetadata = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(marketFolder.folderId)}?fields=${marketFields}`, {
+              headers: { Authorization: `Bearer ${token.access_token}` },
+            });
+            if (marketMetadata.id !== marketFolder.folderId
+                || marketMetadata.mimeType !== 'application/vnd.google-apps.folder'
+                || marketMetadata.trashed === true
+                || !Array.isArray(marketMetadata.parents)
+                || !marketMetadata.parents.includes(marketConfig.rootFolderId)) {
+              throw new Error('Google Drive market-report folders do not match the approved hierarchy.');
+            }
+            marketFolders.push({ label: marketFolder.label, folderId: maskValue(marketMetadata.id, 6, 4), folderName: marketMetadata.name || null });
+          }
           return {
             accessTokenExpiresAt: addSecondsIso(token.expires_in),
+            accountEmail: marketConfig.accountEmail,
             folderName: folder.name || null,
             folderId: maskValue(folder.id, 6, 4),
             folderTrashed: folder.trashed === true,
+            marketFolders,
           };
         })
       : null;
   const row = healthRow(
     {
       id: 'google-drive',
-      name: 'Google Drive Report Archive',
+      name: 'Google Drive Reports',
       category: 'Reports',
-      purpose: 'Stores exported XLS reports and supports archive rename, download, open, and delete actions.',
+      purpose: 'Stores exported XLS reports and reads licensed Bunkerwire and European Marketscan PDFs for the hourly Markets update.',
       scope: 'server',
       provider: 'Google Drive API',
       endpoint: 'https://www.googleapis.com/drive/v3',
@@ -6966,8 +7001,14 @@ async function googleDriveHealthRow() {
       configuredEnv: configuredEnv(required),
       missingEnv: missingEnv(required),
       tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
-      details: { gateEnabled },
-      notes: gateEnabled ? ['Files are uploaded as XLS files, not converted to Google Sheets.'] : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
+      details: {
+        gateEnabled,
+        marketReportAccount: CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail,
+        marketReportBrowserProfile: CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile,
+        marketReportRootFolder: maskValue(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, 6, 4),
+        marketReportSchedule: CONNECTION_INTEGRATIONS.googleDriveMarketReports.syncSchedule,
+      },
+      notes: gateEnabled ? ['Archive files remain XLS. Market-report PDFs are read only; FCOS stores configured observations and checksums, not PDF bytes or report text.'] : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
     },
     result,
   );
@@ -18464,6 +18505,20 @@ async function hedgeDeskMaintenanceCron(body = {}, req = null) {
   });
 }
 
+async function marketReportDriveSyncCron(_body = {}, req = null) {
+  requireCronAuthorization(req);
+  requireExternalActionGate('google_drive');
+  const client = supabaseAdminClient();
+  const accessToken = await googleDriveAccessToken();
+  const result = await runMarketReportDriveSync(client, { accessToken });
+  if (result.status === 'failed') {
+    throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
+  }
+  if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets']);
+  await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
+  return result;
+}
+
 async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const [workspace, canApproveClauses] = await Promise.all([
@@ -18984,6 +19039,7 @@ const handlers = {
   hedgeDeskAssistant,
   hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,
+  marketReportDriveSyncCron,
   specialTermsWorkspace,
   specialTermsSummaryList,
   specialTermsOptions,

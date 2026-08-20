@@ -100,6 +100,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   hedgeDeskAssistant: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgeDeskAssistantSettings: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgeDeskMaintenanceCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
+  marketReportDriveSyncCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   specialTermsWorkspace: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   specialTermsSummaryList: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   specialTermsPdfExport: readPolicy({"cache":"none","externalAction":false,"capability":null}),
