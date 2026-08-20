@@ -4,10 +4,10 @@ public class ReconfirmProcessing {
 	@AuraEnabled
 	    public static List<ReconfirmItem> getReconfirmInfo(List<String> enquiryIds){
         List<STEM_Line_Item__c> stemLineItems = [SELECT Id, STEM__c, STEM__r.Name, Original_Supplier__c, Original_Supplier__r.Name, Reconfirm__c,
-                                                Intended_Payment_Date__c, STEM__r.Enquiry__c
+	                                                Intended_Payment_Date__c, STEM__r.Enquiry__c, LastModifiedDate
                                                 FROM STEM_Line_Item__c WHERE STEM__r.Enquiry__c IN: enquiryIds AND (Payment_Term__c = 'CIA' OR Partial_CIA__c = true)];
         List<STEM_Extra_Cost__c> stemExtraCosts = [SELECT Id, STEM__c, STEM__r.Name, Supplier__c, Supplier__r.Name, Reconfirm__c,
-                                                  Intended_Payment_Date__c, STEM__r.Enquiry__c
+	                                                  Intended_Payment_Date__c, STEM__r.Enquiry__c, LastModifiedDate
                                                   FROM STEM_Extra_Cost__c WHERE STEM__r.Enquiry__c IN: enquiryIds AND Payment_Term__c = 'CIA'];
         List<ReconfirmItem> reconfirmItems = new List<ReconfirmItem>();
         Map<String, String> nominationMap = new Map<String, String>();
@@ -35,7 +35,8 @@ public class ReconfirmProcessing {
                                                  stemLineItem.Original_Supplier__r.Name,
                                                  stemLineItem.Reconfirm__c,
                                                  stemLineItem.Intended_Payment_Date__c,
-                                               	 ownerId));
+                                                 ownerId,
+                                                 stemLineItem.LastModifiedDate));
         }
         for(STEM_Extra_Cost__c stemExtraCost: stemExtraCosts){
             String key = stemExtraCost.STEM__c + '-' + stemExtraCost.Supplier__c;
@@ -50,12 +51,119 @@ public class ReconfirmProcessing {
                                                  stemExtraCost.Supplier__r.Name,
                                                  stemExtraCost.Reconfirm__c,
                                                  stemExtraCost.Intended_Payment_Date__c,
-                                                 ownerId));
+	                                                 ownerId,
+	                                                 stemExtraCost.LastModifiedDate));
         }
-	        return reconfirmItems;
-	    }
+		        return reconfirmItems;
+		    }
 
     @AuraEnabled
+    public static List<ReconfirmItem> saveCiaChanges(Id enquiryId, List<CiaChangeInput> changes) {
+        if (enquiryId == null || changes == null || changes.isEmpty()) {
+            throw new AuraHandledException('No CIA supplier changes were supplied.');
+        }
+
+        Map<Id, CiaChangeInput> changesById = new Map<Id, CiaChangeInput>();
+        Set<Id> lineItemIds = new Set<Id>();
+        Set<Id> extraCostIds = new Set<Id>();
+        for (CiaChangeInput change : changes) {
+            if (change == null || change.recordId == null ||
+                (change.intendedPaymentDateChanged != true && change.reconfirmChanged != true)) {
+                throw new AuraHandledException('One or more CIA supplier changes are incomplete. Reload and try again.');
+            }
+            if (changesById.containsKey(change.recordId)) {
+                throw new AuraHandledException('A CIA supplier row was submitted more than once. Reload and try again.');
+            }
+            changesById.put(change.recordId, change);
+            if (change.recordId.getSObjectType() == STEM_Line_Item__c.SObjectType) {
+                lineItemIds.add(change.recordId);
+            } else if (change.recordId.getSObjectType() == STEM_Extra_Cost__c.SObjectType) {
+                extraCostIds.add(change.recordId);
+            } else {
+                throw new AuraHandledException('An unsupported CIA supplier record was supplied. Reload and try again.');
+            }
+        }
+
+        Map<Id, STEM_Line_Item__c> lineItems = new Map<Id, STEM_Line_Item__c>([
+            SELECT Id, STEM__c, STEM__r.Name, STEM__r.Enquiry__c, Original_Supplier__c,
+                   Original_Supplier__r.Name, Payment_Term__c, Partial_CIA__c, Reconfirm__c,
+                   Intended_Payment_Date__c, LastModifiedDate
+            FROM STEM_Line_Item__c
+            WHERE Id IN :lineItemIds
+            FOR UPDATE
+        ]);
+        Map<Id, STEM_Extra_Cost__c> extraCosts = new Map<Id, STEM_Extra_Cost__c>([
+            SELECT Id, STEM__c, STEM__r.Name, STEM__r.Enquiry__c, Supplier__c,
+                   Supplier__r.Name, Payment_Term__c, Reconfirm__c,
+                   Intended_Payment_Date__c, LastModifiedDate
+            FROM STEM_Extra_Cost__c
+            WHERE Id IN :extraCostIds
+            FOR UPDATE
+        ]);
+
+        List<STEM_Line_Item__c> lineItemUpdates = new List<STEM_Line_Item__c>();
+        List<STEM_Extra_Cost__c> extraCostUpdates = new List<STEM_Extra_Cost__c>();
+        Map<String, ReconfirmItem> intendedPaymentItems = new Map<String, ReconfirmItem>();
+        Map<String, ReconfirmItem> completedItems = new Map<String, ReconfirmItem>();
+        Map<String, ReconfirmItem> cancelledItems = new Map<String, ReconfirmItem>();
+
+        for (CiaChangeInput change : changesById.values()) {
+            ReconfirmItem item;
+            if (lineItems.containsKey(change.recordId)) {
+                STEM_Line_Item__c source = lineItems.get(change.recordId);
+                validateCiaChange(enquiryId, change, source.STEM__r.Enquiry__c, source.LastModifiedDate,
+                    source.Payment_Term__c == 'CIA' || source.Partial_CIA__c == true);
+                STEM_Line_Item__c updateRow = new STEM_Line_Item__c(Id = source.Id);
+                if (change.intendedPaymentDateChanged == true) updateRow.Intended_Payment_Date__c = change.intendedPaymentDate;
+                if (change.reconfirmChanged == true) updateRow.Reconfirm__c = change.reconfirm == true;
+                lineItemUpdates.add(updateRow);
+                item = new ReconfirmItem(source.Id, enquiryId, source.STEM__c, source.STEM__r.Name,
+                    source.Original_Supplier__c, source.Original_Supplier__r.Name,
+                    change.reconfirmChanged == true ? change.reconfirm == true : source.Reconfirm__c,
+                    change.intendedPaymentDateChanged == true ? change.intendedPaymentDate : source.Intended_Payment_Date__c,
+                    null, source.LastModifiedDate);
+            } else if (extraCosts.containsKey(change.recordId)) {
+                STEM_Extra_Cost__c source = extraCosts.get(change.recordId);
+                validateCiaChange(enquiryId, change, source.STEM__r.Enquiry__c, source.LastModifiedDate,
+                    source.Payment_Term__c == 'CIA');
+                STEM_Extra_Cost__c updateRow = new STEM_Extra_Cost__c(Id = source.Id);
+                if (change.intendedPaymentDateChanged == true) updateRow.Intended_Payment_Date__c = change.intendedPaymentDate;
+                if (change.reconfirmChanged == true) updateRow.Reconfirm__c = change.reconfirm == true;
+                extraCostUpdates.add(updateRow);
+                item = new ReconfirmItem(source.Id, enquiryId, source.STEM__c, source.STEM__r.Name,
+                    source.Supplier__c, source.Supplier__r.Name,
+                    change.reconfirmChanged == true ? change.reconfirm == true : source.Reconfirm__c,
+                    change.intendedPaymentDateChanged == true ? change.intendedPaymentDate : source.Intended_Payment_Date__c,
+                    null, source.LastModifiedDate);
+            } else {
+                throw new AuraHandledException('A CIA supplier record no longer exists. Reload and try again.');
+            }
+
+            String key = item.stemId + '-' + item.supplierId;
+            if (change.intendedPaymentDateChanged == true) intendedPaymentItems.put(key, item);
+            if (change.reconfirmChanged == true && item.reconfirm == true) completedItems.put(key, item);
+            if (change.reconfirmChanged == true && item.reconfirm != true) cancelledItems.put(key, item);
+        }
+
+        if (!lineItemUpdates.isEmpty()) update lineItemUpdates;
+        if (!extraCostUpdates.isEmpty()) update extraCostUpdates;
+        if (!intendedPaymentItems.isEmpty()) sendReconfirmNotification(intendedPaymentItems.values());
+        if (!completedItems.isEmpty()) completeTasks(completedItems.values());
+        if (!cancelledItems.isEmpty()) cancelTasks(cancelledItems.values());
+        return getReconfirmInfo(new List<String>{ String.valueOf(enquiryId) });
+    }
+
+    private static void validateCiaChange(Id expectedEnquiryId, CiaChangeInput change, Id actualEnquiryId,
+                                          Datetime actualLastModifiedAt, Boolean isCiaEligible) {
+        if (actualEnquiryId != expectedEnquiryId || isCiaEligible != true) {
+            throw new AuraHandledException('A CIA supplier row is no longer eligible for this enquiry. Reload and try again.');
+        }
+        if (change.expectedLastModifiedAt == null || actualLastModifiedAt != change.expectedLastModifiedAt) {
+            throw new AuraHandledException('A CIA supplier row changed after it was opened. Reload before saving.');
+        }
+    }
+
+	    @AuraEnabled
     public static List<VariableChargeSupplierRow> getVariableChargeSuppliers(Id enquiryId) {
         if (enquiryId == null) return new List<VariableChargeSupplierRow>();
         Map<String, VariableChargeSupplierRow> rows = new Map<String, VariableChargeSupplierRow>();
@@ -291,8 +399,13 @@ public class ReconfirmProcessing {
         for(ReconfirmItem reconfirmItem: reconfirmItems){
             String key = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
             String userName = nominationMap.get(key);
-            
             Id ownerId = userIdMap.get(userName);
+            Datetime reminderAt = futureReminder(reconfirmItem.intendedPaymentDate);
+            String description = reconfirmItem.intendedPaymentDate != null
+                ? 'Intended Payment Date: ' + reconfirmItem.intendedPaymentDate.format() + ' for STEM: ' +
+                    reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName
+                : 'Intended Payment Date is not defined for STEM: ' + reconfirmItem.stemName +
+                    ' - SUPPLIER: ' + reconfirmItem.supplierName;
             if(taskMap.get(key) != null){
                 tasksToUpsert.add(new Task(
                     		 Id = taskMap.get(key).Id,
@@ -300,11 +413,10 @@ public class ReconfirmProcessing {
                 			 Subject = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName + ' - CIA Reconfirm Task - Intended Payment Date - Updated', 
                              Status = 'Open', 
                              Priority = 'Normal', 
-                             IsReminderSet = true, 
+	                         IsReminderSet = reminderAt != null,
                     		 ActivityDate = reconfirmItem.intendedPaymentDate,
-                             ReminderDateTime = reconfirmItem.intendedPaymentDate,
-                             Description = 'Intended Payment Date: ' + reconfirmItem.intendedPaymentDate.format() + ' for STEM: ' + 
-                			 reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName,
+	                         ReminderDateTime = reminderAt,
+	                         Description = description,
                     		 OwnerId = ownerId != null ? ownerId : userIdMap.get('Vincent Lee'),
                 			 Reconfirm_Unique_Key__c = reconfirmItem.stemId + '-' + reconfirmItem.supplierId
             	));
@@ -314,13 +426,10 @@ public class ReconfirmProcessing {
                 			 Subject = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName + ' - CIA Reconfirm Task - Added', 
                              Status = 'Open', 
                              Priority = 'Normal', 
-                             IsReminderSet = true, 
+	                         IsReminderSet = reminderAt != null,
                      		 ActivityDate = reconfirmItem.intendedPaymentDate,
-                             ReminderDateTime = reconfirmItem.intendedPaymentDate,
-                             Description = reconfirmItem.intendedPaymentDate != null ? 'Intended Payment Date: ' + reconfirmItem.intendedPaymentDate.format() + ' for STEM: ' + 
-                    															reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName
-                    														 : 'Intended Payment Date is not defined for STEM: ' + 
-                    															reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName,
+	                         ReminderDateTime = reminderAt,
+	                         Description = description,
                     		 OwnerId = ownerId != null ? ownerId : userIdMap.get('Vincent Lee'),
                 			 Reconfirm_Unique_Key__c = reconfirmItem.stemId + '-' + reconfirmItem.supplierId
             	));      
@@ -329,6 +438,12 @@ public class ReconfirmProcessing {
         }
         upsert tasksToUpsert;
     }
+
+    private static Datetime futureReminder(Date intendedPaymentDate) {
+        if (intendedPaymentDate == null) return null;
+        Datetime candidate = Datetime.newInstance(intendedPaymentDate, Time.newInstance(9, 0, 0, 0));
+        return candidate > System.now() ? candidate : null;
+    }
     
     @AuraEnabled
     public static void completeTasks(List<ReconfirmItem> reconfirmItems){
@@ -336,51 +451,61 @@ public class ReconfirmProcessing {
         for(ReconfirmItem reconfirmItem: reconfirmItems){
             enquiryIds.add(reconfirmItem.enquiryId);
         }
-        List<Task> tasks = [SELECT Id, Reconfirm_Unique_Key__c FROM Task WHERE WhatId IN: enquiryIds];
+        List<Task> tasks = [SELECT Id, Reconfirm_Unique_Key__c, OwnerId FROM Task WHERE WhatId IN: enquiryIds];
         Map<String, Task> taskMap = new Map<String, Task>();
         for(Task task: tasks){
             taskMap.put(task.Reconfirm_Unique_Key__c, task);
         }
-        for(ReconfirmItem reconfirmItem: reconfirmItems){
-            String key = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
-            taskMap.get(key).Status = 'Completed';
-        }
-        update taskMap.values();
-        List<Task> newTasks = new List<Task>();
-        Map<String, String> nominationMap = new Map<String, String>();
-        for(Nomination__c nomination: [SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c 
-                                       FROM Nomination__c WHERE Enquiry__c IN: enquiryIds 
-                                       AND Deprecated__c = false AND RecordTypeId =: FCBStatic.SUPPLIER_NOMINATION_RT_ID]){
-        	nominationMap.put(nomination.STEM__c + '-' + nomination.Account__c, nomination.Buyer_Supplier_Trader__c);
-		}
+        List<Task> primaryTasks = new List<Task>();
+        List<Task> completionTasks = new List<Task>();
         Group allUsers = [SELECT Id FROM Group WHERE DeveloperName = 'All_Users'];
         Map<String, User> users = new Map<String, User>([SELECT Id, Name FROM User WHERE IsActive = true]);
+        User currentUser = users.get(UserInfo.getUserId());
+        Id fallbackOwnerId;
+        for (User user : users.values()) if (user.Name == 'Vincent Lee') fallbackOwnerId = user.Id;
         CustomNotificationType notificationType = [SELECT Id, DeveloperName 
              FROM CustomNotificationType 
              WHERE DeveloperName='All_Users_Notification'];
         for(ReconfirmItem reconfirmItem: reconfirmItems){
             String text = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName +
-                			 ' - CIA Reconfirm Task - Reconfirmed by ' + users.get(UserInfo.getUserId()).Name;
-            
-            String key = reconfirmItem.stemId + '-' + reconfirmItem.supplierId + '- completed';
-            Task currentTask = taskMap.get(key);
-            newTasks.add(new Task(
-                			 Id = currentTask != null ? currentTask.Id : null,
+                ' - CIA Reconfirm Task - Reconfirmed by ' + (currentUser != null ? currentUser.Name : UserInfo.getUserName());
+            String primaryKey = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
+            Task primaryTask = taskMap.get(primaryKey);
+            primaryTasks.add(new Task(
+                             Id = primaryTask != null ? primaryTask.Id : null,
+							 WhatId = reconfirmItem.enquiryId,
+							 Subject = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName + ' - CIA Reconfirm Task',
+							 Status = 'Completed',
+							 Priority = 'Normal',
+							 IsReminderSet = false,
+							 ActivityDate = reconfirmItem.intendedPaymentDate,
+							 OwnerId = primaryTask != null ? primaryTask.OwnerId :
+								 (reconfirmItem.ownerId != null ? reconfirmItem.ownerId : fallbackOwnerId),
+							 Reconfirm_Unique_Key__c = primaryKey
+			));
+
+            String completionKey = primaryKey + '- completed';
+            Task currentTask = taskMap.get(completionKey);
+            completionTasks.add(new Task(
+                             Id = currentTask != null ? currentTask.Id : null,
             				 WhatId = reconfirmItem.enquiryId,
                 			 Subject = text, 
                              Status = 'Open', 
                              Priority = 'Normal', 
-                             IsReminderSet = true, 
-                             ReminderDateTime = Date.today(),
+	                         IsReminderSet = false,
                              Description = text,
-             				 ActivityDate = Date.today(),
+                             ActivityDate = Date.today(),
                     		 OwnerId = allUsers.Id,
-                			 Reconfirm_Unique_Key__c = reconfirmItem.stemId + '-' + reconfirmItem.supplierId + '- completed'
+                             Reconfirm_Unique_Key__c = completionKey
             ));
-            
+        }
+        upsert primaryTasks Reconfirm_Unique_Key__c;
+        upsert completionTasks Reconfirm_Unique_Key__c;
+        for(ReconfirmItem reconfirmItem: reconfirmItems){
+            String text = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName +
+                ' - CIA Reconfirm Task - Reconfirmed by ' + (currentUser != null ? currentUser.Name : UserInfo.getUserName());
             notifyUsers(users.keySet(), reconfirmItem.enquiryId, notificationType.Id, text, text);
         }
-        upsert newTasks;
     }
     
     public static void notifyUsers(Set<String> recipientsIds, String targetId, String notificationTypeId, String title, String body) {
@@ -411,41 +536,51 @@ public class ReconfirmProcessing {
         for(Task task: tasks){
             taskMap.put(task.Reconfirm_Unique_Key__c, task);
         }
-        for(ReconfirmItem reconfirmItem: reconfirmItems){
-            String key = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
-            taskMap.get(key).Status = 'Opened';
-        }
-        update taskMap.values();
-        List<Task> newTasks = new List<Task>();
-        Map<String, String> nominationMap = new Map<String, String>();
-        for(Nomination__c nomination: [SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c 
-                                       FROM Nomination__c WHERE Enquiry__c IN: enquiryIds 
-                                       AND Deprecated__c = false AND RecordTypeId =: FCBStatic.SUPPLIER_NOMINATION_RT_ID]){
-        	nominationMap.put(nomination.STEM__c + '-' + nomination.Account__c, nomination.Buyer_Supplier_Trader__c);
-		}
+        List<Task> primaryTasks = new List<Task>();
+        List<Task> cancellationTasks = new List<Task>();
         Map<String, User> users = new Map<String, User>([SELECT Id, Name FROM User WHERE IsActive = true]);
+        User currentUser = users.get(UserInfo.getUserId());
+        Id fallbackOwnerId;
+        for (User user : users.values()) if (user.Name == 'Vincent Lee') fallbackOwnerId = user.Id;
         for(ReconfirmItem reconfirmItem: reconfirmItems){
             String text = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName +
-                			 ' - CIA Reconfirm Task - Cancelled by ' + users.get(UserInfo.getUserId()).Name;
+                ' - CIA Reconfirm Task - Cancelled by ' + (currentUser != null ? currentUser.Name : UserInfo.getUserName());
             
-            String key = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
-            Task currentTask = taskMap.get(key + '- completed');
-            Task ownerTask = taskMap.get(key);
-            newTasks.add(new Task(
-                			 Id = currentTask != null ? currentTask.Id : null,
+            String primaryKey = reconfirmItem.stemId + '-' + reconfirmItem.supplierId;
+            Task ownerTask = taskMap.get(primaryKey);
+            Id ownerId = ownerTask != null ? ownerTask.OwnerId :
+                (reconfirmItem.ownerId != null ? reconfirmItem.ownerId : fallbackOwnerId);
+            Datetime reminderAt = futureReminder(reconfirmItem.intendedPaymentDate);
+            primaryTasks.add(new Task(
+							 Id = ownerTask != null ? ownerTask.Id : null,
+							 WhatId = reconfirmItem.enquiryId,
+							 Subject = 'STEM: ' + reconfirmItem.stemName + ' - SUPPLIER: ' + reconfirmItem.supplierName + ' - CIA Reconfirm Task',
+							 Status = 'Open',
+							 Priority = 'Normal',
+							 IsReminderSet = reminderAt != null,
+							 ReminderDateTime = reminderAt,
+							 ActivityDate = reconfirmItem.intendedPaymentDate,
+							 OwnerId = ownerId,
+							 Reconfirm_Unique_Key__c = primaryKey
+			));
+
+            String completionKey = primaryKey + '- completed';
+            Task currentTask = taskMap.get(completionKey);
+            cancellationTasks.add(new Task(
+                             Id = currentTask != null ? currentTask.Id : null,
             				 WhatId = reconfirmItem.enquiryId,
                 			 Subject = text, 
                              Status = 'Open', 
                              Priority = 'Normal', 
-                             IsReminderSet = true, 
-                             ReminderDateTime = Date.today(),
+	                         IsReminderSet = false,
                              Description = text,
-             				 ActivityDate = Date.today(),
-                    		 OwnerId = ownerTask.OwnerId,
-                			 Reconfirm_Unique_Key__c = reconfirmItem.stemId + '-' + reconfirmItem.supplierId + '- completed'
+                             ActivityDate = Date.today(),
+                             OwnerId = ownerId,
+                             Reconfirm_Unique_Key__c = completionKey
             ));     
         }
-        upsert newTasks;
+        upsert primaryTasks Reconfirm_Unique_Key__c;
+        upsert cancellationTasks Reconfirm_Unique_Key__c;
     }
     
     @AuraEnabled
@@ -551,12 +686,15 @@ public class ReconfirmProcessing {
         public Date intendedPaymentDate{ get; set; }
         @AuraEnabled
         public Id ownerId{ get; set; }
+		@AuraEnabled
+		public Datetime lastModifiedAt{ get; set; }
         
         public ReconfirmItem(){
             
         }
         
-        public ReconfirmItem(Id id, Id enquiryId, Id stemId, String stemName, Id supplierId, String supplierName, Boolean reconfirm, Date intendedPaymentDate, Id ownerId){
+        public ReconfirmItem(Id id, Id enquiryId, Id stemId, String stemName, Id supplierId, String supplierName,
+							 Boolean reconfirm, Date intendedPaymentDate, Id ownerId, Datetime lastModifiedAt){
             this.id = id;
             this.enquiryId = enquiryId;
             this.stemId = stemId;
@@ -566,7 +704,17 @@ public class ReconfirmProcessing {
             this.reconfirm = reconfirm;
             this.intendedPaymentDate = intendedPaymentDate;
             this.ownerId = ownerId;
+			this.lastModifiedAt = lastModifiedAt;
 	    }
+	}
+
+	public class CiaChangeInput {
+		@AuraEnabled public Id recordId { get; set; }
+		@AuraEnabled public Date intendedPaymentDate { get; set; }
+		@AuraEnabled public Boolean intendedPaymentDateChanged { get; set; }
+		@AuraEnabled public Boolean reconfirm { get; set; }
+		@AuraEnabled public Boolean reconfirmChanged { get; set; }
+		@AuraEnabled public Datetime expectedLastModifiedAt { get; set; }
 	}
 
     public class VariableChargeRequirementInput {

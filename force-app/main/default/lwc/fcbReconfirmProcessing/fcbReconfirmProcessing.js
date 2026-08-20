@@ -1,12 +1,9 @@
 import { LightningElement , api, track , wire} from 'lwc';
-import { updateRecord } from 'lightning/uiRecordApi';
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getReconfirmInfo from '@salesforce/apex/ReconfirmProcessing.getReconfirmInfo';
-import sendReconfirmNotification from '@salesforce/apex/ReconfirmProcessing.sendReconfirmNotification';
+import saveCiaChangesApex from '@salesforce/apex/ReconfirmProcessing.saveCiaChanges';
 import getUsPublicDaysOff from '@salesforce/apex/ReconfirmProcessing.getUsPublicDaysOff';
 import getStemsMessages from '@salesforce/apex/ReconfirmProcessing.getStemsMessages';
-import completeTasks from '@salesforce/apex/ReconfirmProcessing.completeTasks';
-import cancelTasks from '@salesforce/apex/ReconfirmProcessing.cancelTasks';
 import updateStems from '@salesforce/apex/ReconfirmProcessing.updateStems';
 import getVariableChargeSuppliers from '@salesforce/apex/ReconfirmProcessing.getVariableChargeSuppliers';
 import saveVariableChargeRequirements from '@salesforce/apex/ReconfirmProcessing.saveVariableChargeRequirements';
@@ -296,73 +293,44 @@ export default class FcbReconfirmProcessing extends LightningElement {
   async saveCiaChanges() {
     if (this.ciaSaveDisabled) return;
     this.actionExecuting = true;
-    const updatePromises = [];
-    const intendedPaymentTaskRecords = [];
-    const reconfirmTaskRecords = [];
-    const cancelledTaskRecords = [];
-    const intendedKeys = new Set();
-    const reconfirmKeys = new Set();
-    const cancelledKeys = new Set();
+    const changes = [];
 
     this.draftValues.forEach((changedRecord) => {
       const group = this.groupedItems.find((item) => item.key === changedRecord.key);
       if (!group) return;
+      const intendedPaymentDateChanged = Object.prototype.hasOwnProperty.call(changedRecord, 'intendedPaymentDate');
+      const intendedPaymentDate = intendedPaymentDateChanged && changedRecord.intendedPaymentDate
+        ? this.moveDate(new Date(changedRecord.intendedPaymentDate))
+        : intendedPaymentDateChanged
+          ? null
+          : group.value[0].intendedPaymentDate;
+      const reconfirmChanged = Object.prototype.hasOwnProperty.call(changedRecord, 'reconfirm');
       group.value.forEach((record) => {
-        const intendedPaymentDate = changedRecord.intendedPaymentDate
-          ? this.moveDate(new Date(changedRecord.intendedPaymentDate))
-          : record.intendedPaymentDate;
-        const reconfirmChanged = Object.prototype.hasOwnProperty.call(changedRecord, 'reconfirm');
-        const reconfirm = reconfirmChanged ? changedRecord.reconfirm : record.reconfirm;
-        updatePromises.push(updateRecord({
-          fields: {
-            Id: record.id,
-            Reconfirm__c: reconfirm,
-            Intended_Payment_Date__c: intendedPaymentDate,
-          },
-        }));
-
-        const uniqueKey = `${record.stemId}-${record.supplierId}`;
-        const taskItem = {
-          enquiryId: record.enquiryId,
-          stemId: record.stemId,
-          stemName: record.stemName,
-          supplierId: record.supplierId,
-          supplierName: record.supplierName,
+        changes.push({
+          recordId: record.id,
           intendedPaymentDate,
-          ownerId: record.ownerId,
-        };
-        if (changedRecord.intendedPaymentDate && !intendedKeys.has(uniqueKey)) {
-          intendedKeys.add(uniqueKey);
-          intendedPaymentTaskRecords.push(taskItem);
-        }
-        if (reconfirmChanged && reconfirm === true && !reconfirmKeys.has(uniqueKey)) {
-          reconfirmKeys.add(uniqueKey);
-          reconfirmTaskRecords.push(taskItem);
-        }
-        if (reconfirmChanged && reconfirm === false && !cancelledKeys.has(uniqueKey)) {
-          cancelledKeys.add(uniqueKey);
-          cancelledTaskRecords.push(taskItem);
-        }
+          intendedPaymentDateChanged,
+          reconfirm: reconfirmChanged ? changedRecord.reconfirm === true : record.reconfirm === true,
+          reconfirmChanged,
+          expectedLastModifiedAt: record.lastModifiedAt,
+        });
       });
     });
 
     try {
-      if (intendedPaymentTaskRecords.length) {
-        await sendReconfirmNotification({ reconfirmItems: JSON.parse(JSON.stringify(intendedPaymentTaskRecords)) });
-      }
-      if (reconfirmTaskRecords.length) {
-        await completeTasks({ reconfirmItems: JSON.parse(JSON.stringify(reconfirmTaskRecords)) });
-      }
-      if (cancelledTaskRecords.length) {
-        await cancelTasks({ reconfirmItems: JSON.parse(JSON.stringify(cancelledTaskRecords)) });
-      }
-      await Promise.all(updatePromises);
+      const result = await saveCiaChangesApex({ enquiryId: this.recordId, changes });
+      this.groupedItems = this.groupBy(result, "stemId", "supplierId");
+      this.supplierCIArecords = this.groupedItems.map((groupedItem) => ({
+        ...groupedItem.value[0],
+        key: groupedItem.key,
+        ciaRowClass: 'cia-row',
+      }));
+      this.draftValues = [];
       this.dispatchEvent(new ShowToastEvent({
         title: 'CIA reconfirmation saved',
-        message: 'Supplier dates and reconfirmation requirements were updated.',
+        message: 'Supplier dates, reconfirmation requirements, and tasks were saved together.',
         variant: 'success',
       }));
-      await this.refreshData();
     } catch (error) {
       this.showError('CIA supplier reconfirmation could not be saved.', error);
     } finally {

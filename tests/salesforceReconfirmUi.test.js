@@ -34,6 +34,10 @@ test('Reconfirm workspace groups supplier work by STEM and avoids the flat datat
   assert.match(template, /for:each=\{variableChargeGroups\}/);
   assert.doesNotMatch(template, /lightning-datatable/);
   assert.match(controller, /groupRowsByStem\(rows, type\)/);
+  assert.match(controller, /ReconfirmProcessing\.saveCiaChanges/);
+  assert.match(controller, /expectedLastModifiedAt:\s*record\.lastModifiedAt/);
+  assert.doesNotMatch(controller, /lightning\/uiRecordApi/);
+  assert.doesNotMatch(controller, /Promise\.all\(updatePromises\)/);
   assert.match(controller, /this\.stems = this\.stems\.map/);
   assert.doesNotMatch(controller, /getPayablePayments/);
   assert.doesNotMatch(controller, /Hello World/);
