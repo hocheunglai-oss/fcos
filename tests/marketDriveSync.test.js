@@ -187,6 +187,29 @@ test('reviewed archive replay binds the Drive manifest and derives deterministic
   assert.deepEqual(derivedCalls, [{ reportDate: '2026-08-19', commentaryContexts: [], publishAlerts: false, recordShadow: false, reconcileDerived: true }]);
 });
 
+test('reviewed archive drift reports only safe aggregate evidence', async () => {
+  const pdf = Buffer.from('%PDF-reviewed-archive-drift');
+  const { createHash } = await import('node:crypto');
+  const md5 = createHash('md5').update(pdf).digest('hex');
+  const actualFingerprint = createHash('sha256').update(JSON.stringify([{ md5, documentType: 'bunkerwire', reportDate: '2026-08-19' }])).digest('hex');
+  const drive = driveFetch({
+    files: [{ id: 'revieweddrift12345', name: 'BW_20260819.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-19T09:00:00Z', documentType: 'bunkerwire' }],
+    pdf,
+  });
+  await assert.rejects(
+    runMarketReportArchiveReplayBatch(clientMock(), {
+      accessToken: 'token', fetchImpl: drive.fetchImpl, config,
+      reviewedArchive: {
+        startDate: '2026-08-19', endDate: '2026-08-19', sourceFileCount: 2,
+        uniqueReportCount: 2, duplicateFileCount: 0, driveFingerprint: '0'.repeat(64),
+      },
+    }),
+    (error) => error.code === 'MARKET_ARCHIVE_MANIFEST_CHANGED'
+      && error.message.includes(`Observed 1 files, 1 unique PDFs, 0 byte duplicates, fingerprint ${actualFingerprint}.`)
+      && !error.message.includes('revieweddrift12345'),
+  );
+});
+
 test('hourly sync fails closed on the wrong Google account and records a redacted failure', async () => {
   const client = clientMock();
   const drive = driveFetch({ accountEmail: 'wrong@example.com' });

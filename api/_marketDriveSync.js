@@ -169,7 +169,7 @@ function reviewedArchiveFiles(files, policy = REVIEWED_ARCHIVE) {
       || unique.length !== policy.uniqueReportCount
       || duplicateFileCount !== policy.duplicateFileCount
       || driveFingerprint !== policy.driveFingerprint) {
-    throw syncError(`The licensed Google Drive archive no longer matches the reviewed ${policy.startDate} to ${policy.endDate} manifest.`, 'MARKET_ARCHIVE_MANIFEST_CHANGED', 409);
+    throw syncError(`The licensed Google Drive archive no longer matches the reviewed ${policy.startDate} to ${policy.endDate} manifest. Observed ${eligible.length} files, ${unique.length} unique PDFs, ${duplicateFileCount} byte duplicates, fingerprint ${driveFingerprint}.`, 'MARKET_ARCHIVE_MANIFEST_CHANGED', 409);
   }
   return { unique, driveFingerprint, sourceFileCount: eligible.length, duplicateFileCount };
 }
