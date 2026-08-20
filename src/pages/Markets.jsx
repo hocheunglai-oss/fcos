@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
-import { MarketsView } from '@/hedge/views/MarketsView';
+import { MarketIntelligenceWorkspace } from '@/hedge/views/MarketIntelligenceWorkspace';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
 import { loadMarketSnapshot, MarketPrice, saveForwardSpreads, verifyMopsMonth } from '@/hedge/api/marketData';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
-const EMPTY = { mops: [], mopsMonthVerifications: [], settings: {}, capabilities: {} };
+const EMPTY = { mops: [], mopsMonthVerifications: [], marketIntelligence: {}, settings: {}, capabilities: {} };
 
 export default function Markets() {
   const [snapshot, setSnapshot] = useState(EMPTY);
@@ -63,11 +63,12 @@ export default function Markets() {
       <div className="hedge-desk-root">
         {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
-        <MarketsView
-          data={{ mops: snapshot.mops || [], mopsMonthVerifications: snapshot.mopsMonthVerifications || [] }}
+        <MarketIntelligenceWorkspace
+          data={{ mops: snapshot.mops || [], mopsMonthVerifications: snapshot.mopsMonthVerifications || [], marketIntelligence: snapshot.marketIntelligence || {} }}
           settings={settings}
           priceEntity={MarketPrice}
           readOnly={snapshot.capabilities?.hedge_book_manage !== true}
+          reload={reload}
           verifyMonth={async (month, sourceMessage, expectedRevision) => {
             const result = await verifyMopsMonth(month, sourceMessage, expectedRevision);
             await reload({ silent: true });

@@ -8,6 +8,7 @@ import {
 } from '../src/hedge/lib/domain.js';
 import { decorateMopsMonthVerifications, mopsMonthDateBounds, prepareManualMopsVerification } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
+import { importMarketReport, loadMarketIntelligence, previewMarketReport } from './_marketIntelligence.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -661,9 +662,10 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
     const expiryAutomation = await reconcilePaperHedgeExpiry(client);
-    const [mops, settingsResult] = await Promise.all([
+    const [mops, settingsResult, marketIntelligence] = await Promise.all([
       listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),
+      loadMarketIntelligence(client),
     ]);
     if (settingsResult.error) throw httpError(`Market settings could not be loaded: ${settingsResult.error.message}`, 502);
     const mopsMonthVerifications = await loadMopsMonthVerifications(client, mops);
@@ -678,8 +680,16 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
         forwardSpreadsRevision: Number(settings.fwd_spreads?.revision || 0),
       },
       capabilities: { hedge_book_manage: capabilities?.hedge_book_manage === true },
+      marketIntelligence,
       expiryAutomation,
     };
+  }
+
+  if (action === 'market_report_preview') return previewMarketReport(body);
+
+  if (action === 'market_report_import') {
+    await requireWriteCapability(capabilities, configFor('MopsPrice'));
+    return importMarketReport(client, profile, body);
   }
 
   if (action === 'save_spreads') {

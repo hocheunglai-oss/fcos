@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.187',
+    releasedAt: '2026-08-20',
+    title: 'Add delivered bunker market intelligence',
+    changes: [
+      'Separates Delivered Bunkers, Cargo & Forward, and Trading Signals while preserving the controlled MOPS settlement data path.',
+      'Adds Singapore, South Korea, South Korea (West), Zhoushan, and Kaohsiung coverage for VLSFO, HSFO 380, and LSMGO with explicit assessment, posted, unavailable, and stale states.',
+      'Maps Kaohsiung MF-380 to HSFO 380 and displays LS180 as the local VLSFO label.',
+      'Adds deterministic licensed-report review and service-only storage for structured observations without retaining report files or text.',
+    ],
+  },
+  {
     version: '2.0.186',
     releasedAt: '2026-08-19',
     title: 'Configure Buyer PIC row colours',

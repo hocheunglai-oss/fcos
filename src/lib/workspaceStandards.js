@@ -67,9 +67,9 @@ export const WORKSPACE_STANDARDS = Object.freeze({
     title: 'Markets',
     route: '/markets',
     section: 'Trading',
-    authority: 'FCOS market publications',
-    views: ['all', 'activity'],
-    freshness: 'Live FCOS state',
+    authority: 'Licensed market reports and controlled FCOS MOPS records',
+    views: ['delivered', 'cargo-forward', 'signals'],
+    freshness: 'Live service-only market observations',
     consequentialActionsRefresh: true,
   },
   special_terms: {

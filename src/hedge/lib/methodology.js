@@ -2,6 +2,20 @@ const PLATTS_HOLIDAY_URL = "https://www.spglobal.com/energy/en/pricing-benchmark
 const PLATTS_METHODOLOGY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/methodology-specifications/refined-products";
 
 export const PAGE_METHODOLOGIES = {
+  Markets: {
+    summary: "Markets separates delivered bunker observations, cargo and forward references, and trading signals from the MOPS records used for hedge settlement.",
+    steps: [
+      "Delivered Bunkers shows each configured port and product in its native USD/MT basis. Assessment, posted, proxy, estimate, unavailable and stale states remain explicit.",
+      "Kaohsiung VLSFO is displayed with the local LS180 label; MF-380 is mapped to HSFO 380. These names do not change the source symbol or methodology basis.",
+      "Cargo & Forward retains the controlled MOPS publication workflow and separately shows licensed cargo, BM, M1, M2, East-West and gasoil observations.",
+      "Trading Signals calculates transparent port spreads, delivered premiums, curve structure and quote differences. It never makes or executes a trading decision.",
+      "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores structured values plus a source hash rather than the report or its text.",
+      "Delivered, cargo, forward and compliance observations never write to hedge_market_prices and therefore cannot alter MOPS averages, hedge expiry or settlement.",
+    ],
+    sources: [
+      { label: "S&P Global refined products assessment methodology", url: PLATTS_METHODOLOGY_URL },
+    ],
+  },
   "Position control": {
     summary: "Portfolio control combines live physical exposure, linked paper hedges, clearing cash, initial margin, and current MOPS-based valuation.",
     steps: [

@@ -2,7 +2,7 @@ import { appClient } from '@/api/appClient';
 
 async function request(payload, options = { cache: false }) {
   const backgroundUpdate = options.onBackgroundUpdate;
-  const mutates = ['create', 'update', 'delete', 'save_spreads', 'verify_month'].includes(payload?.action);
+  const mutates = ['create', 'update', 'delete', 'save_spreads', 'verify_month', 'market_report_import'].includes(payload?.action);
   const response = await appClient.functions.invoke('hedgeMarkets', payload, {
     ...options,
     invalidateCache: options.invalidateCache ?? mutates,
@@ -39,4 +39,12 @@ export function saveForwardSpreads(value, expectedRevision) {
 
 export function verifyMopsMonth(month, sourceMessage, expectedRevision = 0) {
   return request({ action: 'verify_month', month, sourceMessage, expectedRevision });
+}
+
+export function previewMarketReport(payload) {
+  return request({ action: 'market_report_preview', ...payload });
+}
+
+export function importMarketReport(payload) {
+  return request({ action: 'market_report_import', ...payload });
 }
