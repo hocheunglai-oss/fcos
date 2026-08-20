@@ -41,7 +41,7 @@ function clientMock({ knownMd5 = [], publicationStatus = null } = {}) {
   };
 }
 
-function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buffer.from('%PDF-test') } = {}) {
+function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buffer.from('%PDF-test'), shortcutHierarchy = false } = {}) {
   const calls = [];
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
@@ -53,9 +53,22 @@ function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buff
       return response({ id: fileId, name: 'Market reports', mimeType: 'application/vnd.google-apps.folder', trashed: false });
     }
     if (config.folders.some((folder) => folder.folderId === fileId)) {
-      return response({ id: fileId, name: fileId, mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: [config.rootFolderId] });
+      return response({
+        id: fileId, name: fileId, mimeType: 'application/vnd.google-apps.folder', trashed: false,
+        ...(shortcutHierarchy ? {} : { parents: [config.rootFolderId] }),
+      });
     }
     if (url.pathname.endsWith('/files')) {
+      if (String(url.searchParams.get('q')).includes('application/vnd.google-apps.shortcut')) {
+        return response({
+          files: shortcutHierarchy ? config.folders.map((folder, index) => ({
+            id: `shortcutfolder${index}12345`,
+            mimeType: 'application/vnd.google-apps.shortcut',
+            parents: [config.rootFolderId],
+            shortcutDetails: { targetId: folder.folderId, targetMimeType: 'application/vnd.google-apps.folder' },
+          })) : [],
+        });
+      }
       const folder = config.folders.find((entry) => String(url.searchParams.get('q')).includes(entry.folderId));
       return response({ files: files.filter((file) => file.documentType === folder?.documentType), nextPageToken: null });
     }
@@ -66,6 +79,17 @@ function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buff
 
 test('market Drive run keys are stable UTC-hour idempotency boundaries', () => {
   assert.equal(marketDriveRunKey(new Date('2026-08-20T09:59:59.999Z')), 'market-drive:2026-08-20T09');
+});
+
+test('hourly sync accepts exact approved folders linked through root shortcuts', async () => {
+  const client = clientMock();
+  const drive = driveFetch({ shortcutHierarchy: true });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-20T09:10:00Z'),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.discoveredCount, 0);
+  assert.equal(drive.calls.some((url) => url.includes('application%2Fvnd.google-apps.shortcut')), true);
 });
 
 test('hourly sync skips known checksums without downloading report bytes', async () => {

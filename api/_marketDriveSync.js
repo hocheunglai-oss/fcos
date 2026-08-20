@@ -3,6 +3,7 @@ import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
 
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 const DRIVE_PDF_MIME_TYPE = 'application/pdf';
 const DEFAULT_IMPORT_LIMIT = 25;
 
@@ -63,6 +64,21 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
     throw syncError('Google Drive market-report root does not match the approved folder.', 'MARKET_DRIVE_ROOT_MISMATCH', 503);
   }
 
+  const rootShortcuts = await driveJson(fetchImpl, accessToken, 'files', {
+    q: `'${config.rootFolderId}' in parents and trashed = false and mimeType = '${DRIVE_SHORTCUT_MIME_TYPE}'`,
+    fields: 'files(id,mimeType,parents,shortcutDetails(targetId,targetMimeType))',
+    pageSize: 1000,
+    spaces: 'drive',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
+  });
+  const approvedShortcutTargets = new Set((rootShortcuts.files || [])
+    .filter((shortcut) => shortcut.mimeType === DRIVE_SHORTCUT_MIME_TYPE
+      && Array.isArray(shortcut.parents)
+      && shortcut.parents.includes(config.rootFolderId)
+      && shortcut.shortcutDetails?.targetMimeType === DRIVE_FOLDER_MIME_TYPE)
+    .map((shortcut) => shortcut.shortcutDetails.targetId));
+
   for (const folder of config.folders) {
     const metadata = await driveJson(fetchImpl, accessToken, `files/${encodeURIComponent(folder.folderId)}`, {
       fields: 'id,name,mimeType,trashed,parents',
@@ -71,8 +87,8 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
     if (metadata.id !== folder.folderId
         || metadata.mimeType !== DRIVE_FOLDER_MIME_TYPE
         || metadata.trashed === true
-        || !Array.isArray(metadata.parents)
-        || !metadata.parents.includes(config.rootFolderId)) {
+        || (!metadata.parents?.includes(config.rootFolderId)
+          && !approvedShortcutTargets.has(folder.folderId))) {
       throw syncError('Google Drive market-report folders do not match the approved hierarchy.', 'MARKET_DRIVE_FOLDER_MISMATCH', 503);
     }
   }
