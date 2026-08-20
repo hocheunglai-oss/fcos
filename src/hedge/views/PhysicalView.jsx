@@ -252,7 +252,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
             </thead>
             <tbody>
               {rows.map((record) => {
-                const pnl = calcPhysicalPnl(record, data.mops, settings.general.sgo_bbl_per_mt)?.value;
+                const pnl = calcPhysicalPnl(record, data.mops, settings.general.sgo_bbl_per_mt, data.marketValuation)?.value;
                 const closed = physicalStatus(record) === "closed";
                 return (
                   <tr key={record.id}>

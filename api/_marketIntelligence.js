@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { contractMonthForTenor, shiftContractMonth } from '../shared/plattsMarketModel.js';
 
 const MAX_REPORT_BYTES = 5_000_000;
 const REPORT_TYPES = new Set(['bunkerwire', 'european_marketscan']);
@@ -10,11 +11,21 @@ const SOURCE_PAGES = Object.freeze({
   PUAFT00: 3, PUAFR00: 3, PUAER00: 3, BFDZA00: 3, AAXYO00: 3, AAXYS00: 3, AAXYQ00: 3, MGZSD00: 3,
   CBGAP00: 5, CB1AR00: 5, CB3AN00: 5,
   FPLSM01: 4, FPLSM02: 4, FQLSM01: 4, FQLSM02: 4, MSGSL00: 4, MSHSL00: 4,
+  BSGSL00: 4,
+  AARIN00: 3, AARIO00: 3, AARIP00: 3,
+  AAYES00: 3, AAYET00: 3, AAXZY00: 3, AAYAM00: 3,
+  ICLO001: 3, ICLO002: 3, ICLO003: 3, ICLO004: 3, ICLO005: 3, ICLO006: 3,
+  MSJSL00: 3, MSKSL00: 3, MSLSL00: 3, MSMSL00: 3,
 });
 
 const EUROPEAN_SOURCE_PAGES = Object.freeze({
   AMFSA00: 3, FOFS000: 3, FOFS001: 3, FOFS002: 3,
   FPLSM01: 4, FPLSM02: 4, FQLSM01: 4, FQLSM02: 4, MSGSL00: 4, MSHSL00: 4,
+  BSGSL00: 4,
+  AARIN00: 3, AARIO00: 3, AARIP00: 3,
+  AAYES00: 3, AAYET00: 3, AAXZY00: 3, AAYAM00: 3,
+  ICLO001: 3, ICLO002: 3, ICLO003: 3, ICLO004: 3, ICLO005: 3, ICLO006: 3,
+  MSJSL00: 3, MSKSL00: 3, MSLSL00: 3, MSMSL00: 3,
   PPXDK00: 9, POABC00: 9,
 });
 
@@ -26,11 +37,75 @@ const DOCUMENT_SYMBOLS = Object.freeze({
   ],
   european_marketscan: [
     'AMFSA00', 'PPXDK00', 'POABC00', 'FOFS000', 'FOFS001', 'FOFS002',
-    'FPLSM01', 'FPLSM02', 'FQLSM01', 'FQLSM02', 'MSGSL00', 'MSHSL00',
+    'FPLSM01', 'FPLSM02', 'FQLSM01', 'FQLSM02', 'BSGSL00', 'MSGSL00', 'MSHSL00',
+    'AARIN00', 'AARIO00', 'AARIP00', 'AAYES00', 'AAYET00', 'AAXZY00', 'AAYAM00',
+    'ICLO001', 'ICLO002', 'ICLO003', 'ICLO004', 'ICLO005', 'ICLO006',
+    'MSJSL00', 'MSKSL00', 'MSLSL00', 'MSMSL00',
   ],
 });
 
-const SIGNED_VALUE_SYMBOLS = new Set(['FQLSM01', 'FQLSM02']);
+const SIGNED_VALUE_SYMBOLS = new Set(['FQLSM01', 'FQLSM02', 'MSJSL00', 'MSKSL00', 'MSLSL00', 'MSMSL00']);
+const MONTH_TOKEN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/ig;
+const MONTH_NUMBERS = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });
+const ASIA_PUBLICATION_HOLIDAYS = new Set([
+  '2025-01-01', '2025-01-29', '2025-01-30', '2025-03-31', '2025-04-18', '2025-05-01', '2025-05-12', '2025-10-20', '2025-12-25',
+  '2026-01-01', '2026-02-17', '2026-02-18', '2026-04-03', '2026-05-01', '2026-05-27', '2026-06-01', '2026-08-10', '2026-11-09', '2026-12-25',
+]);
+// Reviewed England and Wales bank-holiday closures for the London assessment
+// sessions. Years outside this controlled calendar fail closed.
+const LONDON_PUBLICATION_HOLIDAYS = new Set([
+  '2025-01-01', '2025-04-18', '2025-04-21', '2025-05-05', '2025-05-26', '2025-08-25', '2025-12-25', '2025-12-26',
+  '2026-01-01', '2026-04-03', '2026-04-06', '2026-05-04', '2026-05-25', '2026-08-31', '2026-12-25', '2026-12-28',
+]);
+const LONDON_SESSIONS = new Set(['london_moc', 'london_1630', 'ice_settlement', 'london_settlement']);
+const SYMBOL_BASIS = Object.freeze({
+  MFSPD00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'singapore', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  MFSKD00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'south-korea', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  WKMFA00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'south-korea-west', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  MFZSD00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'zhoushan', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  MFHKD00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'hong-kong', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  PUAFT00: { productKey: 'hsfo380', marketFamily: 'delivered', portKey: 'singapore', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  PUAFR00: { productKey: 'hsfo380', marketFamily: 'delivered', portKey: 'south-korea', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  PUAER00: { productKey: 'hsfo380', marketFamily: 'delivered', portKey: 'hong-kong', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  BFDZA00: { productKey: 'hsfo380', marketFamily: 'delivered', portKey: 'zhoushan', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  AAXYO00: { productKey: 'lsmgo', marketFamily: 'delivered', portKey: 'singapore', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  AAXYS00: { productKey: 'lsmgo', marketFamily: 'delivered', portKey: 'south-korea', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  AAXYQ00: { productKey: 'lsmgo', marketFamily: 'delivered', portKey: 'hong-kong', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  MGZSD00: { productKey: 'lsmgo', marketFamily: 'delivered', portKey: 'zhoushan', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'delivered_assessment' },
+  CB1AR00: { productKey: 'vlsfo', marketFamily: 'delivered', portKey: 'kaohsiung', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'posted', settlementBasis: 'posted_price' },
+  CB3AN00: { productKey: 'hsfo380', marketFamily: 'delivered', portKey: 'kaohsiung', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'posted', settlementBasis: 'posted_price' },
+  CBGAP00: { productKey: 'lsmgo', marketFamily: 'delivered', portKey: 'kaohsiung', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'posted', settlementBasis: 'posted_price' },
+  AMFSA00: { productKey: 'vlsfo', marketFamily: 'cargo', portKey: 'singapore', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'mops' },
+  PPXDK00: { productKey: 'hsfo380', marketFamily: 'cargo', portKey: 'singapore', tenor: 'spot', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'mops' },
+  POABC00: { productKey: 'lsmgo', marketFamily: 'cargo', portKey: 'singapore', tenor: 'spot', unit: 'USD/BBL', assessmentSession: 'asia_moc', settlementBasis: 'mops' },
+  FOFS000: { productKey: 'vlsfo', marketFamily: 'forward', portKey: 'singapore', tenor: 'bm', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'outright' },
+  FOFS001: { productKey: 'vlsfo', marketFamily: 'forward', portKey: 'singapore', tenor: 'm1', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'outright' },
+  FOFS002: { productKey: 'vlsfo', marketFamily: 'forward', portKey: 'singapore', tenor: 'm2', unit: 'USD/MT', assessmentSession: 'asia_moc', settlementBasis: 'outright' },
+  FPLSM01: { productKey: 'hsfo380', marketFamily: 'forward', portKey: 'singapore', tenor: 'm1', unit: 'USD/MT', assessmentSession: 'london_moc', settlementBasis: 'outright', printedMonthAuthority: true, financialHeaderIndex: 1 },
+  FPLSM02: { productKey: 'hsfo380', marketFamily: 'forward', portKey: 'singapore', tenor: 'm2', unit: 'USD/MT', assessmentSession: 'london_moc', settlementBasis: 'outright', printedMonthAuthority: true, financialHeaderIndex: 2 },
+  FQLSM01: { productKey: 'hsfo380', marketFamily: 'context', portKey: 'singapore', tenor: 'm1', unit: 'USD/MT', assessmentSession: 'london_moc', settlementBasis: 'east_west_spread', printedMonthAuthority: true, financialHeaderIndex: 1 },
+  FQLSM02: { productKey: 'hsfo380', marketFamily: 'context', portKey: 'singapore', tenor: 'm2', unit: 'USD/MT', assessmentSession: 'london_moc', settlementBasis: 'east_west_spread', printedMonthAuthority: true, financialHeaderIndex: 2 },
+  BSGSL00: { productKey: 'lsmgo', marketFamily: 'forward', portKey: 'singapore', tenor: 'bm', unit: 'USD/BBL', assessmentSession: 'london_moc', settlementBasis: 'outright', printedMonthAuthority: true, financialHeaderIndex: 0 },
+  MSGSL00: { productKey: 'lsmgo', marketFamily: 'forward', portKey: 'singapore', tenor: 'm1', unit: 'USD/BBL', assessmentSession: 'london_moc', settlementBasis: 'outright', printedMonthAuthority: true, financialHeaderIndex: 1 },
+  MSHSL00: { productKey: 'lsmgo', marketFamily: 'forward', portKey: 'singapore', tenor: 'm2', unit: 'USD/BBL', assessmentSession: 'london_moc', settlementBasis: 'outright', printedMonthAuthority: true, financialHeaderIndex: 2 },
+  AARIN00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'ice_lsgo_assessment', printedMonthAuthority: true, relativePosition: 1 },
+  AARIO00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'ice_lsgo_assessment', printedMonthAuthority: true, relativePosition: 2 },
+  AARIP00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'ice_lsgo_assessment', printedMonthAuthority: true, relativePosition: 3 },
+  AAYES00: { productKey: null, marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/BBL', assessmentSession: 'london_1630', settlementBasis: 'ice_brent', printedMonthAuthority: true, relativePosition: 1 },
+  AAYET00: { productKey: null, marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/BBL', assessmentSession: 'london_1630', settlementBasis: 'ice_brent', printedMonthAuthority: true, relativePosition: 2 },
+  AAXZY00: { productKey: null, marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/BBL', assessmentSession: 'london_1630', settlementBasis: 'ice_brent', printedMonthAuthority: true, relativePosition: 3 },
+  AAYAM00: { productKey: null, marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/BBL', assessmentSession: 'london_1630', settlementBasis: 'ice_brent', printedMonthAuthority: true, relativePosition: 4 },
+  ICLO001: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 1 },
+  ICLO002: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 2 },
+  ICLO003: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 3 },
+  ICLO004: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 4 },
+  ICLO005: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 5 },
+  ICLO006: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'ice', tenor: 'other', unit: 'USD/MT', assessmentSession: 'ice_settlement', settlementBasis: 'ice_lsgo_settlement', printedMonthAuthority: true, relativePosition: 6 },
+  MSJSL00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'singapore', tenor: 'bm', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'gasoil_efs' },
+  MSKSL00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'singapore', tenor: 'm0', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'gasoil_efs', printedMonthAuthority: true },
+  MSLSL00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'singapore', tenor: 'm1', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'gasoil_efs', printedMonthAuthority: true },
+  MSMSL00: { productKey: 'lsmgo', marketFamily: 'context', portKey: 'singapore', tenor: 'm2', unit: 'USD/MT', assessmentSession: 'london_1630', settlementBasis: 'gasoil_efs', printedMonthAuthority: true },
+});
 const PRODUCT_ORDER = Object.freeze(['hsfo380', 'vlsfo', 'lsmgo']);
 const PRODUCT_KEYS = new Set(PRODUCT_ORDER);
 const PORT_KEYS = new Set(['singapore', 'south-korea', 'south-korea-west', 'zhoushan', 'kaohsiung', 'hong-kong']);
@@ -73,24 +148,154 @@ function detectedDocumentType(text, requested = null, filename = '') {
   return null;
 }
 
-function symbolObservation(text, symbol, documentType) {
-  const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
-  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pricePattern = SIGNED_VALUE_SYMBOLS.has(symbol) ? '[+-]?\\d+(?:\\.\\d+)?' : '\\d+(?:\\.\\d+)?';
-  const exact = new RegExp(`${escaped}\\s+(?:\\d+(?:\\.\\d+)?\\s*-\\s*\\d+(?:\\.\\d+)?\\s+)?(${pricePattern})\\s+([+-]\\d+(?:\\.\\d+)?)`, 'i').exec(text);
-  if (exact) return { sourceSymbol: symbol, price: Number(exact[1]), dayChange: Number(exact[2]), sourcePage: sourcePage || null };
-  const posted = new RegExp(`${escaped}\\s+(${pricePattern})`, 'i').exec(text);
-  if (posted) return { sourceSymbol: symbol, price: Number(posted[1]), dayChange: null, sourcePage: sourcePage || null };
+function monthDateFromToken(token, reportDate) {
+  const number = MONTH_NUMBERS[String(token || '').slice(0, 3).toLowerCase()];
+  if (!number || !/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) return null;
+  const reportYear = Number(reportDate.slice(0, 4));
+  const reportMonth = Number(reportDate.slice(5, 7));
+  const year = number < reportMonth - 6 ? reportYear + 1 : number > reportMonth + 6 ? reportYear - 1 : reportYear;
+  return `${year}-${String(number).padStart(2, '0')}-01`;
+}
+
+export function marketPublicationEligible(reportDate, assessmentSession = 'asia_moc') {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(reportDate || ''))) return null;
+  if (!['2025', '2026'].includes(reportDate.slice(0, 4))) return null;
+  const date = new Date(`${reportDate}T00:00:00Z`);
+  if ([0, 6].includes(date.getUTCDay())) return false;
+  if (assessmentSession === 'asia_moc') return !ASIA_PUBLICATION_HOLIDAYS.has(reportDate);
+  if (LONDON_SESSIONS.has(assessmentSession)) return !LONDON_PUBLICATION_HOLIDAYS.has(reportDate);
+  return true;
+}
+
+export function nextMarketPublicationDate(reportDate, assessmentSession = 'asia_moc', { afterMonthBoundary = false } = {}) {
+  if (marketPublicationEligible(reportDate, assessmentSession) == null) return null;
+  const date = new Date(`${afterMonthBoundary ? `${reportDate.slice(0, 7)}-01` : reportDate}T00:00:00Z`);
+  if (afterMonthBoundary) date.setUTCMonth(date.getUTCMonth() + 1);
+  else date.setUTCDate(date.getUTCDate() + 1);
+  for (let attempts = 0; attempts < 12; attempts += 1) {
+    const candidate = date.toISOString().slice(0, 10);
+    const eligible = marketPublicationEligible(candidate, assessmentSession);
+    if (eligible === true) return candidate;
+    if (eligible == null) return null;
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
   return null;
 }
 
-export function parseMarketReportText(rawText, { documentType = null, filename = '' } = {}) {
+function printedContractMonthNearSymbol(text, symbol, reportDate) {
+  const index = String(text).indexOf(symbol);
+  if (index < 0) return null;
+  const matches = [...String(text).slice(Math.max(0, index - 100), index).matchAll(MONTH_TOKEN)];
+  return matches.length ? monthDateFromToken(matches.at(-1)[1], reportDate) : null;
+}
+
+function vlsfoPrintedMonths(text, reportDate) {
+  const start = String(text).search(/Marine Fuel 0\.5% Derivatives/i);
+  const end = String(text).indexOf('FOFS002', start);
+  if (start < 0 || end < 0) return [];
+  const tokens = [...String(text).slice(start, end).matchAll(MONTH_TOKEN)].map((match) => monthDateFromToken(match[1], reportDate));
+  return [...new Set(tokens.filter(Boolean))].slice(-3);
+}
+
+function financialDerivativePrintedMonths(text, reportDate) {
+  const source = String(text);
+  const tableStart = source.search(/\(\$\/mt\)/i);
+  if (tableStart < 0) return [];
+  const tableEnd = source.indexOf('London MOC', tableStart);
+  const header = source.slice(tableStart, tableEnd > tableStart ? tableEnd : tableStart + 1200);
+  const tokens = [...header.matchAll(MONTH_TOKEN)].map((match) => monthDateFromToken(match[1], reportDate));
+  return [...new Set(tokens.filter(Boolean))].slice(0, 3);
+}
+
+function observationContractMetadata(text, symbol, reportDate) {
+  const basis = SYMBOL_BASIS[symbol];
+  if (!basis) return { contractMonth: null, printedContractMonth: null, tenor: 'spot', unit: 'USD/MT', assessmentSession: 'daily_assessment', basisMetadata: {} };
+  let printedContractMonth = null;
+  if (symbol.startsWith('FOFS')) printedContractMonth = vlsfoPrintedMonths(text, reportDate)[Number(symbol.slice(-1))] || null;
+  else if (Number.isInteger(basis.financialHeaderIndex)) printedContractMonth = financialDerivativePrintedMonths(text, reportDate)[basis.financialHeaderIndex] || null;
+  else if (basis.printedMonthAuthority) printedContractMonth = printedContractMonthNearSymbol(text, symbol, reportDate);
+  if (basis.relativePosition && printedContractMonth && printedContractMonth.slice(0, 7) < reportDate.slice(0, 7)) {
+    const nextYear = shiftContractMonth(printedContractMonth.slice(0, 7), 12);
+    printedContractMonth = nextYear ? `${nextYear}-01` : null;
+  }
+  let contractMonth = null;
+  let contractMonthSource = 'not_applicable';
+  if (['bm', 'm1', 'm2'].includes(basis.tenor)) {
+    if (basis.printedMonthAuthority) {
+      contractMonth = printedContractMonth;
+      contractMonthSource = printedContractMonth ? 'printed' : 'missing_printed_month';
+    } else {
+      const calculated = contractMonthForTenor({ reportDate, tenor: basis.tenor.toUpperCase(), printedContractMonth: printedContractMonth?.slice(0, 7) || null });
+      contractMonth = calculated ? `${calculated}-01` : null;
+      contractMonthSource = printedContractMonth ? (contractMonth ? 'printed_verified' : 'printed_roll_mismatch') : 'derived_roll';
+    }
+  } else if (basis.tenor === 'm0') {
+    contractMonth = printedContractMonth || `${reportDate.slice(0, 7)}-01`;
+    contractMonthSource = printedContractMonth ? 'printed' : 'derived_current_month';
+  } else if (/^m[3-6]$/.test(basis.tenor)) {
+    if (basis.printedMonthAuthority) {
+      contractMonth = printedContractMonth;
+      contractMonthSource = printedContractMonth ? 'printed' : 'missing_printed_month';
+    } else {
+      const derived = shiftContractMonth(reportDate.slice(0, 7), Number(basis.tenor.slice(1)));
+      contractMonth = derived ? `${derived}-01` : null;
+      contractMonthSource = 'derived_roll';
+    }
+  } else if (basis.printedMonthAuthority) {
+    contractMonth = printedContractMonth;
+    contractMonthSource = printedContractMonth ? 'printed' : 'missing_printed_month';
+  }
+  const sessionEligibility = basis.assessmentSession === 'posted'
+    ? true
+    : marketPublicationEligible(reportDate, basis.assessmentSession);
+  const printedMonthComplete = !(basis.printedMonthAuthority && !printedContractMonth);
+  return {
+    contractMonth,
+    printedContractMonth,
+    tenor: basis.tenor,
+    unit: basis.unit,
+    assessmentSession: basis.assessmentSession,
+    basisMetadata: {
+      productKey: basis.productKey,
+      marketFamily: basis.marketFamily,
+      portKey: basis.portKey,
+      settlementBasis: basis.settlementBasis,
+      contractMonthSource,
+      publicationEligible: sessionEligibility === true && printedMonthComplete,
+      calendarKnown: sessionEligibility != null,
+      publicationCalendar: basis.assessmentSession === 'asia_moc'
+        ? 'platts_singapore_v2026_08'
+        : LONDON_SESSIONS.has(basis.assessmentSession)
+          ? 'platts_london_v2026_08'
+          : basis.assessmentSession === 'posted' ? 'publisher_report_date' : 'session_report_date',
+      ...(Number.isInteger(basis.financialHeaderIndex) ? { printedMonthTable: 'european_financial_derivatives', printedMonthHeaderIndex: basis.financialHeaderIndex } : {}),
+      ...(basis.relativePosition ? { relativePosition: basis.relativePosition } : {}),
+    },
+  };
+}
+
+function symbolObservation(text, symbol, documentType, reportDate) {
+  const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pricePattern = SIGNED_VALUE_SYMBOLS.has(symbol) ? '[+-]?\\d+(?:\\.\\d+)?' : '\\d+(?:\\.\\d+)?';
+  const exact = new RegExp(`${escaped}\\s+(?:\\d+(?:\\.\\d+)?\\s*-\\s*\\d+(?:\\.\\d+)?\\s+)?(${pricePattern})\\s+([+-]?\\d+(?:\\.\\d+)?)`, 'i').exec(text);
+  if (exact) return { sourceSymbol: symbol, price: Number(exact[1]), dayChange: Number(exact[2]), sourcePage: sourcePage || null, ...observationContractMetadata(text, symbol, reportDate) };
+  const posted = new RegExp(`${escaped}\\s+(${pricePattern})`, 'i').exec(text);
+  if (posted) return { sourceSymbol: symbol, price: Number(posted[1]), dayChange: null, sourcePage: sourcePage || null, ...observationContractMetadata(text, symbol, reportDate) };
+  return null;
+}
+
+export function parseMarketReportText(rawText, { documentType = null, filename = '', pageTexts = null } = {}) {
   const text = normalizedReportText(rawText);
   const type = detectedDocumentType(text, documentType, filename);
   if (!type) throw marketError('Choose whether this is Bunkerwire or European Marketscan.', 400, 'MARKET_REPORT_TYPE_REQUIRED');
   const reportDate = reportDateFrom(text, filename);
   if (!reportDate) throw marketError('The report date could not be detected.', 400, 'MARKET_REPORT_DATE_MISSING');
-  const observations = DOCUMENT_SYMBOLS[type].map((symbol) => symbolObservation(text, symbol, type)).filter(Boolean);
+  const observations = DOCUMENT_SYMBOLS[type].map((symbol) => {
+    const sourcePage = type === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
+    const pageText = Array.isArray(pageTexts) && sourcePage ? normalizedReportText(pageTexts[sourcePage - 1] || '') : text;
+    return symbolObservation(pageText || text, symbol, type, reportDate);
+  }).filter(Boolean);
   if (!observations.length) throw marketError('No configured market symbols were found in this report.', 400, 'MARKET_REPORT_NO_VALUES');
   const found = new Set(observations.map((row) => row.sourceSymbol));
   return {
@@ -119,19 +324,28 @@ function decodeReport(base64) {
   }
 }
 
-export async function parseMarketReportPdf(buffer, { documentType = null, filename = '' } = {}) {
+export async function parseMarketReportPdf(buffer, { documentType = null, filename = '', includeCommentaryContext = false } = {}) {
   const validated = validatedReportBuffer(buffer);
   let parsed;
+  const pageTexts = [];
   try {
-    parsed = await pdfParse(validated);
+    parsed = await pdfParse(validated, {
+      pagerender: async (pageData) => {
+        const content = await pageData.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
+        const pageText = content.items.map((item) => String(item.str || '')).join(' ');
+        pageTexts.push(pageText);
+        return pageText;
+      },
+    });
   } catch {
     throw marketError('The PDF text could not be read. Use an unlocked Bunkerwire or European Marketscan report.', 400, 'MARKET_REPORT_UNREADABLE');
   }
-  const preview = parseMarketReportText(parsed.text, { documentType, filename });
+  const preview = parseMarketReportText(parsed.text, { documentType, filename, pageTexts });
   return {
     ...preview,
     sourceHash: createHash('sha256').update(validated).digest('hex'),
     sourceBytes: validated.length,
+    ...(includeCommentaryContext ? { commentaryContext: pageTexts.map((text, index) => ({ page: index + 1, text })).filter((row) => row.text) } : {}),
   };
 }
 
@@ -223,6 +437,7 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
     const list = bySeries.get(row.series_id) || [];
     list.push({
       id: row.id,
+      importId: row.import_id,
       priceDate: row.price_date,
       price: numeric(row.price),
       dayChange: numeric(row.day_change),
@@ -292,15 +507,16 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
     };
   });
   const forward = series.filter((row) => row.marketFamily === 'forward');
-  const value = (productKey) => forward.find((row) => row.productKey === productKey)?.latest?.price ?? null;
-  const bm = value('vlsfo-bm');
-  const m1 = value('vlsfo-m1');
-  const m2 = value('vlsfo-m2');
-  const hsfoM1 = value('hsfo380-m1');
-  const forwardStructure = bm == null || m1 == null ? null : {
-    label: bm > m1 ? 'Backwardation' : bm < m1 ? 'Contango' : 'Flat',
-    bmM1: Number((bm - m1).toFixed(3)),
-    m1M2: m2 == null ? null : Number((m1 - m2).toFixed(3)),
+  const latest = (productKey) => forward.find((row) => row.productKey === productKey)?.latest || null;
+  const sameSnapshot = (...rows) => rows.every(Boolean) && rows.every((row) => row.priceDate === rows[0].priceDate && row.importId === rows[0].importId);
+  const bm = latest('vlsfo-bm');
+  const m1 = latest('vlsfo-m1');
+  const m2 = latest('vlsfo-m2');
+  const hsfoM1 = latest('hsfo380-m1');
+  const forwardStructure = !sameSnapshot(bm, m1) ? null : {
+    label: bm.price > m1.price ? 'Backwardation' : bm.price < m1.price ? 'Contango' : 'Flat',
+    bmM1: Number((bm.price - m1.price).toFixed(3)),
+    m1M2: sameSnapshot(m1, m2) ? Number((m1.price - m2.price).toFixed(3)) : null,
   };
   const alerts = [
     ...delivered.filter((row) => row.sourceType === 'unavailable').map((row) => `${row.portLabel} ${row.productLabel}: no exact series configured.`),
@@ -314,9 +530,9 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
     signals: {
       relativeValue,
       forwardStructure,
-      vlsfoHsfoM1: m1 == null || hsfoM1 == null ? null : Number((m1 - hsfoM1).toFixed(3)),
-      eastWestM1: value('east-west-m1'),
-      gasoilM1: value('gasoil-m1'),
+      vlsfoHsfoM1: sameSnapshot(m1, hsfoM1) ? Number((m1.price - hsfoM1.price).toFixed(3)) : null,
+      eastWestM1: latest('east-west-m1')?.price ?? null,
+      gasoilM1: latest('gasoil-m1')?.price ?? null,
       alerts,
     },
     conflicts,
@@ -327,7 +543,7 @@ export async function loadMarketIntelligence(client) {
   const historyStart = dateBefore(isoDate(), HISTORY_RANGES['3m'] + 7);
   const [seriesResult, observationsResult, importsResult, conflictsResult, syncRunsResult, publicationsResult] = await Promise.all([
     client.from('market_intelligence_series').select('*').eq('active', true).order('display_order'),
-    client.from('market_price_observations').select('id,series_id,price_date,price,day_change,quality_status,source_page').gte('price_date', historyStart).order('price_date', { ascending: true }).limit(5000),
+    client.from('market_price_observations').select('id,series_id,import_id,price_date,price,day_change,quality_status,source_page').eq('quality_status', 'verified').gte('price_date', historyStart).order('price_date', { ascending: true }).limit(5000),
     client.from('market_report_imports').select('id,source_document_type,report_date,observation_count,status,mops_publication_status,created_at,actor_email').order('created_at', { ascending: false }).limit(20),
     client.from('market_observation_evidence').select('id,series_id,price_date,conflict_code,created_at').eq('disposition', 'quarantined').order('created_at', { ascending: false }).limit(50),
     client.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').order('started_at', { ascending: false }).limit(1),
@@ -372,6 +588,7 @@ async function loadCanonicalObservations(client, seriesIds, startDate, endDate) 
       .from('market_price_observations')
       .select('id,series_id,price_date,price,day_change,quality_status,source_page')
       .in('series_id', seriesIds)
+      .eq('quality_status', 'verified')
       .gte('price_date', startDate)
       .lte('price_date', endDate)
       .order('price_date', { ascending: true })

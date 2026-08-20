@@ -1,29 +1,37 @@
 const PLATTS_HOLIDAY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/holiday";
 const PLATTS_METHODOLOGY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/methodology-specifications/refined-products";
+const PLATTS_FORWARD_CURVE_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/risk/forward-curve-oil-specifications.pdf";
+const PLATTS_BUNKER_FUELS_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/shipping/bunker-fuels-specifications.pdf";
 
 export const PAGE_METHODOLOGIES = {
   Markets: {
-    summary: "Markets compares delivered bunker observations with controlled exact-date MOPS benchmarks and keeps settlement publication behind a complete European Marketscan three-symbol gate.",
+    summary: "Markets combines a source-linked daily bunker brief, exact-date delivered/MOPS comparisons and report-derived contract-month curves without converting evidence into a trading recommendation.",
     steps: [
-      "Delivered Bunkers shows Hong Kong, Singapore, South Korea, South Korea West, Zhoushan and Kaohsiung in USD/MT. South Korea West HSFO and LSMGO remain explicit Not published gaps.",
+      "Daily Decision Brief presents report completeness, same-snapshot curve regimes, material moves, port dislocations, physical-versus-paper confirmation or divergence, supported drivers and risks. AI may paraphrase commentary with store:false, but it cannot create, adjust or delay a price.",
+      "Delivered & MOPS shows Hong Kong, Singapore, South Korea, South Korea West, Zhoushan and Kaohsiung in USD/MT. South Korea West HSFO and LSMGO remain explicit Not published gaps.",
       "Each matrix cell uses one three-month premium/discount sparkline and exact-date 1W, 1M and 3M statistics. Missing dates are never forward-filled, interpolated or replaced with a cargo proxy.",
       "Kaohsiung VLSFO is displayed with the local LS180 label; MF-380 is mapped to HSFO 380. These names do not change the source symbol or methodology basis.",
       "Synchronized product panels compare delivered prices or delivered-minus-MOPS spreads over 1W, 1M, 3M, 6M or 1Y. SGO is converted to USD/MT with the controlled 7.45 bbl/MT factor.",
-      "Cargo & Forward retains the controlled MOPS publication workflow and separately shows licensed cargo, BM, M1, M2, East-West and gasoil observations.",
-      "Trading Signals calculates transparent port spreads, delivered premiums, curve structure and quote differences. It never makes or executes a trading decision.",
+      "Forward Curves uses the exact report outright for each printed contract month. It never copies M1 into M2, reuses a mark after roll, interpolates a tenor, forward-fills a gap or derives a numeric mark from commentary.",
+      "Closed-month settlement uses the approved publication-day average. Current month uses actual publication days before a valid balance-month assessment and applies that balance-month outright to remaining publication days including its assessment date.",
+      "An authorized manual fallback is an exact outright product, contract month and unit. It expires on the next verified report, next Platts publication day or contract roll and never overrides verified data. Legacy per-product adjustments are not trading inputs.",
+      "Drivers & Alerts retains only concise non-verbatim bunker-relevant summaries, tags, confidence and report/page lineage. A numeric fact is dropped unless it validates against the cited page; no PDF, report text, prompt or raw model response is stored.",
+      "Company alerts use the larger of a configured floor or the previous 60-day 95th percentile after at least 20 samples. Regime flips require two complete reports outside the controlled deadband and notifications remain in-app only.",
       "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores immutable structured evidence plus a source hash rather than the report or its text. Conflicts are quarantined.",
       "FCOS checks the approved Bunkerwire and European Marketscan Google Drive folders hourly through the pinned vince.less@gmail.com server authorization. It imports only unseen checksums and refreshes an open Markets page shortly after each scheduled check. If browser reauthorization is required, use only the Vincent profile; normal scheduled processing uses the server OAuth refresh token.",
       "Only one European Marketscan report containing AMFSA00, PPXDK00 and POABC00 for the same date may publish MOPS. Estimates are replaced, matching actuals are verified, differing actuals are never overwritten, and monthly-average verification and hedge-expiry gates remain unchanged.",
     ],
     sources: [
       { label: "S&P Global refined products assessment methodology", url: PLATTS_METHODOLOGY_URL },
+      { label: "S&P Global Platts forward curve oil specifications", url: PLATTS_FORWARD_CURVE_URL },
+      { label: "S&P Global Platts global bunker fuels specifications", url: PLATTS_BUNKER_FUELS_URL },
     ],
   },
   "Position control": {
     summary: "Portfolio control combines live physical exposure, linked paper hedges, clearing cash, initial margin, and current MOPS-based valuation.",
     steps: [
       "Net exposure is physical quantity less active hedge quantity for each counterparty and product.",
-      "Paper mark-to-market uses the applicable monthly MOPS average; forward months use the latest actual MOPS plus the saved forward adjustment.",
+      "Paper mark-to-market uses the applicable approved monthly MOPS average or the exact report-derived outright for an open future contract month. Missing tenors remain unavailable unless a current authorized fallback exists.",
       "Account equity is clearing cash plus unrealized hedge mark-to-market. Buying power deducts usable initial margin from that equity.",
       "Attention items are generated from material unhedged positions, pending clearing records, stale MOPS data, and open settlement months.",
     ],
@@ -48,15 +56,16 @@ export const PAGE_METHODOLOGIES = {
     ],
   },
   "MOPS market": {
-    summary: "The MOPS workspace combines recorded Singapore assessments, the Platts publication calendar, projected monthly averages, and forward MOC indications.",
+    summary: "The MOPS workspace combines recorded Singapore assessments, the Platts publication calendar, projected monthly averages and exact report-derived contract-month outrights.",
     steps: [
-      "Projected monthly averages use recorded actual or estimated values and carry the latest available price through each remaining publication day.",
+      "A closed-month projected average is its approved publication-day average. A current month with a valid balance-month assessment combines actuals strictly before that assessment date with the balance-month outright for every remaining publication day including the assessment date.",
       "The publication ledger includes every weekday in the selected month except Singapore Platts holidays, alongside any saved source and record type.",
       "Daily actual rows provide the inputs but do not require individual source verification.",
       "After all daily values are complete, a user pastes and saves the text used for manual verification. FCOS retains the text but does not parse or compare its contents.",
       "A paper hedge expires automatically after every contract month reaches its final trading day and its manual verification text is saved.",
-      "Forward prices equal the latest actual spot MOPS plus the saved product adjustment. Positive adjustments indicate contango; negative adjustments indicate backwardation.",
-      "Assisted capture parses published MOPS bulletins. Market-indication capture creates an editable estimate for today and can derive the nearest future MOC adjustment.",
+      "Future M1 and M2 use the exact outright assessment printed for their contract month. Positive front-minus-back structure indicates backwardation; negative indicates contango.",
+      "An exact-month authorized fallback may be used only while verified report data is absent. It expires at the next report, next Platts publication day or contract roll and cannot override verified data.",
+      "Assisted capture parses allowlisted published symbols deterministically. It cannot derive a price from commentary or reuse one tenor for another.",
     ],
     sources: [
       { label: "S&P Global Platts holiday publication schedule", url: PLATTS_HOLIDAY_URL },

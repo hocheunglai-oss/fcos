@@ -14,6 +14,7 @@ import {
   loadMarketIntelligenceHistory,
   previewMarketReport,
 } from './_marketIntelligence.js';
+import { loadGovernedMarketValuation } from './_marketIntelligenceTrading.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -572,12 +573,18 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
     await listRows(client, entity, configFor(entity), { limit }),
   ]));
   const entityData = Object.fromEntries(entries);
-  const [mopsMonthVerifications, brokerSettlements] = await Promise.all([
+  const marketProducts = [...new Set([...(entityData.swaps || []), ...(entityData.physicals || [])]
+    .map((row) => ({ S380: 'hsfo380', 'S0.5': 'vlsfo', SGO: 'lsmgo' })[row.product])
+    .filter(Boolean))];
+  const marketContractMonths = [...new Set([...(entityData.swaps || []).flatMap((row) => [row.swap_month, row.leg1_month, row.leg2_month]), ...(entityData.physicals || []).flatMap((row) => [row.sell_pricing_month, row.buy_pricing_month])]
+    .filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))))];
+  const [mopsMonthVerifications, brokerSettlements, marketValuation] = await Promise.all([
     loadMopsMonthVerifications(client, entityData.mops),
     loadBrokerSettlements(client, entityData.swaps),
+    loadGovernedMarketValuation(client, { products: marketProducts.length ? marketProducts : undefined, contractMonths: marketContractMonths }),
   ]);
   const auditLogs = await recentEvents(client);
-  return { ...entityData, mopsMonthVerifications, brokerSettlements, auditLogs, capabilities, expiryAutomation };
+  return { ...entityData, mopsMonthVerifications, brokerSettlements, marketValuation, auditLogs, capabilities, expiryAutomation };
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
@@ -684,7 +691,10 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
         forwardSpreadsUpdatedAt: settings.fwd_spreads?.updated_date || null,
         forwardSpreadsRevision: Number(settings.fwd_spreads?.revision || 0),
       },
-      capabilities: { hedge_book_manage: capabilities?.hedge_book_manage === true },
+      capabilities: {
+        hedge_book_manage: capabilities?.hedge_book_manage === true,
+        hedge_admin: capabilities?.hedge_admin === true,
+      },
       marketIntelligence,
       expiryAutomation,
     };

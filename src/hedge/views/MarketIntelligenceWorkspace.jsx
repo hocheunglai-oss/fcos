@@ -35,17 +35,30 @@ import {
   Select,
   StatusBadge,
 } from '@/hedge/components/ui';
+import { MarketDecisionBrief } from './market-intelligence/MarketDecisionBrief';
+import { MarketDriversAlerts } from './market-intelligence/MarketDriversAlerts';
+import { MarketForwardCurves } from './market-intelligence/MarketForwardCurves';
 import { MarketsView } from './MarketsView';
+import './market-intelligence/marketIntelligence.css';
 
 const TABS = [
-  { value: 'delivered', label: 'Delivered Bunkers' },
-  { value: 'cargo', label: 'Cargo & Forward' },
-  { value: 'signals', label: 'Trading Signals' },
+  { value: 'brief', label: 'Daily Decision Brief' },
+  { value: 'delivered', label: 'Delivered & MOPS' },
+  { value: 'curves', label: 'Forward Curves' },
+  { value: 'drivers', label: 'Drivers & Alerts' },
 ];
+
+const TAB_VALUES = new Set(TABS.map((item) => item.value));
+
+function initialMarketTab() {
+  if (typeof window === 'undefined') return 'brief';
+  const requested = new URLSearchParams(window.location.search).get('tab');
+  return TAB_VALUES.has(requested) ? requested : 'brief';
+}
 
 const PRODUCTS = [
   { value: 'hsfo380', label: 'HSFO 380', color: '#d97706' },
-  { value: 'vlsfo', label: 'VLSFO 0.5%', color: '#2563eb' },
+  { value: 'vlsfo', label: 'S0.5%', color: '#2563eb' },
   { value: 'lsmgo', label: 'LSMGO 0.1%', color: '#0f766e' },
 ];
 
@@ -184,7 +197,7 @@ function DeliveredBunkers({ intelligence }) {
   const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
   const [selectedProducts, setSelectedProducts] = useState(() => PRODUCTS.map((item) => item.value));
   const [selectedPorts, setSelectedPorts] = useState(() => ports.some(([key]) => key === 'singapore') ? ['singapore'] : ports.slice(0, 1).map(([key]) => key));
-  const [mode, setMode] = useState('spread');
+  const [mode, setMode] = useState('price');
   const [range, setRange] = useState('3m');
   const [includeMops, setIncludeMops] = useState(true);
   const [mobileProduct, setMobileProduct] = useState(PRODUCTS[0].value);
@@ -214,6 +227,7 @@ function DeliveredBunkers({ intelligence }) {
 
   return (
     <div className="market-intelligence-stack">
+      <div className="app-callout app-callout--neutral"><Info size={15} /> Delivered Bunkers remain distinct physical assessments or posted prices; exact-date MOPS comparisons do not erase their product, location, quantity or delivery-window basis.</div>
       <div className="app-metric-grid app-metric-grid--4">
         {PRODUCTS.map((item) => {
           const values = delivered.filter((row) => row.productKey === item.value && row.latest?.price != null);
@@ -298,12 +312,12 @@ function DeliveredBunkers({ intelligence }) {
   );
 }
 
-function CargoForwardSummary({ intelligence }) {
+export function CargoForwardSummary({ intelligence }) {
   const rows = intelligence?.cargoForward || [];
   if (!rows.length) return null;
   return (
-    <Panel className="market-forward-summary">
-      <div className="app-panel-header"><div><h2>Cargo and forward reference</h2><p>Reference only. MOPS entries below remain the authoritative hedge-settlement inputs.</p></div></div>
+    <Panel className="market-forward-summary" data-compatibility-view="Cargo & Forward">
+      <div className="app-panel-header"><div><h2>Cargo &amp; Forward reference</h2><p>Reference only. Exact contract-month reports remain the authoritative open-month hedge inputs.</p></div></div>
       <div className="market-forward-cards">{rows.map((row) => (
         <div key={row.id} className="market-forward-card">
           <span>{row.productLabel}</span>
@@ -315,7 +329,7 @@ function CargoForwardSummary({ intelligence }) {
   );
 }
 
-function TradingSignals({ intelligence }) {
+export function TradingSignals({ intelligence }) {
   const delivered = intelligence?.delivered || [];
   const [portKey, setPortKey] = useState('singapore');
   const [productKey, setProductKey] = useState('vlsfo');
@@ -326,6 +340,7 @@ function TradingSignals({ intelligence }) {
 
   return (
     <div className="market-intelligence-stack">
+      <div className="app-callout app-callout--neutral"><Info size={15} /> Trading Signals below are deterministic evidence checks. They do not issue a recommendation or execute a trade.</div>
       <div className="market-signal-grid">
         {(intelligence?.signals?.relativeValue || []).map((signal) => (
           <Panel key={signal.productKey} className="market-signal-card">
@@ -336,13 +351,13 @@ function TradingSignals({ intelligence }) {
         ))}
         <Panel className="market-signal-card">
           <div className="market-signal-card__icon"><Gauge size={18} /></div>
-          <span>VLSFO forward structure</span>
+          <span>S0.5% forward structure</span>
           <strong>{intelligence?.signals?.forwardStructure?.label || 'Unavailable'}</strong>
           <small>{intelligence?.signals?.forwardStructure ? `BM/M1 ${intelligence.signals.forwardStructure.bmM1 >= 0 ? '+' : ''}${intelligence.signals.forwardStructure.bmM1.toFixed(2)} · M1/M2 ${intelligence.signals.forwardStructure.m1M2 == null ? '—' : intelligence.signals.forwardStructure.m1M2.toFixed(2)}` : 'Import forward observations'}</small>
         </Panel>
         <Panel className="market-signal-card">
           <div className="market-signal-card__icon"><Scale size={18} /></div>
-          <span>VLSFO - HSFO 380 M1</span>
+          <span>S0.5% - HSFO 380 M1</span>
           <strong>{intelligence?.signals?.vlsfoHsfoM1 == null ? 'Unavailable' : `${formatMoney(intelligence.signals.vlsfoHsfoM1, { digits: 2 })} USD/MT`}</strong>
           <small>Product-switch economics before operational and compliance costs.</small>
         </Panel>
@@ -407,6 +422,11 @@ function ReportImportDrawer({ open, onClose, onImported }) {
   const [entitlementConfirmed, setEntitlementConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const importBlockers = useMemo(() => (preview?.observations || []).filter((row) => {
+    const forward = row?.basisMetadata?.marketFamily === 'forward' || ['bm', 'm1', 'm2'].includes(String(row?.tenor || '').toLowerCase());
+    const monthSource = String(row?.basisMetadata?.contractMonthSource || '');
+    return row?.basisMetadata?.publicationEligible !== false && forward && (!row.contractMonth || monthSource.includes('missing') || monthSource.includes('mismatch'));
+  }), [preview]);
 
   const chooseFile = async (nextFile) => {
     setError(null);
@@ -439,7 +459,7 @@ function ReportImportDrawer({ open, onClose, onImported }) {
   };
 
   return (
-    <Drawer open={open} onClose={onClose} title="Import market report" description="FCOS extracts only configured symbols and stores structured observations, not the PDF or report text." width="large" footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button>{preview ? <Button variant="primary" onClick={save} disabled={busy || !entitlementConfirmed}>{busy ? 'Importing...' : `Import ${preview.observationCount} values`}</Button> : <Button variant="primary" onClick={prepare} disabled={busy || !file}>{busy ? 'Reading...' : 'Review values'}</Button>}</>}>
+    <Drawer open={open} onClose={onClose} title="Import market report" description="FCOS extracts only configured symbols and stores structured observations, not the PDF or report text." width="large" footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button>{preview ? <Button variant="primary" onClick={save} disabled={busy || !entitlementConfirmed || importBlockers.length > 0}>{busy ? 'Importing...' : `Import ${preview.observationCount} values`}</Button> : <Button variant="primary" onClick={prepare} disabled={busy || !file}>{busy ? 'Reading...' : 'Review values'}</Button>}</>}>
       {error ? <InlineError error={error} /> : null}
       <section className="app-form-section">
         <div className="app-form-grid app-form-grid--2">
@@ -451,25 +471,33 @@ function ReportImportDrawer({ open, onClose, onImported }) {
       {preview ? <section className="app-form-section">
         <div className="app-form-section__title">Review · {formatDate(preview.reportDate)}</div>
         <div className="market-import-summary"><strong>{preview.observationCount} values detected</strong><span>{preview.missingSymbols.length ? `${preview.missingSymbols.length} configured symbols missing: ${preview.missingSymbols.join(', ')}` : 'All configured symbols detected.'}</span></div>
-        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{row.sourceSymbol}</strong><span>{formatMoney(row.price, { digits: 3 })}</span><small>{row.dayChange == null ? 'No daily change' : `${row.dayChange >= 0 ? '+' : ''}${row.dayChange.toFixed(3)}`}</small></div>)}</div>
+        {importBlockers.length ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Import is blocked because {importBlockers.map((row) => row.sourceSymbol).join(', ')} has no unambiguous printed/validated contract month.</div> : null}
+        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{row.sourceSymbol}</strong><span>{formatMoney(row.price, { digits: String(row.unit).toUpperCase() === 'USD/BBL' ? 3 : 2 })} {row.unit || 'Unit unavailable'}</span>{row?.basisMetadata?.publicationEligible === false ? <StatusBadge tone="warning">Non-publication reprint · evidence only</StatusBadge> : null}<small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Spot assessment'}</small><small>{row.dayChange == null ? 'No daily change' : `${row.dayChange >= 0 ? '+' : ''}${row.dayChange.toFixed(3)}`}</small></div>)}</div>
         <label className="app-check"><input type="checkbox" checked={entitlementConfirmed} onChange={(event) => setEntitlementConfirmed(event.target.checked)} /><span>I confirm FCOS is licensed to store these structured market observations for internal use.</span></label>
       </section> : null}
     </Drawer>
   );
 }
 
-export function MarketIntelligenceWorkspace({ data, settings, readOnly, priceEntity, verifyMonth, reload }) {
-  const [tab, setTab] = useState('delivered');
+export function MarketIntelligenceWorkspace({ data, settings, canManageMarketData = false, canManageAlertRules = false, canManageCurveCutover = false, priceEntity, verifyMonth, reload }) {
+  const [tab, setTab] = useState(initialMarketTab);
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([initialMarketTab()]));
   const [importOpen, setImportOpen] = useState(false);
+  const [settlementOpen, setSettlementOpen] = useState(false);
   const intelligence = data.marketIntelligence || {};
+  const selectTab = (value) => {
+    setVisitedTabs((current) => current.has(value) ? current : new Set([...current, value]));
+    setTab(value);
+  };
   return (
     <div className="app-page market-intelligence-workspace">
-      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Compare exact-date delivered bunker prices with controlled MOPS benchmarks; only complete European Marketscan triples may update the settlement ledger." actions={!readOnly ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
-      <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => setTab(item.value)}>{item.label}</button>)}</div>
-      {tab === 'delivered' ? <DeliveredBunkers intelligence={intelligence} /> : null}
-      {tab === 'cargo' ? <><CargoForwardSummary intelligence={intelligence} /><MarketsView embedded data={data} settings={settings} readOnly={readOnly} priceEntity={priceEntity} verifyMonth={verifyMonth} /></> : null}
-      {tab === 'signals' ? <TradingSignals intelligence={intelligence} /> : null}
-      {!readOnly ? <ReportImportDrawer open={importOpen} onClose={() => setImportOpen(false)} onImported={() => reload({ silent: true }).catch(() => {})} /> : null}
+      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Read the daily bunker decision brief, compare delivered prices with controlled MOPS, and inspect exact contract-month curves with source lineage." actions={canManageMarketData ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
+      <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
+      {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Daily Decision Brief"><MarketDecisionBrief initialBrief={intelligence.brief || null} /></div> : null}
+      {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered and MOPS"><DeliveredBunkers intelligence={intelligence} /><Panel className="market-settlement-control"><div className="app-panel-header"><div><h2>Settlement MOPS control</h2><p>Add, correct and verify the publication ledger used by monthly settlement and paper-hedge expiry. This advanced surface contains no legacy forward-adjustment input.</p></div><Button size="sm" onClick={() => setSettlementOpen((value) => !value)}>{settlementOpen ? 'Hide settlement control' : 'Open settlement control'}</Button></div>{settlementOpen ? <MarketsView embedded showLegacyForward={false} data={data} settings={settings} readOnly={!canManageMarketData} priceEntity={priceEntity} verifyMonth={verifyMonth} /> : null}</Panel></div> : null}
+      {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward Curves"><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={canManageCurveCutover} /></div> : null}
+      {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Drivers and Alerts"><MarketDriversAlerts readOnly={!canManageAlertRules} /></div> : null}
+      {canManageMarketData ? <ReportImportDrawer open={importOpen} onClose={() => setImportOpen(false)} onImported={() => reload({ silent: true }).catch(() => {})} /> : null}
     </div>
   );
 }

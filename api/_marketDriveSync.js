@@ -1,11 +1,20 @@
 import { createHash } from 'node:crypto';
 import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
+import { processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
 
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 const DRIVE_PDF_MIME_TYPE = 'application/pdf';
 const DEFAULT_IMPORT_LIMIT = 25;
+const REVIEWED_ARCHIVE = Object.freeze({
+  startDate: '2025-01-01',
+  endDate: '2026-08-19',
+  sourceFileCount: 855,
+  uniqueReportCount: 832,
+  duplicateFileCount: 23,
+  driveFingerprint: 'b3b8d1b9b94c6085cbe4ea6e34ee1616027c6f344ce5644e699592e29ffafbfa',
+});
 
 function syncError(message, code = 'MARKET_DRIVE_SYNC_FAILED', statusCode = 502) {
   const error = new Error(message);
@@ -30,6 +39,11 @@ function safeMd5(value) {
 
 function validIsoDateTime(value) {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : null;
+}
+
+function reportDateFromFilename(value) {
+  const match = String(value || '').match(/(?:^|\D)(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])(?:\D|$)/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
 }
 
 async function driveJson(fetchImpl, accessToken, path, query = {}) {
@@ -124,6 +138,142 @@ async function listDriveReports(fetchImpl, accessToken, folder) {
   return files;
 }
 
+function reviewedArchiveFiles(files, policy = REVIEWED_ARCHIVE) {
+  const eligible = files.filter((file) => {
+    const reportDate = reportDateFromFilename(file.name);
+    return reportDate && reportDate >= policy.startDate && reportDate <= policy.endDate;
+  }).map((file) => ({ ...file, reportDate: reportDateFromFilename(file.name) }));
+  const fingerprintRows = eligible.map((file) => ({
+    md5: file.md5,
+    documentType: file.documentType,
+    reportDate: file.reportDate,
+  })).sort((left, right) => left.reportDate.localeCompare(right.reportDate)
+    || left.documentType.localeCompare(right.documentType)
+    || String(left.md5 || '').localeCompare(String(right.md5 || '')));
+  const driveFingerprint = createHash('sha256').update(JSON.stringify(fingerprintRows)).digest('hex');
+  const unique = [];
+  const seenMd5 = new Set();
+  for (const file of eligible.sort((left, right) => left.reportDate.localeCompare(right.reportDate)
+    || left.documentType.localeCompare(right.documentType)
+    || left.id.localeCompare(right.id))) {
+    if (!file.md5) throw syncError('A reviewed archive file has no Google Drive checksum.', 'MARKET_ARCHIVE_CHECKSUM_MISSING', 409);
+    if (seenMd5.has(file.md5)) continue;
+    seenMd5.add(file.md5);
+    unique.push(file);
+  }
+  const duplicateFileCount = eligible.length - unique.length;
+  if (eligible.length !== policy.sourceFileCount
+      || unique.length !== policy.uniqueReportCount
+      || duplicateFileCount !== policy.duplicateFileCount
+      || driveFingerprint !== policy.driveFingerprint) {
+    throw syncError(`The licensed Google Drive archive no longer matches the reviewed ${policy.startDate} to ${policy.endDate} manifest.`, 'MARKET_ARCHIVE_MANIFEST_CHANGED', 409);
+  }
+  return { unique, driveFingerprint, sourceFileCount: eligible.length, duplicateFileCount };
+}
+
+async function concurrentMap(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+export async function runMarketReportArchiveReplayBatch(client, {
+  accessToken,
+  cursor = 0,
+  expectedArchiveFingerprint = null,
+  batchLimit = 25,
+  fetchImpl = fetch,
+  parseReport = parseMarketReportPdf,
+  processDerived = processMarketIntelligenceDate,
+  config = CONNECTION_INTEGRATIONS.googleDriveMarketReports,
+  reviewedArchive = REVIEWED_ARCHIVE,
+} = {}) {
+  if (!client || !accessToken) throw syncError('Market archive replay authorization is unavailable.', 'MARKET_ARCHIVE_AUTH_UNAVAILABLE', 503);
+  await verifyDriveAuthority(fetchImpl, accessToken, config);
+  const folderFiles = await Promise.all(config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)));
+  const archive = reviewedArchiveFiles(folderFiles.flat(), reviewedArchive);
+  const normalizedCursor = Number(cursor);
+  if (!Number.isInteger(normalizedCursor) || normalizedCursor < 0 || normalizedCursor > archive.unique.length) {
+    throw syncError('Market archive replay cursor is invalid.', 'MARKET_ARCHIVE_CURSOR_INVALID', 400);
+  }
+  if (normalizedCursor > 0 && expectedArchiveFingerprint !== archive.driveFingerprint) {
+    throw syncError('The licensed archive changed after replay started.', 'MARKET_ARCHIVE_FINGERPRINT_CHANGED', 409);
+  }
+  const limit = Math.max(1, Math.min(Number(batchLimit) || 25, 25));
+  const selected = archive.unique.slice(normalizedCursor, normalizedCursor + limit);
+  const parsedReports = await concurrentMap(selected, 2, async (file) => {
+    if (file.size > marketReportLimits.maxBytes) throw syncError('A reviewed market report exceeds the configured PDF limit.', 'MARKET_REPORT_TOO_LARGE', 409);
+    const buffer = await driveBuffer(fetchImpl, accessToken, file.id);
+    const md5 = createHash('md5').update(buffer).digest('hex');
+    if (md5 !== file.md5) throw syncError('A reviewed market report checksum changed during replay.', 'MARKET_DRIVE_CHECKSUM_MISMATCH', 409);
+    const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name });
+    if (parsed.reportDate !== file.reportDate) throw syncError('A reviewed report date does not match its archive manifest.', 'MARKET_ARCHIVE_REPORT_DATE_MISMATCH', 409);
+    return { file, parsed };
+  });
+
+  const reportDates = new Set();
+  let replayedCount = 0;
+  let quarantinedCount = 0;
+  for (const { file, parsed } of parsedReports) {
+    const saved = await client.rpc('save_market_drive_report_import', {
+      p_idempotency_key: `market-archive-replay-${parsed.sourceHash}`,
+      p_source_document_type: file.documentType,
+      p_source_hash: parsed.sourceHash,
+      p_source_md5: file.md5,
+      p_drive_file_id: file.id,
+      p_drive_modified_at: file.modifiedAt,
+      p_report_date: parsed.reportDate,
+      p_observations: parsed.observations,
+    });
+    if (saved.error) throw syncError('A reviewed archive report could not be replayed.', 'MARKET_ARCHIVE_IMPORT_FAILED');
+    if (saved.data?.mopsPublication?.status === 'conflict') {
+      throw syncError('A reviewed archive report conflicts with the authoritative MOPS ledger.', saved.data?.mopsPublication?.conflictCode || 'MOPS_LEDGER_VALUE_MISMATCH', 409);
+    }
+    replayedCount += 1;
+    quarantinedCount += Number(saved.data?.quarantinedCount || 0);
+    reportDates.add(parsed.reportDate);
+  }
+
+  let briefCompletedCount = 0;
+  let briefWaitingCount = 0;
+  for (const reportDate of [...reportDates].sort()) {
+    const derived = await processDerived(client, {
+      reportDate,
+      commentaryContexts: [],
+      publishAlerts: false,
+      recordShadow: false,
+      reconcileDerived: true,
+    });
+    if (derived.status === 'completed') briefCompletedCount += 1;
+    else if (derived.status === 'waiting_for_pair') briefWaitingCount += 1;
+    else if (derived.status === 'conflict') throw syncError('A reviewed report pair has quarantined evidence.', 'MARKET_INTELLIGENCE_PAIR_CONFLICT', 409);
+  }
+
+  const nextCursor = normalizedCursor + selected.length;
+  return {
+    status: nextCursor >= archive.unique.length ? 'completed' : 'in_progress',
+    archiveFingerprint: archive.driveFingerprint,
+    sourceFileCount: archive.sourceFileCount,
+    uniqueReportCount: archive.unique.length,
+    duplicateFileCount: archive.duplicateFileCount,
+    cursor: normalizedCursor,
+    nextCursor,
+    replayedCount,
+    quarantinedCount,
+    briefCompletedCount,
+    briefWaitingCount,
+    complete: nextCursor >= archive.unique.length,
+  };
+}
+
 async function loadKnownMd5(client) {
   const known = new Set();
   for (let offset = 0; ; offset += 1000) {
@@ -140,6 +290,57 @@ async function loadKnownMd5(client) {
     if ((result.data || []).length < 1000) break;
   }
   return known;
+}
+
+export async function loadPendingMarketIntelligenceDates(client, { now = new Date(), limit = 5 } = {}) {
+  const cutoff = new Date(now);
+  if (Number.isNaN(cutoff.getTime())) throw syncError('Market reconciliation time is invalid.', 'MARKET_DRIVE_TIME_INVALID', 500);
+  cutoff.setUTCDate(cutoff.getUTCDate() - 14);
+  const importsResult = await client.from('market_report_imports')
+    .select('report_date,source_document_type')
+    .gte('report_date', cutoff.toISOString().slice(0, 10))
+    .order('report_date', { ascending: false })
+    .limit(500);
+  if (importsResult.error) throw syncError('Paired market reports could not be reconciled.', 'MARKET_INTELLIGENCE_RECONCILIATION_LOAD_FAILED');
+  const typesByDate = new Map();
+  for (const row of importsResult.data || []) {
+    if (!row.report_date || !['bunkerwire', 'european_marketscan'].includes(row.source_document_type)) continue;
+    const types = typesByDate.get(row.report_date) || new Set();
+    types.add(row.source_document_type);
+    typesByDate.set(row.report_date, types);
+  }
+  const pairedDates = [...typesByDate.entries()]
+    .filter(([, types]) => types.size === 2)
+    .map(([reportDate]) => reportDate)
+    .sort((left, right) => right.localeCompare(left));
+  return pairedDates
+    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 10)))
+    .sort();
+}
+
+async function completeCommentaryPair(client, fetchImpl, accessToken, reportDate, contexts, parseReport) {
+  const availableTypes = new Set((contexts || []).map((row) => row.documentType));
+  if (availableTypes.has('bunkerwire') && availableTypes.has('european_marketscan')) return contexts;
+  const result = await client.from('market_report_imports')
+    .select('source_document_type,source_hash,drive_file_id')
+    .eq('report_date', reportDate)
+    .in('source_document_type', ['bunkerwire', 'european_marketscan'])
+    .not('drive_file_id', 'is', null);
+  if (result.error) return contexts;
+  const completed = [...(contexts || [])];
+  for (const row of result.data || []) {
+    if (availableTypes.has(row.source_document_type) || !safeDriveId(row.drive_file_id)) continue;
+    try {
+      const buffer = await driveBuffer(fetchImpl, accessToken, row.drive_file_id);
+      const parsed = await parseReport(buffer, { documentType: row.source_document_type, includeCommentaryContext: true });
+      if (parsed.reportDate !== reportDate || parsed.sourceHash !== row.source_hash) continue;
+      completed.push({ sourceHash: parsed.sourceHash, documentType: row.source_document_type, commentaryContext: parsed.commentaryContext || [] });
+      availableTypes.add(row.source_document_type);
+    } catch {
+      // Price import and deterministic brief remain available if commentary cannot be reloaded.
+    }
+  }
+  return completed;
 }
 
 export function marketDriveRunKey(now = new Date()) {
@@ -170,6 +371,7 @@ export async function runMarketReportDriveSync(client, {
   config = CONNECTION_INTEGRATIONS.googleDriveMarketReports,
   now = new Date(),
   importLimit = DEFAULT_IMPORT_LIMIT,
+  processDerived = processMarketIntelligenceDate,
 } = {}) {
   if (!client || !accessToken) throw syncError('Market sync authorization is unavailable.', 'MARKET_DRIVE_AUTH_UNAVAILABLE', 503);
   if (!config?.accountEmail || !config?.rootFolderId || !Array.isArray(config?.folders) || config.folders.length !== 2) {
@@ -190,6 +392,11 @@ export async function runMarketReportDriveSync(client, {
     mopsMatchedCount: 0,
     mopsIncompleteCount: 0,
     mopsConflictCount: 0,
+    briefCompletedCount: 0,
+    briefWaitingCount: 0,
+    briefReconciledCount: 0,
+    marketAlertsPublishedCount: 0,
+    marketShadowRecordedCount: 0,
   };
   try {
     await verifyDriveAuthority(fetchImpl, accessToken, config);
@@ -213,6 +420,8 @@ export async function runMarketReportDriveSync(client, {
     const limit = Math.max(1, Math.min(Number(importLimit) || DEFAULT_IMPORT_LIMIT, 50));
     summary.deferredCount = Math.max(0, candidates.length - limit);
 
+    const touchedReportDates = new Set();
+    const commentaryByDate = new Map();
     for (const file of candidates.slice(0, limit)) {
       try {
         if (file.size > marketReportLimits.maxBytes) throw syncError('A market report exceeds the configured PDF limit.', 'MARKET_REPORT_TOO_LARGE');
@@ -223,7 +432,7 @@ export async function runMarketReportDriveSync(client, {
           summary.skippedCount += 1;
           continue;
         }
-        const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name });
+        const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name, includeCommentaryContext: true });
         const saved = await client.rpc('save_market_drive_report_import', {
           p_idempotency_key: `market-drive-${parsed.sourceHash}`,
           p_source_document_type: file.documentType,
@@ -245,11 +454,61 @@ export async function runMarketReportDriveSync(client, {
         }
         knownMd5.add(md5);
         summary.importedCount += 1;
+        touchedReportDates.add(parsed.reportDate);
+        if (Array.isArray(parsed.commentaryContext) && parsed.commentaryContext.length) {
+          const contexts = commentaryByDate.get(parsed.reportDate) || [];
+          contexts.push({ sourceHash: parsed.sourceHash, documentType: file.documentType, commentaryContext: parsed.commentaryContext });
+          commentaryByDate.set(parsed.reportDate, contexts);
+        }
+      } catch (error) {
+        summary.failedCount += 1;
+        if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
+        const alert = await publishMarketDataQualityAlert(client, {
+          reportDate: reportDateFromFilename(file.name),
+          code: normalizedErrorCode(error),
+          title: 'Market report processing failed',
+          message: 'A licensed market report could not be parsed, validated, or imported.',
+          severity: 'critical',
+          evidence: { documentType: file.documentType },
+        }).catch(() => ({ created: false }));
+        if (alert.created) summary.marketAlertsPublishedCount += 1;
+      }
+    }
+
+    const pendingDerivedDates = await loadPendingMarketIntelligenceDates(client, { now });
+    const derivedDates = [...new Set([...touchedReportDates, ...pendingDerivedDates])].sort();
+    for (const reportDate of derivedDates) {
+      try {
+        const touched = touchedReportDates.has(reportDate);
+        const commentaryContexts = touched
+          ? await completeCommentaryPair(client, fetchImpl, accessToken, reportDate, commentaryByDate.get(reportDate) || [], parseReport)
+          : [];
+        const derived = await processDerived(client, {
+          reportDate,
+          commentaryContexts,
+          reconcileDerived: !touched,
+        });
+        if (derived.status === 'completed') {
+          summary.briefCompletedCount += 1;
+          if (!touched) summary.briefReconciledCount += 1;
+          summary.marketAlertsPublishedCount += Number(derived.alertsPublished || 0);
+          summary.marketShadowRecordedCount += Number(derived.shadowRecorded || 0);
+        } else if (derived.status === 'waiting_for_pair') {
+          summary.briefWaitingCount += 1;
+          summary.marketAlertsPublishedCount += Number(derived.alertsPublished || 0);
+        } else if (derived.status === 'conflict') {
+          summary.marketAlertsPublishedCount += Number(derived.alertsPublished || 0);
+          throw syncError('A paired market report has quarantined evidence and no derived brief was published.', 'MARKET_INTELLIGENCE_PAIR_CONFLICT');
+        }
       } catch (error) {
         summary.failedCount += 1;
         if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
       }
     }
+
+    const expectedSessions = await scanExpectedMarketSessions(client, { now });
+    summary.marketAlertsPublishedCount += Number(expectedSessions.published || 0);
+    summary.expectedSessionsEvaluatedCount = Number(expectedSessions.evaluated || 0);
 
     const status = summary.failedCount ? 'failed' : 'completed';
     await finishRun(client, runKey, summary, status, summary.errorCode || null);

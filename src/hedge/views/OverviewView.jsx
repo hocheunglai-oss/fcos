@@ -89,15 +89,17 @@ export function OverviewView({ data, settings, onNavigate, readOnly = false }) {
     margins: settings.iceMargins,
     usableRatio: settings.general.ice_usable_ratio,
     sgoRatio: settings.general.sgo_bbl_per_mt,
-  }), [data.clearing, data.mops, data.swaps, settings.general.ice_usable_ratio, settings.general.sgo_bbl_per_mt, settings.iceMargins]);
+    governedValuation: data.marketValuation,
+  }), [data.clearing, data.marketValuation, data.mops, data.swaps, settings.general.ice_usable_ratio, settings.general.sgo_bbl_per_mt, settings.iceMargins]);
   const exposures = useMemo(() => buildExposureRows(
     data.physicals,
     data.swaps,
     data.mops,
     settings.general.sgo_bbl_per_mt,
     settings.forwardSpreads,
-  ), [data.mops, data.physicals, data.swaps, settings.forwardSpreads, settings.general.sgo_bbl_per_mt]);
-  const portfolioPnl = exposures.reduce((sum, row) => sum + row.combinedPnl, 0);
+    data.marketValuation,
+  ), [data.marketValuation, data.mops, data.physicals, data.swaps, settings.forwardSpreads, settings.general.sgo_bbl_per_mt]);
+  const portfolioPnl = exposures.some((row) => row.combinedPnl == null) ? null : exposures.reduce((sum, row) => sum + row.combinedPnl, 0);
   const latest = latestMops(data.mops);
   const ledger = useMemo(() => buildClearingLedger(data.clearing), [data.clearing]);
   const ledgerNewest = useMemo(() => [...ledger].reverse(), [ledger]);
@@ -186,10 +188,10 @@ export function OverviewView({ data, settings, onNavigate, readOnly = false }) {
       />
 
       <div className="app-metric-grid app-metric-grid--4">
-        <Metric label="Account equity" value={formatMoney(buying.equity, { digits: 0 })} detail={`${formatMoney(buying.cash, { digits: 0 })} cash | ${formatMoney(buying.unrealizedMtm, { signed: true, digits: 0 })} MTM`} icon={WalletCards} tone="teal" />
+        <Metric label="Account equity" value={formatMoney(buying.equity, { digits: 0 })} detail={buying.valuationAvailable ? `${formatMoney(buying.cash, { digits: 0 })} cash | ${formatMoney(buying.unrealizedMtm, { signed: true, digits: 0 })} MTM` : "Unavailable until every hedge has a governed market value"} icon={WalletCards} tone={buying.valuationAvailable ? "teal" : "default"} />
         <Metric label="Used initial margin" value={formatMoney(buying.used, { digits: 0 })} detail={`${buying.utilization.toFixed(1)}% of usable equity`} progress={buying.utilization} icon={Gauge} tone={buying.utilization >= 85 ? "red" : buying.utilization >= 70 ? "amber" : "green"} />
-        <Metric label="Remaining buying power" value={formatMoney(buying.remaining, { digits: 0 })} detail={`${Math.max(0, 100 - buying.utilization).toFixed(1)}% capacity remaining`} icon={ShieldAlert} tone={buying.remaining < 0 ? "red" : "default"} />
-        <Metric label="Portfolio P&L" value={formatMoney(portfolioPnl, { signed: true, digits: 0 })} detail={`${openPhysicals} open physicals | ${currentSwaps} active hedges`} icon={TrendingUp} tone={portfolioPnl >= 0 ? "green" : "red"} />
+        <Metric label="Remaining buying power" value={formatMoney(buying.remaining, { digits: 0 })} detail={buying.valuationAvailable ? `${Math.max(0, 100 - buying.utilization).toFixed(1)}% capacity remaining` : "Suppressed because governed MTM is incomplete"} icon={ShieldAlert} tone={buying.remaining != null && buying.remaining < 0 ? "red" : "default"} />
+        <Metric label="Portfolio P&L" value={formatMoney(portfolioPnl, { signed: true, digits: 0 })} detail={portfolioPnl == null ? "Unavailable until every open position has a governed market value" : `${openPhysicals} open physicals | ${currentSwaps} active hedges`} icon={TrendingUp} tone={portfolioPnl == null ? "default" : portfolioPnl >= 0 ? "green" : "red"} />
       </div>
 
       <div className="app-overview-grid">
@@ -211,7 +213,7 @@ export function OverviewView({ data, settings, onNavigate, readOnly = false }) {
                         <td>{formatQuantity(row.hedgeQty, row.unit)}</td>
                         <td><StatusBadge tone={over || under ? "warning" : "positive"}>{row.hedgeRatio == null ? "No cargo" : `${Math.round(row.hedgeRatio)}%`}</StatusBadge></td>
                         <td><strong className={Math.abs(row.netExposure) > 0 ? row.netExposure > 0 ? "app-text-warning" : "app-text-violet" : ""}>{formatQuantity(row.netExposure, row.unit)}</strong></td>
-                        <td><Money value={row.combinedPnl} strong /></td>
+                        <td>{row.combinedPnl == null ? <StatusBadge tone="warning" title="One or more open positions has no complete governed market value.">Unavailable</StatusBadge> : <Money value={row.combinedPnl} strong />}</td>
                       </tr>
                     );
                   })}

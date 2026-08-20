@@ -21,6 +21,7 @@ const SOURCE_LABELS = {
   fcos_improvements: "FCOS Improvements",
   variable_charges: "Variable Charges",
   email_router: "Email Router",
+  markets: "Markets",
   system_error: "System",
   system: "System",
 };
@@ -49,6 +50,7 @@ function sourceBadgeClass(source) {
   if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10";
   if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10";
   if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10";
+  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10";
   return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10" : "bg-blue-50 text-blue-800 ring-blue-700/10";
 }
 
@@ -228,6 +230,7 @@ export default function WorkNotifications() {
               <SelectItem value="fcos_improvements">FCOS Improvements</SelectItem>
               <SelectItem value="variable_charges">Variable Charges</SelectItem>
               <SelectItem value="email_router">Email Router</SelectItem>
+              <SelectItem value="markets">Markets</SelectItem>
               <SelectItem value="system_error">System errors</SelectItem>
             </SelectContent>
           </Select>

@@ -295,7 +295,7 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
                 const live = isSwapLive(record);
                 const expiry = paperHedgeExpiryStatus(record, data.mops, new Date(), data.mopsMonthVerifications || []);
                 const pendingMonth = expiry.months.find((item) => !item.ready);
-                const mtm = calcSwapMtm(record, data.mops, settings.general.sgo_bbl_per_mt);
+                const mtm = calcSwapMtm(record, data.mops, settings.general.sgo_bbl_per_mt, data.marketValuation);
                 const fees = calcSwapFees(record, settings.rates);
                 const totalFees = fees.total + (!live ? fees.iceSettlement : 0);
                 return (

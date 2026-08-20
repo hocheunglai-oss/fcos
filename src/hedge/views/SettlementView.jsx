@@ -69,7 +69,7 @@ function pdfBlob(result) {
   return new Blob([bytes], { type: result?.mimeType || 'application/pdf' });
 }
 
-function buildCounterpartyGroups(swaps, mops, rates, sgoRatio) {
+function buildCounterpartyGroups(swaps, mops, rates, sgoRatio, governedValuation) {
   const grouped = new Map();
   swaps.forEach((swap) => {
     const key = swap.counterparty || "Unassigned";
@@ -78,7 +78,7 @@ function buildCounterpartyGroups(swaps, mops, rates, sgoRatio) {
   });
   return [...grouped.entries()].map(([counterparty, records]) => {
     const rows = records.map((swap) => {
-      const mtm = calcSwapMtm(swap, mops, sgoRatio)?.value || 0;
+      const mtm = calcSwapMtm(swap, mops, sgoRatio, governedValuation)?.value ?? null;
       const fees = calcSwapFees(swap, rates);
       const iceCost = fees.brokerFee + fees.sfsCommission + fees.ice + fees.iceClearing + fees.iceSettlement;
       const attributedFeeAmount = counterparty === "FCBS"
@@ -91,23 +91,25 @@ function buildCounterpartyGroups(swaps, mops, rates, sgoRatio) {
         : attributedFeeAmount;
       return {
         swap,
-        mtm: roundMoney(mtm),
+        mtm: mtm == null ? null : roundMoney(mtm),
         fees,
         attributedFeeAmount: roundMoney(attributedFeeAmount),
         attributedFeeImpact: roundMoney(attributedFeeImpact),
-        net: roundMoney(-mtm + attributedFeeImpact),
+        net: mtm == null ? null : roundMoney(-mtm + attributedFeeImpact),
       };
     });
+    const valuationAvailable = rows.every((row) => row.mtm != null);
     return {
       key: counterparty,
       counterparty,
       records,
       rows,
-      mtm: roundMoney(rows.reduce((sum, row) => sum - row.mtm, 0)),
+      mtm: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum - row.mtm, 0)) : null,
       fees: roundMoney(rows.reduce((sum, row) => sum + row.attributedFeeAmount, 0)),
-      net: roundMoney(rows.reduce((sum, row) => sum + row.net, 0)),
+      net: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum + row.net, 0)) : null,
+      valuationAvailable,
     };
-  }).sort((left, right) => Math.abs(right.net) - Math.abs(left.net));
+  }).sort((left, right) => Number(right.valuationAvailable) - Number(left.valuationAvailable) || Math.abs(right.net || 0) - Math.abs(left.net || 0));
 }
 
 function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth, counterpartyRecord) {
@@ -170,10 +172,10 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
     if (!months.includes(month)) setMonth(months[0] || hktThisMonth());
   }, [month, months]);
 
-  const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt), [data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
+  const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt, data.marketValuation), [data.marketValuation, data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
   const brokerCommissionMonths = useMemo(() => monthlyBrokerCommissionSummary(data.swaps, settings.rates), [data.swaps, settings.rates]);
   const brokerSettlementMap = useMemo(() => new Map((data.brokerSettlements || []).map((row) => [`${row.trade_month}:${row.broker_key}`, row])), [data.brokerSettlements]);
-  const groups = useMemo(() => buildCounterpartyGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt), [data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
+  const groups = useMemo(() => buildCounterpartyGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt, data.marketValuation), [data.marketValuation, data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
   const closed = settings.closedMonths.includes(month);
   const filteredInvoices = useMemo(() => data.invoices
     .filter((invoice) => invoiceStatus === "all" || invoice.status === invoiceStatus)
@@ -249,6 +251,10 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   };
 
   const openInvoice = (group) => {
+    if (!group?.valuationAvailable || group?.net == null) {
+      setError(new Error("Settlement document generation is blocked until every hedge has a governed market value."));
+      return;
+    }
     setInvoiceDrawer(group);
     setInvoiceForm({ number: nextInvoiceNumber(data.invoices, settings.general.invoice_prefix), date: hktToday() });
     setError(null);
@@ -447,11 +453,11 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const renderOverview = () => (
     <>
       <div className="app-metric-grid app-metric-grid--5">
-        <Metric label="Swap MTM" value={formatMoney(summary.mtm, { signed: true, digits: 2 })} detail={`${summary.monthSwaps.length} pricing-month hedges`} tone={summary.mtm >= 0 ? "green" : "red"} />
+        <Metric label="Swap MTM" value={formatMoney(summary.mtm, { signed: true, digits: 2 })} detail={summary.mtmAvailable ? `${summary.monthSwaps.length} pricing-month hedges` : "Unavailable until every hedge has a governed market value"} tone={summary.mtm == null ? "default" : summary.mtm >= 0 ? "green" : "red"} />
         <Metric label="FCBS handling" value={formatMoney(-summary.fcbs, { digits: 2 })} detail="Venue services" tone="orange" />
         <Metric label="Broker commission" value={formatMoney(-summary.broker, { digits: 2 })} detail={`${summary.brokerSwaps.length} trade-month hedges`} tone="violet" />
         <Metric label="ICE and SFS fees" value={formatMoney(-(summary.ice + summary.sfs), { digits: 2 })} detail={summary.isFinal ? "Includes settlement fees" : "Settlement fees pending"} tone="amber" />
-        <Metric label="Net settlement" value={formatMoney(summary.net, { signed: true, digits: 2 })} detail={closed ? "Month settled" : "Month in progress"} tone={summary.net >= 0 ? "green" : "red"} />
+        <Metric label="Net settlement" value={formatMoney(summary.net, { signed: true, digits: 2 })} detail={summary.mtmAvailable ? (closed ? "Month settled" : "Month in progress") : "Suppressed because governed MTM is incomplete"} tone={summary.net == null ? "default" : summary.net >= 0 ? "green" : "red"} />
       </div>
       <Panel>
         <SectionHeading title="Swap-by-swap settlement" description="Pricing-month MTM and attributed charges for the selected month." />
@@ -460,10 +466,10 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
             <table className="app-table app-table--compact">
               <thead><tr><th>Trade</th><th>Product</th><th>Direction</th><th>Quantity</th><th>Price</th><th>Counterparty</th><th>MTM</th><th>Fees</th><th>Net</th></tr></thead>
               <tbody>{summary.monthSwaps.map((swap) => {
-                const mtm = calcSwapMtm(swap, data.mops, settings.general.sgo_bbl_per_mt)?.value || 0;
+                const mtm = calcSwapMtm(swap, data.mops, settings.general.sgo_bbl_per_mt, data.marketValuation)?.value ?? null;
                 const fees = calcSwapFees(swap, settings.rates);
                 const charges = fees.broker + fees.sfsCommission + fees.ice + fees.iceClearing + (summary.isFinal ? fees.iceSettlement : 0) + fees.fcbsVenueFee;
-                return <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td><strong>{swap.trade_type === "SPREAD" ? "SPREAD" : swap.direction}</strong></td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td>{swap.trade_type === "SPREAD" ? `$${swap.leg1_price} / $${swap.leg2_price}` : `$${swap.price}`}</td><td>{swap.counterparty || "-"}</td><td><Money value={mtm} digits={2} /></td><td><Money value={-charges} digits={2} /></td><td><Money value={mtm - charges} digits={2} strong /></td></tr>;
+                return <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td><strong>{swap.trade_type === "SPREAD" ? "SPREAD" : swap.direction}</strong></td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td>{swap.trade_type === "SPREAD" ? `$${swap.leg1_price} / $${swap.leg2_price}` : `$${swap.price}`}</td><td>{swap.counterparty || "-"}</td><td><Money value={mtm} digits={2} /></td><td><Money value={-charges} digits={2} /></td><td><Money value={mtm == null ? null : mtm - charges} digits={2} strong /></td></tr>;
               })}</tbody>
             </table>
           ) : <EmptyState title="No hedges settle in this month" description="Choose another month or add a hedge with this pricing month." />}
@@ -475,21 +481,19 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const renderCounterparties = () => (
     <div className="app-settlement-groups">
       {groups.length ? groups.map((group) => {
-        const paymentDirection = paymentDirectionFor(group.net, group.counterparty);
+        const paymentDirection = group.valuationAvailable ? paymentDirectionFor(group.net, group.counterparty) : null;
         return (
           <Panel key={group.key} className="app-counterparty-settlement">
             <div className="app-counterparty-settlement__header">
               <div><h2>{group.counterparty}</h2><p>{group.records.length} hedges</p></div>
-              <div className="app-counterparty-settlement__net"><strong>{formatMoney(paymentDirection.amount, { digits: 2 })}</strong>{!readOnly && <Button size="sm" icon={FileText} onClick={() => openInvoice(group)}>Generate {paymentDirection.invoiceType.toLowerCase()}</Button>}</div>
+              <div className="app-counterparty-settlement__net"><strong>{paymentDirection ? formatMoney(paymentDirection.amount, { digits: 2 }) : "Unavailable"}</strong>{!readOnly && paymentDirection && <Button size="sm" icon={FileText} onClick={() => openInvoice(group)}>Generate {paymentDirection.invoiceType.toLowerCase()}</Button>}</div>
             </div>
-            <div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}>
-              <span>Payment direction</span>
-              <strong>{paymentDirection.label}</strong>
-              <small>Beneficiary: {paymentDirection.beneficiary.fullName}</small>
-            </div>
+            {paymentDirection ? <div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}>
+              <span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small>
+            </div> : <InlineError error={new Error("Settlement is blocked until every hedge has a governed market value.")} />}
             <div className="app-table-frame app-table-frame--flush">
               <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>MTM from CP</th><th>Fee impact</th><th>Net to FCBHK</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => (
-                <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={-mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
+                <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={mtm == null ? null : -mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
               ))}</tbody></table>
             </div>
           </Panel>

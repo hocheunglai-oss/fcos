@@ -11,6 +11,7 @@ const EMPTY_DATA = {
   counterparties: [],
   invoices: [],
   brokerSettlements: [],
+  marketValuation: { available: false, mode: "legacy_active_curve_shadow", reason: "curve_cutover_not_approved", settlements: [], valuationPoints: [] },
   auditLogs: [],
   capabilities: {},
 };

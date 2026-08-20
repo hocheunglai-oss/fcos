@@ -4,7 +4,7 @@ import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { MarketIntelligenceWorkspace } from '@/hedge/views/MarketIntelligenceWorkspace';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
-import { loadMarketSnapshot, MarketPrice, saveForwardSpreads, verifyMopsMonth } from '@/hedge/api/marketData';
+import { loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
@@ -64,16 +64,13 @@ export default function Markets() {
     general: { ...DEFAULT_GENERAL, ...(snapshot.settings?.general || {}) },
     forwardSpreads: snapshot.settings?.forwardSpreads || {},
     forwardSpreadsUpdatedAt: snapshot.settings?.forwardSpreadsUpdatedAt || null,
-    update: async (key, value) => {
-      if (key !== 'fwd_spreads') throw new Error('This page may update only forward adjustments.');
-      await saveForwardSpreads(value, snapshot.settings?.forwardSpreadsRevision || 0);
-      await reload({ silent: true });
-      return value;
+    update: async () => {
+      throw new Error('Legacy forward adjustments are no longer available. Use an exact contract-month fallback in Forward Curves.');
     },
-  }), [reload, snapshot.settings]);
+  }), [snapshot.settings]);
 
   if (loading && !snapshot.mops.length) {
-    return <div className="hedge-desk-root"><EmptyState title="Loading Markets" description="Preparing MOPS prices and forward adjustments." icon={RefreshCw} /></div>;
+    return <div className="hedge-desk-root"><EmptyState title="Loading Markets" description="Preparing the daily brief, delivered prices and exact contract-month curves." icon={RefreshCw} /></div>;
   }
 
   return (
@@ -85,7 +82,9 @@ export default function Markets() {
           data={{ mops: snapshot.mops || [], mopsMonthVerifications: snapshot.mopsMonthVerifications || [], marketIntelligence: snapshot.marketIntelligence || {} }}
           settings={settings}
           priceEntity={MarketPrice}
-          readOnly={snapshot.capabilities?.hedge_book_manage !== true}
+          canManageMarketData={snapshot.capabilities?.hedge_book_manage === true}
+          canManageAlertRules={snapshot.capabilities?.hedge_admin === true}
+          canManageCurveCutover={snapshot.capabilities?.hedge_admin === true}
           reload={reload}
           verifyMonth={async (month, sourceMessage, expectedRevision) => {
             const result = await verifyMopsMonth(month, sourceMessage, expectedRevision);

@@ -117,7 +117,7 @@ function MopsTooltip({ active, payload, label }) {
   );
 }
 
-export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, verifyMonth = null, embedded = false }) {
+export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = false, priceEntity = MopsPrice, verifyMonth = null, embedded = false, showLegacyForward = true }) {
   const actions = useActions();
   const [range, setRange] = useState("3m");
   const [drawer, setDrawer] = useState(null);
@@ -236,7 +236,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       is_estimate: isEstimate,
       raw_input: rawInput,
     }));
-    setForwardSuggestion(parsedForwardSuggestion(result));
+    setForwardSuggestion(showLegacyForward ? parsedForwardSuggestion(result) : null);
   };
 
   const parseRaw = async () => {
@@ -264,7 +264,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       setError(new Error("Today is not a Platts publishing day, so a daily MOPS estimate cannot be saved."));
       return;
     }
-    const normalizedInput = `${today}\nMOPS\n${indicationText.trim()}${forwardIndicationText.trim() ? `\nMOC\n${forwardIndicationText.trim()}` : ""}`;
+    const normalizedInput = `${today}\nMOPS\n${indicationText.trim()}${showLegacyForward && forwardIndicationText.trim() ? `\nMOC\n${forwardIndicationText.trim()}` : ""}`;
     setParsing(true);
     setError(null);
     try {
@@ -306,7 +306,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
       if (drawer?.mode === "edit") await actions.update({ entity: priceEntity, entityName: "MopsPrice", id: drawer.record.id, payload, before: drawer.record, label });
       else await actions.create({ entity: priceEntity, entityName: "MopsPrice", payload, label });
 
-      if (forwardSuggestion?.apply) {
+      if (showLegacyForward && forwardSuggestion?.apply) {
         const parsedAdjustments = Object.fromEntries(Object.entries(forwardSuggestion.adjustments || {})
           .filter(([, value]) => value !== "" && Number.isFinite(Number(value)))
           .map(([field, value]) => [field, String(Number(value))]));
@@ -371,13 +371,13 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
   return (
     <div className="app-page">
       {embedded ? <SectionHeading
-        title="MOPS market"
-        description="Authoritative Singapore MOPS inputs for hedge settlement, kept separate from delivered bunker observations."
+        title="Settlement MOPS controls"
+        description="Authoritative daily Singapore settlement inputs, monthly completeness, and hedge-expiry verification."
         actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add MOPS price</Button> : null}
       /> : <PageHeader
         eyebrow="Market data"
         title="MOPS market"
-        description="Track published Singapore prices, maintain forward adjustments, and control estimated versus actual entries."
+        description="Track published Singapore settlement prices and control estimated versus actual entries."
         actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>Add price</Button> : null}
       />}
 
@@ -415,7 +415,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           </div>
         </Panel>
 
-        <Panel className="app-forward-panel">
+        {showLegacyForward && <Panel className="app-forward-panel">
           <div className="app-panel-header app-forward-panel__header">
             <div>
               <h2>Forward adjustment</h2>
@@ -439,7 +439,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
             })}
           </div>
           {!readOnly && <Button icon={Save} variant="primary" onClick={saveSpreads} disabled={saving}>Save adjustments</Button>}
-        </Panel>
+        </Panel>}
       </div>
 
       <SectionHeading
@@ -564,7 +564,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
                   placeholder={"380: 535.00\n0.5%: 710.00\n10ppm gas: 147.00"}
                 />
               </Field>
-              <Field label="Forward indication" hint="Optional nearest future-month MOC levels">
+              {showLegacyForward && <Field label="Forward indication" hint="Optional nearest future-month MOC levels">
                 <textarea
                   className="app-input app-textarea"
                   rows="5"
@@ -572,7 +572,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
                   onChange={(event) => setForwardIndicationText(event.target.value)}
                   placeholder={"Aug 380: 522.00\nAug 0.5%: 670.00\nAug gas: 141.23"}
                 />
-              </Field>
+              </Field>}
             </div>
             <Button icon={Sparkles} onClick={parseIndication} disabled={parsing || !indicationText.trim()}>{parsing ? "Estimating..." : "Estimate today's MOPS"}</Button>
           </section>
@@ -588,7 +588,7 @@ export function MarketsView({ data, settings, quickCreateSignal = 0, readOnly = 
           </div>
           <label className="app-check"><input type="checkbox" checked={Boolean(form.is_estimate)} onChange={(event) => setField("is_estimate", event.target.checked)} /><span>Mark this record as an estimate</span></label>
         </section>
-        {forwardSuggestion && (
+        {showLegacyForward && forwardSuggestion && (
           <section className="app-form-section">
             <div className="app-form-section__title">{formatMonth(forwardSuggestion.month)} forward adjustment</div>
             <div className="app-form-grid app-form-grid--3">

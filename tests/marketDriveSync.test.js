@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { marketDriveRunKey, runMarketReportDriveSync } from '../api/_marketDriveSync.js';
+import { loadPendingMarketIntelligenceDates, marketDriveRunKey, runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../api/_marketDriveSync.js';
 
 const config = {
   accountEmail: 'vince.less@gmail.com',
@@ -20,7 +20,7 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [], publicationStatus = null } = {}) {
+function clientMock({ knownMd5 = [], publicationStatus = null, pairedImports = [], briefs = [] } = {}) {
   const rpcCalls = [];
   return {
     rpcCalls,
@@ -31,12 +31,22 @@ function clientMock({ knownMd5 = [], publicationStatus = null } = {}) {
       if (name === 'save_market_drive_report_import') return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
       return { data: null, error: new Error('Unexpected RPC') };
     },
-    from: () => ({
-      select: () => ({
-        not: () => ({
-          range: async () => ({ data: knownMd5.map((source_md5) => ({ source_md5 })), error: null }),
-        }),
-      }),
+    from: (table) => ({
+      select: (columns) => {
+        if (table === 'market_report_imports' && columns === 'source_md5') return {
+          not: () => ({ range: async () => ({ data: knownMd5.map((source_md5) => ({ source_md5 })), error: null }) }),
+        };
+        if (table === 'market_report_imports' && columns === 'report_date,source_document_type') return {
+          gte: () => ({ order: () => ({ limit: async () => ({ data: pairedImports, error: null }) }) }),
+        };
+        if (table === 'market_report_imports' && columns.includes('drive_file_id')) return {
+          eq: () => ({ in: () => ({ not: async () => ({ data: [], error: null }) }) }),
+        };
+        if (table === 'market_intelligence_briefs') return {
+          in: () => ({ order: async () => ({ data: briefs, error: null }) }),
+        };
+        throw new Error(`Unexpected query ${table}:${columns}`);
+      },
     }),
   };
 }
@@ -103,6 +113,35 @@ test('hourly sync skips known checksums without downloading report bytes', async
   assert.equal(drive.calls.some((url) => url.includes('alt=media')), false);
 });
 
+test('hourly reconciliation retries recent paired derived work without reimporting or repeating AI', async () => {
+  const pairedImports = [
+    { report_date: '2026-08-20', source_document_type: 'bunkerwire' },
+    { report_date: '2026-08-20', source_document_type: 'european_marketscan' },
+  ];
+  const client = clientMock({ pairedImports });
+  assert.deepEqual(await loadPendingMarketIntelligenceDates(client, { now: new Date('2026-08-21T00:00:00Z') }), ['2026-08-20']);
+  const drive = driveFetch();
+  const failed = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-21T01:00:00Z'),
+    processDerived: async () => { throw new Error('Transient derived failure'); },
+  });
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.importedCount, 0);
+
+  const repaired = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-21T02:00:00Z'),
+    processDerived: async (_client, options) => {
+      assert.equal(options.reconcileDerived, true);
+      assert.deepEqual(options.commentaryContexts, []);
+      return { status: 'completed', alertsPublished: 0, shadowRecorded: 1, reconciled: true };
+    },
+  });
+  assert.equal(repaired.status, 'completed');
+  assert.equal(repaired.importedCount, 0);
+  assert.equal(repaired.briefReconciledCount, 1);
+  assert.equal(drive.calls.some((url) => url.includes('alt=media')), false);
+});
+
 test('hourly sync parses and atomically stores an unseen report', async () => {
   const pdf = Buffer.from('%PDF-new-report');
   const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');
@@ -117,6 +156,35 @@ test('hourly sync parses and atomically stores an unseen report', async () => {
   assert.equal(saved.payload.p_source_md5, md5);
   assert.equal(saved.payload.p_source_document_type, 'european_marketscan');
   assert.deepEqual(saved.payload.p_observations, [{ sourceSymbol: 'AMFSA00', price: 700 }]);
+});
+
+test('reviewed archive replay binds the Drive manifest and derives deterministic briefs without commentary', async () => {
+  const pdf = Buffer.from('%PDF-reviewed-archive');
+  const { createHash } = await import('node:crypto');
+  const md5 = createHash('md5').update(pdf).digest('hex');
+  const fingerprintRows = [{ md5, documentType: 'bunkerwire', reportDate: '2026-08-19' }];
+  const driveFingerprint = createHash('sha256').update(JSON.stringify(fingerprintRows)).digest('hex');
+  const file = { id: 'reviewedreport12345', name: 'BW_20260819.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-19T09:00:00Z', documentType: 'bunkerwire' };
+  const client = clientMock();
+  const drive = driveFetch({ files: [file], pdf });
+  const derivedCalls = [];
+  const result = await runMarketReportArchiveReplayBatch(client, {
+    accessToken: 'token',
+    fetchImpl: drive.fetchImpl,
+    config,
+    reviewedArchive: {
+      startDate: '2026-08-19', endDate: '2026-08-19', sourceFileCount: 1,
+      uniqueReportCount: 1, duplicateFileCount: 0, driveFingerprint,
+    },
+    parseReport: async () => ({ sourceHash: 'c'.repeat(64), reportDate: '2026-08-19', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }] }),
+    processDerived: async (_client, options) => { derivedCalls.push(options); return { status: 'completed' }; },
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.nextCursor, 1);
+  assert.equal(result.archiveFingerprint, driveFingerprint);
+  assert.equal(result.replayedCount, 1);
+  assert.equal(client.rpcCalls.find(({ name }) => name === 'save_market_drive_report_import').payload.p_idempotency_key, `market-archive-replay-${'c'.repeat(64)}`);
+  assert.deepEqual(derivedCalls, [{ reportDate: '2026-08-19', commentaryContexts: [], publishAlerts: false, recordShadow: false, reconcileDerived: true }]);
 });
 
 test('hourly sync fails closed on the wrong Google account and records a redacted failure', async () => {

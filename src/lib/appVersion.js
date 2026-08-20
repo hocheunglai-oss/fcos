@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.189',
+    releasedAt: '2026-08-21',
+    title: 'Add Platts-aligned market intelligence',
+    changes: [
+      'Adds a Daily Decision Brief, exact contract-month forward curves, source-linked bunker drivers, and company alert controls without trade recommendations.',
+      'Replaces shared M1/M2 adjustments with verified outright BM, M1, and M2 observations plus short-lived authorized fallbacks for missing exact contracts.',
+      'Keeps settlement MOPS controls and hedge-expiry verification available while the new valuation curve completes its ten-publication-day shadow review.',
+      'Backfills structured licensed-report evidence without storing PDF content, report commentary, prompts, or raw AI responses.',
+    ],
+  },
+  {
     version: '2.0.188',
     releasedAt: '2026-08-20',
     title: 'Add delivered-price MOPS analytics',

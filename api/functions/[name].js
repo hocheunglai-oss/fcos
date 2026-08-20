@@ -197,7 +197,16 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { runMarketReportDriveSync } from '../_marketDriveSync.js';
+import { runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../_marketDriveSync.js';
+import {
+  getMarketIntelligenceAlertRules,
+  loadMarketIntelligenceBrief,
+  loadMarketIntelligenceCurve,
+  loadGovernedMarketValuation,
+  saveMarketForwardFallback,
+  saveMarketCurveShadowCutover,
+  saveMarketIntelligenceAlertRules,
+} from '../_marketIntelligenceTrading.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
@@ -995,16 +1004,22 @@ function requireAdministratorContext(accessContext) {
   return accessContext;
 }
 
+async function workNotificationsAccessContext(req, accessContext) {
+  const context = accessContext || (await requireActiveUser(req));
+  const markets = await userHasAnyModuleAccess(context.client, context.profile, ['markets']);
+  return { ...context, capabilities: { ...(context.capabilities || {}), markets } };
+}
+
 async function workNotificationsList(body = {}, req = null, accessContext = null) {
-  return workNotificationsListService(body, accessContext || (await requireActiveUser(req)));
+  return workNotificationsListService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
 async function workNotificationsRead(body = {}, req = null, accessContext = null) {
-  return workNotificationsReadService(body, accessContext || (await requireActiveUser(req)));
+  return workNotificationsReadService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
 async function workNotificationsState(body = {}, req = null, accessContext = null) {
-  return workNotificationsStateService(body, accessContext || (await requireActiveUser(req)));
+  return workNotificationsStateService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
 async function verifyFinancialReportIncident(client, purposeKey) {
@@ -1409,6 +1424,14 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterMaintenanceCron: [],
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
+  marketIntelligenceBrief: ['markets'],
+  marketIntelligenceCurve: ['markets'],
+  marketIntelligenceValuation: ['markets'],
+  marketForwardFallbackSave: ['markets'],
+  marketIntelligenceAlertRulesGet: ['markets'],
+  marketIntelligenceAlertRulesSave: ['markets'],
+  marketIntelligenceCurveCutoverSave: ['markets'],
+  marketIntelligenceArchiveReplay: ['markets'],
   hedgeDeskParseMops: ['hedge_desk', 'markets'],
   hedgeDeskGenerateInvoice: ['hedge_desk'],
   hedgeDeskSaveInvoicePdf: ['hedge_desk'],
@@ -18439,12 +18462,79 @@ async function hedgeDeskEntity(body = {}, req = null, accessContext = null) {
 
 async function hedgeMarkets(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  if (body.action === 'intelligence_brief') return { data: await loadMarketIntelligenceBrief(context.client, body) };
+  if (body.action === 'intelligence_curve') return { data: await loadMarketIntelligenceCurve(context.client, body) };
+  if (body.action === 'intelligence_valuation') return { data: await loadGovernedMarketValuation(context.client, body) };
+  if (body.action === 'forward_fallback_save') {
+    await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required to save a forward fallback.');
+    return { data: await saveMarketForwardFallback(context.client, context.profile, body) };
+  }
+  if (body.action === 'intelligence_alert_rules_get') return { data: await getMarketIntelligenceAlertRules(context.client) };
+  if (body.action === 'intelligence_alert_rules_save') {
+    await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to change market alert rules.');
+    return { data: await saveMarketIntelligenceAlertRules(context.client, context.profile, body) };
+  }
+  if (body.action === 'intelligence_curve_cutover_save') {
+    await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to approve a curve cutover.');
+    return { data: await saveMarketCurveShadowCutover(context.client, context.profile, body) };
+  }
   return {
     data: await handleHedgeMarkets(body, context.profile, {
       client: context.client,
       capabilities: await hedgeCapabilities(context),
     }),
   };
+}
+
+async function marketIntelligenceBrief(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadMarketIntelligenceBrief(context.client, body);
+}
+
+async function marketIntelligenceCurve(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadMarketIntelligenceCurve(context.client, body);
+}
+
+async function marketIntelligenceValuation(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadGovernedMarketValuation(context.client, body);
+}
+
+async function marketForwardFallbackSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return saveMarketForwardFallback(context.client, context.profile, body);
+}
+
+async function marketIntelligenceAlertRulesGet(_body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return getMarketIntelligenceAlertRules(context.client);
+}
+
+async function marketIntelligenceAlertRulesSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return saveMarketIntelligenceAlertRules(context.client, context.profile, body);
+}
+
+async function marketIntelligenceCurveCutoverSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return saveMarketCurveShadowCutover(context.client, context.profile, body);
+}
+
+async function marketIntelligenceArchiveReplay(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to reconcile the licensed market archive.');
+  requireExternalActionGate('google_drive');
+  const accessToken = await googleDriveAccessToken();
+  const result = await runMarketReportArchiveReplayBatch(context.client, {
+    accessToken,
+    cursor: body.cursor,
+    expectedArchiveFingerprint: body.archiveFingerprint || null,
+  });
+  if (result.replayedCount > 0 || result.briefCompletedCount > 0) {
+    await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
+  }
+  return result;
 }
 
 async function hedgeDeskParseMops(body = {}) {
@@ -18536,7 +18626,7 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   if (result.status === 'failed') {
     throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
   }
-  if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets']);
+  if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
   await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
   return result;
 }
@@ -19048,6 +19138,14 @@ const handlers = {
   emailRouterMaintenanceCron,
   hedgeDeskEntity,
   hedgeMarkets,
+  marketIntelligenceBrief,
+  marketIntelligenceCurve,
+  marketIntelligenceValuation,
+  marketForwardFallbackSave,
+  marketIntelligenceAlertRulesGet,
+  marketIntelligenceAlertRulesSave,
+  marketIntelligenceCurveCutoverSave,
+  marketIntelligenceArchiveReplay,
   hedgeDeskParseMops,
   hedgeDeskGenerateInvoice,
   hedgeDeskSaveInvoicePdf,

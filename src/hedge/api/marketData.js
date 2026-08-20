@@ -14,6 +14,12 @@ async function request(payload, options = { cache: false }) {
   return response.data?.data;
 }
 
+async function requestMarketIntelligence(handler, payload = {}, options = {}) {
+  const response = await appClient.functions.invoke(handler, payload, options);
+  if (response.data?.error) throw new Error(response.data.error);
+  return response.data?.data ?? response.data;
+}
+
 export const MarketPrice = {
   list(sort = '-created_date', limit = 1000) {
     return request({ action: 'list', entity: 'MopsPrice', sort, limit });
@@ -54,6 +60,66 @@ export function loadMarketHistory(payload, options = {}) {
     cache: true,
     cacheTtlMs: 60_000,
     cacheTags: ['markets', 'market-history'],
+    ...options,
+  });
+}
+
+
+export function loadMarketIntelligenceBrief(payload = {}, options = {}) {
+  return requestMarketIntelligence('marketIntelligenceBrief', payload, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-intelligence-brief'],
+    ...options,
+  });
+}
+
+export function loadMarketIntelligenceCurve(payload = {}, options = {}) {
+  return requestMarketIntelligence('marketIntelligenceCurve', payload, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-intelligence-curve'],
+    ...options,
+  });
+}
+
+export function saveMarketForwardFallback(payload, options = {}) {
+  return requestMarketIntelligence('marketForwardFallbackSave', payload, {
+    cache: false,
+    invalidateCache: true,
+    ...options,
+  });
+}
+
+export function loadMarketIntelligenceAlertRules(options = {}) {
+  return requestMarketIntelligence('marketIntelligenceAlertRulesGet', {}, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-intelligence-alert-rules'],
+    ...options,
+  });
+}
+
+export function saveMarketIntelligenceAlertRules(payload, options = {}) {
+  return requestMarketIntelligence('marketIntelligenceAlertRulesSave', payload, {
+    cache: false,
+    invalidateCache: true,
+    ...options,
+  });
+}
+
+export function saveMarketIntelligenceCurveCutover(payload, options = {}) {
+  return requestMarketIntelligence('marketIntelligenceCurveCutoverSave', payload, {
+    cache: false,
+    invalidateCache: true,
+    ...options,
+  });
+}
+
+export function replayMarketIntelligenceArchive(payload, options = {}) {
+  return requestMarketIntelligence('marketIntelligenceArchiveReplay', payload, {
+    cache: false,
+    invalidateCache: true,
     ...options,
   });
 }

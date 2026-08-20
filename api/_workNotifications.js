@@ -70,6 +70,27 @@ function emailRouterNotification(row, state = {}) {
   };
 }
 
+function marketIntelligenceNotification(row, state = {}) {
+  const sourceSeverity = String(row.severity || '').trim().toLowerCase();
+  const severity = ['critical', 'error'].includes(sourceSeverity)
+    ? 'critical'
+    : ['warning', 'high'].includes(sourceSeverity) ? 'warning' : 'info';
+  return {
+    id: `market_intelligence:${row.id}`,
+    source: 'markets',
+    sourceId: row.series_id || row.report_id || row.id,
+    type: row.alert_type || 'market_alert',
+    severity,
+    title: row.title || (severity === 'critical' ? 'Market data needs review' : 'Market intelligence alert'),
+    message: row.message || 'Review the affected market series and its source evidence.',
+    link: '/markets?tab=drivers',
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: row.created_at,
+  };
+}
+
 function systemErrorNotification(row, state = {}) {
   const occurrenceCount = Math.max(1, Number(row.occurrence_count || 1));
   const verificationHandlers = new Set([
@@ -282,15 +303,26 @@ async function loadDatabaseSnapshot(client, profileId, queryLimit, now, systemWi
 
 export async function workNotificationsList(body = {}, accessContext) {
   const { client, profile } = accessContext;
+  const canViewMarkets = accessContext?.capabilities?.markets === true;
   const limit = Math.max(10, Math.min(Number(body.limit) || 50, 100));
   const queryLimit = Math.min(200, limit * 4);
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const [databaseSnapshot, specialTermsQueue, specialTermsConsolidationQueue] = await Promise.all([
+  const [databaseSnapshot, specialTermsQueue, specialTermsConsolidationQueue, marketAlertEvents] = await Promise.all([
     loadDatabaseSnapshot(client, profile.id, queryLimit, now, systemWindow),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
     listSpecialTermClauseConsolidations({ includeClosed: false }).then((data) => ({ data: data.consolidations || [], error: null })).catch((error) => ({ data: [], error })),
+    canViewMarkets
+      ? client.from('market_intelligence_alert_events').select('id,report_id,series_id,alert_type,severity,title,message,created_at').order('created_at', { ascending: false }).limit(queryLimit)
+      : Promise.resolve({ data: [], error: null }),
   ]);
+  const marketAlertIds = (marketAlertEvents.data || []).map((row) => row.id).filter(Boolean);
+  const marketAlertStates = canViewMarkets && marketAlertIds.length
+    ? await client.from('market_intelligence_alert_notification_states')
+      .select('alert_event_id,read_at,handled_at,snoozed_until')
+      .eq('user_id', profile.id)
+      .in('alert_event_id', marketAlertIds)
+    : { data: [], error: null };
   const {
     collaborationResult,
     growthResult,
@@ -348,11 +380,18 @@ export async function workNotificationsList(body = {}, accessContext) {
   if (specialTermsQueue.error) unavailableSources.push('Special Terms');
   if (specialTermsConsolidationQueue.error && !unavailableSources.includes('Special Terms')) unavailableSources.push('Special Terms');
   if (specialTermsStates.error && !unavailableTable(specialTermsStates.error)) throw specialTermsStates.error;
+  if (marketAlertEvents.error) {
+    if (!unavailableTable(marketAlertEvents.error)) throw marketAlertEvents.error;
+    unavailableSources.push('Markets');
+  }
+  if (marketAlertStates.error && !unavailableTable(marketAlertStates.error)) throw marketAlertStates.error;
 
   const routerStateByAlert = new Map((emailRouterStates.data || []).map((row) => [row.alert_id, row]));
   const routerNotifications = (emailRouterAlerts.data || []).map((row) => emailRouterNotification(row, routerStateByAlert.get(row.id)));
   const systemStateByEvent = new Map((systemStates.data || []).map((row) => [row.event_id, row]));
   const systemNotifications = (systemEvents.data || []).map((row) => systemErrorNotification(row, systemStateByEvent.get(row.id)));
+  const marketStateByEvent = new Map((marketAlertStates.data || []).map((row) => [row.alert_event_id, row]));
+  const marketNotifications = (marketAlertEvents.data || []).map((row) => marketIntelligenceNotification(row, marketStateByEvent.get(row.id)));
   const generalManagerIds = [...new Set((generalManagerRoles.data || []).map((row) => row.user_id).filter(Boolean))];
   const isGeneralManager = profile.user_type === 'general_manager' && generalManagerIds.length === 1 && generalManagerIds[0] === profile.id;
   const readyRecipient = ['finance', 'administrator'].includes(profile.user_type) || isGeneralManager;
@@ -387,14 +426,14 @@ export async function workNotificationsList(body = {}, accessContext) {
       return specialTermsRelinkNotification(consolidation, term, specialTermsStateByKey.get(key));
     }));
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',
@@ -406,6 +445,7 @@ export async function workNotificationsList(body = {}, accessContext) {
 
 export async function workNotificationsRead(body = {}, accessContext) {
   const { client, profile } = accessContext;
+  const canViewMarkets = accessContext?.capabilities?.markets === true;
   const ids = cleanIds(body.notificationIds);
   const collaborationIds = ids.filter((value) => value.startsWith('collaboration:')).map((value) => value.slice('collaboration:'.length));
   const growthIds = ids.filter((value) => value.startsWith('growth:')).map((value) => value.slice('growth:'.length));
@@ -414,6 +454,9 @@ export async function workNotificationsRead(body = {}, accessContext) {
   let systemErrorIds = ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length));
   let variableChargeIds = ids.filter((value) => value.startsWith('variable_charges:')).map((value) => value.slice('variable_charges:'.length));
   let specialTermsIds = ids.filter((value) => value.startsWith('special_terms:')).map((value) => value.slice('special_terms:'.length));
+  let marketIntelligenceIds = canViewMarkets
+    ? ids.filter((value) => value.startsWith('market_intelligence:')).map((value) => value.slice('market_intelligence:'.length))
+    : [];
   const readAt = new Date().toISOString();
 
   const updateTable = async (table, selectedIds) => {
@@ -438,6 +481,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
     systemErrorIds = (systemResult.data || []).map((row) => row.id);
     variableChargeIds = (currentNotifications.notifications || []).filter((row) => row.source === 'variable_charges').map((row) => row.id.slice('variable_charges:'.length));
     specialTermsIds = (currentNotifications.notifications || []).filter((row) => row.source === 'special_terms').map((row) => row.id.slice('special_terms:'.length));
+    marketIntelligenceIds = (currentNotifications.notifications || []).filter((row) => row.source === 'markets').map((row) => row.id.slice('market_intelligence:'.length));
   }
   const markEmailRouterRead = async () => {
     if (!emailRouterIds.length) return;
@@ -487,12 +531,25 @@ export async function workNotificationsRead(body = {}, accessContext) {
     }
   };
 
-  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), updateTable('fcos_improvement_notifications', improvementIds), markEmailRouterRead(), markSystemErrorsRead(), markShipAgentRead(), markSpecialTermsRead()]);
+  const markMarketIntelligenceRead = async () => {
+    for (const alertEventId of marketIntelligenceIds) {
+      const { error } = await client.rpc('set_market_intelligence_alert_notification_state', {
+        p_alert_event_id: alertEventId,
+        p_user_id: profile.id,
+        p_state: 'read',
+        p_snoozed_until: null,
+      });
+      if (error && !unavailableTable(error)) throw error;
+    }
+  };
+
+  await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), updateTable('fcos_improvement_notifications', improvementIds), markEmailRouterRead(), markSystemErrorsRead(), markShipAgentRead(), markSpecialTermsRead(), markMarketIntelligenceRead()]);
   return workNotificationsList({ limit: body.limit }, accessContext);
 }
 
 export async function workNotificationsState(body = {}, accessContext) {
   const { client, profile } = accessContext;
+  const canViewMarkets = accessContext?.capabilities?.markets === true;
   const ids = cleanIds(body.notificationIds);
   if (!ids.length)
     throw Object.assign(new Error('Select at least one notification.'), {
@@ -525,6 +582,7 @@ export async function workNotificationsState(body = {}, accessContext) {
     ['system_error', ids.filter((value) => value.startsWith('system_error:')).map((value) => value.slice('system_error:'.length))],
     ['variable_charges', ids.filter((value) => value.startsWith('variable_charges:')).map((value) => value.slice('variable_charges:'.length))],
     ['special_terms', ids.filter((value) => value.startsWith('special_terms:')).map((value) => value.slice('special_terms:'.length))],
+    ['market_intelligence', canViewMarkets ? ids.filter((value) => value.startsWith('market_intelligence:')).map((value) => value.slice('market_intelligence:'.length)) : []],
   ];
   let updated = 0;
   for (const [source, sourceIds] of groups) {
@@ -548,6 +606,19 @@ export async function workNotificationsState(body = {}, accessContext) {
       for (const notificationKey of sourceIds) {
         const { error } = await client.rpc('set_special_terms_notification_state', {
           p_notification_key: notificationKey,
+          p_user_id: profile.id,
+          p_state: state,
+          p_snoozed_until: snoozedUntil,
+        });
+        if (error) throw error;
+        updated += 1;
+      }
+      continue;
+    }
+    if (source === 'market_intelligence') {
+      for (const alertEventId of sourceIds) {
+        const { error } = await client.rpc('set_market_intelligence_alert_notification_state', {
+          p_alert_event_id: alertEventId,
           p_user_id: profile.id,
           p_state: state,
           p_snoozed_until: snoozedUntil,

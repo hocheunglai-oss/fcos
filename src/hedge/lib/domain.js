@@ -494,11 +494,49 @@ function shiftedMonth(yearMonth, offset) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function mopsForExposureSwap(swap, records, forwardSpreads = {}) {
-  const forwardMonths = new Set([shiftedMonth(hktThisMonth(), 1), shiftedMonth(hktThisMonth(), 2)]);
+const MARKET_PRODUCT_KEY = Object.freeze({ S380: "hsfo380", "S0.5": "vlsfo", SGO: "lsmgo" });
+
+function governedMopsForMonths(product, months, records, governedValuation) {
+  if (governedValuation?.mode !== "platts_curve_active") return undefined;
+  const productKey = MARKET_PRODUCT_KEY[product];
+  const contractMonths = [...new Set((months || []).filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ""))))];
+  if (!productKey || !contractMonths.length) return null;
+  const settlements = contractMonths.map((month) => (governedValuation.settlements || []).find((row) => (
+    row.productKey === productKey
+    && String(row.contractMonth || "").slice(0, 7) === month
+    && row.available === true
+    && row.authorizedForValuation !== false
+  )));
+  if (settlements.some((row) => !row)) return null;
+  const field = mopsField(product);
+  const governedRows = contractMonths.flatMap((month) => {
+    const points = (governedValuation.valuationPoints || []).filter((point) => (
+      point.productKey === productKey
+      && String(point.contractMonth || "").slice(0, 7) === month
+      && String(point.priceDate || "").slice(0, 7) === month
+      && Number.isFinite(Number(point.value))
+    ));
+    const uniqueDates = new Set(points.map((point) => point.priceDate));
+    if (!points.length || uniqueDates.size !== points.length) return [];
+    return points.map((point) => ({
+      price_date: point.priceDate,
+      [field]: Number(point.value),
+      is_estimate: !["approved_actual", "verified_actual"].includes(point.source),
+      market_intelligence_source: point.source,
+    }));
+  });
+  if (contractMonths.some((month) => !governedRows.some((row) => String(row.price_date).slice(0, 7) === month))) return null;
+  const governedMonths = new Set(contractMonths);
+  return [...(records || []).filter((row) => !governedMonths.has(String(row.price_date || "").slice(0, 7))), ...governedRows];
+}
+
+function mopsForExposureSwap(swap, records, forwardSpreads = {}, governedValuation = null) {
   const swapMonths = swap?.trade_type === "SPREAD"
     ? [swap.leg1_month, swap.leg2_month]
     : [swap?.swap_month];
+  const governed = governedMopsForMonths(swap?.product, swapMonths, records, governedValuation);
+  if (governed !== undefined) return governed;
+  const forwardMonths = new Set([shiftedMonth(hktThisMonth(), 1), shiftedMonth(hktThisMonth(), 2)]);
   const syntheticMonths = [...new Set(swapMonths.filter((month) => forwardMonths.has(month)))];
   if (!syntheticMonths.length) return records;
 
@@ -583,15 +621,19 @@ function calcLegMtm(direction, price, product, quantity, unit, month, basis, sta
   return { value: roundMoney(value), mtmAvg: market, average };
 }
 
-export function calcSwapMtm(swap, records, sgoRatio = 7.45) {
+export function calcSwapMtm(swap, records, sgoRatio = 7.45, governedValuation = null) {
   if (!swap) return null;
+  const months = swap.trade_type === "SPREAD" ? [swap.leg1_month, swap.leg2_month] : [swap.swap_month];
+  const governedRecords = governedMopsForMonths(swap.product, months, records, governedValuation);
+  if (governedRecords === null) return null;
+  const valuationRecords = governedRecords || records;
   if (swap.trade_type === "SPREAD") {
-    const leg1 = calcLegMtm("BUY", swap.leg1_price, swap.product, swap.quantity, swap.unit, swap.leg1_month, swap.leg1_basis, swap.leg1_bal_date, records, sgoRatio);
-    const leg2 = calcLegMtm("SELL", swap.leg2_price, swap.product, swap.quantity, swap.unit, swap.leg2_month, swap.leg2_basis, swap.leg2_bal_date, records, sgoRatio);
-    if (!leg1 && !leg2) return null;
+    const leg1 = calcLegMtm("BUY", swap.leg1_price, swap.product, swap.quantity, swap.unit, swap.leg1_month, swap.leg1_basis, swap.leg1_bal_date, valuationRecords, sgoRatio);
+    const leg2 = calcLegMtm("SELL", swap.leg2_price, swap.product, swap.quantity, swap.unit, swap.leg2_month, swap.leg2_basis, swap.leg2_bal_date, valuationRecords, sgoRatio);
+    if ((!leg1 && !leg2) || (governedValuation?.mode === "platts_curve_active" && (!leg1 || !leg2))) return null;
     return { value: roundMoney((leg1?.value || 0) + (leg2?.value || 0)), leg1, leg2, isSpread: true };
   }
-  return calcLegMtm(swap.direction, swap.price, swap.product, swap.quantity, swap.unit, swap.swap_month, swap.pricing_basis, swap.bal_start_date, records, sgoRatio);
+  return calcLegMtm(swap.direction, swap.price, swap.product, swap.quantity, swap.unit, swap.swap_month, swap.pricing_basis, swap.bal_start_date, valuationRecords, sgoRatio);
 }
 
 export function calcSwapFees(swap, rates = DEFAULT_RATES) {
@@ -658,10 +700,18 @@ function physicalLegPnl(side, physical, records, quantity) {
   return { value: roundMoney(value), market: average.avg };
 }
 
-export function calcPhysicalPnl(physical, records, sgoRatio = 7.45) {
+export function calcPhysicalPnl(physical, records, sgoRatio = 7.45, governedValuation = null) {
+  const governedRecords = governedMopsForMonths(physical?.product, [physical?.sell_pricing_month, physical?.buy_pricing_month], records, governedValuation);
+  if (governedRecords === null) return null;
+  const valuationRecords = governedRecords || records;
   const quantity = physicalMidQuantity(physical, sgoRatio);
-  const sell = physicalLegPnl("sell", physical, records, quantity);
-  const buy = physicalLegPnl("buy", physical, records, quantity);
+  const sell = physicalLegPnl("sell", physical, valuationRecords, quantity);
+  const buy = physicalLegPnl("buy", physical, valuationRecords, quantity);
+  if (governedValuation?.mode === "platts_curve_active") {
+    const configured = (side) => ["price_type", "price", "premium", "pricing_month", "pricing_basis", "bal_date"]
+      .some((field) => physical?.[`${side}_${field}`] != null && physical?.[`${side}_${field}`] !== "");
+    if ((configured("sell") && !sell) || (configured("buy") && !buy)) return null;
+  }
   if (!sell && !buy) return null;
   return { value: roundMoney((sell?.value || 0) + (buy?.value || 0)), sell, buy };
 }
@@ -768,11 +818,13 @@ export function clearingBalance(rows = []) {
     .reduce((sum, row) => sum + clearingEntryAmount(row), 0));
 }
 
-export function buyingPower({ clearing = [], swaps = [], mops = [], margins = ICE_IM_FALLBACK, usableRatio = 0.8, sgoRatio = 7.45 }) {
+export function buyingPower({ clearing = [], swaps = [], mops = [], margins = ICE_IM_FALLBACK, usableRatio = 0.8, sgoRatio = 7.45, governedValuation = null }) {
   const cash = clearingBalance(clearing);
-  const unrealizedMtm = roundMoney(swaps.reduce((sum, swap) => sum + (calcSwapMtm(swap, mops, sgoRatio)?.value || 0), 0));
-  const equity = roundMoney(cash + unrealizedMtm);
-  const available = roundMoney(equity * usableRatio);
+  const swapMtms = swaps.map((swap) => calcSwapMtm(swap, mops, sgoRatio, governedValuation)?.value ?? null);
+  const valuationAvailable = governedValuation?.mode !== "platts_curve_active" || swapMtms.every((value) => value != null);
+  const unrealizedMtm = valuationAvailable ? roundMoney(swapMtms.reduce((sum, value) => sum + (value || 0), 0)) : null;
+  const equity = unrealizedMtm == null ? null : roundMoney(cash + unrealizedMtm);
+  const available = equity == null ? null : roundMoney(equity * usableRatio);
   const used = roundMoney(swaps
     .filter((swap) => !swap.is_expired && BROKER_EXCHANGE.includes(swap.broker))
     .reduce((sum, swap) => sum + asNumber(swap.current_margin || swap.initial_margin || estimateSwapInitialMargin(swap, margins, sgoRatio)), 0));
@@ -782,23 +834,28 @@ export function buyingPower({ clearing = [], swaps = [], mops = [], margins = IC
     unrealizedMtm,
     available,
     used,
-    remaining: roundMoney(available - used),
+    remaining: available == null ? null : roundMoney(available - used),
     utilization: available > 0 ? (used / available) * 100 : 0,
+    valuationAvailable,
   };
 }
 
-export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRatio = 7.45, forwardSpreads = {}) {
+export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRatio = 7.45, forwardSpreads = {}, governedValuation = null) {
   const groups = new Map();
   const ensure = (counterparty, product, unit) => {
     const key = `${counterparty || "Unassigned"}::${product || "Unknown"}`;
-    if (!groups.has(key)) groups.set(key, { key, counterparty: counterparty || "Unassigned", product, unit, physicalQty: 0, hedgeQty: 0, physicalPnl: 0, swapMtm: 0 });
+    if (!groups.has(key)) groups.set(key, { key, counterparty: counterparty || "Unassigned", product, unit, physicalQty: 0, hedgeQty: 0, physicalPnl: 0, swapMtm: 0, physicalPnlAvailable: true, swapMtmAvailable: true, valuationWarnings: [] });
     return groups.get(key);
   };
 
   physicals.filter((row) => !row.is_closed).forEach((row) => {
     const item = ensure(row.counterparty, row.product, row.product === "SGO" ? "BBL" : "MT");
     item.physicalQty += physicalMidQuantity(row, sgoRatio);
-    item.physicalPnl += calcPhysicalPnl(row, mops, sgoRatio)?.value || 0;
+    const result = calcPhysicalPnl(row, mops, sgoRatio, governedValuation);
+    if (!result) {
+      item.physicalPnlAvailable = false;
+      item.valuationWarnings.push({ recordId: row.id, type: "physical", reason: governedValuation?.mode === "platts_curve_active" ? "governed_settlement_unavailable" : "market_average_unavailable" });
+    } else item.physicalPnl += result.value;
   });
   swaps.filter((row) => isSwapLive(row) && row.counterparty && !BROKER_EXCHANGE.includes(row.counterparty)).forEach((row) => {
     const item = ensure(row.counterparty, row.product, row.product === "SGO" ? "BBL" : "MT");
@@ -808,7 +865,12 @@ export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRati
         ? asNumber(row.quantity) / sgoRatio
         : asNumber(row.quantity);
     item.hedgeQty += quantity * (row.direction === "SELL" ? -1 : 1);
-    item.swapMtm += calcSwapMtm(row, mopsForExposureSwap(row, mops, forwardSpreads), sgoRatio)?.value || 0;
+    const valuationRecords = governedValuation?.mode === "platts_curve_active" ? mops : mopsForExposureSwap(row, mops, forwardSpreads);
+    const result = calcSwapMtm(row, valuationRecords, sgoRatio, governedValuation);
+    if (!result) {
+      item.swapMtmAvailable = false;
+      item.valuationWarnings.push({ recordId: row.id, type: "swap", reason: governedValuation?.mode === "platts_curve_active" ? "governed_settlement_unavailable" : "market_average_unavailable" });
+    } else item.swapMtm += result.value;
   });
 
   return [...groups.values()].map((item) => {
@@ -819,14 +881,14 @@ export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRati
       hedgeQty: roundMoney(hedgeQty),
       netExposure: roundMoney(item.physicalQty - hedgeQty),
       hedgeRatio: item.physicalQty > 0 ? (hedgeQty / item.physicalQty) * 100 : null,
-      physicalPnl: roundMoney(item.physicalPnl),
-      swapMtm: roundMoney(item.swapMtm),
-      combinedPnl: roundMoney(item.physicalPnl + item.swapMtm),
+      physicalPnl: item.physicalPnlAvailable ? roundMoney(item.physicalPnl) : null,
+      swapMtm: item.swapMtmAvailable ? roundMoney(item.swapMtm) : null,
+      combinedPnl: item.physicalPnlAvailable && item.swapMtmAvailable ? roundMoney(item.physicalPnl + item.swapMtm) : null,
     };
   }).sort((a, b) => Math.abs(b.netExposure) - Math.abs(a.netExposure));
 }
 
-export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, month = hktThisMonth(), sgoRatio = 7.45) {
+export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, month = hktThisMonth(), sgoRatio = 7.45, governedValuation = null) {
   const monthSwaps = swaps.filter((swap) => swapMonth(swap) === month);
   const brokerSwaps = swaps.filter((swap) => (
     String(swap.broker || "").trim()
@@ -839,8 +901,11 @@ export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, 
   let broker = 0;
   let ice = 0;
   let sfs = 0;
+  let mtmAvailable = true;
   monthSwaps.forEach((swap) => {
-    mtm += calcSwapMtm(swap, mops, sgoRatio)?.value || 0;
+    const result = calcSwapMtm(swap, mops, sgoRatio, governedValuation);
+    if (!result && governedValuation?.mode === "platts_curve_active") mtmAvailable = false;
+    else mtm += result?.value || 0;
     const fees = calcSwapFees(swap, rates);
     fcbs += fees.fcbsVenueFee;
     ice += fees.ice + fees.iceClearing + (isFinal ? fees.iceSettlement : 0);
@@ -851,13 +916,14 @@ export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, 
   return {
     monthSwaps,
     brokerSwaps,
-    mtm: roundMoney(mtm),
+    mtm: mtmAvailable ? roundMoney(mtm) : null,
     fcbs: roundMoney(fcbs),
     broker: roundMoney(broker),
     ice: roundMoney(ice),
     sfs: roundMoney(sfs),
     totalFees: roundMoney(totalFees),
-    net: roundMoney(mtm - totalFees),
+    net: mtmAvailable ? roundMoney(mtm - totalFees) : null,
+    mtmAvailable,
     isFinal,
   };
 }

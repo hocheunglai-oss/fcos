@@ -11,6 +11,7 @@ import {
 import { buildMarketReplayImpact, exactMopsTriple } from '../scripts/replay-market-report-archive.mjs';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+const basicObservation = ({ sourceSymbol, price, dayChange, sourcePage }) => ({ sourceSymbol, price, dayChange, sourcePage });
 
 test('Bunkerwire parsing keeps delivered, posted and cargo symbols deterministic', () => {
   const report = `
@@ -21,7 +22,7 @@ test('Bunkerwire parsing keeps delivered, posted and cargo symbols deterministic
   `;
   const result = parseMarketReportText(report, { documentType: 'bunkerwire' });
   assert.equal(result.reportDate, '2026-08-18');
-  assert.deepEqual(result.observations.find((row) => row.sourceSymbol === 'MFSPD00'), {
+  assert.deepEqual(basicObservation(result.observations.find((row) => row.sourceSymbol === 'MFSPD00')), {
     sourceSymbol: 'MFSPD00', price: 801, dayChange: 2, sourcePage: 1,
   });
   assert.equal(result.observations.find((row) => row.sourceSymbol === 'CB1AR00').price, 811);
@@ -34,7 +35,7 @@ test('Bunkerwire parsing adds all three exact Hong Kong delivered symbols', () =
     Hong Kong MFHKD00 871.000 +47.000
     Hong Kong PUAER00 684.00-685.00 684.500 +13.500 AAXYQ00 1242.00 +32.000
   `, { documentType: 'bunkerwire' });
-  assert.deepEqual(result.observations.filter((row) => ['MFHKD00', 'PUAER00', 'AAXYQ00'].includes(row.sourceSymbol)), [
+  assert.deepEqual(result.observations.filter((row) => ['MFHKD00', 'PUAER00', 'AAXYQ00'].includes(row.sourceSymbol)).map(basicObservation), [
     { sourceSymbol: 'MFHKD00', price: 871, dayChange: 47, sourcePage: 1 },
     { sourceSymbol: 'PUAER00', price: 684.5, dayChange: 13.5, sourcePage: 3 },
     { sourceSymbol: 'AAXYQ00', price: 1242, dayChange: 32, sourcePage: 3 },
@@ -61,7 +62,7 @@ test('European Marketscan parsing requires no proxy for the complete MOPS trio',
     HSFO 380 CST ($/mt) PPXDK00 611.88-611.92 611.900 +3.920
     Gasoil POABC00 165.90-165.94 165.920 +0.700
   `, { documentType: 'european_marketscan' });
-  assert.deepEqual(result.observations.filter((row) => ['AMFSA00', 'PPXDK00', 'POABC00'].includes(row.sourceSymbol)), [
+  assert.deepEqual(result.observations.filter((row) => ['AMFSA00', 'PPXDK00', 'POABC00'].includes(row.sourceSymbol)).map(basicObservation), [
     { sourceSymbol: 'AMFSA00', price: 746.97, dayChange: -5.32, sourcePage: 3 },
     { sourceSymbol: 'PPXDK00', price: 611.9, dayChange: 3.92, sourcePage: 9 },
     { sourceSymbol: 'POABC00', price: 165.92, dayChange: 0.7, sourcePage: 9 },
@@ -192,6 +193,13 @@ test('archive replay impact is deterministic and distinguishes matches, creates 
     create: 1, replace_estimate: 0, match_actual: 1, conflict_actual: 1,
   });
   assert.deepEqual(impact.conflicts, ['2025-01-04']);
+});
+
+test('archive replay fails closed on a Supabase project mismatch before live access', () => {
+  const replay = read('scripts/replay-market-report-archive.mjs');
+  assert.match(replay, /EXPECTED_SUPABASE_PROJECT_REF = 'pjforfvchygdyqfcgpmw'/);
+  assert.match(replay, /projectRef !== EXPECTED_SUPABASE_PROJECT_REF/);
+  assert.match(replay, /Supabase identity mismatch/);
 });
 
 test('service-only migration pins Kaohsiung product terminology and hardens browser access', () => {
