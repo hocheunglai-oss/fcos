@@ -297,14 +297,14 @@ export function resolveGroupCreditAuthority({ group = null, members = [], openSt
   const groupExposure = openStems.reduce((sum, stem) => sum + value(stem?.QLIK_Receivable_Balance__c), 0);
   const matches = (members || []).filter((member) => member?.Inactive_Suspended__c !== true).flatMap((member) => {
     const snapshot = accountCreditSnapshot(member);
-    const applicableCapacity = snapshot.category === 'Group'
-      ? number(snapshot.groupLimit)
-      : snapshot.category === 'Special'
-        ? value(snapshot.groupLimit) + value(snapshot.specialGroupLimit)
-        : null;
-    if (!(applicableCapacity > 0)) return [];
+    if (snapshot.category !== 'Group' || !(number(snapshot.groupLimit) > 0)) return [];
+    const usedGroup = number(snapshot.usedGroup);
+    const salesforceAvailable = number(snapshot.salesforceAvailable);
+    if (usedGroup == null || salesforceAvailable == null) return [];
+    const calculatedAvailable = number(snapshot.groupLimit) - usedGroup;
+    const snapshotDifference = currencyAmount(calculatedAvailable - salesforceAvailable);
+    if (snapshotDifference == null || Math.abs(snapshotDifference) > CREDIT_RECONCILIATION_TOLERANCE) return [];
     const reconciliation = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete: true });
-    if (!reconciliation.matches) return [];
     return [{ member, snapshot, reconciliation, signature: groupCreditSnapshotSignature(snapshot) }];
   });
   if (!matches.length) return { status: 'unresolved', candidates: [] };
@@ -828,7 +828,7 @@ export function buildAccountCreditStatement({
   }]));
   const individualReconciliation = reconcileCreditExposure(snapshot.usedCustomer, currencyConflict ? null : accountExposure, { complete: projectionComplete });
   const groupReconciliation = group
-    ? groupScope?.partial
+    ? groupScope?.partial || groupScope?.operationalSubset
       ? {
         complete: projectionComplete,
         matches: projectionComplete,
@@ -837,7 +837,7 @@ export function buildAccountCreditStatement({
         difference: null,
         tolerance: CREDIT_RECONCILIATION_TOLERANCE,
         scoped: true,
-        explanation: 'Selected-account exposure is an operational subset and is not reconciled to Salesforce’s full GROUP used-credit snapshot.',
+        explanation: 'The displayed exposure is an operational subset and is not treated as a reconstruction of Salesforce’s maintained GROUP used-credit snapshot.',
       }
       : reconcileCreditExposure(snapshot.usedGroup, currencyConflict ? null : groupExposure, { complete: projectionComplete })
     : { complete: true, matches: true, expected: snapshot.usedGroup, reconstructed: groupExposure, difference: 0, tolerance: CREDIT_RECONCILIATION_TOLERANCE, notApplicable: true };
@@ -932,6 +932,7 @@ export function buildAccountCreditStatement({
     ...(!individualReconciliation.matches ? ['Individual used credit does not reconcile to the selected Account’s current buyer-leg STEM exposure. The individual projection is hidden.'] : []),
     ...(group && !groupReconciliation.matches ? ['Group used credit does not reconcile to current buyer-leg STEM exposure across the Salesforce GROUP hierarchy. The group projection is hidden.'] : []),
     ...(groupScope?.partial ? ['The GROUP forecast includes only the selected active Accounts. Salesforce’s effective available credit and used-credit fields still describe the full GROUP.'] : []),
+    ...(groupScope?.operationalSubset && !groupScope?.partial ? ['The GROUP forecast uses the operational buyer-leg exposure scope from 1 January 2026. Salesforce’s used-credit and effective-available fields remain the authoritative full GROUP snapshot.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
     ...(currencyConflict ? [`Buyer-leg STEM exposure spans multiple currencies (${currencyLabels.join(', ')}). Values remain separated by row and projected balances are hidden.`] : []),
   ];

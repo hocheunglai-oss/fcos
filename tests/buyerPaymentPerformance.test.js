@@ -9,6 +9,7 @@ import {
 } from '../api/_buyerPaymentPerformance.js';
 import {
   adjustCreditForecastBusinessDay,
+  buildAccountCreditStatement,
   buildStemCreditRelease,
   resolveGroupCreditAuthority,
 } from '../api/_dashboardAccountCreditStatement.js';
@@ -71,6 +72,24 @@ test('resolves COSCO GROUP credit authority from the exact active hierarchy', ()
   assert.equal(result.candidate.Id, petroleum.Id);
   assert.equal(result.candidate.CL_Group__c, 20_000_000);
   assert.equal(result.reconciliation.matches, true);
+
+  const selectedStatementStems = [{ ...openStems[0], QLIK_Receivable_Balance__c: 6_519_689 }];
+  assert.equal(resolveGroupCreditAuthority({ group, members: [group, petroleum], openStems: selectedStatementStems, complete: true }).status, 'resolved');
+  const statement = buildAccountCreditStatement({
+    account: group,
+    creditAccount: petroleum,
+    creditResolution: { mode: 'group_hierarchy_authority', accountName: petroleum.Name, clKey: petroleum.Company_Code__c },
+    group,
+    groupMembers: [group, petroleum],
+    groupScope: { partial: false, operationalSubset: true },
+    openStems: selectedStatementStems,
+    statementStems: selectedStatementStems,
+    today,
+    complete: true,
+  });
+  assert.equal(statement.credit.groupLimit, 20_000_000);
+  assert.equal(statement.credit.salesforceAvailable, 11_812_743);
+  assert.equal(statement.reconciliation.group.scoped, true);
 });
 
 test('accepts identical authority snapshots and rejects conflicting ones', () => {
@@ -80,7 +99,7 @@ test('accepts identical authority snapshots and rejects conflicting ones', () =>
   const second = { ...base, Id: '001000000000003AAA', Name: 'SECOND' };
   const stems = [{ Id: 'a0H000000000001AAA', Account__c: first.Id, QLIK_Receivable_Balance__c: 400, CurrencyIsoCode: 'USD' }];
   assert.equal(resolveGroupCreditAuthority({ group, members: [first, second], openStems: stems, complete: true }).status, 'resolved');
-  assert.equal(resolveGroupCreditAuthority({ group, members: [first, { ...second, CL_Group__c: 1200 }], openStems: stems, complete: true }).status, 'ambiguous');
+  assert.equal(resolveGroupCreditAuthority({ group, members: [first, { ...second, CL_Group__c: 1200, CL_Available_Credit__c: 800 }], openStems: stems, complete: true }).status, 'ambiguous');
 });
 
 test('floors overdue modeled dates and applies business-day blocks', () => {
