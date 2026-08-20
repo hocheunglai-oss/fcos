@@ -47,8 +47,8 @@ const HANDLER_CONTEXT = {
     link: '/hedge-desk',
   },
   marketReportDriveSyncCron: {
-    title: 'Market report synchronization failed',
-    message: 'The hourly Google Drive market-report check did not complete. Existing verified market prices remain available while the error is reviewed.',
+    title: 'Market report synchronization needs attention',
+    message: 'The hourly Google Drive market-report check did not complete or found a quarantined MOPS conflict. Existing verified prices remain available while the data-quality issue is reviewed.',
     link: '/markets',
   },
   emailRouterMaintenanceCron: {

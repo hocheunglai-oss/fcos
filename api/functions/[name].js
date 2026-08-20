@@ -6977,6 +6977,17 @@ async function googleDriveHealthRow() {
             }
             marketFolders.push({ label: marketFolder.label, folderId: maskValue(marketMetadata.id, 6, 4), folderName: marketMetadata.name || null });
           }
+          const healthClient = supabaseAdminClient();
+          const [syncRun, imports, published, matched, incomplete, conflicts] = await Promise.all([
+            healthClient.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).maybeSingle(),
+            healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).gte('report_date', '2025-01-01'),
+            healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'published'),
+            healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'matched'),
+            healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'incomplete'),
+            healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'conflict'),
+          ]);
+          const marketDatabaseError = [syncRun, imports, published, matched, incomplete, conflicts].find((entry) => entry.error)?.error;
+          if (marketDatabaseError) throw marketDatabaseError;
           return {
             accessTokenExpiresAt: addSecondsIso(token.expires_in),
             accountEmail: marketConfig.accountEmail,
@@ -6984,6 +6995,14 @@ async function googleDriveHealthRow() {
             folderId: maskValue(folder.id, 6, 4),
             folderTrashed: folder.trashed === true,
             marketFolders,
+            lastSuccessfulMarketScan: syncRun.data?.completed_at || null,
+            lastMarketScanDiscovered: syncRun.data?.discovered_count ?? null,
+            lastMarketScanImported: syncRun.data?.imported_count ?? null,
+            importedReportsSince2025: imports.count || 0,
+            mopsDatesPublished: published.count || 0,
+            mopsDatesMatched: matched.count || 0,
+            missingMopsTriples: incomplete.count || 0,
+            mopsConflicts: conflicts.count || 0,
           };
         })
       : null;

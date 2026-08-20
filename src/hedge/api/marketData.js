@@ -48,3 +48,12 @@ export function previewMarketReport(payload) {
 export function importMarketReport(payload) {
   return request({ action: 'market_report_import', ...payload });
 }
+
+export function loadMarketHistory(payload, options = {}) {
+  return request({ action: 'market_history', ...payload }, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-history'],
+    ...options,
+  });
+}

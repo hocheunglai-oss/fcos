@@ -164,7 +164,17 @@ export async function runMarketReportDriveSync(client, {
   if (reserve.error) throw syncError('Market sync could not reserve its hourly operation.', 'MARKET_DRIVE_RUN_RESERVE_FAILED');
   if (reserve.data?.reserved !== true) return { duplicate: true, runKey, status: reserve.data?.status || null };
 
-  const summary = { discoveredCount: 0, skippedCount: 0, importedCount: 0, failedCount: 0, deferredCount: 0 };
+  const summary = {
+    discoveredCount: 0,
+    skippedCount: 0,
+    importedCount: 0,
+    failedCount: 0,
+    deferredCount: 0,
+    mopsPublishedCount: 0,
+    mopsMatchedCount: 0,
+    mopsIncompleteCount: 0,
+    mopsConflictCount: 0,
+  };
   try {
     await verifyDriveAuthority(fetchImpl, accessToken, config);
     const [knownMd5, ...folderFiles] = await Promise.all([
@@ -209,6 +219,14 @@ export async function runMarketReportDriveSync(client, {
           p_observations: parsed.observations,
         });
         if (saved.error) throw syncError('A parsed market report could not be saved.', 'MARKET_DRIVE_IMPORT_FAILED');
+        const publicationStatus = saved.data?.mopsPublication?.status;
+        if (publicationStatus === 'published') summary.mopsPublishedCount += 1;
+        if (publicationStatus === 'matched') summary.mopsMatchedCount += 1;
+        if (publicationStatus === 'incomplete') summary.mopsIncompleteCount += 1;
+        if (publicationStatus === 'conflict') {
+          summary.mopsConflictCount += 1;
+          throw syncError('A licensed report conflicts with the authoritative MOPS ledger.', saved.data?.mopsPublication?.conflictCode || 'MOPS_LEDGER_VALUE_MISMATCH');
+        }
         knownMd5.add(md5);
         summary.importedCount += 1;
       } catch (error) {

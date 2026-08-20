@@ -8,7 +8,12 @@ import {
 } from '../src/hedge/lib/domain.js';
 import { decorateMopsMonthVerifications, mopsMonthDateBounds, prepareManualMopsVerification } from './_hedgeMops.js';
 import { reconcilePaperHedgeExpiry } from './_hedgeExpiry.js';
-import { importMarketReport, loadMarketIntelligence, previewMarketReport } from './_marketIntelligence.js';
+import {
+  importMarketReport,
+  loadMarketIntelligence,
+  loadMarketIntelligenceHistory,
+  previewMarketReport,
+} from './_marketIntelligence.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -686,6 +691,8 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
   }
 
   if (action === 'market_report_preview') return previewMarketReport(body);
+
+  if (action === 'market_history') return loadMarketIntelligenceHistory(client, body);
 
   if (action === 'market_report_import') {
     await requireWriteCapability(capabilities, configFor('MopsPrice'));

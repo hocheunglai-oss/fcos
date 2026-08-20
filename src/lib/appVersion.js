@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.188',
+    releasedAt: '2026-08-20',
+    title: 'Add delivered-price MOPS analytics',
+    changes: [
+      'Adds Hong Kong VLSFO, HSFO 380, and LSMGO plus exact Not published gaps for South Korea West.',
+      'Adds exact-date premium/discount sparklines, 1W/1M/3M statistics, and synchronized 1W-to-1Y product charts.',
+      'Preserves immutable report lineage, quarantines conflicts, and publishes settlement MOPS only from a complete European Marketscan AMFSA00/PPXDK00/POABC00 triple.',
+      'Moves long market history behind a lazy authenticated range API and expands System Health with report-sync and MOPS publication outcomes.',
+    ],
+  },
+  {
     version: '2.0.187',
     releasedAt: '2026-08-20',
     title: 'Add delivered bunker market intelligence',

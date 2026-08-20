@@ -20,7 +20,7 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [] } = {}) {
+function clientMock({ knownMd5 = [], publicationStatus = null } = {}) {
   const rpcCalls = [];
   return {
     rpcCalls,
@@ -28,7 +28,7 @@ function clientMock({ knownMd5 = [] } = {}) {
       rpcCalls.push({ name, payload });
       if (name === 'reserve_market_report_sync_run') return { data: { reserved: true, status: 'running' }, error: null };
       if (name === 'finish_market_report_sync_run') return { data: { status: payload.p_status }, error: null };
-      if (name === 'save_market_drive_report_import') return { data: { status: 'completed' }, error: null };
+      if (name === 'save_market_drive_report_import') return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
       return { data: null, error: new Error('Unexpected RPC') };
     },
     from: () => ({
@@ -105,6 +105,21 @@ test('hourly sync fails closed on the wrong Google account and records a redacte
   const finished = client.rpcCalls.find(({ name }) => name === 'finish_market_report_sync_run');
   assert.equal(finished.payload.p_status, 'failed');
   assert.equal(finished.payload.p_error_code, 'MARKET_DRIVE_IDENTITY_MISMATCH');
+});
+
+test('hourly sync surfaces a quarantined MOPS conflict without retrying delivery actions', async () => {
+  const pdf = Buffer.from('%PDF-conflicting-report');
+  const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');
+  const client = clientMock({ publicationStatus: 'conflict' });
+  const drive = driveFetch({ files: [{ id: 'conflictreport12345', name: 'EUM_20260820.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-20T11:00:00Z', documentType: 'european_marketscan' }], pdf });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-20T11:15:00Z'),
+    parseReport: async () => ({ sourceHash: 'b'.repeat(64), reportDate: '2026-08-20', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }] }),
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.mopsConflictCount, 1);
+  assert.equal(result.failedCount, 1);
+  assert.equal(result.errorCode, 'MOPS_LEDGER_VALUE_MISMATCH');
 });
 
 test('hourly market sync migration is service-only and stores no PDF or report text', () => {

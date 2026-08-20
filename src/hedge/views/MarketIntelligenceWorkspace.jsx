@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -16,12 +16,13 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-import { importMarketReport, previewMarketReport } from '@/hedge/api/marketData';
+import { importMarketReport, loadMarketHistory, previewMarketReport } from '@/hedge/api/marketData';
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import {
   Button,
@@ -31,7 +32,6 @@ import {
   Metric,
   PageHeader,
   Panel,
-  SegmentedControl,
   Select,
   StatusBadge,
 } from '@/hedge/components/ui';
@@ -71,30 +71,139 @@ function readFileAsBase64(file) {
   });
 }
 
-function DeliveredTooltip({ active, payload, label }) {
+function signedMoney(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  return `${Number(value) >= 0 ? '+' : ''}${formatMoney(Number(value), { digits: 2 })}`;
+}
+
+function SpreadSparkline({ points = [], color = '#2563eb' }) {
+  const values = points.map((row) => Number(row.spread)).filter(Number.isFinite);
+  if (values.length < 2) return <div className="market-sparkline market-sparkline--empty">Insufficient matched dates</div>;
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const range = high - low || 1;
+  const coordinates = values.map((value, index) => `${(index / (values.length - 1)) * 100},${28 - ((value - low) / range) * 24}`).join(' ');
+  return (
+    <svg className="market-sparkline" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="Three-month premium or discount sparkline">
+      <line x1="0" x2="100" y1={28 - ((0 - low) / range) * 24} y2={28 - ((0 - low) / range) * 24} className="market-sparkline__zero" />
+      <polyline points={coordinates} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function HorizonStat({ label, value }) {
+  return (
+    <div className="market-horizon-stat">
+      <strong>{label}</strong>
+      {value?.matchedSamples ? <>
+        <span>Avg {signedMoney(value.average)}</span>
+        <small>{signedMoney(value.low)} to {signedMoney(value.high)}</small>
+        <small>Move {signedMoney(value.movement)} · n={value.matchedSamples}</small>
+      </> : <span>No match</span>}
+    </div>
+  );
+}
+
+function MarketToggleGroup({ label, options, selected, onChange, single = false }) {
+  const toggle = (value) => {
+    if (single) { onChange(value); return; }
+    const next = selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value];
+    if (next.length) onChange(next);
+  };
+  return (
+    <fieldset className="market-toggle-group">
+      <legend>{label}</legend>
+      <div>{options.map((option) => {
+        const active = single ? selected === option.value : selected.includes(option.value);
+        return <button key={option.value} type="button" aria-pressed={active} className={active ? 'is-active' : ''} onClick={() => toggle(option.value)}>{option.label}</button>;
+      })}</div>
+    </fieldset>
+  );
+}
+
+function DeliveredTooltip({ active, payload, label, mode }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="app-chart-tooltip">
       <strong>{formatDate(label)}</strong>
       {payload.filter((item) => item.value != null).map((item) => (
-        <span key={item.dataKey} style={{ color: item.color }}>{item.name}: {formatMoney(item.value, { digits: 2 })} USD/MT</span>
+        <span key={item.dataKey} style={{ color: item.color }}>{item.name}: {mode === 'spread' ? signedMoney(item.value) : formatMoney(item.value, { digits: 2 })} USD/MT</span>
       ))}
     </div>
   );
 }
 
+function historyChartRows(panel, mode) {
+  const byDate = new Map();
+  const rowFor = (date) => {
+    if (!byDate.has(date)) byDate.set(date, { date });
+    return byDate.get(date);
+  };
+  for (const series of panel.series || []) {
+    for (const point of series.points || []) rowFor(point.date)[series.portKey] = mode === 'spread' ? point.spread : point.delivered;
+  }
+  if (mode === 'price') {
+    for (const point of panel.benchmark?.points || []) rowFor(point.date).mops = point.usdMt;
+  }
+  return [...byDate.values()].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
+  const data = useMemo(() => historyChartRows(panel, mode), [mode, panel]);
+  return (
+    <section className={`market-product-panel${mobileActive ? ' is-mobile-active' : ''}`} aria-hidden={!visible}>
+      <div className="market-product-panel__title">
+        <div><strong>{panel.productLabel}</strong><span>{mode === 'spread' ? 'Delivered premium / discount vs exact-date MOPS' : panel.benchmark?.label || 'Delivered price'}</span></div>
+        <StatusBadge tone={mode === 'spread' ? 'warning' : 'neutral'}>{mode === 'spread' ? 'USD/MT spread' : 'USD/MT price'}</StatusBadge>
+      </div>
+      {data.length ? <div className="market-product-panel__chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} syncId="delivered-mops" syncMethod="value" margin={{ top: 8, right: 16, left: 0, bottom: 2 }}>
+            <CartesianGrid stroke="#e8ecef" vertical={false} />
+            <XAxis dataKey="date" tickFormatter={(value) => value.slice(5)} tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={28} />
+            <YAxis tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} />
+            <Tooltip content={<DeliveredTooltip mode={mode} />} />
+            <Legend iconType="plainline" wrapperStyle={{ fontSize: 11, paddingTop: 5 }} />
+            {mode === 'spread' ? <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" /> : null}
+            {(panel.series || []).filter((series) => series.available).map((series, index) => (
+              <Line key={series.portKey} type="monotone" dataKey={series.portKey} name={series.portLabel} stroke={PORT_COLORS[index % PORT_COLORS.length]} strokeWidth={2} dot={false} connectNulls={false} />
+            ))}
+            {mode === 'price' && panel.benchmark?.points?.length ? <Line type="monotone" dataKey="mops" name={panel.benchmark.label} stroke="#111827" strokeWidth={2} strokeDasharray="5 4" dot={false} connectNulls={false} /> : null}
+          </LineChart>
+        </ResponsiveContainer>
+      </div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No matched history</strong><span>Missing dates remain gaps; FCOS never forward-fills a price.</span></div></div>}
+    </section>
+  );
+}
+
 function DeliveredBunkers({ intelligence }) {
-  const [product, setProduct] = useState('vlsfo');
   const delivered = intelligence?.delivered || [];
-  const productRows = delivered.filter((row) => row.productKey === product);
-  const chartData = useMemo(() => {
-    const dates = [...new Set(productRows.flatMap((row) => row.history.map((item) => item.priceDate)))].sort();
-    return dates.map((date) => Object.fromEntries([
-      ['date', date],
-      ...productRows.map((row) => [row.portKey, row.history.find((item) => item.priceDate === date)?.price ?? null]),
-    ]));
-  }, [productRows]);
-  const ports = [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()];
+  const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
+  const [selectedProducts, setSelectedProducts] = useState(() => PRODUCTS.map((item) => item.value));
+  const [selectedPorts, setSelectedPorts] = useState(() => ports.map(([key]) => key));
+  const [mode, setMode] = useState('spread');
+  const [range, setRange] = useState('3m');
+  const [includeMops, setIncludeMops] = useState(true);
+  const [mobileProduct, setMobileProduct] = useState('vlsfo');
+  const [history, setHistory] = useState(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
+
+  useEffect(() => {
+    if (!selectedProducts.includes(mobileProduct)) setMobileProduct(selectedProducts[0]);
+  }, [mobileProduct, selectedProducts]);
+
+  useEffect(() => {
+    if (!intelligence?.available || !selectedProducts.length || !selectedPorts.length) return undefined;
+    const controller = new AbortController();
+    setHistoryBusy(true);
+    setHistoryError(null);
+    loadMarketHistory({ range, mode, products: selectedProducts, ports: selectedPorts, includeMops, limit: 400 }, { signal: controller.signal })
+      .then((result) => { if (!result?.cancelled) setHistory(result); })
+      .catch((error) => { if (error?.name !== 'AbortError') setHistoryError(error); })
+      .finally(() => { if (!controller.signal.aborted) setHistoryBusy(false); });
+    return () => controller.abort();
+  }, [includeMops, intelligence?.available, mode, range, selectedPorts, selectedProducts]);
 
   if (!intelligence?.available) {
     return <Panel><div className="market-empty-inline"><RefreshCw size={20} /><div><strong>Delivered-price storage is not deployed yet</strong><span>The MOPS market remains available. Apply the reviewed service-only migration to enable delivered data.</span></div></div></Panel>;
@@ -108,35 +217,47 @@ function DeliveredBunkers({ intelligence }) {
           const latestDate = values.map((row) => row.latest.priceDate).sort().at(-1);
           return <Metric key={item.value} label={`${item.label} coverage`} value={`${values.length} ports`} detail={latestDate ? `Latest ${formatDate(latestDate)}` : 'No observation loaded'} tone={item.value === 'vlsfo' ? 'blue' : item.value === 'hsfo380' ? 'orange' : 'teal'} icon={Ship} />;
         })}
-        <Metric label="Market basis" value="Delivered" detail="Never used for MOPS settlement" tone="green" icon={Scale} />
+        <Metric label="Spread basis" value="Exact date" detail="No interpolation or cargo proxy" tone="green" icon={Scale} />
       </div>
+
+      {(intelligence?.conflicts || []).length ? <div className="app-callout app-callout--warning"><AlertTriangle size={16} /> Conflicting report observations are quarantined. Affected dates are excluded from premium / discount analytics until reviewed.</div> : null}
 
       <Panel className="market-matrix-panel">
         <div className="app-panel-header">
-          <div><h2>Major-port delivered prices</h2><p>USD/MT. Posted and assessed values remain visibly distinct.</p></div>
-          <StatusBadge tone="neutral">5 ports · 3 products</StatusBadge>
+          <div><h2>Major-port delivered prices and MOPS spread</h2><p>Latest USD/MT values with one three-month sparkline and exact-date 1W, 1M and 3M statistics.</p></div>
+          <StatusBadge tone="neutral">{ports.length} ports · 3 products</StatusBadge>
         </div>
         <div className="market-matrix-scroll">
-          <table className="market-matrix">
+          <table className="market-matrix market-matrix--analytics">
             <thead><tr><th>Port</th>{PRODUCTS.map((item) => <th key={item.value}>{item.label}</th>)}</tr></thead>
             <tbody>{ports.map(([portKey, portLabel]) => (
               <tr key={portKey}>
                 <th>{portLabel}</th>
                 {PRODUCTS.map((item) => {
                   const row = delivered.find((entry) => entry.portKey === portKey && entry.productKey === item.value);
+                  if (!row || row.sourceType === 'unavailable') return <td key={item.value} className="market-price-cell--unavailable"><strong>Not published</strong><small>No exact licensed series</small></td>;
+                  const latestSpread = row.latestSpread;
                   return (
                     <td key={item.value}>
                       <div className="market-price-cell">
                         <div className="market-price-cell__top">
-                          <strong>{row?.latest?.price == null ? '—' : formatMoney(row.latest.price, { digits: 2 })}</strong>
-                          {row?.aliasLabel ? <span className="market-alias-label">{row.aliasLabel}</span> : null}
+                          <strong>{row.latest?.price == null ? '—' : formatMoney(row.latest.price, { digits: 2 })}</strong>
+                          {row.aliasLabel ? <span className="market-alias-label">{row.aliasLabel}</span> : null}
+                        </div>
+                        <div className="market-price-cell__spread">
+                          <span>{latestSpread?.spread == null ? 'No exact-date MOPS' : `${latestSpread.spread >= 0 ? 'Premium' : 'Discount'} ${signedMoney(latestSpread.spread)}`}</span>
+                          <small>{latestSpread?.date ? formatDate(latestSpread.date) : row.benchmark?.label || 'Benchmark unavailable'}</small>
+                        </div>
+                        <SpreadSparkline points={row.spreadHistory || []} color={item.color} />
+                        <div className="market-horizon-grid">
+                          <HorizonStat label="1W" value={row.horizonStats?.['1w']} />
+                          <HorizonStat label="1M" value={row.horizonStats?.['1m']} />
+                          <HorizonStat label="3M" value={row.horizonStats?.['3m']} />
                         </div>
                         <div className="market-price-cell__meta">
-                          <StatusBadge tone={sourceTone(row?.sourceType)}>{sourceLabel(row?.sourceType || 'unavailable')}</StatusBadge>
-                          {row?.latest?.dayChange != null ? <span className={row.latest.dayChange >= 0 ? 'is-up' : 'is-down'}>{row.latest.dayChange >= 0 ? '+' : ''}{row.latest.dayChange.toFixed(2)}</span> : null}
+                          <StatusBadge tone={sourceTone(row.sourceType)}>{sourceLabel(row.sourceType)}</StatusBadge>
+                          <small>{row.sourceSymbol}{row.latest?.stale ? ` · ${row.latest.staleDays}d old` : ''}</small>
                         </div>
-                        <small>{row?.sourceSymbol || 'No exact symbol'}{row?.latest?.stale ? ` · ${row.latest.staleDays}d old` : ''}</small>
-                        {row?.deliveredPremium != null ? <small>Premium vs SG cargo {row.deliveredPremium >= 0 ? '+' : ''}{row.deliveredPremium.toFixed(2)}</small> : null}
                       </div>
                     </td>
                   );
@@ -145,26 +266,30 @@ function DeliveredBunkers({ intelligence }) {
             ))}</tbody>
           </table>
         </div>
-        <div className="app-callout app-callout--neutral"><Info size={15} /> Kaohsiung uses CPC posted terminology: VLSFO is labelled <strong>LS180</strong>; <strong>MF-380</strong> is mapped to HSFO 380.</div>
+        <div className="app-callout app-callout--neutral"><Info size={15} /> Kaohsiung is CPC posted pricing: VLSFO is <strong>LS180</strong> and HSFO 380 is <strong>MF-380</strong>. South Korea (West) publishes VLSFO only.</div>
       </Panel>
 
-      <Panel className="app-chart-panel market-delivered-chart">
+      <Panel className="app-chart-panel market-delivered-chart market-analytics-chart">
         <div className="app-panel-header">
-          <div><h2>Delivered-price trend</h2><p>Compare like-for-like products across ports; no currency or unit conversion is applied.</p></div>
-          <SegmentedControl label="Product" value={product} onChange={setProduct} options={PRODUCTS} />
+          <div><h2>Delivered price and premium / discount trends</h2><p>Product panels share the same date and tooltip position while retaining independent scales.</p></div>
+          {historyBusy ? <StatusBadge tone="neutral">Updating…</StatusBadge> : <StatusBadge tone={history?.coverage?.complete ? 'positive' : 'warning'}>{history?.coverage?.matchedSpreads || 0} matched spreads</StatusBadge>}
         </div>
-        {chartData.length ? <div className="app-chart">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 10, right: 22, left: 0, bottom: 4 }}>
-              <CartesianGrid stroke="#e8ecef" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={(value) => value.slice(5)} tick={{ fill: '#738091', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#738091', fontSize: 11 }} axisLine={false} tickLine={false} width={54} domain={['auto', 'auto']} />
-              <Tooltip content={<DeliveredTooltip />} />
-              <Legend iconType="plainline" wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-              {productRows.map((row, index) => <Line key={row.portKey} type="monotone" dataKey={row.portKey} name={row.portLabel} stroke={PORT_COLORS[index % PORT_COLORS.length]} strokeWidth={2} dot={false} connectNulls />)}
-            </LineChart>
-          </ResponsiveContainer>
-        </div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No {PRODUCTS.find((item) => item.value === product)?.label} history yet</strong><span>Import a licensed report to populate the trend.</span></div></div>}
+        <div className="market-chart-controls">
+          <MarketToggleGroup label="View" single options={[{ value: 'price', label: 'Delivered price' }, { value: 'spread', label: 'Premium vs MOPS' }]} selected={mode} onChange={setMode} />
+          <MarketToggleGroup label="Range" single options={['1w', '1m', '3m', '6m', '1y'].map((value) => ({ value, label: value.toUpperCase() }))} selected={range} onChange={setRange} />
+          <MarketToggleGroup label="Products" options={PRODUCTS} selected={selectedProducts} onChange={setSelectedProducts} />
+          <MarketToggleGroup label="Ports" options={ports.map(([value, label]) => ({ value, label }))} selected={selectedPorts} onChange={setSelectedPorts} />
+          <fieldset className="market-toggle-group"><legend>Benchmark</legend><div><button type="button" aria-pressed={includeMops} className={includeMops ? 'is-active' : ''} onClick={() => setIncludeMops((value) => !value)}>MOPS</button></div></fieldset>
+        </div>
+        {mode === 'spread' ? <div className="app-callout app-callout--neutral"><Info size={15} /> MOPS is represented by the zero line in spread mode. Switch to Delivered price to draw the benchmark line.</div> : null}
+        {historyError ? <InlineError error={historyError} /> : null}
+        {(history?.warnings || []).length ? <div className="market-history-warnings">{history.warnings.map((warning) => <div key={`${warning.code}:${warning.date}:${warning.productKey || ''}`}><AlertTriangle size={14} /><span>{warning.message}</span></div>)}</div> : null}
+        <div className="market-mobile-product-tabs" role="tablist" aria-label="Chart product">{selectedProducts.map((value) => {
+          const option = PRODUCTS.find((item) => item.value === value);
+          return <button key={value} type="button" role="tab" aria-selected={mobileProduct === value} className={mobileProduct === value ? 'is-active' : ''} onClick={() => setMobileProduct(value)}>{option?.label || value}</button>;
+        })}</div>
+        <div className="market-product-panels">{(history?.panels || []).map((panel) => <DeliveredTrendPanel key={panel.productKey} panel={panel} mode={mode} visible={selectedProducts.includes(panel.productKey)} mobileActive={mobileProduct === panel.productKey} />)}</div>
+        {history && !history.coverage?.complete ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> The selected horizon was paginated. Narrow the selection before using the chart for a complete comparison.</div> : null}
       </Panel>
     </div>
   );
@@ -336,7 +461,7 @@ export function MarketIntelligenceWorkspace({ data, settings, readOnly, priceEnt
   const intelligence = data.marketIntelligence || {};
   return (
     <div className="app-page market-intelligence-workspace">
-      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Separate delivered bunker indications, cargo and forward references, and decision signals without changing MOPS settlement." actions={!readOnly ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
+      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Compare exact-date delivered bunker prices with controlled MOPS benchmarks; only complete European Marketscan triples may update the settlement ledger." actions={!readOnly ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
       <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => setTab(item.value)}>{item.label}</button>)}</div>
       {tab === 'delivered' ? <DeliveredBunkers intelligence={intelligence} /> : null}
       {tab === 'cargo' ? <><CargoForwardSummary intelligence={intelligence} /><MarketsView embedded data={data} settings={settings} readOnly={readOnly} priceEntity={priceEntity} verifyMonth={verifyMonth} /></> : null}

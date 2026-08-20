@@ -3,15 +3,17 @@ const PLATTS_METHODOLOGY_URL = "https://www.spglobal.com/energy/en/pricing-bench
 
 export const PAGE_METHODOLOGIES = {
   Markets: {
-    summary: "Markets separates delivered bunker observations, cargo and forward references, and trading signals from the MOPS records used for hedge settlement.",
+    summary: "Markets compares delivered bunker observations with controlled exact-date MOPS benchmarks and keeps settlement publication behind a complete European Marketscan three-symbol gate.",
     steps: [
-      "Delivered Bunkers shows each configured port and product in its native USD/MT basis. Assessment, posted, proxy, estimate, unavailable and stale states remain explicit.",
+      "Delivered Bunkers shows Hong Kong, Singapore, South Korea, South Korea West, Zhoushan and Kaohsiung in USD/MT. South Korea West HSFO and LSMGO remain explicit Not published gaps.",
+      "Each matrix cell uses one three-month premium/discount sparkline and exact-date 1W, 1M and 3M statistics. Missing dates are never forward-filled, interpolated or replaced with a cargo proxy.",
       "Kaohsiung VLSFO is displayed with the local LS180 label; MF-380 is mapped to HSFO 380. These names do not change the source symbol or methodology basis.",
+      "Synchronized product panels compare delivered prices or delivered-minus-MOPS spreads over 1W, 1M, 3M, 6M or 1Y. SGO is converted to USD/MT with the controlled 7.45 bbl/MT factor.",
       "Cargo & Forward retains the controlled MOPS publication workflow and separately shows licensed cargo, BM, M1, M2, East-West and gasoil observations.",
       "Trading Signals calculates transparent port spreads, delivered premiums, curve structure and quote differences. It never makes or executes a trading decision.",
-      "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores structured values plus a source hash rather than the report or its text.",
+      "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores immutable structured evidence plus a source hash rather than the report or its text. Conflicts are quarantined.",
       "FCOS checks the approved Bunkerwire and European Marketscan Google Drive folders hourly through the pinned vince.less@gmail.com server authorization. It imports only unseen checksums and refreshes an open Markets page shortly after each scheduled check. If browser reauthorization is required, use only the Vincent profile; normal scheduled processing uses the server OAuth refresh token.",
-      "Delivered, cargo, forward and compliance observations never write to hedge_market_prices and therefore cannot alter MOPS averages, hedge expiry or settlement.",
+      "Only one European Marketscan report containing AMFSA00, PPXDK00 and POABC00 for the same date may publish MOPS. Estimates are replaced, matching actuals are verified, differing actuals are never overwritten, and monthly-average verification and hedge-expiry gates remain unchanged.",
     ],
     sources: [
       { label: "S&P Global refined products assessment methodology", url: PLATTS_METHODOLOGY_URL },
