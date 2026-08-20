@@ -188,6 +188,8 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(handler, /async function systemErrorVerify/);
   assert.match(handler, /case 'specialTermsWorkspace'/);
   assert.match(handler, /case 'hedgeDeskSalesforceMapping'/);
+  assert.match(handler, /case 'hedgeMarkets'/);
+  assert.match(handler, /hedgeMarkets\(\{ action: 'snapshot' \}, req, context\)/);
   assert.match(handler, /case 'emailRouterMaintenanceCron'/);
   assert.match(handler, /EMAIL_ROUTER_SYNCHRONIZATION_STALE/);
   assert.match(handler, /expectedFolders = \['inbox', 'sentitems', 'archive'\]/);

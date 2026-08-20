@@ -1054,6 +1054,9 @@ async function systemErrorVerify(body = {}, req = null, accessContext = null) {
     case 'hedgeDeskSalesforceMapping':
       await getHedgeSalesforceMapping(context.client);
       break;
+    case 'hedgeMarkets':
+      await hedgeMarkets({ action: 'snapshot' }, req, context);
+      break;
     case 'emailRouterMaintenanceCron': {
       const serviceClient = createEmailRouterServiceClient();
       const mailbox = await currentEmailRouterMailbox(serviceClient);
