@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
-const MAX_REPORT_BYTES = 3_500_000;
+const MAX_REPORT_BYTES = 5_000_000;
 const REPORT_TYPES = new Set(['bunkerwire', 'european_marketscan']);
 
 const SOURCE_PAGES = Object.freeze({
@@ -47,10 +47,10 @@ function normalizedReportText(value) {
 
 function reportDateFrom(value, filename = '') {
   const filenameMatch = String(filename).match(/(?:^|\D)(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])(?:\D|$)/);
-  if (filenameMatch) return `${filenameMatch[1]}-${filenameMatch[2]}-${filenameMatch[3]}`;
+  const filenameDate = filenameMatch ? `${filenameMatch[1]}-${filenameMatch[2]}-${filenameMatch[3]}` : null;
   const monthNames = 'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
   const match = String(value).match(new RegExp(`\\b(${monthNames})\\s+(\\d{1,2}),?\\s+(20\\d{2})\\b`, 'i'));
-  if (!match) return null;
+  if (!match) return filenameDate;
   const month = new Date(`${match[1]} 1, 2000`).getMonth() + 1;
   return `${match[3]}-${String(month).padStart(2, '0')}-${String(Number(match[2])).padStart(2, '0')}`;
 }
@@ -99,7 +99,7 @@ function decodeReport(base64) {
   } catch {
     throw marketError('The PDF report could not be decoded.', 400, 'MARKET_REPORT_INVALID_FILE');
   }
-  if (!buffer.length || buffer.length > MAX_REPORT_BYTES) throw marketError('The PDF report must be no larger than 3.5 MB.', 413, 'MARKET_REPORT_TOO_LARGE');
+  if (!buffer.length || buffer.length > MAX_REPORT_BYTES) throw marketError('The PDF report must be no larger than 5 MB.', 413, 'MARKET_REPORT_TOO_LARGE');
   if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') throw marketError('Only a valid PDF report can be imported.', 400, 'MARKET_REPORT_INVALID_FILE');
   return buffer;
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { buildMarketIntelligenceSnapshot, parseMarketReportText } from '../api/_marketIntelligence.js';
+import { buildMarketIntelligenceSnapshot, marketReportLimits, parseMarketReportText } from '../api/_marketIntelligence.js';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -32,6 +32,18 @@ test('European Marketscan parser supports BM, M1/M2 and East-West symbols', () =
   const result = parseMarketReportText(report, { documentType: 'european_marketscan' });
   assert.equal(result.observations.find((row) => row.sourceSymbol === 'FOFS000').sourcePage, 3);
   assert.equal(result.observations.find((row) => row.sourceSymbol === 'FQLSM01').dayChange, -1);
+});
+
+test('report header date overrides a misleading archive filename', () => {
+  const result = parseMarketReportText(`
+    Bunkerwire September 5, 2025
+    Singapore MFSPD00 701.000 +2.000
+  `, { documentType: 'bunkerwire', filename: 'BW_20250509.pdf' });
+  assert.equal(result.reportDate, '2025-09-05');
+});
+
+test('market report upload limit accepts bounded historical reports up to 5 MB', () => {
+  assert.equal(marketReportLimits.maxBytes, 5_000_000);
 });
 
 test('market snapshot calculates port relative value and cargo premium without affecting MOPS', () => {
