@@ -152,9 +152,9 @@ export function MarketDriversAlerts({ readOnly }) {
   const reconcileArchive = async () => {
     setArchiveBusy(true);
     setArchiveError(null);
-    setArchiveProgress(null);
-    let cursor = 0;
-    let archiveFingerprint = null;
+    const canResume = archiveProgress && archiveProgress.complete !== true;
+    let cursor = canResume ? Number(archiveProgress.nextCursor || 0) : 0;
+    let archiveFingerprint = canResume ? archiveProgress.archiveFingerprint || null : null;
     try {
       for (;;) {
         const result = await replayMarketIntelligenceArchive({ cursor, archiveFingerprint });

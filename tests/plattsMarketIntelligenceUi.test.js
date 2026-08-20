@@ -188,6 +188,10 @@ test('licensed archive reconciliation is administrator-only, batched, and no-ref
   const policies = read('api/_handlerPolicyRegistry.js');
   assert.match(drivers, /if \(result\.complete\) break/);
   assert.match(drivers, /result\.nextCursor/);
+  assert.match(drivers, /const canResume = archiveProgress && archiveProgress\.complete !== true/);
+  assert.match(drivers, /cursor = canResume \? Number\(archiveProgress\.nextCursor \|\| 0\) : 0/);
+  assert.match(drivers, /archiveFingerprint = canResume \? archiveProgress\.archiveFingerprint \|\| null : null/);
+  assert.doesNotMatch(drivers, /setArchiveProgress\(null\)/);
   assert.match(drivers, /832-file Drive manifest/);
   assert.match(drivers, /831 unique PDFs and one byte duplicate/);
   assert.match(drivers, /PDF bytes and report prose are never stored/);
