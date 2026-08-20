@@ -14,7 +14,7 @@ const authenticatedWorkspaces = [
   ['/projects-tasks', 'Projects & Tasks'],
   ['/fcos-improvements', 'FCOS Improvements'],
   ['/', 'Dashboard'],
-  ['/markets', 'Markets', 'MOPS market'],
+  ['/markets', 'Markets'],
   ['/special-terms', 'Special Terms'],
   ['/payment-collections', 'Payment Collections'],
   ['/disputes', 'Dispute Workflow'],
