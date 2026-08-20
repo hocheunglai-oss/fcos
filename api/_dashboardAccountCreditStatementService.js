@@ -1,6 +1,11 @@
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { calculatedBuyerPayTermDate } from './_buyerInvoiceDates.js';
+import {
+  buildBuyerPaymentDelayModels,
+  normalizeBuyerPaymentConservativeness,
+} from './_buyerPaymentPerformance.js';
 import {
   accountCreditSnapshot,
   buildAccountCreditStatement,
@@ -12,6 +17,7 @@ import {
   normalizeCreditAccountName,
   reconcileCreditExposure,
   resolveCreditSnapshotCandidate,
+  resolveGroupCreditAuthority,
   selectUltimateCreditGroup,
 } from './_dashboardAccountCreditStatement.js';
 import {
@@ -102,6 +108,19 @@ function oneYearBefore(date) {
   const value = new Date(`${date}T00:00:00.000Z`);
   value.setUTCFullYear(value.getUTCFullYear() - 1);
   return value.toISOString().slice(0, 10);
+}
+
+function addCalendarDays(date, days) {
+  const value = new Date(`${String(date).slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(value.getTime())) return null;
+  value.setUTCDate(value.getUTCDate() + Number(days || 0));
+  return value.toISOString().slice(0, 10);
+}
+
+function daysBetween(fromDate, toDate) {
+  const from = Date.parse(`${String(fromDate).slice(0, 10)}T00:00:00.000Z`);
+  const to = Date.parse(`${String(toDate).slice(0, 10)}T00:00:00.000Z`);
+  return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / 86_400_000) : null;
 }
 
 async function describeObject(objectName, force = false) {
@@ -591,6 +610,126 @@ function serializePayment(row, config) {
   };
 }
 
+function paymentPerformanceStemSelectFields(stemFields, accountFields) {
+  const result = stemSelectFields(stemFields);
+  if (stemFields.has('Account__c')) {
+    if (accountFields.has('ParentId')) result.push('Account__r.ParentId');
+    if (accountFields.has('ParentId')) result.push('Account__r.Parent.Name');
+    if (accountFields.has('Group_Name__c')) result.push('Account__r.Group_Name__c');
+  }
+  return [...new Set(result)];
+}
+
+async function queryStemsByIds(stemIds, stemFields, accountFields) {
+  const rows = [];
+  const select = paymentPerformanceStemSelectFields(stemFields, accountFields);
+  for (const ids of chunkIds(stemIds)) {
+    const result = await queryAll(`SELECT ${select.join(',')} FROM STEM__c WHERE Id IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) LIMIT ${MAX_EVIDENCE_ROWS + 1}`, MAX_EVIDENCE_ROWS + 1);
+    rows.push(...result.records);
+    if (rows.length > MAX_EVIDENCE_ROWS) break;
+  }
+  return rows.slice(0, MAX_EVIDENCE_ROWS);
+}
+
+async function queryBuyerPaymentPerformanceSamples({
+  since,
+  scopedAccountIds = null,
+  paymentFields,
+  paymentConfig,
+  stemFields,
+  accountFields,
+  currentGroup = null,
+  currentGroupMembers = [],
+}) {
+  const select = paymentSelectFields(paymentFields, paymentConfig);
+  const dateWhere = paymentConfig.dateField === 'CreatedDate'
+    ? `CreatedDate >= ${since}T00:00:00Z`
+    : `${paymentConfig.dateField} >= ${since}`;
+  const conditions = [dateWhere];
+  if (Array.isArray(scopedAccountIds) && scopedAccountIds.length) {
+    conditions.push(`Account__c IN (${scopedAccountIds.map((id) => `'${soql(id)}'`).join(',')})`);
+  }
+  for (const field of paymentConfig.supplierInvoiceFields) conditions.push(`${field} = null`);
+  const result = await queryAll(`SELECT ${select.join(',')} FROM Payment__c WHERE ${conditions.join(' AND ')} ORDER BY ${paymentConfig.dateField} DESC NULLS LAST LIMIT ${MAX_EVIDENCE_ROWS + 1}`, MAX_EVIDENCE_ROWS + 1);
+  const candidatePayments = result.records.slice(0, MAX_EVIDENCE_ROWS).filter((payment) => nonVoidedPayment(payment, paymentConfig.statusFields));
+  const stems = await queryStemsByIds(unique(candidatePayments.map((payment) => payment.STEM__c)), stemFields, accountFields);
+  const stemById = new Map(stems.map((stem) => [idKey(stem.Id), stem]));
+  const accountByStem = new Map(stems.map((stem) => [idKey(stem.Id), stem.Account__c]));
+  const currentGroupMemberIds = new Set(currentGroupMembers.map((member) => idKey(member.Id)));
+  const samples = [];
+  for (const payment of candidatePayments) {
+    const stem = stemById.get(idKey(payment.STEM__c));
+    if (!stem || !validBuyerPayment(payment, paymentConfig, accountByStem) || !isCreditExposureStemEligible(stem)) continue;
+    const paymentText = [payment.Name, ...paymentConfig.statusFields.map((field) => payment[field])].filter(Boolean).join(' ');
+    if (/(bank\s*charge|broker|commission|payable|supplier)/i.test(paymentText)) continue;
+    const dueDate = calculatedBuyerPayTermDate(stem)
+      || stem.Invoice_Due_Date__c
+      || stem.QLIK_Invoice_Due_Date__c
+      || stem.Due_Date__c
+      || stem.Expected_Delivery_Date_Payment_Term__c
+      || null;
+    const paymentDate = String(payment[paymentConfig.dateField] || payment.CreatedDate || '').slice(0, 10);
+    const delayDays = daysBetween(dueDate, paymentDate);
+    if (!dueDate || !paymentDate || delayDays == null) continue;
+    const exactCurrentGroup = currentGroup && currentGroupMemberIds.has(idKey(stem.Account__c));
+    samples.push({
+      paymentId: payment.Id,
+      stemId: stem.Id,
+      buyerAccountId: stem.Account__c,
+      buyerName: stem.Account__r?.Name || null,
+      buyerGroupId: exactCurrentGroup ? currentGroup.Id : stem.Account__r?.ParentId || null,
+      buyerGroupName: exactCurrentGroup ? currentGroup.Name : stem.Account__r?.Group_Name__c || stem.Account__r?.Parent?.Name || null,
+      dueDate: String(dueDate).slice(0, 10),
+      paymentDate,
+      delayDays,
+      amount: number(payment[paymentConfig.amountField]),
+    });
+  }
+  return { samples, complete: result.records.length <= MAX_EVIDENCE_ROWS && stems.length <= MAX_EVIDENCE_ROWS };
+}
+
+async function loadBuyerPaymentPerformanceModels({
+  settings,
+  paymentFields,
+  paymentConfig,
+  stemFields,
+  accountFields,
+  currentGroup,
+  currentGroupMembers,
+  interoffice,
+  today,
+  force,
+}) {
+  const lookbackMonths = Math.max(1, Math.min(Number(settings.lookbackMonths) || 12, 36));
+  const since = [addCalendarDays(today, -lookbackMonths * 31), CREDIT_EXPOSURE_DELIVERY_START].sort().at(-1);
+  const scopedAccountIds = interoffice ? currentGroupMembers.map((member) => member.Id) : null;
+  const cached = await getOrLoadRuntimeCache({
+    namespace: 'salesforce-buyer-payment-performance-samples',
+    version: '1',
+    accessScope: interoffice ? `interoffice:${scopedAccountIds.map(idKey).sort().join(',')}` : 'standard',
+    apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    payload: { since, lookbackMonths, currentGroupId: idKey(currentGroup?.Id) || null },
+    ttlSeconds: 60,
+    tags: ['salesforce:account-credit', 'salesforce:payment', 'salesforce:stem', 'salesforce:cashflow'],
+    force,
+    loader: () => queryBuyerPaymentPerformanceSamples({
+      since,
+      scopedAccountIds,
+      paymentFields,
+      paymentConfig,
+      stemFields,
+      accountFields,
+      currentGroup,
+      currentGroupMembers,
+    }),
+  });
+  return {
+    models: buildBuyerPaymentDelayModels(cached.value.samples, settings, { today }),
+    sampleCount: cached.value.samples.length,
+    complete: cached.value.complete,
+  };
+}
+
 function mergeStems(rows) {
   const values = new Map();
   for (const row of rows) if (row?.Id) values.set(idKey(row.Id), row);
@@ -692,24 +831,84 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   timings.hierarchyMs = Date.now() - stageStartedAt;
   if (!groupMembers.some((member) => idKey(member.Id) === idKey(account.Id))) groupMembers.push(account);
   const groupScope = resolveGroupAccountScope({ entityType, group, groupMembers, requestedAccountIds });
-  const groupAccountIds = entityType === 'group' ? groupScope.includedAccountIds : unique(groupMembers.map((member) => member.Id));
+  const fullGroupAccountIds = unique(groupMembers.map((member) => member.Id));
+  const groupAccountIds = entityType === 'group' ? groupScope.includedAccountIds : fullGroupAccountIds;
   const statementAccountIds = entityType === 'group' ? groupScope.includedAccountIds : [accountId];
+  const companyConservativeness = normalizeBuyerPaymentConservativeness(body._forecastSettings?.creditStatementConservativeness);
+  const requestedConservativeness = body.forecastConservativeness == null || body.forecastConservativeness === ''
+    ? companyConservativeness
+    : normalizeBuyerPaymentConservativeness(body.forecastConservativeness, null);
+  if (!requestedConservativeness) {
+    throw serviceError('Credit forecast conservativeness must be typical, cautious, or severe.', 400, 'ACCOUNT_CREDIT_FORECAST_INVALID');
+  }
+  const forecastSettings = {
+    ...(body._forecastSettings || {}),
+    companyConservativeness,
+    effectiveConservativeness: requestedConservativeness,
+    canManage: body._canManageForecastSettings === true,
+  };
   stageStartedAt = Date.now();
-  const openStemsRaw = await queryStemsForAccountIds(groupAccountIds, stemFields, `QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}`);
-  const openStemScopeComplete = openStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
-  const openStems = openStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS).filter((stem) => isCreditExposureStemEligible(stem));
+  const [fullOpenStemsRaw, paymentPerformance] = await Promise.all([
+    queryStemsForAccountIds(fullGroupAccountIds, stemFields, `QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}`),
+    loadBuyerPaymentPerformanceModels({
+      settings: forecastSettings,
+      paymentFields,
+      paymentConfig,
+      stemFields,
+      accountFields,
+      currentGroup: group,
+      currentGroupMembers: groupMembers,
+      interoffice,
+      today,
+      force,
+    }),
+  ]);
+  const openStemScopeComplete = fullOpenStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
+  const fullOpenStems = fullOpenStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS).filter((stem) => isCreditExposureStemEligible(stem));
+  const selectedGroupAccountKeys = new Set(groupAccountIds.map(idKey));
+  const openStems = fullOpenStems.filter((stem) => selectedGroupAccountKeys.has(idKey(stem.Account__c)));
   let creditAccount = account;
   let creditOpenStems = openStems;
   let creditResolution = null;
-  const selectedReconciliation = creditScopeReconciles({ account, group, openStems, complete: openStemScopeComplete });
-  if (!groupScope.partial && !selectedReconciliation.matches) {
+  if (entityType === 'group' && group) {
+    const authority = resolveGroupCreditAuthority({
+      group,
+      members: groupMembers,
+      openStems: fullOpenStems,
+      complete: openStemScopeComplete,
+    });
+    if (authority.status === 'resolved') {
+      creditAccount = authority.candidate;
+      creditResolution = {
+        mode: 'group_hierarchy_authority',
+        accountId: authority.candidate.Id,
+        accountName: authority.candidate.Name,
+        clKey: authority.candidate.Company_Code__c || null,
+        matchingSnapshotCount: authority.matchingAccountIds.length,
+        reconciliationWindowStart: null,
+        notice: `Salesforce GROUP credit is held on ${authority.candidate.Name}${authority.candidate.Company_Code__c ? ` · ${authority.candidate.Company_Code__c}` : ''}. The GROUP limit and used-credit snapshot remain fixed while child Account selections change only the displayed exposure.`,
+      };
+    } else {
+      creditResolution = {
+        mode: authority.status === 'ambiguous' ? 'group_hierarchy_ambiguous' : 'group_hierarchy_unresolved',
+        accountId: null,
+        accountName: null,
+        clKey: null,
+        matchingSnapshotCount: authority.candidates?.length || 0,
+        reconciliationWindowStart: null,
+        notice: null,
+      };
+    }
+  }
+  const selectedReconciliation = creditScopeReconciles({ account, group, openStems: fullOpenStems, complete: openStemScopeComplete });
+  if (entityType !== 'group' && !groupScope.partial && !selectedReconciliation.matches) {
     const duplicateScope = await loadSameNameCreditCandidates(account, accountFields, interoffice);
     const resolution = resolveCreditSnapshotCandidate({
       selectedAccount: account,
       selectedGroup: group,
       candidates: duplicateScope.candidates,
       candidateGroupsById: duplicateScope.groupsByAccountId,
-      openStems,
+      openStems: fullOpenStems,
       complete: openStemScopeComplete,
     });
     if (resolution.status === 'resolved') {
@@ -759,6 +958,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const expectedInvoiceLineItemsByStem = indexByStem(expectedInvoiceEvidence.lineItems);
   const expectedInvoiceExtraCostsByStem = indexByStem(expectedInvoiceEvidence.extraCosts);
   timings.expectedInvoiceMs = Date.now() - stageStartedAt;
+  const modelComplete = complete && paymentPerformance.complete;
   const model = buildAccountCreditStatement({
     account,
     creditAccount,
@@ -775,8 +975,11 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     expectedInvoiceLineItemsByStem,
     expectedInvoiceExtraCostsByStem,
     expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
+    paymentPerformanceModels: paymentPerformance.models,
+    forecastSettings,
+    blockedForecastDates: Array.isArray(body._blockedForecastDates) ? body._blockedForecastDates : [],
     today,
-    complete,
+    complete: modelComplete,
   });
   return {
     ...model,
@@ -800,9 +1003,11 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       groupMemberCount: groupMembers.length,
       openStemCount: openStems.length,
       statementRowCount: model.rows.length,
-      complete,
+      complete: modelComplete,
       buyerInvoiceScopeComplete: buyerInvoices.complete,
       expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
+      paymentPerformanceSampleCount: paymentPerformance.sampleCount,
+      paymentPerformanceComplete: paymentPerformance.complete,
       timings,
       salesforceFetchedAt: new Date().toISOString(),
     },
@@ -815,14 +1020,17 @@ function combinedExposurePoints(buyer, supplier, currencyCode, entityType) {
   const supplierPoints = entityType === 'group' ? supplierSeries?.group?.points : supplierSeries?.account?.points;
   if (!buyerPoints.length || !Array.isArray(supplierPoints) || !supplierPoints.length) return [];
   const dates = [...new Set([...buyerPoints.map((row) => row.date), ...supplierPoints.map((row) => row.date)].filter(Boolean))].sort();
-  let buyerValue = null; let supplierValue = null; let buyerIndex = 0; let supplierIndex = 0;
+  let buyerValue = null; let supplierValue = null; let buyerEvents = []; let buyerIndex = 0; let supplierIndex = 0;
   return dates.map((date) => {
     while (buyerIndex < buyerPoints.length && buyerPoints[buyerIndex].date <= date) {
       buyerValue = entityType === 'group' ? buyerPoints[buyerIndex].groupExposure : buyerPoints[buyerIndex].individualExposure;
+      buyerEvents = buyerPoints[buyerIndex].events || [];
       buyerIndex += 1;
     }
     while (supplierIndex < supplierPoints.length && supplierPoints[supplierIndex].date <= date) { supplierValue = supplierPoints[supplierIndex].remaining; supplierIndex += 1; }
-    return buyerValue == null || supplierValue == null ? { date, buyer: buyerValue, supplier: supplierValue, net: null } : { date, buyer: buyerValue, supplier: supplierValue, net: buyerValue - supplierValue };
+    return buyerValue == null || supplierValue == null
+      ? { date, buyer: buyerValue, supplier: supplierValue, net: null, buyerEvents }
+      : { date, buyer: buyerValue, supplier: supplierValue, net: buyerValue - supplierValue, buyerEvents };
   });
 }
 
@@ -848,6 +1056,8 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
       side: 'both',
       identity: { accountId, entityType, name: buyer.identity?.name || supplier.identity?.name || accountId, clKey: buyer.identity?.clKey || supplier.identity?.clKey || null },
       roles: ['buyer', 'supplier'], buyer, supplier,
+      forecastSettings: buyer.forecastSettings || null,
+      creditResolution: buyer.creditResolution || null,
       groupScope: buyer.groupScope || supplier.groupScope || null,
       combined: { currencies, warning: currencies.every((row) => row.netOpening != null) ? null : 'Combined net exposure is suppressed where either buyer or supplier evidence is incomplete.' },
       complete: buyer.meta?.complete === true && supplier.meta?.complete === true,
@@ -862,10 +1072,20 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '10',
+    version: '11',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
-    payload: { accountId: idKey(accountId), entityType, includedAccountIds: includedAccountIds?.map(idKey).sort() || null, scope, cursor: body.cursor || null, limit },
+    payload: {
+      accountId: idKey(accountId),
+      entityType,
+      includedAccountIds: includedAccountIds?.map(idKey).sort() || null,
+      scope,
+      cursor: body.cursor || null,
+      limit,
+      forecastConservativeness: normalizeBuyerPaymentConservativeness(body.forecastConservativeness || body._forecastSettings?.creditStatementConservativeness),
+      forecastSettingsUpdatedAt: body._forecastSettings?.updatedAt || null,
+      blockedForecastDates: Array.isArray(body._blockedForecastDates) ? body._blockedForecastDates : [],
+    },
     ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:cashflow', 'salesforce:payment', 'salesforce:invoice', 'salesforce:account-credit', `salesforce:account:${idKey(accountId)}`],
     force,

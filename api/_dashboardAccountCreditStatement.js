@@ -3,6 +3,12 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ONE_DAY_MS = 86_400_000;
 
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import {
+  BUYER_PAYMENT_CONSERVATIVENESS,
+  DEFAULT_BUYER_PAYMENT_CONSERVATIVENESS,
+  normalizeBuyerPaymentConservativeness,
+  selectBuyerPaymentDelayModel,
+} from './_buyerPaymentPerformance.js';
 
 export const CREDIT_RECONCILIATION_TOLERANCE = 1;
 export const CREDIT_EXPOSURE_DELIVERY_START = '2026-01-01';
@@ -272,6 +278,55 @@ export function resolveCreditSnapshotCandidate({
     : { status: distinctMatches.length ? 'ambiguous' : 'unresolved', matches: distinctMatches.map((match) => match.candidate.Id) };
 }
 
+function groupCreditSnapshotSignature(snapshot = {}) {
+  const normalized = [
+    snapshot.category,
+    snapshot.groupLimit,
+    snapshot.specialGroupLimit,
+    snapshot.usedGroup,
+    snapshot.salesforceAvailable,
+  ].map((entry) => typeof entry === 'number' ? currencyAmount(entry) : entry ?? null);
+  return JSON.stringify(normalized);
+}
+
+export function resolveGroupCreditAuthority({ group = null, members = [], openStems = [], complete = true } = {}) {
+  const groupId = idKey(group?.Id);
+  if (!groupId || !complete) return { status: 'unresolved', candidates: [] };
+  const currencies = new Set(openStems.map((stem) => text(stem?.CurrencyIsoCode)).filter(Boolean));
+  if (currencies.size > 1) return { status: 'unresolved', candidates: [] };
+  const groupExposure = openStems.reduce((sum, stem) => sum + value(stem?.QLIK_Receivable_Balance__c), 0);
+  const matches = (members || []).filter((member) => member?.Inactive_Suspended__c !== true).flatMap((member) => {
+    const snapshot = accountCreditSnapshot(member);
+    const applicableCapacity = snapshot.category === 'Group'
+      ? number(snapshot.groupLimit)
+      : snapshot.category === 'Special'
+        ? value(snapshot.groupLimit) + value(snapshot.specialGroupLimit)
+        : null;
+    if (!(applicableCapacity > 0)) return [];
+    const reconciliation = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete: true });
+    if (!reconciliation.matches) return [];
+    return [{ member, snapshot, reconciliation, signature: groupCreditSnapshotSignature(snapshot) }];
+  });
+  if (!matches.length) return { status: 'unresolved', candidates: [] };
+  const signatures = new Set(matches.map((match) => match.signature));
+  if (signatures.size !== 1) {
+    return { status: 'ambiguous', candidates: matches.map((match) => match.member.Id) };
+  }
+  const preferred = [...matches].sort((left, right) => {
+    const leftIsRoot = idKey(left.member.Id) === groupId ? 1 : 0;
+    const rightIsRoot = idKey(right.member.Id) === groupId ? 1 : 0;
+    if (leftIsRoot !== rightIsRoot) return leftIsRoot - rightIsRoot;
+    return text(left.member.Name).localeCompare(text(right.member.Name)) || idKey(left.member.Id).localeCompare(idKey(right.member.Id));
+  })[0];
+  return {
+    status: 'resolved',
+    candidate: preferred.member,
+    reconciliation: preferred.reconciliation,
+    matchingAccountIds: matches.map((match) => match.member.Id),
+    groupExposure: currencyAmount(groupExposure),
+  };
+}
+
 export function accountCreditBalances(snapshot = {}, overrides = {}) {
   const usedCustomer = number(overrides.usedCustomer) ?? number(snapshot.usedCustomer);
   const usedGroup = number(overrides.usedGroup) ?? number(snapshot.usedGroup);
@@ -372,7 +427,7 @@ function earliestDated(rows, fields, today, { allowPast = false } = {}) {
   return candidates.sort((left, right) => left.date.localeCompare(right.date))[0] || null;
 }
 
-function releaseCandidate(stem, cashflows, today) {
+function contractualReleaseCandidate(stem, cashflows, today) {
   const cashflowDue = earliestDated(cashflows, ['Invoice_Due_Date__c'], today, { allowPast: true });
   const stemDue = [stem.Invoice_Due_Date__c, stem.QLIK_Invoice_Due_Date__c, stem.Due_Date__c]
     .map(dateOnly).filter(Boolean).sort()[0] || null;
@@ -393,6 +448,47 @@ function releaseCandidate(stem, cashflows, today) {
   return { date: null, missedDate: null, source: 'unknown', sourceLabel: 'Release date unavailable' };
 }
 
+export function adjustCreditForecastBusinessDay(date, today, blockedDates = []) {
+  const effectiveToday = dateOnly(today);
+  let current = dateOnly(date);
+  if (!effectiveToday || !current) return { date: null, originalDate: null, adjusted: false };
+  if (current < effectiveToday) current = effectiveToday;
+  const originalDate = current;
+  const blocked = blockedDates instanceof Set ? blockedDates : new Set(blockedDates || []);
+  for (let guard = 0; guard < 30; guard += 1) {
+    const day = new Date(`${current}T00:00:00.000Z`).getUTCDay();
+    if (day !== 0 && day !== 6 && !blocked.has(current)) {
+      return { date: current, originalDate, adjusted: current !== dateOnly(date) };
+    }
+    current = addDays(current, 1);
+  }
+  return { date: originalDate, originalDate, adjusted: originalDate !== dateOnly(date) };
+}
+
+function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = []) {
+  const contractual = contractualReleaseCandidate(stem, cashflows, today);
+  if (!contractual.date && !contractual.missedDate) return contractual;
+  if (!paymentModel) return contractual;
+  const contractualDate = contractual.date || contractual.missedDate;
+  const modeledDate = addDays(contractualDate, paymentModel.predictedDelayDays || 0);
+  const adjusted = adjustCreditForecastBusinessDay(modeledDate, today, blockedDates);
+  return {
+    date: adjusted.date,
+    missedDate: null,
+    source: contractual.source,
+    sourceLabel: contractual.sourceLabel,
+    contractualDate,
+    modeledDate,
+    predictedDelayDays: paymentModel.predictedDelayDays || 0,
+    modelLevel: paymentModel.level || 'Default',
+    modelSampleCount: paymentModel.sampleCount || 0,
+    modelConfidence: paymentModel.confidence || 'Low',
+    conservativeness: paymentModel.conservativeness || null,
+    percentileLabel: paymentModel.percentileLabel || null,
+    businessDayAdjusted: adjusted.adjusted,
+  };
+}
+
 function scheduledReleases(cashflows, today) {
   return uniqueById(cashflows)
     .map((cashflow) => ({
@@ -406,7 +502,7 @@ function scheduledReleases(cashflows, today) {
     .sort((left, right) => left.date.localeCompare(right.date));
 }
 
-export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId }) {
+export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [] }) {
   const effectiveToday = dateOnly(today);
   if (!effectiveToday) throw new TypeError('today must be an ISO date');
   const exposure = number(stem.QLIK_Receivable_Balance__c) ?? 0;
@@ -446,7 +542,7 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     }
   }
   if (Math.abs(remaining) > 0.01) {
-    const candidate = releaseCandidate(stem, cashflows, effectiveToday);
+    const candidate = releaseCandidate(stem, cashflows, effectiveToday, paymentModel, blockedDates);
     forecastEvents.push({ ...candidate, amount: remaining });
   }
   const primaryForecast = forecastEvents.find((event) => event.date) || forecastEvents[0] || null;
@@ -682,6 +778,9 @@ export function buildAccountCreditStatement({
   expectedInvoiceLineItemsByStem = {},
   expectedInvoiceExtraCostsByStem = {},
   expectedInvoiceScopeComplete = true,
+  paymentPerformanceModels = null,
+  forecastSettings = null,
+  blockedForecastDates = [],
   today,
   complete = true,
   warnings = [],
@@ -694,12 +793,26 @@ export function buildAccountCreditStatement({
     .filter(Boolean))].sort();
   const currencyConflict = currencyLabels.length > 1;
   const projectionComplete = complete && !currencyConflict;
+  const companyConservativeness = normalizeBuyerPaymentConservativeness(forecastSettings?.companyConservativeness);
+  const effectiveConservativeness = normalizeBuyerPaymentConservativeness(
+    forecastSettings?.effectiveConservativeness,
+    companyConservativeness,
+  );
+  const paymentModelForStem = (stem) => paymentPerformanceModels
+    ? selectBuyerPaymentDelayModel({
+      buyerAccountId: stem?.Account__c,
+      buyerGroupId: group?.Id || null,
+      buyerGroupName: group?.Name || null,
+    }, paymentPerformanceModels, forecastSettings || {}, { conservativeness: effectiveConservativeness })
+    : null;
   const releases = openStems.map((stem) => buildStemCreditRelease({
     stem,
     payments: paymentsByStem[stem.Id] || [],
     cashflows: cashflowsByStem[stem.Id] || [],
     today,
     accountId: stem.Account__c,
+    paymentModel: paymentModelForStem(stem),
+    blockedDates: blockedForecastDates,
   }));
   const accountExposure = openStems
     .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId))
@@ -748,6 +861,8 @@ export function buildAccountCreditStatement({
       accountId: stem.Account__c,
       accountName: stem.Account__r?.Name || null,
       currency: text(stem.CurrencyIsoCode) || snapshot.currency,
+      paymentModel: paymentModelForStem(stem),
+      blockedDates: blockedForecastDates,
     });
     const actualReleased = release.actualReleases.reduce((sum, row) => sum + value(row.amount), 0);
     const buyerInvoices = buyerInvoicesByStem[stem.Id] || [];
@@ -755,7 +870,7 @@ export function buildAccountCreditStatement({
     const buyerInvoiceAmountComplete = buyerInvoiceScopeComplete && buyerInvoices.length > 0 && buyerInvoiceAmounts.every((amount) => amount != null);
     const buyerInvoiceDueDates = [...new Set(buyerInvoices.map((invoice) => dateOnly(invoice.Invoice_Due_Date__c)).filter(Boolean))].sort();
     const buyerInvoiceDueDate = buyerInvoiceDueDates[0] || null;
-    const expectedDueCandidate = releaseCandidate(stem, cashflowsByStem[stem.Id] || [], dateOnly(today));
+    const expectedDueCandidate = contractualReleaseCandidate(stem, cashflowsByStem[stem.Id] || [], dateOnly(today));
     const expectedBuyerInvoiceDueDate = expectedDueCandidate.date || expectedDueCandidate.missedDate || null;
     const expectedInvoice = buyerInvoices.length ? null : expectedBuyerInvoiceEstimate({
       lineItems: expectedInvoiceLineItemsByStem[stem.Id] || [],
@@ -839,6 +954,20 @@ export function buildAccountCreditStatement({
       notice: null,
     },
     credit: snapshot,
+    forecastSettings: {
+      companyConservativeness,
+      effectiveConservativeness,
+      temporaryPreview: companyConservativeness !== effectiveConservativeness,
+      canManage: forecastSettings?.canManage === true,
+      updatedAt: forecastSettings?.updatedAt || null,
+      updatedByEmail: forecastSettings?.updatedByEmail || null,
+      options: Object.values(BUYER_PAYMENT_CONSERVATIVENESS),
+      lookbackMonths: forecastSettings?.lookbackMonths || 12,
+      minBuyerSamples: forecastSettings?.minBuyerSamples || 3,
+      minGroupSamples: forecastSettings?.minGroupSamples || 5,
+      recencyHalfLifeDays: 90,
+      default: DEFAULT_BUYER_PAYMENT_CONSERVATIVENESS,
+    },
     reconciliation: { individual: individualReconciliation, group: groupReconciliation },
     exposureByCurrency,
     releases,
@@ -854,6 +983,7 @@ export function buildAccountCreditStatement({
 
 export const dashboardAccountCreditStatementInternals = {
   addDays,
+  contractualReleaseCandidate,
   dateOnly,
   idKey,
   releaseCandidate,

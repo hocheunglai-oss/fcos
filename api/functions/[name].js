@@ -14,6 +14,11 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import {
+  buildBuyerPaymentDelayModels,
+  normalizeBuyerPaymentConservativeness,
+  selectBuyerPaymentDelayModel,
+} from '../_buyerPaymentPerformance.js';
 import { loadDashboardAccountExposureBatch, loadDashboardCounterpartySearch, resolveUnifiedCounterpartyMemberIds } from '../_dashboardUnifiedCounterpartyService.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
@@ -1492,6 +1497,7 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountInsight: ['dashboard'],
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
+  dashboardCreditForecastSettingsSave: ['dashboard'],
   dashboardCounterpartySearch: ['dashboard'],
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
@@ -10068,13 +10074,70 @@ async function dashboardAccountCreditDirectory(body = {}, req = null, accessCont
   };
 }
 
+async function canManageDashboardCreditForecastSettings(context) {
+  if (context?.profile?.user_type === 'administrator') return true;
+  if (context?.profile?.user_type !== 'general_manager') return false;
+  const activeGeneralManager = await loadActiveGeneralManager(context.client);
+  return activeGeneralManager.id === context.profile.id;
+}
+
 async function dashboardAccountCreditStatement(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  const forecastToday = dateOnly(new Date());
+  const [forecastSettings, canManageForecastSettings, holidayData] = await Promise.all([
+    loadCashflowSettings(),
+    canManageDashboardCreditForecastSettings(context),
+    loadCashflowHolidayData(yearsBetween(forecastToday, addDays(forecastToday, 730)), []),
+  ]);
   return loadDashboardAccountCreditStatement({
-    body,
+    body: {
+      ...body,
+      _forecastSettings: forecastSettings,
+      _canManageForecastSettings: canManageForecastSettings,
+      _blockedForecastDates: [...holidayData.blockedMap.keys()],
+    },
     accessContext: context,
     force: requestForcesRefresh(body, req),
   });
+}
+
+async function dashboardCreditForecastSettingsSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  if (!(await canManageDashboardCreditForecastSettings(context))) {
+    throw appError('Only an Administrator or the active General Manager may change the company credit forecast setting.', 403, 'CREDIT_FORECAST_SETTINGS_FORBIDDEN');
+  }
+  const conservativeness = normalizeBuyerPaymentConservativeness(body.conservativeness, null);
+  if (!conservativeness) throw appError('Credit forecast conservativeness must be typical, cautious, or severe.', 400, 'CREDIT_FORECAST_SETTINGS_INVALID');
+  const expectedUpdatedAt = body.expectedUpdatedAt ? String(body.expectedUpdatedAt) : null;
+  if (!expectedUpdatedAt) {
+    throw appError('Reload the Credit Statement before changing the company forecast setting.', 409, 'CREDIT_FORECAST_SETTINGS_STALE');
+  }
+  const { data, error } = await context.client.rpc('save_credit_statement_conservativeness', {
+    p_conservativeness: conservativeness,
+    p_actor_user_id: context.profile.id,
+    p_actor_email: context.profile.email,
+    p_expected_updated_at: expectedUpdatedAt,
+  });
+  if (error) {
+    if (error.code === '40001' || /changed after/i.test(String(error.message || ''))) {
+      throw appError('The company credit forecast setting changed after this chart was opened. Reload the statement before saving.', 409, 'CREDIT_FORECAST_SETTINGS_STALE');
+    }
+    throw error;
+  }
+  await Promise.all([
+    expireRuntimeCacheTags(['salesforce:account-credit', 'dashboard:credit-forecast-settings']),
+    writeAdminAudit(context.client, context.profile, 'dashboard_credit_forecast_setting_changed', null, null, {
+      conservativeness,
+    }),
+  ]);
+  return {
+    forecastSettings: {
+      companyConservativeness: conservativeness,
+      updatedAt: data?.updatedAt || data?.updated_at || null,
+      updatedByEmail: data?.updatedByEmail || data?.updated_by_email || context.profile.email,
+      canManage: true,
+    },
+  };
 }
 
 async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
@@ -10777,6 +10840,7 @@ function serializeCashflowSettings(row = null) {
     lookbackMonths: clampInteger(row?.lookback_months, DEFAULT_CASHFLOW_SETTINGS.lookbackMonths, 1, 36),
     minBuyerSamples: clampInteger(row?.min_buyer_samples, DEFAULT_CASHFLOW_SETTINGS.minBuyerSamples, 1, 100),
     minGroupSamples: clampInteger(row?.min_group_samples, DEFAULT_CASHFLOW_SETTINGS.minGroupSamples, 1, 100),
+    creditStatementConservativeness: normalizeBuyerPaymentConservativeness(row?.credit_statement_conservativeness),
     updatedAt: row?.updated_at || null,
     updatedByEmail: row?.updated_by_email || null,
   };
@@ -10785,7 +10849,7 @@ function serializeCashflowSettings(row = null) {
 async function loadCashflowSettings() {
   const client = safeSupabaseAdminClient();
   if (!client) return serializeCashflowSettings(null);
-  const { data, error } = await client.from('cashflow_forecast_settings').select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at').eq('id', CASHFLOW_SETTINGS_ID).maybeSingle();
+  const { data, error } = await client.from('cashflow_forecast_settings').select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,credit_statement_conservativeness,updated_by_email,updated_at').eq('id', CASHFLOW_SETTINGS_ID).maybeSingle();
   if (error) return serializeCashflowSettings(null);
   return serializeCashflowSettings(data);
 }
@@ -11004,79 +11068,12 @@ function cashflowBusinessDayAdjustment(originalDate, blockedMap) {
   return { date: originalDate, note: null };
 }
 
-function cashflowWeightedDelay(samples) {
-  const today = dateOnly(new Date());
-  let weightedTotal = 0;
-  let weightTotal = 0;
-  const recent = [];
-  for (const sample of samples) {
-    const age = Math.max(0, daysBetween(sample.paymentDate, today) ?? 0);
-    const weight = Math.pow(0.5, age / 90);
-    weightedTotal += Number(sample.delayDays || 0) * weight;
-    weightTotal += weight;
-    if (age <= 90) recent.push(sample);
-  }
-  if (!weightTotal) return 0;
-  const weighted = weightedTotal / weightTotal;
-  if (recent.length >= Math.min(3, samples.length)) {
-    const recentAverage = recent.reduce((sum, sample) => sum + Number(sample.delayDays || 0), 0) / recent.length;
-    return Math.round(weighted * 0.7 + recentAverage * 0.3);
-  }
-  return Math.round(weighted);
-}
-
-function cashflowDelayModel(samples, level, minSamples) {
-  const usable = samples.filter((sample) => Number.isFinite(Number(sample.delayDays)));
-  if (!usable.length) return null;
-  const delay = Math.max(-15, Math.min(120, cashflowWeightedDelay(usable)));
-  return {
-    level,
-    predictedDelayDays: delay,
-    sampleCount: usable.length,
-    minSamples,
-    confidence: usable.length >= minSamples * 2 ? 'High' : usable.length >= minSamples ? 'Medium' : 'Low',
-  };
-}
-
 function cashflowBuildDelayModels(samples, settings) {
-  const byBuyer = new Map();
-  const byGroup = new Map();
-  for (const sample of samples) {
-    if (sample.buyerAccountId) {
-      if (!byBuyer.has(sample.buyerAccountId)) byBuyer.set(sample.buyerAccountId, []);
-      byBuyer.get(sample.buyerAccountId).push(sample);
-    }
-    if (sample.buyerGroupName) {
-      if (!byGroup.has(sample.buyerGroupName)) byGroup.set(sample.buyerGroupName, []);
-      byGroup.get(sample.buyerGroupName).push(sample);
-    }
-  }
-  const buyerModels = {};
-  for (const [id, rows] of byBuyer.entries()) {
-    const model = cashflowDelayModel(rows, 'Buyer', settings.minBuyerSamples);
-    if (model) buyerModels[id] = model;
-  }
-  const groupModels = {};
-  for (const [name, rows] of byGroup.entries()) {
-    const model = cashflowDelayModel(rows, 'Buyer Group', settings.minGroupSamples);
-    if (model) groupModels[name] = model;
-  }
-  const globalModel = cashflowDelayModel(samples, 'Global', 1) || {
-    level: 'Default',
-    predictedDelayDays: 0,
-    sampleCount: 0,
-    minSamples: 1,
-    confidence: 'Low',
-  };
-  return { buyerModels, groupModels, globalModel };
+  return buildBuyerPaymentDelayModels(samples, settings, { today: dateOnly(new Date()) });
 }
 
 function cashflowSelectDelayModel(row, models, settings) {
-  const buyerModel = row.buyerAccountId ? models.buyerModels[row.buyerAccountId] : null;
-  if (buyerModel && buyerModel.sampleCount >= settings.minBuyerSamples) return buyerModel;
-  const groupModel = row.buyerGroupName ? models.groupModels[row.buyerGroupName] : null;
-  if (groupModel && groupModel.sampleCount >= settings.minGroupSamples) return groupModel;
-  return models.globalModel;
+  return selectBuyerPaymentDelayModel(row, models, settings);
 }
 
 function cashflowPaymentText(payment, fields = []) {
@@ -11604,7 +11601,7 @@ async function cashflowSettingsSave(body, req, accessContext = null) {
     updated_by_email: profile.email,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await client.from('cashflow_forecast_settings').upsert(payload, { onConflict: 'id' }).select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,updated_by_email,updated_at').single();
+  const { data, error } = await client.from('cashflow_forecast_settings').upsert(payload, { onConflict: 'id' }).select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,credit_statement_conservativeness,updated_by_email,updated_at').single();
   if (error) throw error;
   return {
     settings: serializeCashflowSettings(data),
@@ -19067,6 +19064,7 @@ const handlers = {
   dashboardAccountInsight,
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
+  dashboardCreditForecastSettingsSave,
   dashboardCounterpartySearch,
   dashboardAccountExposureBatch,
   dashboardAiSearch,

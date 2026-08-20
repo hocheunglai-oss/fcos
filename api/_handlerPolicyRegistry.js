@@ -179,6 +179,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   dashboardAccountInsight: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountCreditDirectory: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountCreditStatement: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  dashboardCreditForecastSettingsSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   dashboardCounterpartySearch: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountExposureBatch: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountInsightExport: readPolicy({"cache":"none","externalAction":false,"capability":null}),
