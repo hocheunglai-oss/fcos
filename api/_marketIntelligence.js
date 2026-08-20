@@ -31,7 +31,8 @@ const DOCUMENT_SYMBOLS = Object.freeze({
 });
 
 const SIGNED_VALUE_SYMBOLS = new Set(['FQLSM01', 'FQLSM02']);
-const PRODUCT_KEYS = new Set(['vlsfo', 'hsfo380', 'lsmgo']);
+const PRODUCT_ORDER = Object.freeze(['hsfo380', 'vlsfo', 'lsmgo']);
+const PRODUCT_KEYS = new Set(PRODUCT_ORDER);
 const PORT_KEYS = new Set(['singapore', 'south-korea', 'south-korea-west', 'zhoushan', 'kaohsiung', 'hong-kong']);
 const HISTORY_RANGES = Object.freeze({ '1w': 7, '1m': 31, '3m': 93, '6m': 186, '1y': 366 });
 const BENCHMARK_SYMBOLS = Object.freeze({ vlsfo: 'AMFSA00', hsfo380: 'PPXDK00', lsmgo: 'POABC00' });
@@ -388,7 +389,7 @@ export function buildMarketHistoryResponse(seriesRows = [], observationRows = []
   const includeMops = request.includeMops !== false;
   const endDate = request.endDate || isoDate();
   const startDate = dateBefore(endDate, HISTORY_RANGES[range] - 1);
-  const products = normalizedSelection(request.products, PRODUCT_KEYS, [...PRODUCT_KEYS]);
+  const products = normalizedSelection(request.products, PRODUCT_KEYS, PRODUCT_ORDER);
   const availablePortKeys = new Set(seriesRows.filter((row) => row.market_family === 'delivered').map((row) => row.port_key));
   const allowedPorts = new Set([...PORT_KEYS].filter((key) => availablePortKeys.has(key)));
   const ports = normalizedSelection(request.ports, allowedPorts, [...allowedPorts]);
@@ -538,7 +539,7 @@ export async function loadMarketIntelligenceHistory(client, body = {}) {
   const startDate = dateBefore(endDate, HISTORY_RANGES[range] - 1);
   const seriesResult = await client.from('market_intelligence_series').select('*').eq('active', true).order('display_order');
   if (seriesResult.error) throw marketError(`Market history series could not be loaded: ${seriesResult.error.message}`, 502, 'MARKET_HISTORY_LOAD_FAILED');
-  const products = normalizedSelection(body.products, PRODUCT_KEYS, [...PRODUCT_KEYS]);
+  const products = normalizedSelection(body.products, PRODUCT_KEYS, PRODUCT_ORDER);
   const availablePorts = new Set((seriesResult.data || []).filter((row) => row.market_family === 'delivered').map((row) => row.port_key));
   const ports = normalizedSelection(body.ports, availablePorts, [...availablePorts]);
   const selectedSeries = (seriesResult.data || []).filter((row) => (

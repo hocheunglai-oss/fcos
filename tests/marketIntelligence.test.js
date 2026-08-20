@@ -154,6 +154,17 @@ test('history response converts SGO with 7.45 and suppresses a report-ledger mis
   assert.equal(mismatch.warnings[0].code, 'MOPS_LEDGER_VALUE_MISMATCH');
 });
 
+test('market history defaults to HSFO, S0.5%, then LSMGO product order', () => {
+  const series = [
+    { id: 'sg-vlsfo', market_family: 'delivered', port_key: 'singapore', port_label: 'Singapore', product_key: 'vlsfo', product_label: 'VLSFO 0.5%', source_symbol: 'MFSPD00', source_type: 'assessment', display_order: 1 },
+    { id: 'sg-hsfo', market_family: 'delivered', port_key: 'singapore', port_label: 'Singapore', product_key: 'hsfo380', product_label: 'HSFO 380', source_symbol: 'PUAFT00', source_type: 'assessment', display_order: 2 },
+    { id: 'sg-lsmgo', market_family: 'delivered', port_key: 'singapore', port_label: 'Singapore', product_key: 'lsmgo', product_label: 'LSMGO 0.1%', source_symbol: 'AAXYO00', source_type: 'assessment', display_order: 3 },
+  ];
+  const result = buildMarketHistoryResponse(series, [], [], [], { range: '1w', ports: ['singapore'], endDate: '2026-08-19' });
+  assert.deepEqual(result.products, ['hsfo380', 'vlsfo', 'lsmgo']);
+  assert.deepEqual(result.panels.map((panel) => panel.productKey), ['hsfo380', 'vlsfo', 'lsmgo']);
+});
+
 test('archive replay impact is deterministic and distinguishes matches, creates and actual conflicts', () => {
   const complete = {
     documentType: 'european_marketscan', reportDate: '2025-01-02', sourceHash: 'a'.repeat(64),
@@ -240,6 +251,12 @@ test('Markets UI keeps delivered observations separate from the MOPS settlement 
   assert.match(workspace, /syncId="delivered-mops"/);
   assert.match(workspace, /Premium vs MOPS/);
   assert.match(workspace, /Not published/);
+  assert.ok(workspace.indexOf("value: 'hsfo380'") < workspace.indexOf("value: 'vlsfo'"));
+  assert.ok(workspace.indexOf("value: 'vlsfo'") < workspace.indexOf("value: 'lsmgo'"));
+  assert.match(workspace, /useState\(PRODUCTS\[0\]\.value\)/);
+  assert.match(workspace, /PRODUCT_ORDER\.get\(left\.productKey\)/);
+  assert.match(workspace, /ports\.some\(\(\[key\]\) => key === 'singapore'\) \? \['singapore'\]/);
+  assert.match(workspace, /const \[includeMops, setIncludeMops\] = useState\(true\)/);
   assert.match(service, /loadMarketIntelligence\(client\)/);
   assert.match(service, /loadMarketIntelligenceHistory\(client, body\)/);
   assert.match(service, /if \(String\(body\?\.entity \|\| ''\) !== 'MopsPrice'\)/);

@@ -44,10 +44,12 @@ const TABS = [
 ];
 
 const PRODUCTS = [
-  { value: 'vlsfo', label: 'VLSFO 0.5%', color: '#2563eb' },
   { value: 'hsfo380', label: 'HSFO 380', color: '#d97706' },
+  { value: 'vlsfo', label: 'VLSFO 0.5%', color: '#2563eb' },
   { value: 'lsmgo', label: 'LSMGO 0.1%', color: '#0f766e' },
 ];
+
+const PRODUCT_ORDER = new Map(PRODUCTS.map((product, index) => [product.value, index]));
 
 const PORT_COLORS = ['#2563eb', '#0f766e', '#d97706', '#7c3aed', '#db2777'];
 
@@ -107,7 +109,8 @@ function HorizonStat({ label, value }) {
 function MarketToggleGroup({ label, options, selected, onChange, single = false }) {
   const toggle = (value) => {
     if (single) { onChange(value); return; }
-    const next = selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value];
+    const selectedValues = new Set(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+    const next = options.map((option) => option.value).filter((optionValue) => selectedValues.has(optionValue));
     if (next.length) onChange(next);
   };
   return (
@@ -180,11 +183,11 @@ function DeliveredBunkers({ intelligence }) {
   const delivered = intelligence?.delivered || [];
   const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
   const [selectedProducts, setSelectedProducts] = useState(() => PRODUCTS.map((item) => item.value));
-  const [selectedPorts, setSelectedPorts] = useState(() => ports.map(([key]) => key));
+  const [selectedPorts, setSelectedPorts] = useState(() => ports.some(([key]) => key === 'singapore') ? ['singapore'] : ports.slice(0, 1).map(([key]) => key));
   const [mode, setMode] = useState('spread');
   const [range, setRange] = useState('3m');
   const [includeMops, setIncludeMops] = useState(true);
-  const [mobileProduct, setMobileProduct] = useState('vlsfo');
+  const [mobileProduct, setMobileProduct] = useState(PRODUCTS[0].value);
   const [history, setHistory] = useState(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState(null);
@@ -288,7 +291,7 @@ function DeliveredBunkers({ intelligence }) {
           const option = PRODUCTS.find((item) => item.value === value);
           return <button key={value} type="button" role="tab" aria-selected={mobileProduct === value} className={mobileProduct === value ? 'is-active' : ''} onClick={() => setMobileProduct(value)}>{option?.label || value}</button>;
         })}</div>
-        <div className="market-product-panels">{(history?.panels || []).map((panel) => <DeliveredTrendPanel key={panel.productKey} panel={panel} mode={mode} visible={selectedProducts.includes(panel.productKey)} mobileActive={mobileProduct === panel.productKey} />)}</div>
+        <div className="market-product-panels">{[...(history?.panels || [])].sort((left, right) => (PRODUCT_ORDER.get(left.productKey) ?? Number.MAX_SAFE_INTEGER) - (PRODUCT_ORDER.get(right.productKey) ?? Number.MAX_SAFE_INTEGER)).map((panel) => <DeliveredTrendPanel key={panel.productKey} panel={panel} mode={mode} visible={selectedProducts.includes(panel.productKey)} mobileActive={mobileProduct === panel.productKey} />)}</div>
         {history && !history.coverage?.complete ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> The selected horizon was paginated. Narrow the selection before using the chart for a complete comparison.</div> : null}
       </Panel>
     </div>
