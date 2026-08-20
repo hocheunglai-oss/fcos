@@ -16,7 +16,7 @@ const REVIEWED_ARCHIVE = Object.freeze({
   sourceFileCount: 832,
   uniqueReportCount: 831,
   duplicateFileCount: 1,
-  driveFingerprint: '024231542fbbbcac3cffe1aba78f97dd6770ffc401b41f758037fa8524680200',
+  driveFingerprint: 'c8a92a76efc0f9ccadf4a2aed0389e1650100e8dc2c2e328fca928ca8e396ed2',
 });
 
 function syncError(message, code = 'MARKET_DRIVE_SYNC_FAILED', statusCode = 502) {
