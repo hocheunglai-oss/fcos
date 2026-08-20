@@ -470,6 +470,7 @@ test('the reviewed SGO midpoint parser correction is exact, fail closed, and aud
   assert.match(migration, /set sgo=89\.410000/);
   assert.match(migration, /SOURCE_MIDPOINT_PARSER_CORRECTION/);
   assert.match(migration, /MARKET_20250805_CORRECTION_PRECONDITION_FAILED/);
+  assert.match(migration, /if not found then\s+return;/i);
 });
 
 test('five authenticated handler names and fail-closed policies are wired', () => {

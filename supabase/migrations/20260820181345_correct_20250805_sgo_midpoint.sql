@@ -40,12 +40,18 @@ declare
   v_ledger public.hedge_market_prices%rowtype;
   v_source_hash constant text := '5b4652df928a6d479d3bcc8bf47f377d127a704005bc0873c77322b4f59ced23';
 begin
-  select * into strict v_import
+  select * into v_import
   from public.market_report_imports
   where source_document_type='european_marketscan'
     and report_date=date '2025-08-05'
     and source_hash=v_source_hash
   for update;
+
+  -- A clean database has no licensed archive rows yet. The governed replay applies
+  -- the corrected parser output when the report is imported after bootstrap.
+  if not found then
+    return;
+  end if;
 
   select * into strict v_series
   from public.market_intelligence_series
