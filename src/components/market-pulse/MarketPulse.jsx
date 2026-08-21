@@ -59,7 +59,7 @@ function formatDate(value) {
 function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets }) {
   const reportLabel = data?.curveReportDate ? `Curve report ${formatDate(data.curveReportDate)}` : 'Curve report unavailable';
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -219,7 +219,7 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="end" side="bottom" sideOffset={10} className="w-[min(440px,calc(100vw-24px))] p-0">
+      <PopoverContent align="end" side="bottom" sideOffset={10} className="flex max-h-[calc(100dvh-72px)] w-[min(440px,calc(100vw-24px))] flex-col overflow-hidden p-0">
         {body}
       </PopoverContent>
     </Popover>

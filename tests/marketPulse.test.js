@@ -149,6 +149,7 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(pulse, /Open Markets/);
   assert.match(pulse, /No prior comparison/);
   assert.match(pulse, /align="end" side="bottom"/);
+  assert.match(pulse, /max-h-\[calc\(100dvh-72px\)\]/);
   assert.doesNotMatch(pulse, /window\.location\.reload|window\.location\.replace/);
   assert.doesNotMatch(api, /brent|tradingview/i);
   assert.doesNotMatch(layout, /MarketShellBar|BRN1/i);
