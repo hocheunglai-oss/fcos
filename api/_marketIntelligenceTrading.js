@@ -860,7 +860,7 @@ async function adjacentBriefDate(client, date, direction, upperBound) {
 async function curveAvailabilityForBrief(client, brief, curve) {
   const reportIds = (brief.source_refs || []).map((row) => row.reportId).filter(Boolean);
   const [seriesResult, availabilityResult] = await Promise.all([
-    client.from('market_intelligence_series').select('id,product_key,source_symbol,tenor,unit,assessment_session,basis_metadata').eq('active', true),
+    client.from('market_intelligence_series').select('id,product_key,source_symbol,tenor,unit,assessment_session,market_family,basis_metadata').eq('active', true),
     reportIds.length
       ? client.from('market_report_series_availability').select('import_id,series_id,availability_status,source_page,contract_month,printed_contract_month,tenor,observation_unit,assessment_session,basis_metadata').in('import_id', reportIds)
       : Promise.resolve({ data: [], error: null }),
@@ -875,7 +875,9 @@ async function curveAvailabilityForBrief(client, brief, curve) {
     const series = seriesById.get(row.series_id);
     const productKey = seriesProduct(series, { basis_metadata: row.basis_metadata });
     const tenor = String(row.tenor || series?.tenor || '').toUpperCase();
-    if (!productKey || !REQUIRED_CURVE_TENORS[productKey]?.includes(tenor)) continue;
+    if (seriesMarketFamily(series, row) !== 'forward'
+      || !productKey
+      || !REQUIRED_CURVE_TENORS[productKey]?.includes(tenor)) continue;
     const key = `${productKey}:${tenor}`;
     const current = availabilityByKey.get(key);
     if (!current || row.availability_status === 'published_na') {

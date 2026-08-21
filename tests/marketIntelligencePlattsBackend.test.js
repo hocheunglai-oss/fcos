@@ -56,8 +56,14 @@ test('brief availability keeps page-four published N/A authoritative and removes
     ['v0', 'FOFS000', 'vlsfo', 'bm'], ['v1', 'FOFS001', 'vlsfo', 'm1'], ['v2', 'FOFS002', 'vlsfo', 'm2'],
     ['g0', 'BSGSL00', 'lsmgo', 'bm'], ['g1', 'MSGSL00', 'lsmgo', 'm1'], ['g2', 'MSHSL00', 'lsmgo', 'm2'],
   ];
-  const series = definitions.map(([id, source_symbol, productKey, tenor]) => ({ id, source_symbol, product_key: `${productKey}-${tenor}`, tenor, unit: productKey === 'lsmgo' ? 'USD/BBL' : 'USD/MT', basis_metadata: { productKey } }));
-  const availability = [{ import_id: 'report', series_id: 'g0', availability_status: 'published_na', source_page: 4, contract_month: '2026-08-01', tenor: 'bm', observation_unit: 'USD/BBL', basis_metadata: { productKey: 'lsmgo' } }];
+  const series = [
+    ...definitions.map(([id, source_symbol, productKey, tenor]) => ({ id, source_symbol, product_key: `${productKey}-${tenor}`, tenor, unit: productKey === 'lsmgo' ? 'USD/BBL' : 'USD/MT', market_family: 'forward', basis_metadata: { productKey } })),
+    { id: 'efs-bm', source_symbol: 'MSJSL00', product_key: 'lsmgo-bm', tenor: 'bm', unit: 'USD/MT', market_family: 'forward', basis_metadata: { productKey: 'lsmgo' } },
+  ];
+  const availability = [
+    { import_id: 'report', series_id: 'efs-bm', availability_status: 'published_na', source_page: 3, contract_month: '2026-08-01', tenor: 'bm', observation_unit: 'USD/MT', basis_metadata: { productKey: 'lsmgo', marketFamily: 'context', settlementBasis: 'gasoil_efs' } },
+    { import_id: 'report', series_id: 'g0', availability_status: 'published_na', source_page: 4, contract_month: '2026-08-01', tenor: 'bm', observation_unit: 'USD/BBL', basis_metadata: { productKey: 'lsmgo', marketFamily: 'forward', settlementBasis: 'outright' } },
+  ];
   const client = {
     from(table) {
       if (table === 'market_intelligence_series') return { select: () => ({ eq: async () => ({ data: series, error: null }) }) };
