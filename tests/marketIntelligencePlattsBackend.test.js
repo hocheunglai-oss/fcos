@@ -503,6 +503,17 @@ test('curve-evidence migration normalizes all eight series and stores immutable 
   assert.match(migration, /revise_market_intelligence_brief/i);
 });
 
+test('brief revision repair serializes without granting update on immutable brief tables', () => {
+  const migration = read('supabase/migrations/20260821035058_daily_brief_revision_lock_permission.sql');
+  assert.match(migration, /pg_advisory_xact_lock\(hashtextextended\(/i);
+  assert.match(migration, /market-intelligence-brief:/i);
+  assert.doesNotMatch(migration, /for update/i);
+  assert.doesNotMatch(migration, /grant\s+update\s+on\s+table\s+public\.market_intelligence_briefs/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all on function[\s\S]*from public, anon, authenticated/i);
+  assert.match(migration, /grant execute on function[\s\S]*to service_role/i);
+});
+
 test('the reviewed SGO midpoint parser correction is exact, fail closed, and audit preserving', () => {
   const migration = read('supabase/migrations/20260820181345_correct_20250805_sgo_midpoint.sql');
   assert.match(migration, /market_parser_correction_events/);
