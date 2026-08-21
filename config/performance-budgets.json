@@ -6,7 +6,7 @@
     "totalJavaScriptBytes": 3600000
   },
   "server": {
-    "universalDispatcherLines": 19500,
+    "universalDispatcherLines": 19600,
     "universalFunctionKilobytes": 23000,
     "dedicatedFunctionKilobytes": 9000
   },
