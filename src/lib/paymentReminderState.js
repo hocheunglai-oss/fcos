@@ -3,13 +3,13 @@ function normalizedText(value) {
 }
 
 export function isPaymentReminderSentEvent(event = {}) {
-  const eventType = normalizedText(event.eventType ?? event.event_type).toLowerCase();
+  const eventType = normalizedText(event?.eventType ?? event?.event_type).toLowerCase();
   if (eventType === 'reminder_sent') return true;
-  return /^Payment reminder (?:sent|accepted by Microsoft Graph)\b/i.test(normalizedText(event.note));
+  return /^Payment reminder (?:sent|accepted by Microsoft Graph)\b/i.test(normalizedText(event?.note));
 }
 
 export function latestPaymentReminderSentEvent(row = {}) {
-  const events = Array.isArray(row.collectionEvents) ? row.collectionEvents : [];
+  const events = Array.isArray(row?.collectionEvents) ? row.collectionEvents : [];
   return events
     .filter(isPaymentReminderSentEvent)
     .filter((event) => event.createdAt)

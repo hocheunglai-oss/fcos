@@ -20,6 +20,8 @@ test('legacy reminder notes remain recognized without accepting unrelated collec
   assert.equal(isPaymentReminderSentEvent({ note: 'Payment reminder sent.' }), true);
   assert.equal(isPaymentReminderSentEvent({ note: 'Payment reminder accepted by Microsoft Graph.' }), true);
   assert.equal(isPaymentReminderSentEvent({ eventType: 'note', note: 'Buyer asked for another reminder.' }), false);
+  assert.equal(isPaymentReminderSentEvent(null), false);
+  assert.equal(latestPaymentReminderSentAt(null), null);
 });
 
 test('latest reminder timestamp ignores newer unrelated events', () => {
