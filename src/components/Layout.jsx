@@ -498,7 +498,6 @@ export default function Layout() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center transition-transform duration-150 hover:[&_svg]:scale-110 [&_svg]:transition-transform [&_svg]:duration-150">
-                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                   <WorkNotifications />
                 </div>
               </div>
@@ -521,7 +520,6 @@ export default function Layout() {
                     <WorkNotifications />
                   </div>
                   <span className="min-w-0 flex-1 text-sm font-medium text-slate-700">Notifications</span>
-                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                 </div>
               </>
             ) : (
@@ -537,7 +535,6 @@ export default function Layout() {
                 </Tooltip>
                 <div className="-mx-1 flex items-center transition-transform duration-150 hover:[&_svg]:scale-110 [&_svg]:transition-transform [&_svg]:duration-150">
                   <WorkNotifications />
-                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                 </div>
               </>
             )}
@@ -740,22 +737,39 @@ export default function Layout() {
 
       <div className="w-[72px] shrink-0" aria-hidden="true" />
 
-      <main className={cn('min-w-0 flex-1 bg-slate-50', pageOwnsScroll ? 'flex h-screen flex-col overflow-hidden' : 'overflow-auto')}>
-        {versionUpdate && (
-          <div className="sticky top-0 z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm">
-                <span className="font-semibold">New version available</span>
-                <span className="ml-2 text-amber-800">Version {versionUpdate.version || APP_VERSION} is ready.</span>
+      <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-slate-50">
+        {(versionUpdate || hasMarketsAccess) && <div className="pointer-events-none z-40 shrink-0">
+          {versionUpdate && (
+            <div className="pointer-events-auto border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm">
+                  <span className="font-semibold">New version available</span>
+                  <span className="ml-2 text-amber-800">Version {versionUpdate.version || APP_VERSION} is ready.</span>
+                </div>
+                <Button size="sm" onClick={updateToLatestVersion} className="gap-2 bg-amber-600 text-white hover:bg-amber-700">
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Update Now
+                </Button>
               </div>
-              <Button size="sm" onClick={updateToLatestVersion} className="gap-2 bg-amber-600 text-white hover:bg-amber-700">
-                <RefreshCw className="h-3.5 w-3.5" />
-                Update Now
-              </Button>
             </div>
-          </div>
-        )}
-        <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
+          )}
+          {hasMarketsAccess && (
+            <div
+              className="app-market-pulse-dock flex h-14 items-start justify-end"
+              style={{
+                paddingTop: 'max(0.5rem, env(safe-area-inset-top))',
+                paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+              }}
+            >
+              <div className="pointer-events-auto rounded-xl border border-white/80 bg-white/80 p-0.5 shadow-lg shadow-slate-900/10 backdrop-blur-xl supports-[backdrop-filter]:bg-white/70">
+                <Suspense fallback={null}>
+                  <MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} triggerClassName="h-9 w-9" />
+                </Suspense>
+              </div>
+            </div>
+          )}
+        </div>}
+        <div className={cn('min-h-0 flex-1', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
           <Outlet />
         </div>
       </main>

@@ -35,19 +35,54 @@ function normalizeRegime(value) {
   return ['backwardation', 'contango', 'flat', 'mixed'].includes(normalized) ? normalized : 'unavailable';
 }
 
+function briefPairComplete(brief) {
+  if (!brief) return false;
+  const required = Number(brief.completeness?.requiredReports || 2);
+  return required > 0 && Number(brief.completeness?.completeReports || 0) >= required;
+}
+
+function publishedComparison(currentValue, currentDate, previousValue, previousDate, unit) {
+  const current = number(currentValue);
+  const previous = number(previousValue);
+  const available = current != null
+    && previous != null
+    && Boolean(currentDate)
+    && Boolean(previousDate)
+    && previousDate < currentDate;
+  return {
+    available,
+    currentValue: current,
+    currentDate: currentDate || null,
+    previousValue: available ? previous : null,
+    previousDate: available ? previousDate : null,
+    change: available ? Math.round((current - previous) * 1_000_000) / 1_000_000 : null,
+    unit,
+  };
+}
+
 export function buildMarketPulseSnapshot({
   currentMonthRows = [],
   latestMopsRow = null,
+  previousMopsRow = null,
   latestBrief = null,
+  previousBrief = null,
   generatedAt = new Date().toISOString(),
   month = hktThisMonth(),
 } = {}) {
   const latest = latestMopsRow || latestMops(currentMonthRows);
   const metrics = latestBrief?.deterministic_metrics || {};
+  const previousMetrics = previousBrief?.deterministic_metrics || {};
+  const currentBriefComplete = briefPairComplete(latestBrief);
+  const previousBriefComplete = briefPairComplete(previousBrief);
   const regimeByProduct = new Map((metrics.curveRegimes || []).map((row) => [row.productKey, row]));
+  const previousRegimeByProduct = new Map((previousMetrics.curveRegimes || []).map((row) => [row.productKey, row]));
   const products = PRODUCTS.map((spec) => {
     const average = calcMopsAverage(month, currentMonthRows, spec.field);
     const curve = regimeByProduct.get(spec.productKey);
+    const previousCurve = previousRegimeByProduct.get(spec.productKey);
+    const latestPublicationDate = latest?.price_date || null;
+    const curveReportDate = curve?.reportDate || latestBrief?.report_date || null;
+    const previousCurveReportDate = previousCurve?.reportDate || previousBrief?.report_date || null;
     return {
       productKey: spec.productKey,
       productName: spec.name,
@@ -55,8 +90,15 @@ export function buildMarketPulseSnapshot({
       unit: spec.unit,
       latestMops: {
         value: number(latest?.[spec.field]),
-        publicationDate: latest?.price_date || null,
+        publicationDate: latestPublicationDate,
         estimated: latest?.is_estimate === true,
+        comparison: publishedComparison(
+          latest?.[spec.field],
+          latestPublicationDate,
+          previousMopsRow?.[spec.field],
+          previousMopsRow?.price_date,
+          spec.unit,
+        ),
       },
       monthlyEstimate: average ? {
         value: number(average.avg),
@@ -68,19 +110,26 @@ export function buildMarketPulseSnapshot({
         publicationDays: average.totalDays,
       } : null,
       curve: {
-        reportDate: curve?.reportDate || latestBrief?.report_date || null,
+        reportDate: curveReportDate,
         status: normalizeRegime(curve?.regime),
         spreads: spec.spreads.map((key) => ({
           key,
           label: key === 'bmM1' ? 'BM − M1' : 'M1 − M2',
           value: number(curve?.[key]),
           unit: curve?.unit || spec.unit,
+          comparison: publishedComparison(
+            currentBriefComplete ? curve?.[key] : null,
+            curveReportDate,
+            previousBriefComplete ? previousCurve?.[key] : null,
+            previousCurveReportDate,
+            curve?.unit || spec.unit,
+          ),
         })),
       },
     };
   });
   const reportCompleteness = {
-    complete: Number(latestBrief?.completeness?.completeReports || 0) >= Number(latestBrief?.completeness?.requiredReports || 2),
+    complete: currentBriefComplete,
     completeReports: Number(latestBrief?.completeness?.completeReports || 0),
     requiredReports: Number(latestBrief?.completeness?.requiredReports || 2),
   };
@@ -107,6 +156,7 @@ export function buildMarketPulseSnapshot({
     methodology: {
       monthlyEstimate: 'Same current-month weighted-average calculation used in Markets, carrying the latest available value across remaining publication days.',
       curveDirection: 'Positive front-minus-back is backwardation; negative is contango. Missing marks remain unavailable.',
+      publishedChanges: 'Latest MOPS and prompt-spread changes compare with the immediately preceding completed publication. Missing or N/A evidence remains unavailable and is never carried forward.',
     },
   };
 }
@@ -124,7 +174,7 @@ async function loadUncachedMarketPulse(client) {
       .eq('is_estimate', false)
       .lte('price_date', hktToday())
       .order('price_date', { ascending: false })
-      .limit(1),
+      .limit(2),
     client.from('market_intelligence_briefs')
       .select('report_date,revision,completeness,deterministic_metrics')
       .lte('report_date', hktToday())
@@ -134,10 +184,24 @@ async function loadUncachedMarketPulse(client) {
   ]);
   const error = mopsResult.error || latestResult.error || briefResult.error;
   if (error) throw pulseError(`Market Pulse could not be loaded: ${error.message}`);
+  const latestBrief = briefResult.data?.[0] || null;
+  let previousBrief = null;
+  if (latestBrief?.report_date) {
+    const previousBriefResult = await client.from('market_intelligence_briefs')
+      .select('report_date,revision,completeness,deterministic_metrics')
+      .lt('report_date', latestBrief.report_date)
+      .order('report_date', { ascending: false })
+      .order('revision', { ascending: false })
+      .limit(1);
+    if (previousBriefResult.error) throw pulseError(`Market Pulse comparison could not be loaded: ${previousBriefResult.error.message}`);
+    previousBrief = previousBriefResult.data?.[0] || null;
+  }
   return buildMarketPulseSnapshot({
     currentMonthRows: mopsResult.data || [],
     latestMopsRow: latestResult.data?.[0] || null,
-    latestBrief: briefResult.data?.[0] || null,
+    previousMopsRow: latestResult.data?.[1] || null,
+    latestBrief,
+    previousBrief,
     month,
   });
 }
@@ -145,7 +209,7 @@ async function loadUncachedMarketPulse(client) {
 export async function loadMarketPulseSnapshot(client, request = {}) {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'market-pulse-snapshot',
-    version: '2',
+    version: '3',
     accessScope: 'markets',
     apiVersion: 'supabase-market-intelligence-v1',
     payload: { month: hktThisMonth() },

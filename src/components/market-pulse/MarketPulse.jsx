@@ -24,7 +24,28 @@ function formatMarketValue(value, unit) {
 function formatSpread(value, unit) {
   if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
   const amount = Number(value);
-  return `${amount > 0 ? '+' : ''}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
+  const sign = amount > 0 ? '+' : amount < 0 ? '−' : '';
+  return `${sign}${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
+}
+
+function comparisonTone(change) {
+  const amount = Number(change);
+  if (!Number.isFinite(amount) || amount === 0) return 'text-slate-500';
+  return amount > 0 ? 'text-blue-700' : 'text-red-700';
+}
+
+function PublishedComparison({ comparison }) {
+  if (!comparison?.available) return <div className="mt-1 text-[10px] text-slate-500">No prior comparison</div>;
+  const change = Number(comparison.change);
+  const direction = change > 0 ? 'Up' : change < 0 ? 'Down' : 'Unchanged';
+  return (
+    <div
+      className={cn('mt-1 text-[10px] font-medium', comparisonTone(change))}
+      aria-label={`${direction} ${Math.abs(change).toFixed(2)} ${comparison.unit} compared with ${formatDate(comparison.previousDate)}`}
+    >
+      {formatSpread(change, comparison.unit)} vs {formatDate(comparison.previousDate)}
+    </div>
+  );
 }
 
 function formatDate(value) {
@@ -100,6 +121,7 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets })
                     <div className="rounded-md bg-slate-50 px-2.5 py-2">
                       <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Latest MOPS</div>
                       <div className="mt-0.5 text-sm font-semibold text-slate-950">{formatMarketValue(product.latestMops?.value, product.unit)}</div>
+                      <PublishedComparison comparison={product.latestMops?.comparison} />
                     </div>
                     <div className="rounded-md bg-blue-50 px-2.5 py-2">
                       <div className="text-[10px] font-medium uppercase tracking-wide text-blue-600">Est. {data.currentMonth} average</div>
@@ -110,6 +132,7 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets })
                     {(product.curve?.spreads || []).map((spread) => (
                       <span key={spread.key} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700">
                         <span className="font-medium">{spread.label}</span> {formatSpread(spread.value, spread.unit)}
+                        <PublishedComparison comparison={spread.comparison} />
                       </span>
                     ))}
                   </div>
@@ -196,7 +219,7 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="start" side="right" sideOffset={12} className="w-[min(440px,calc(100vw-24px))] p-0">
+      <PopoverContent align="end" side="bottom" sideOffset={10} className="w-[min(440px,calc(100vw-24px))] p-0">
         {body}
       </PopoverContent>
     </Popover>
