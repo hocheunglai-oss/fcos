@@ -7,7 +7,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
-import TradingViewBrentWidget from './TradingViewBrentWidget';
 
 const REGIME_CLASSES = {
   backwardation: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20',
@@ -36,7 +35,7 @@ function formatDate(value) {
   }).format(date);
 }
 
-function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, showBrent }) {
+function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets }) {
   const reportLabel = data?.curveReportDate ? `Curve report ${formatDate(data.curveReportDate)}` : 'Curve report unavailable';
   return (
     <div className="flex min-h-0 flex-col">
@@ -69,7 +68,6 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, s
                 The latest refresh failed. Showing the previously loaded Market Pulse. {error}
               </div>
             )}
-            {showBrent && <TradingViewBrentWidget height={118} />}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
               <span>MOPS {formatDate(data.latestMopsPublicationDate)}</span>
               <span aria-hidden="true">·</span>
@@ -128,7 +126,7 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, s
               </div>
             )}
             <div className="text-[10px] leading-relaxed text-slate-500">
-              Positive front-minus-back is backwardation; negative is contango. Missing marks are not inferred. TradingView Brent is indicative only and is never used in these figures.
+              Positive front-minus-back is backwardation; negative is contango. Missing marks are not inferred.
             </div>
           </div>
         ) : null}
@@ -174,7 +172,7 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
     navigate('/markets');
   };
   const body = (
-    <PulseBody data={data} error={error} loading={loading} updating={updating} onRefresh={() => load({ force: true })} onOpenMarkets={openMarkets} showBrent={isMobile} />
+    <PulseBody data={data} error={error} loading={loading} updating={updating} onRefresh={() => load({ force: true })} onOpenMarkets={openMarkets} />
   );
   const trigger = (
     <Button type="button" variant="ghost" size="icon" className={cn('h-8 w-8 shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-950', triggerClassName)} aria-label="Open Market Pulse" title="Market Pulse">
@@ -188,7 +186,7 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
       <SheetContent side="bottom" className="h-[min(90vh,780px)] p-0">
         <SheetHeader className="sr-only">
           <SheetTitle>Market Pulse</SheetTitle>
-          <SheetDescription>Latest FCOS MOPS and curve snapshot with an indicative Brent chart.</SheetDescription>
+          <SheetDescription>Latest FCOS MOPS and curve snapshot.</SheetDescription>
         </SheetHeader>
         {body}
       </SheetContent>

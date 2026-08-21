@@ -1,5 +1,4 @@
 import { calcMopsAverage, hktThisMonth, hktToday, latestMops } from '../src/hedge/lib/domain.js';
-import { tradingViewIndicativeBrent } from '../shared/brentMarketModel.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 
 const PRODUCTS = Object.freeze([
@@ -105,7 +104,6 @@ export function buildMarketPulseSnapshot({
     curveCompleteness,
     products,
     warnings: [...new Set(warnings)],
-    brent: tradingViewIndicativeBrent(),
     methodology: {
       monthlyEstimate: 'Same current-month weighted-average calculation used in Markets, carrying the latest available value across remaining publication days.',
       curveDirection: 'Positive front-minus-back is backwardation; negative is contango. Missing marks remain unavailable.',
@@ -147,7 +145,7 @@ async function loadUncachedMarketPulse(client) {
 export async function loadMarketPulseSnapshot(client, request = {}) {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'market-pulse-snapshot',
-    version: '1',
+    version: '2',
     accessScope: 'markets',
     apiVersion: 'supabase-market-intelligence-v1',
     payload: { month: hktThisMonth() },

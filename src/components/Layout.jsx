@@ -42,7 +42,6 @@ import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettin
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
 const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
-const MarketShellBar = lazy(() => import('@/components/market-pulse/MarketShellBar'));
 
 function StaticDragDropContext({ children }) {
   return children;
@@ -756,7 +755,6 @@ export default function Layout() {
             </div>
           </div>
         )}
-        {hasMarketsAccess && <Suspense fallback={null}><MarketShellBar onOpenPulse={() => setMarketPulseOpen(true)} /></Suspense>}
         <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
           <Outlet />
         </div>
