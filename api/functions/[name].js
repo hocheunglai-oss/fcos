@@ -207,6 +207,7 @@ import {
   saveMarketCurveShadowCutover,
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
+import { loadMarketPulseSnapshot } from '../_marketPulse.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
@@ -1424,6 +1425,7 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterMaintenanceCron: [],
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
+  marketPulseSnapshot: ['markets'],
   marketIntelligenceBrief: ['markets'],
   marketIntelligenceCurve: ['markets'],
   marketIntelligenceValuation: ['markets'],
@@ -18478,17 +18480,24 @@ async function hedgeMarkets(body = {}, req = null, accessContext = null) {
     await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to approve a curve cutover.');
     return { data: await saveMarketCurveShadowCutover(context.client, context.profile, body) };
   }
-  return {
-    data: await handleHedgeMarkets(body, context.profile, {
-      client: context.client,
-      capabilities: await hedgeCapabilities(context),
-    }),
-  };
+  const data = await handleHedgeMarkets(body, context.profile, {
+    client: context.client,
+    capabilities: await hedgeCapabilities(context),
+  });
+  if (['create', 'update', 'delete', 'save_spreads', 'verify_month', 'market_report_import'].includes(String(body.action || ''))) {
+    await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence', 'market:pulse']);
+  }
+  return { data };
 }
 
 async function marketIntelligenceBrief(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return loadMarketIntelligenceBrief(context.client, body);
+}
+
+async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadMarketPulseSnapshot(context.client, { ...body, force: requestForcesRefresh(body, req) });
 }
 
 async function marketIntelligenceCurve(body = {}, req = null, accessContext = null) {
@@ -19138,6 +19147,7 @@ const handlers = {
   emailRouterMaintenanceCron,
   hedgeDeskEntity,
   hedgeMarkets,
+  marketPulseSnapshot,
   marketIntelligenceBrief,
   marketIntelligenceCurve,
   marketIntelligenceValuation,

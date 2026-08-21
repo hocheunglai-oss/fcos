@@ -41,6 +41,8 @@ import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
+const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
+const MarketShellBar = lazy(() => import('@/components/market-pulse/MarketShellBar'));
 
 function StaticDragDropContext({ children }) {
   return children;
@@ -163,6 +165,7 @@ export default function Layout() {
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
+  const [marketPulseOpen, setMarketPulseOpen] = useState(false);
   const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [navigationPreferences, setNavigationPreferences] = useState(() => normalizedNavigationPreferences(DEFAULT_NAVIGATION_PREFERENCES));
@@ -194,6 +197,7 @@ export default function Layout() {
   // `fixed` is the compact icon dock and legacy `auto_hide` is the expanding caption dock.
   const sidebarCaptionMode = !sidebarFixed;
   const sidebarShowsCaptions = !navigationEditing && sidebarCaptionMode && sidebarHovered;
+  const hasMarketsAccess = hasModuleAccess('markets');
   const userInitials = (user?.full_name || user?.email || 'FCOS User')
     .split(/\s+/)
     .filter(Boolean)
@@ -494,7 +498,8 @@ export default function Layout() {
                     <div className="truncate text-[11px] font-medium text-emerald-700">Salesforce connected</div>
                   </div>
                 </div>
-                <div className="shrink-0 transition-transform duration-150 hover:scale-110 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
+                <div className="flex shrink-0 items-center transition-transform duration-150 hover:[&_svg]:scale-110 [&_svg]:transition-transform [&_svg]:duration-150">
+                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                   <WorkNotifications />
                 </div>
               </div>
@@ -516,7 +521,8 @@ export default function Layout() {
                   <div className="flex w-14 shrink-0 justify-center transition-transform duration-150 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
                     <WorkNotifications />
                   </div>
-                  <span className="text-sm font-medium text-slate-700">Notifications</span>
+                  <span className="min-w-0 flex-1 text-sm font-medium text-slate-700">Notifications</span>
+                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                 </div>
               </>
             ) : (
@@ -530,8 +536,9 @@ export default function Layout() {
                   </TooltipTrigger>
                   <TooltipContent side="right" sideOffset={12} className="border border-white/15 bg-slate-950/90 text-white shadow-xl backdrop-blur-xl">FCOS · Salesforce connected</TooltipContent>
                 </Tooltip>
-                <div className="transition-transform duration-150 hover:scale-110 hover:[&_svg]:scale-125 [&_svg]:transition-transform [&_svg]:duration-150">
+                <div className="-mx-1 flex items-center transition-transform duration-150 hover:[&_svg]:scale-110 [&_svg]:transition-transform [&_svg]:duration-150">
                   <WorkNotifications />
+                  {hasMarketsAccess && <Suspense fallback={null}><MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} /></Suspense>}
                 </div>
               </>
             )}
@@ -749,6 +756,7 @@ export default function Layout() {
             </div>
           </div>
         )}
+        {hasMarketsAccess && <Suspense fallback={null}><MarketShellBar onOpenPulse={() => setMarketPulseOpen(true)} /></Suspense>}
         <div className={cn(pageOwnsScroll && 'min-h-0 flex-1 overflow-hidden')}>
           <Outlet />
         </div>

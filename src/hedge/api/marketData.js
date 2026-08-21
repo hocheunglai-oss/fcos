@@ -64,6 +64,15 @@ export function loadMarketHistory(payload, options = {}) {
   });
 }
 
+export function loadMarketPulseSnapshot(options = {}) {
+  return requestMarketIntelligence('marketPulseSnapshot', {}, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-pulse'],
+    ...options,
+  });
+}
+
 
 export function loadMarketIntelligenceBrief(payload = {}, options = {}) {
   return requestMarketIntelligence('marketIntelligenceBrief', payload, {
