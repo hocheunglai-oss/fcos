@@ -524,12 +524,14 @@ export default function FcosImprovements() {
 
       <Sheet open={Boolean(detail) || detailLoading} onOpenChange={(open) => !open && closeDetail()}>
         <SheetContent className="w-full overflow-hidden p-0 sm:max-w-[min(980px,calc(100vw-2rem))]">
+          <SheetTitle className="sr-only">{ticket ? `${ticket.key} · ${ticket.title}` : 'FCOS improvement ticket'}</SheetTitle>
+          <SheetDescription className="sr-only">Review the ticket, discussion, files, activity, and proposed workflow changes.</SheetDescription>
           {detailLoading && !detail ? <StateBlock icon={Loader2} title="Opening ticket" description="Loading the current workflow state." /> : ticket && (
             <div className="flex h-full min-h-0 flex-col">
               <SheetHeader className="border-b border-border px-5 py-4 pr-12">
                 <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{typeLabel(ticket.type)}</Badge><Badge variant="outline" className={statusClass(ticket.status)}>{ticket.status}</Badge><Badge variant="outline" className={priorityClass(ticket.priority)}>{ticket.priority}</Badge>{pendingProposals.length > 0 && <Badge className="border-amber-200 bg-amber-50 text-amber-900">{pendingProposals.length} Pending Approval</Badge>}</div>
-                <SheetTitle className="mt-2 text-xl">{ticket.key} · {ticket.title}</SheetTitle>
-                <SheetDescription>{moduleLabel(ticket.moduleKey)} · reported by {ticket.reporter?.name} · updated {formatDateTime(ticket.updatedAt)}</SheetDescription>
+                <h2 className="mt-2 text-xl font-semibold">{ticket.key} · {ticket.title}</h2>
+                <p className="text-sm text-muted-foreground">{moduleLabel(ticket.moduleKey)} · reported by {ticket.reporter?.name} · updated {formatDateTime(ticket.updatedAt)}</p>
                 <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={copyCodexPrompt}><Clipboard className="h-4 w-4" />Copy Codex prompt</Button></div>
               </SheetHeader>
 
@@ -550,7 +552,7 @@ export default function FcosImprovements() {
 
                     {ticket.permissions?.canProposeWorkflow && (
                       <section className="border-t border-border pt-5"><h3 className="text-sm font-semibold">Propose workflow change</h3><p className="mt-1 text-xs text-muted-foreground">{isGeneralManager ? 'Your changes apply immediately as approved.' : `Changes remain pending until ${generalManager?.name || 'the General Manager'} approves them.`}</p><div className="mt-4 grid gap-4 lg:grid-cols-2">
-                        <div className="space-y-3"><Field label="Next status"><Select value={nextStatus || undefined} onValueChange={(value) => { setNextStatus(value); setStatusNote(''); }}><SelectTrigger><SelectValue placeholder="Select next status" /></SelectTrigger><SelectContent>{allowedStatusTransitions.map((transition) => <SelectItem key={transition.status} value={transition.status}>{transition.label}</SelectItem>)}</SelectContent></Select></Field>{nextStatus && <Textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} rows={2} placeholder={selectedStatusTransition?.requiresNote ? 'Reason required' : 'Optional decision note'} />}<Button onClick={proposeStatus} disabled={!nextStatus || saving || (selectedStatusTransition?.requiresNote && !statusNote.trim())}><ArrowRight className="h-4 w-4" />Submit status change</Button></div>
+                        <div className="space-y-3"><Field label="Next status"><Select value={nextStatus} onValueChange={(value) => { setNextStatus(value); setStatusNote(''); }}><SelectTrigger><SelectValue placeholder="Select next status" /></SelectTrigger><SelectContent>{allowedStatusTransitions.map((transition) => <SelectItem key={transition.status} value={transition.status}>{transition.label}</SelectItem>)}</SelectContent></Select></Field>{nextStatus && <Textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} rows={2} placeholder={selectedStatusTransition?.requiresNote ? 'Reason required' : 'Optional decision note'} />}<Button onClick={proposeStatus} disabled={!nextStatus || saving || (selectedStatusTransition?.requiresNote && !statusNote.trim())}><ArrowRight className="h-4 w-4" />Submit status change</Button></div>
                         <div className="space-y-3"><Field label="Accountable assignee"><Select value={assigneeId} onValueChange={setAssigneeId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">Unassigned</SelectItem>{users.map((user) => <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>)}</SelectContent></Select></Field><Button variant="outline" onClick={proposeAssignment} disabled={saving || assigneeId === (ticket.assignee?.id || '__none__')}><UserRound className="h-4 w-4" />Submit assignment change</Button></div>
                       </div></section>
                     )}
