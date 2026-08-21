@@ -48,6 +48,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
 import { paymentReminderCopyLine } from '@/lib/paymentReminderClipboard';
+import { latestPaymentReminderSentAt } from '@/lib/paymentReminderState';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
@@ -637,22 +638,6 @@ function collectionPill(status) {
   if (status === 'On Hold') return 'bg-amber-50 text-amber-700 border-amber-200';
   if (status === 'Paid / Closed') return 'bg-muted text-muted-foreground border-border';
   return 'bg-background text-foreground border-border';
-}
-
-function isPaymentReminderSentEvent(event) {
-  return /^Payment reminder sent\b/i.test(textValue(event?.note, ''));
-}
-
-function latestPaymentReminderSentEvent(row) {
-  const events = Array.isArray(row?.collectionEvents) ? row.collectionEvents : [];
-  return events
-    .filter(isPaymentReminderSentEvent)
-    .filter((event) => event.createdAt)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-}
-
-function latestPaymentReminderSentAt(row) {
-  return latestPaymentReminderSentEvent(row)?.createdAt || null;
 }
 
 function wasPaymentReminderSentToday(row, todayKey = hongKongDateKey()) {
@@ -3349,23 +3334,39 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
         <TableShell title={queueView === 'needs-action' ? 'Needs Action' : queueView === 'closed' ? 'Closed Collections' : 'Open Collections'} meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
           {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
-              <table className="w-full min-w-[1680px] text-sm">
+              <table className="w-full min-w-[1120px] table-fixed text-xs xl:min-w-0">
+                <colgroup>
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[5%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[4%]" />
+                  <col className="w-[9%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Broker</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">PSPRS</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Collection Handler</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Evidence</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Stem</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer broker</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice amount</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Receivable balance</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice due</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer trader</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">PSPRS</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Collection handler</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Next follow-up</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Payment evidence</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Status</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Overdue</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3384,8 +3385,8 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                       : null);
                     return (
                       <tr key={row.id} className={`border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}>
-                      <td className={cn('border-l-4 px-4 py-3 text-foreground', dispute.accent)} data-dispute-state={dispute.state}>
-                        <div><StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink></div>
+                      <td className={cn('border-l-4 px-2 py-2 text-foreground', dispute.accent)} data-dispute-state={dispute.state}>
+                        <div className="truncate" title={row.stemName || ''}><StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink></div>
                         {dispute.label && (
                           <span
                             className={cn('mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium', dispute.badge)}
@@ -3397,11 +3398,11 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <div>{row.buyerName || '-'}</div>
+                      <td className="px-2 py-2 text-muted-foreground">
+                        <div className="truncate" title={row.buyerName || ''}>{row.buyerName || '-'}</div>
                         {row.effectiveReminderPolicy === 'overdue_only' && (
                           <span
-                            className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                            className="mt-1 inline-flex max-w-full truncate rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
                             title={[
                               row.reminderRuleSource === 'group' && row.reminderRuleSourceAccountName
                                 ? `Inherited from ${row.reminderRuleSourceAccountName}.`
@@ -3413,26 +3414,26 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.buyerBrokerNames || '-'}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
-                      <td className="px-4 py-3 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.buyerTraderInCharge || '-'}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.prpspStatus || '-'}</td>
-                      <td className="px-4 py-3">
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.buyerBrokerNames || ''}>{row.buyerBrokerNames || '-'}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.buyerTraderInCharge || ''}>{row.buyerTraderInCharge || '-'}</td>
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.prpspStatus || ''}>{row.prpspStatus || '-'}</td>
+                      <td className="px-2 py-2">
                         <div className="flex flex-col gap-1">
-                          <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(row))}`}>
+                          <span className={`w-fit max-w-full truncate rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(row))}`} title={collectionStatus(row)}>
                             {collectionStatus(row)}
                           </span>
-                          {collectionOwner(row) && <span className="text-xs text-muted-foreground">{collectionOwner(row)}</span>}
+                          {collectionOwner(row) && <span className="truncate text-xs text-muted-foreground" title={collectionOwner(row)}>{collectionOwner(row)}</span>}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-foreground">
+                      <td className="whitespace-nowrap px-2 py-2 text-foreground">
                         <div className={isFollowUpDue(row, today) ? 'font-semibold text-amber-800' : ''}>
                           {fmtDate(row.collection?.nextFollowUpDate)}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                      <td className="px-2 py-2 text-[11px] text-muted-foreground">
                         {row.collection?.adviceReceivedDate ? (
                           <div><span className="font-medium text-cyan-800">Advice {fmtDate(row.collection.adviceReceivedDate)}</span><div>{row.currency || ''} {Number(row.collection.adviceAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
                         ) : latestBuyerPayment ? (
@@ -3444,15 +3445,15 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                           />
                         ) : '-'}
                       </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`}>
+                      <td className="px-2 py-2">
+                        <span className={`inline-flex max-w-full truncate rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`} title={row.status}>
                           {row.status}
                         </span>
                       </td>
-                      <td className={`px-4 py-3 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
+                      <td className={`whitespace-nowrap px-2 py-2 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
                         {overdueDisplayValue(row.daysUntilDue)}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-2 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
                           <Button
                             type="button"
