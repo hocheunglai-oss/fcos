@@ -86,6 +86,18 @@ test('brief availability keeps page-four published N/A authoritative and removes
   ]), ['LSMGO BM was published N/A in European Marketscan page 4.']);
 });
 
+test('hourly reconciliation recognizes immutable shadow scopes before retrying a partially completed date', () => {
+  const { shadowScopeKey } = marketIntelligenceTradingInternals;
+  assert.equal(
+    shadowScopeKey({ publication_date: '2026-08-19', product_key: 'HSFO380', contract_month: '2026-09-01', unit: 'usd/mt' }),
+    shadowScopeKey({ publicationDate: '2026-08-19', productKey: 'hsfo380', contractMonth: '2026-09', unit: 'USD/MT' }),
+  );
+  assert.notEqual(
+    shadowScopeKey({ publicationDate: '2026-08-19', productKey: 'hsfo380', contractMonth: '2026-09', unit: 'USD/MT' }),
+    shadowScopeKey({ publicationDate: '2026-08-19', productKey: 'hsfo380', contractMonth: '2026-10', unit: 'USD/MT' }),
+  );
+});
+
 test('printed FOFS contract months survive the May roll while the non-publication reprint is evidence-only', () => {
   const may1 = parseMarketReportText(`
     European Marketscan May 1, 2025

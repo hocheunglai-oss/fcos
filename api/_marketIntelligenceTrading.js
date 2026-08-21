@@ -1421,6 +1421,15 @@ async function loadDeterministicAiObservationEvidence(client, importIds, sourceR
     })));
 }
 
+function shadowScopeKey(row = {}) {
+  return [
+    isoDate(row.publication_date || row.publicationDate),
+    String(row.product_key || row.productKey || '').trim().toLowerCase(),
+    isoMonth(row.contract_month || row.contractMonth),
+    String(row.unit || '').trim().toUpperCase(),
+  ].join(':');
+}
+
 export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false } = {}) {
   const date = isoDate(reportDate);
   if (!date) throw intelligenceError('A valid report date is required.');
@@ -1498,9 +1507,25 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
   const shadowComparisons = recordShadow
     ? ((legacyComparisons || []).length ? legacyComparisons : await legacyShadowComparisons(client, date, curve))
     : [];
+  const existingShadowScopes = new Set();
+  if (reconcileDerived && shadowComparisons.length) {
+    const existingShadowResult = await client.from('market_curve_shadow_runs')
+      .select('publication_date,product_key,contract_month,unit')
+      .eq('publication_date', date);
+    if (existingShadowResult.error) {
+      throw intelligenceError(`Existing curve shadow evidence could not be loaded: ${existingShadowResult.error.message}`, 502, 'MARKET_CURVE_SHADOW_LOAD_FAILED');
+    }
+    for (const row of existingShadowResult.data || []) existingShadowScopes.add(shadowScopeKey(row));
+  }
   for (const comparison of shadowComparisons) {
     if (!PRODUCTS.includes(comparison.productKey) || !isoMonth(comparison.contractMonth) || number(comparison.legacyValue) == null || number(comparison.curveValue) == null) continue;
     const unit = PRODUCT_UNITS[comparison.productKey];
+    if (existingShadowScopes.has(shadowScopeKey({
+      publication_date: date,
+      product_key: comparison.productKey,
+      contract_month: `${isoMonth(comparison.contractMonth)}-01`,
+      unit,
+    }))) continue;
     const signedVariance = Number(comparison.curveValue) - Number(comparison.legacyValue);
     const result = await client.rpc('record_market_curve_shadow', {
       p_publication_date: date,
@@ -1557,6 +1582,7 @@ export const marketIntelligenceTradingInternals = Object.freeze({
   isoDate,
   latestBriefsByReportDate,
   seriesProduct,
+  shadowScopeKey,
   seriesMarketFamily,
   observationProjection,
   curveAvailabilityForBrief,
