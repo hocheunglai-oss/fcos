@@ -12,12 +12,9 @@ const ADMIN_USER_TYPES = new Set(['administrator']);
 export const IMPROVEMENT_TYPES = Object.freeze(['bug', 'feature_request']);
 export const IMPROVEMENT_STATUSES = Object.freeze([
   'Reported',
-  'Under Review',
-  'Accepted',
   'In Progress',
   'Ready for Verification',
   'Closed',
-  'Reopened',
   'Rejected',
 ]);
 export const IMPROVEMENT_PRIORITIES = Object.freeze(['Low', 'Medium', 'High', 'Urgent']);
@@ -44,18 +41,37 @@ export const IMPROVEMENT_MODULES = Object.freeze([
 ]);
 
 const STATUS_TRANSITIONS = Object.freeze({
-  Reported: ['Under Review', 'Rejected'],
-  'Under Review': ['Accepted', 'Rejected'],
-  Accepted: ['In Progress', 'Rejected'],
+  Reported: ['In Progress', 'Rejected'],
   'In Progress': ['Ready for Verification', 'Rejected'],
-  'Ready for Verification': ['Closed', 'Reopened'],
-  Closed: ['Reopened'],
-  Reopened: ['Accepted', 'In Progress', 'Rejected'],
-  Rejected: ['Reopened'],
+  'Ready for Verification': ['Closed', 'In Progress'],
+  Closed: ['In Progress'],
+  Rejected: ['Reported'],
 });
 
 export function improvementStatusTransitionAllowed(fromStatus, toStatus) {
   return (STATUS_TRANSITIONS[fromStatus] || []).includes(toStatus);
+}
+
+export function improvementStatusChangeRequiresNote(fromStatus, toStatus) {
+  return toStatus === 'Rejected'
+    || (fromStatus === 'Ready for Verification' && toStatus === 'In Progress')
+    || (fromStatus === 'Closed' && toStatus === 'In Progress')
+    || (fromStatus === 'Rejected' && toStatus === 'Reported');
+}
+
+export function improvementStatusTransitionLabel(fromStatus, toStatus) {
+  if (fromStatus === 'Ready for Verification' && toStatus === 'In Progress') return 'Return to In Progress';
+  if (fromStatus === 'Closed' && toStatus === 'In Progress') return 'Reopen → In Progress';
+  if (fromStatus === 'Rejected' && toStatus === 'Reported') return 'Reconsider → Reported';
+  return toStatus;
+}
+
+function statusTransitionsFor(status) {
+  return (STATUS_TRANSITIONS[status] || []).map((toStatus) => ({
+    status: toStatus,
+    label: improvementStatusTransitionLabel(status, toStatus),
+    requiresNote: improvementStatusChangeRequiresNote(status, toStatus),
+  }));
 }
 
 function appError(message, status = 500, details = undefined) {
@@ -371,10 +387,12 @@ export async function improvementDetail(body = {}, accessContext) {
   if (attachmentResult.error) throw attachmentResult.error;
   if (eventResult.error) throw eventResult.error;
   const isGeneralManager = generalManager.id === profile.id;
+  const allowedStatusTransitions = statusTransitionsFor(ticket.status);
   return {
     ticket: ticketShape(ticket, {
       permissions: permissionsFor(ticket, profile, isGeneralManager),
-      allowedNextStatuses: STATUS_TRANSITIONS[ticket.status] || [],
+      allowedNextStatuses: allowedStatusTransitions.map((transition) => transition.status),
+      allowedStatusTransitions,
     }),
     proposals: (proposalResult.data || []).map(proposalShape),
     comments: (proposalResult.data || []).filter((row) => row.change_type === 'comment').map(proposalShape),
@@ -450,7 +468,9 @@ function proposalPayload(changeType, body, ticket) {
       throw appError(`Status cannot move from ${ticket.status} to ${status || 'the selected value'}.`, 400);
     }
     const note = cleanText(body.note, 2000);
-    if (['Rejected', 'Reopened'].includes(status) && !note) throw appError(`A note is required when moving to ${status}.`, 400);
+    if (improvementStatusChangeRequiresNote(ticket.status, status) && !note) {
+      throw appError(`A note is required when moving from ${ticket.status} to ${status}.`, 400);
+    }
     return { status, note: note || null, fromStatus: ticket.status };
   }
   if (changeType === 'assignment') {

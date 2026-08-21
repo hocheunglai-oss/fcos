@@ -5,6 +5,8 @@ import {
   IMPROVEMENT_PRIORITIES,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_TYPES,
+  improvementStatusChangeRequiresNote,
+  improvementStatusTransitionLabel,
   improvementStatusTransitionAllowed,
 } from '../api/_fcosImprovements.js';
 
@@ -15,25 +17,49 @@ test('FCOS Improvements exposes the agreed ticket types, priorities, and workflo
   assert.deepEqual(IMPROVEMENT_PRIORITIES, ['Low', 'Medium', 'High', 'Urgent']);
   assert.deepEqual(IMPROVEMENT_STATUSES, [
     'Reported',
-    'Under Review',
-    'Accepted',
     'In Progress',
     'Ready for Verification',
     'Closed',
-    'Reopened',
     'Rejected',
   ]);
 });
 
 test('FCOS Improvements accepts only explicit workflow transitions', () => {
-  assert.equal(improvementStatusTransitionAllowed('Reported', 'Under Review'), true);
-  assert.equal(improvementStatusTransitionAllowed('Under Review', 'Accepted'), true);
-  assert.equal(improvementStatusTransitionAllowed('Accepted', 'In Progress'), true);
+  assert.equal(improvementStatusTransitionAllowed('Reported', 'In Progress'), true);
+  assert.equal(improvementStatusTransitionAllowed('Reported', 'Rejected'), true);
   assert.equal(improvementStatusTransitionAllowed('In Progress', 'Ready for Verification'), true);
+  assert.equal(improvementStatusTransitionAllowed('In Progress', 'Rejected'), true);
   assert.equal(improvementStatusTransitionAllowed('Ready for Verification', 'Closed'), true);
-  assert.equal(improvementStatusTransitionAllowed('Closed', 'Reopened'), true);
+  assert.equal(improvementStatusTransitionAllowed('Ready for Verification', 'In Progress'), true);
+  assert.equal(improvementStatusTransitionAllowed('Closed', 'In Progress'), true);
+  assert.equal(improvementStatusTransitionAllowed('Rejected', 'Reported'), true);
   assert.equal(improvementStatusTransitionAllowed('Reported', 'Closed'), false);
-  assert.equal(improvementStatusTransitionAllowed('Closed', 'In Progress'), false);
+  assert.equal(improvementStatusTransitionAllowed('Closed', 'Reported'), false);
+  assert.equal(improvementStatusTransitionAllowed('Rejected', 'In Progress'), false);
+  for (const legacyStatus of ['Under Review', 'Accepted', 'Reopened']) {
+    assert.equal(improvementStatusTransitionAllowed('Reported', legacyStatus), false);
+    assert.equal(improvementStatusTransitionAllowed(legacyStatus, 'In Progress'), false);
+  }
+});
+
+test('exceptional status transitions expose clear labels and require notes', () => {
+  assert.equal(improvementStatusTransitionLabel('Ready for Verification', 'In Progress'), 'Return to In Progress');
+  assert.equal(improvementStatusTransitionLabel('Closed', 'In Progress'), 'Reopen → In Progress');
+  assert.equal(improvementStatusTransitionLabel('Rejected', 'Reported'), 'Reconsider → Reported');
+  assert.equal(improvementStatusTransitionLabel('Reported', 'In Progress'), 'In Progress');
+
+  for (const [from, to] of [
+    ['Reported', 'Rejected'],
+    ['In Progress', 'Rejected'],
+    ['Ready for Verification', 'In Progress'],
+    ['Closed', 'In Progress'],
+    ['Rejected', 'Reported'],
+  ]) {
+    assert.equal(improvementStatusChangeRequiresNote(from, to), true, `${from} -> ${to}`);
+  }
+  assert.equal(improvementStatusChangeRequiresNote('Reported', 'In Progress'), false);
+  assert.equal(improvementStatusChangeRequiresNote('In Progress', 'Ready for Verification'), false);
+  assert.equal(improvementStatusChangeRequiresNote('Ready for Verification', 'Closed'), false);
 });
 
 test('migration keeps ticket data service-only and General Manager decisions atomic', async () => {
@@ -53,6 +79,40 @@ test('migration keeps ticket data service-only and General Manager decisions ato
   assert.match(source, /fcos_improvement_status_transition_allowed/);
   assert.match(source, /where approval_state = 'pending'/);
   assert.match(source, /'fcos-improvement-files'.*false.*20971520/s);
+});
+
+test('status simplification migration narrows current state without rewriting history', async () => {
+  const source = await readFile(new URL('supabase/migrations/20260821094025_simplify_fcos_improvement_statuses.sql', root), 'utf8');
+  assert.match(source, /check \(status in \('Reported', 'In Progress', 'Ready for Verification', 'Closed', 'Rejected'\)\)/);
+  assert.match(source, /ticket\.status in \('Under Review', 'Accepted'\).*then 'Reported'/s);
+  assert.match(source, /proposal\.payload->>'fromStatus'[\s\S]*when 'Closed' then 'In Progress'[\s\S]*when 'Rejected' then 'Reported'/);
+  assert.match(source, /Historical proposal payloads and events[\s\S]*retain the terminology/i);
+  assert.doesNotMatch(source, /update public\.fcos_improvement_proposals as/);
+  assert.doesNotMatch(source, /update public\.fcos_improvement_events as/);
+  assert.match(source, /fcos_improvement_status_note_required/);
+  assert.match(source, /v_target_status in \('Closed', 'Rejected'\)/);
+  assert.match(source, /security invoker/);
+  assert.match(source, /revoke all on function public\.fcos_improvement_status_note_required\(text, text\) from public, anon, authenticated/);
+  assert.match(source, /grant execute on function public\.fcos_improvement_status_note_required\(text, text\) to service_role/);
+});
+
+test('reduced lifecycle is projected consistently in the API, UI, commitments, CLI, and methodology', async () => {
+  const [service, page, commitments, script, methodology] = await Promise.all([
+    readFile(new URL('api/_fcosImprovements.js', root), 'utf8'),
+    readFile(new URL('src/pages/FcosImprovements.jsx', root), 'utf8'),
+    readFile(new URL('api/_workCommitments.js', root), 'utf8'),
+    readFile(new URL('scripts/fcos-improvements.mjs', root), 'utf8'),
+    readFile(new URL('src/lib/pageMethodologies.js', root), 'utf8'),
+  ]);
+  assert.match(service, /allowedStatusTransitions/);
+  assert.match(service, /improvementStatusChangeRequiresNote\(ticket\.status, status\)/);
+  assert.match(page, /Reopen → In Progress/);
+  assert.match(page, /Reconsider → Reported/);
+  assert.match(page, /selectedStatusTransition\?\.requiresNote/);
+  assert.match(commitments, /\.not\('status', 'in', '\(Closed,Rejected\)'\)/);
+  assert.match(script, /Ticket statuses: Reported, In Progress, Ready for Verification, Closed, Rejected/);
+  assert.match(script, /This helper cannot approve them/);
+  assert.match(methodology, /Tickets progress through Reported, In Progress, Ready for Verification, and Closed/);
 });
 
 test('all active users receive the page and authenticated API while approval remains role-bound', async () => {

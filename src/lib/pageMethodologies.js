@@ -526,7 +526,7 @@ export const FCOS_IMPROVEMENTS_METHODOLOGY = {
     },
     {
       title: 'Status progression',
-      body: 'Tickets progress through Reported, Under Review, Accepted, In Progress, Ready for Verification, and Closed. Reopened and Rejected preserve exceptional outcomes. The server validates every transition and rejects stale changes.',
+      body: 'Tickets progress through Reported, In Progress, Ready for Verification, and Closed. Rejected remains a distinct terminal outcome. Failed verification returns to In Progress, completed tickets reopen into In Progress, and rejected tickets return to Reported for reconsideration. The server validates every transition, requires reasons for exceptional moves, and rejects stale changes.',
     },
     {
       title: 'Codex collaboration',

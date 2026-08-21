@@ -73,7 +73,7 @@ import { cn } from '@/lib/utils';
 
 const DEFAULT_OPTIONS = {
   types: ['bug', 'feature_request'],
-  statuses: ['Reported', 'Under Review', 'Accepted', 'In Progress', 'Ready for Verification', 'Closed', 'Reopened', 'Rejected'],
+  statuses: ['Reported', 'In Progress', 'Ready for Verification', 'Closed', 'Rejected'],
   priorities: ['Low', 'Medium', 'High', 'Urgent'],
   severities: ['Low', 'Medium', 'High', 'Critical'],
   modules: [{ value: 'general', label: 'General / Cross-module' }],
@@ -127,8 +127,20 @@ function statusClass(status) {
   if (status === 'Rejected') return 'border-slate-200 bg-slate-100 text-slate-700';
   if (status === 'Ready for Verification') return 'border-violet-200 bg-violet-50 text-violet-800';
   if (status === 'In Progress') return 'border-blue-200 bg-blue-50 text-blue-800';
-  if (status === 'Reopened') return 'border-rose-200 bg-rose-50 text-rose-800';
   return 'border-amber-200 bg-amber-50 text-amber-900';
+}
+
+function statusTransitionFallback(fromStatus, toStatus) {
+  if (fromStatus === 'Ready for Verification' && toStatus === 'In Progress') {
+    return { status: toStatus, label: 'Return to In Progress', requiresNote: true };
+  }
+  if (fromStatus === 'Closed' && toStatus === 'In Progress') {
+    return { status: toStatus, label: 'Reopen → In Progress', requiresNote: true };
+  }
+  if (fromStatus === 'Rejected' && toStatus === 'Reported') {
+    return { status: toStatus, label: 'Reconsider → Reported', requiresNote: true };
+  }
+  return { status: toStatus, label: toStatus, requiresNote: toStatus === 'Rejected' };
 }
 
 function priorityClass(priority) {
@@ -405,6 +417,10 @@ export default function FcosImprovements() {
   const ticket = detail?.ticket;
   const workflowProposals = detail?.proposals?.filter((proposal) => proposal.changeType !== 'comment') || [];
   const pendingProposals = detail?.proposals?.filter((proposal) => proposal.approvalState === 'pending') || [];
+  const allowedStatusTransitions = ticket?.allowedStatusTransitions?.length
+    ? ticket.allowedStatusTransitions
+    : (ticket?.allowedNextStatuses || []).map((status) => statusTransitionFallback(ticket.status, status));
+  const selectedStatusTransition = allowedStatusTransitions.find((transition) => transition.status === nextStatus);
 
   return (
     <div className="space-y-4">
@@ -534,7 +550,7 @@ export default function FcosImprovements() {
 
                     {ticket.permissions?.canProposeWorkflow && (
                       <section className="border-t border-border pt-5"><h3 className="text-sm font-semibold">Propose workflow change</h3><p className="mt-1 text-xs text-muted-foreground">{isGeneralManager ? 'Your changes apply immediately as approved.' : `Changes remain pending until ${generalManager?.name || 'the General Manager'} approves them.`}</p><div className="mt-4 grid gap-4 lg:grid-cols-2">
-                        <div className="space-y-3"><Field label="Next status"><Select value={nextStatus || undefined} onValueChange={setNextStatus}><SelectTrigger><SelectValue placeholder="Select next status" /></SelectTrigger><SelectContent>{ticket.allowedNextStatuses?.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></Field>{nextStatus && <Textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} rows={2} placeholder={['Rejected', 'Reopened'].includes(nextStatus) ? 'Reason required' : 'Optional decision note'} />}<Button onClick={proposeStatus} disabled={!nextStatus || saving}><ArrowRight className="h-4 w-4" />Submit status change</Button></div>
+                        <div className="space-y-3"><Field label="Next status"><Select value={nextStatus || undefined} onValueChange={(value) => { setNextStatus(value); setStatusNote(''); }}><SelectTrigger><SelectValue placeholder="Select next status" /></SelectTrigger><SelectContent>{allowedStatusTransitions.map((transition) => <SelectItem key={transition.status} value={transition.status}>{transition.label}</SelectItem>)}</SelectContent></Select></Field>{nextStatus && <Textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} rows={2} placeholder={selectedStatusTransition?.requiresNote ? 'Reason required' : 'Optional decision note'} />}<Button onClick={proposeStatus} disabled={!nextStatus || saving || (selectedStatusTransition?.requiresNote && !statusNote.trim())}><ArrowRight className="h-4 w-4" />Submit status change</Button></div>
                         <div className="space-y-3"><Field label="Accountable assignee"><Select value={assigneeId} onValueChange={setAssigneeId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">Unassigned</SelectItem>{users.map((user) => <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>)}</SelectContent></Select></Field><Button variant="outline" onClick={proposeAssignment} disabled={saving || assigneeId === (ticket.assignee?.id || '__none__')}><UserRound className="h-4 w-4" />Submit assignment change</Button></div>
                       </div></section>
                     )}

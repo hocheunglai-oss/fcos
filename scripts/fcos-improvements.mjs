@@ -21,6 +21,8 @@ function usage() {
     '  npm run improvements:agent -- comment FCOS-000001 --body "Finding or progress update"',
     '  npm run improvements:agent -- status FCOS-000001 --to "In Progress" --note "Implementation started"',
     '',
+    'Ticket statuses: Reported, In Progress, Ready for Verification, Closed, Rejected.',
+    'A note is required for rejection, failed verification, reopening, and reconsideration.',
     'Codex proposals remain Pending Approval. This helper cannot approve them.',
   ].join('\n');
 }
@@ -86,4 +88,3 @@ main().catch((error) => {
   process.stderr.write(`${error?.message || error}\n`);
   process.exitCode = 1;
 });
-
