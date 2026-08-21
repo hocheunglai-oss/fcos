@@ -162,6 +162,16 @@ export function yearOverYearDateWindows(dateWindows = []) {
   });
 }
 
+export function dashboardCurrentYearDateWindows(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric',
+  }).formatToParts(now);
+  const year = Number(parts.find((part) => part.type === 'year')?.value);
+  if (!Number.isInteger(year) || year < 2000 || year > 9999) return [];
+  return [{ startDate: `${year}-01-01`, endDate: `${year}-12-31` }];
+}
+
 function shiftMonthYear(value, offset) {
   const match = /^(\d{4})-(\d{2})$/.exec(String(value || ''));
   return match ? `${Number(match[1]) + Number(offset || 0)}-${match[2]}` : null;
@@ -173,8 +183,10 @@ export function dashboardMonthlyComparison({
   currentVolume = [],
   priorVolume = [],
   priorComplete = true,
+  calendarYear = null,
 } = {}) {
   const financialKey = (row, month = row?.month) => `${month}\u001f${dashboardCurrency(row?.currency)}`;
+  const currentFinancialByMonth = new Map((currentFinancial || []).flatMap((row) => /^\d{4}-\d{2}$/.test(String(row?.month || '')) ? [[financialKey(row), row]] : []));
   const priorFinancialByCurrentMonth = new Map((priorFinancial || []).flatMap((row) => {
     const month = shiftMonthYear(row?.month, 1);
     return month ? [[financialKey(row, month), row]] : [];
@@ -193,12 +205,23 @@ export function dashboardMonthlyComparison({
       .sort((left, right) => left.family.localeCompare(right.family));
     return { found, total: productVolumes.reduce((sum, row) => sum + row.quantity, 0), productVolumes };
   };
-  return (currentFinancial || []).flatMap((current) => {
-    const month = String(current?.month || '');
+  const normalizedCalendarYear = /^\d{4}$/.test(String(calendarYear || '')) ? String(calendarYear) : null;
+  const currencies = [...new Set([
+    ...(currentFinancial || []).map((row) => dashboardCurrency(row?.currency)),
+    ...(priorFinancial || []).map((row) => dashboardCurrency(row?.currency)),
+    ...(currentVolume || []).map((row) => dashboardCurrency(row?.currency)),
+    ...(priorVolume || []).map((row) => dashboardCurrency(row?.currency)),
+  ].filter(Boolean))].sort();
+  const candidates = normalizedCalendarYear
+    ? currencies.flatMap((currency) => Array.from({ length: 12 }, (_, index) => ({ month: `${normalizedCalendarYear}-${String(index + 1).padStart(2, '0')}`, currency })))
+    : currentFinancial || [];
+  return candidates.flatMap((candidate) => {
+    const month = String(candidate?.month || '');
     if (!/^\d{4}-\d{2}$/.test(month)) return [];
-    const currency = dashboardCurrency(current.currency);
+    const currency = dashboardCurrency(candidate.currency);
+    const current = normalizedCalendarYear ? currentFinancialByMonth.get(financialKey(candidate)) || null : candidate;
     const priorMonth = shiftMonthYear(month, -1);
-    const prior = priorComplete ? priorFinancialByCurrentMonth.get(financialKey(current)) || null : null;
+    const prior = priorComplete ? priorFinancialByCurrentMonth.get(financialKey(candidate)) || null : null;
     const currentVolumes = volumeFor(currentVolume, month, currency);
     const priorVolumes = priorComplete ? volumeFor(priorVolume, priorMonth, currency) : { found: false, total: 0, productVolumes: [] };
     return [{
@@ -206,14 +229,15 @@ export function dashboardMonthlyComparison({
       priorMonth,
       currency,
       unitOfMeasure: 'MT',
-      currentGrossProfit: finite(current.netPnl),
+      currentGrossProfit: current ? finite(current.netPnl) : null,
       priorGrossProfit: prior ? finite(prior.netPnl) : null,
-      currentGrossMarginPct: current.grossMarginPct == null ? null : finite(current.grossMarginPct),
+      currentGrossMarginPct: current?.grossMarginPct == null ? null : finite(current.grossMarginPct),
       priorGrossMarginPct: prior?.grossMarginPct == null ? null : finite(prior.grossMarginPct),
-      currentVolume: currentVolumes.found ? currentVolumes.total : 0,
+      currentVolume: current ? currentVolumes.found ? currentVolumes.total : 0 : null,
       priorVolume: priorVolumes.found ? priorVolumes.total : null,
       currentProductVolumes: currentVolumes.productVolumes,
       priorProductVolumes: priorVolumes.productVolumes,
+      ...(normalizedCalendarYear ? { currentAvailable: Boolean(current) } : {}),
       priorComplete,
       priorAvailable: Boolean(prior),
     }];

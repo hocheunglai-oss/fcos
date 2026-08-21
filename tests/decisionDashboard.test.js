@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  dashboardCurrentYearDateWindows,
   dashboardFinancialBuckets,
   dashboardMonthlyComparison,
   dashboardMonthlyFinancialTrend,
@@ -16,6 +17,12 @@ import {
   decisionDashboardSupplierAmount,
   yearOverYearDateWindows,
 } from '../api/_decisionDashboard.js';
+
+test('Dashboard calendar-year analytics use the Hong Kong current year', () => {
+  assert.deepEqual(dashboardCurrentYearDateWindows(new Date('2025-12-31T16:30:00.000Z')), [
+    { startDate: '2026-01-01', endDate: '2026-12-31' },
+  ]);
+});
 
 test('keeps product suppliers aligned and shows only extra-cost-only suppliers', () => {
   const rows = dashboardSupplierProductRows({
@@ -228,6 +235,26 @@ test('combines actual current and prior-year gross profit, margin, and MT volume
   assert.equal(rows.find((row) => row.month === '2026-08').priorGrossProfit, null);
 });
 
+test('calendar-year monthly comparison always returns January through December with honest gaps', () => {
+  const rows = dashboardMonthlyComparison({
+    calendarYear: '2026',
+    currentFinancial: [{ month: '2026-08', currency: 'USD', netPnl: 50, grossMarginPct: 5 }],
+    priorFinancial: [{ month: '2025-01', currency: 'USD', netPnl: 20, grossMarginPct: 2 }],
+    currentVolume: [{ month: '2026-08', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 100 }],
+    priorVolume: [{ month: '2025-01', currency: 'USD', family: 'HSFO', unitOfMeasure: 'MT', quantity: 40 }],
+  });
+
+  assert.equal(rows.length, 12);
+  assert.deepEqual(rows.map((row) => row.month), Array.from({ length: 12 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`));
+  assert.equal(rows[0].currentGrossProfit, null);
+  assert.equal(rows[0].currentVolume, null);
+  assert.equal(rows[0].priorGrossProfit, 20);
+  assert.equal(rows[0].priorVolume, 40);
+  assert.equal(rows[7].currentGrossProfit, 50);
+  assert.equal(rows[7].currentVolume, 100);
+  assert.equal(rows[7].priorGrossProfit, null);
+});
+
 test('incomplete prior-year scope leaves gaps without suppressing current monthly values', () => {
   assert.deepEqual(dashboardMonthlyComparison({
     currentFinancial: [{ month: '2026-08', currency: 'USD', netPnl: 50, grossMarginPct: 5 }],
@@ -274,6 +301,8 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.doesNotMatch(loader, /monthlyCounterparties|dashboardMonthlyCounterpartySeries/);
   assert.match(loader, /monthlyVolumeYearOverYear/);
   assert.match(loader, /monthlyComparison/);
+  assert.match(loader, /dashboardCurrentYearDateWindows/);
+  assert.match(loader, /calendarYear: currentYear/);
   assert.match(loader, /decisionDashboardInternalAccountIdentity/);
   assert.match(loader, /normalizedGroupIdentity/);
   assert.match(loader, /Group_Name__c/);
@@ -282,5 +311,6 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
   assert.doesNotMatch(analytics, /Monthly gross profit by|MonthlyCounterpartyChart|monthlyCounterparties/);
   assert.match(analytics, /MonthlyPerformanceChart/);
+  assert.match(analytics, /January to December/);
   assert.match(analytics, /TopAccounts/);
 });
