@@ -14,7 +14,7 @@ import {
   loadMarketIntelligenceHistory,
   previewMarketReport,
 } from './_marketIntelligence.js';
-import { loadGovernedMarketValuation } from './_marketIntelligenceTrading.js';
+import { loadGovernedMarketValuation, processMarketIntelligenceDate } from './_marketIntelligenceTrading.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -706,7 +706,12 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
 
   if (action === 'market_report_import') {
     await requireWriteCapability(capabilities, configFor('MopsPrice'));
-    return importMarketReport(client, profile, body);
+    const imported = await importMarketReport(client, profile, body);
+    const derived = await processMarketIntelligenceDate(client, {
+      reportDate: imported.preview.reportDate,
+      commentaryContexts: [],
+    });
+    return { ...imported, derived };
   }
 
   if (action === 'save_spreads') {

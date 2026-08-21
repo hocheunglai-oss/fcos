@@ -14,6 +14,11 @@ const PRODUCTS = Object.freeze(['hsfo380', 'vlsfo', 'lsmgo']);
 const PRODUCT_UNITS = Object.freeze({ hsfo380: 'USD/MT', vlsfo: 'USD/MT', lsmgo: 'USD/BBL' });
 const PRODUCT_SESSIONS = Object.freeze({ hsfo380: 'london_moc', vlsfo: 'asia_moc', lsmgo: 'london_moc' });
 const REQUIRED_CURVE_TENORS = Object.freeze({ hsfo380: ['M1', 'M2'], vlsfo: ['BM', 'M1', 'M2'], lsmgo: ['BM', 'M1', 'M2'] });
+const FORWARD_SYMBOL_PRODUCTS = Object.freeze({
+  FPLSM01: 'hsfo380', FPLSM02: 'hsfo380',
+  FOFS000: 'vlsfo', FOFS001: 'vlsfo', FOFS002: 'vlsfo',
+  BSGSL00: 'lsmgo', MSGSL00: 'lsmgo', MSHSL00: 'lsmgo',
+});
 const SGO_BBL_PER_MT = 7.45;
 const RANGES = Object.freeze({ '1w': 7, '1m': 31, '3m': 93, '6m': 186, '1y': 366 });
 const DEFAULT_RULES = Object.freeze({
@@ -251,8 +256,16 @@ function normalizeProducts(products) {
   return PRODUCTS.filter((product) => values.includes(product));
 }
 
-function seriesProduct(series) {
-  return series?.basis_metadata?.productKey || (PRODUCTS.includes(series?.product_key) ? series.product_key : String(series?.product_key || '').split('-')[0]);
+function canonicalProduct(value) {
+  const product = String(value || '').toLowerCase();
+  return PRODUCTS.includes(product) ? product : null;
+}
+
+function seriesProduct(series, observation = null) {
+  return canonicalProduct(observation?.basis_metadata?.productKey)
+    || FORWARD_SYMBOL_PRODUCTS[String(series?.source_symbol || '').toUpperCase()]
+    || canonicalProduct(series?.basis_metadata?.productKey)
+    || canonicalProduct(series?.product_key);
 }
 
 function observationProjection(row, series, report) {
@@ -262,7 +275,7 @@ function observationProjection(row, series, report) {
     reportId: report?.id || row.import_id,
     sourceHash: report?.source_hash || row.source_hash,
     reportDate: row.price_date,
-    productKey: seriesProduct(series),
+    productKey: seriesProduct(series, row),
     contractMonth: row.contract_month,
     printedContractMonth: row.printed_contract_month,
     tenor: String(row.tenor || series?.tenor || '').toUpperCase(),
@@ -813,19 +826,122 @@ function latestBriefsByReportDate(rows = [], limit = 3) {
   return latest;
 }
 
+async function briefAtOrBefore(client, date) {
+  const result = await client.from('market_intelligence_briefs')
+    .select('*')
+    .lte('report_date', date)
+    .order('report_date', { ascending: false })
+    .order('revision', { ascending: false })
+    .limit(1);
+  if (result.error) throw intelligenceError(`Market brief could not be loaded: ${result.error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
+  return result.data?.[0] || null;
+}
+
+async function adjacentBriefDate(client, date, direction, upperBound) {
+  let query = client.from('market_intelligence_briefs').select('report_date,revision');
+  if (direction === 'previous') {
+    query = query.lt('report_date', date).order('report_date', { ascending: false });
+  } else {
+    query = query.gt('report_date', date).lte('report_date', upperBound).order('report_date', { ascending: true });
+  }
+  const result = await query.order('revision', { ascending: false }).limit(1);
+  if (result.error) throw intelligenceError(`Market brief navigation could not be loaded: ${result.error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
+  return result.data?.[0]?.report_date || null;
+}
+
+async function curveAvailabilityForBrief(client, brief, curve) {
+  const reportIds = (brief.source_refs || []).map((row) => row.reportId).filter(Boolean);
+  const [seriesResult, availabilityResult] = await Promise.all([
+    client.from('market_intelligence_series').select('id,product_key,source_symbol,tenor,unit,assessment_session,basis_metadata').eq('active', true),
+    reportIds.length
+      ? client.from('market_report_series_availability').select('import_id,series_id,availability_status,source_page,contract_month,printed_contract_month,tenor,observation_unit,assessment_session,basis_metadata').in('import_id', reportIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const error = seriesResult.error || availabilityResult.error;
+  if (error) throw intelligenceError(`Market curve availability could not be loaded: ${error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
+  const seriesById = new Map((seriesResult.data || []).map((row) => [row.id, row]));
+  const reportById = new Map((brief.source_refs || []).map((row) => [row.reportId, row]));
+  const exactRows = (curve.snapshot || []).filter((row) => row.reportDate === brief.report_date && row.qualityStatus === 'verified');
+  const availabilityByKey = new Map();
+  for (const row of availabilityResult.data || []) {
+    const series = seriesById.get(row.series_id);
+    const productKey = seriesProduct(series, { basis_metadata: row.basis_metadata });
+    const tenor = String(row.tenor || series?.tenor || '').toUpperCase();
+    if (!productKey || !REQUIRED_CURVE_TENORS[productKey]?.includes(tenor)) continue;
+    const key = `${productKey}:${tenor}`;
+    const current = availabilityByKey.get(key);
+    if (!current || row.availability_status === 'published_na') {
+      availabilityByKey.set(key, {
+        productKey,
+        tenor,
+        status: row.availability_status,
+        sourceSymbol: series?.source_symbol || null,
+        sourcePage: row.source_page,
+        contractMonth: row.contract_month,
+        unit: row.observation_unit || series?.unit || PRODUCT_UNITS[productKey],
+        documentType: reportById.get(row.import_id)?.documentType || null,
+      });
+    }
+  }
+  const marks = PRODUCTS.flatMap((productKey) => REQUIRED_CURVE_TENORS[productKey].map((tenor) => {
+    const numeric = exactRows.find((row) => row.productKey === productKey && row.tenor === tenor);
+    if (numeric) return {
+      productKey, tenor, status: 'numeric', value: numeric.value, unit: numeric.unit,
+      sourceSymbol: numeric.sourceSymbol, sourcePage: numeric.sourcePage,
+      contractMonth: numeric.contractMonth, documentType: numeric.source,
+    };
+    return availabilityByKey.get(`${productKey}:${tenor}`) || {
+      productKey, tenor, status: 'not_detected', value: null, unit: PRODUCT_UNITS[productKey],
+      sourceSymbol: null, sourcePage: null, contractMonth: null, documentType: null,
+    };
+  }));
+  const numericCount = marks.filter((row) => row.status === 'numeric').length;
+  const publishedNaCount = marks.filter((row) => row.status === 'published_na').length;
+  const missingCount = marks.length - numericCount - publishedNaCount;
+  return {
+    requiredCount: marks.length,
+    numericCount,
+    publishedNaCount,
+    missingCount,
+    complete: missingCount === 0,
+    marks,
+  };
+}
+
 export async function loadMarketIntelligenceBrief(client, request = {}) {
-  let briefQuery = client.from('market_intelligence_briefs').select('*').order('report_date', { ascending: false }).order('revision', { ascending: false }).limit(1);
-  if (request.date) briefQuery = briefQuery.eq('report_date', request.date);
-  const briefResult = await briefQuery;
-  if (briefResult.error) throw intelligenceError(`Market brief could not be loaded: ${briefResult.error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
-  const brief = briefResult.data?.[0];
-  if (!brief) return { available: false, asOfDate: request.date || null, completeness: { complete: false }, curveRegimes: [], materialChanges: [], portDislocations: [], physicalPaperSignals: [], drivers: [], risks: [], warnings: ['No complete derived market brief is available.'], shadow: { status: 'shadowing', cutoverApproved: false } };
-  const [itemsResult, curve, recentBriefsResult] = await Promise.all([
+  const today = isoDate(new Date());
+  const requestedDate = request.date == null || request.date === '' ? today : isoDate(request.date);
+  if (!requestedDate) throw intelligenceError('The requested market brief date is invalid.', 400, 'MARKET_INTELLIGENCE_DATE_INVALID');
+  const requestedBoundary = requestedDate > today ? today : requestedDate;
+  const [brief, latestBrief] = await Promise.all([
+    briefAtOrBefore(client, requestedBoundary),
+    briefAtOrBefore(client, today),
+  ]);
+  if (!brief) return {
+    available: false,
+    requestedDate,
+    displayedDate: null,
+    latestAvailableDate: latestBrief?.report_date || null,
+    previousAvailableDate: null,
+    nextAvailableDate: null,
+    fallbackApplied: false,
+    asOfDate: null,
+    completeness: { complete: false, completeReports: 0, requiredReports: 2 },
+    reportCompleteness: { complete: false, completeReports: 0, requiredReports: 2 },
+    curveCoverage: { requiredCount: 8, numericCount: 0, publishedNaCount: 0, missingCount: 8, complete: false, marks: [] },
+    curveRegimes: [], materialChanges: [], portDislocations: [], physicalPaperSignals: [], drivers: [], risks: [],
+    warnings: ['No completed Bunkerwire and European Marketscan report pair is available.'],
+    shadow: { status: 'shadowing', cutoverApproved: false },
+  };
+  const [itemsResult, curve, recentBriefsResult, previousAvailableDate, nextAvailableDate] = await Promise.all([
     client.from('market_intelligence_brief_items').select('*').eq('brief_id', brief.id).order('item_order'),
     loadMarketIntelligenceCurve(client, { asOfDate: brief.report_date, range: '3m' }),
     client.from('market_intelligence_briefs').select('id,report_date,revision').lt('report_date', brief.report_date).order('report_date', { ascending: false }).order('revision', { ascending: false }).limit(20),
+    adjacentBriefDate(client, brief.report_date, 'previous', today),
+    adjacentBriefDate(client, brief.report_date, 'next', today),
   ]);
   if (itemsResult.error || recentBriefsResult.error) throw intelligenceError(`Market brief items could not be loaded: ${(itemsResult.error || recentBriefsResult.error).message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
+  const curveCoverage = await curveAvailabilityForBrief(client, brief, curve);
   const items = (itemsResult.data || []).map(itemProjection);
   const byKind = (kind) => items.filter((row) => row.kind === kind);
   const metrics = brief.deterministic_metrics || {};
@@ -859,16 +975,36 @@ export async function loadMarketIntelligenceBrief(client, request = {}) {
     });
   return {
     available: true,
+    requestedDate,
+    displayedDate: brief.report_date,
+    latestAvailableDate: latestBrief?.report_date || brief.report_date,
+    previousAvailableDate,
+    nextAvailableDate,
+    fallbackApplied: requestedDate !== brief.report_date,
+    fallbackMessage: requestedDate !== brief.report_date
+      ? `Reports for the requested date are not available. Showing the latest completed report: ${brief.report_date}.`
+      : null,
     asOfDate: brief.report_date,
     asOfAt: brief.as_of_at,
     completeness: brief.completeness,
+    reportCompleteness: {
+      complete: Number(brief.completeness?.completeReports || 0) >= Number(brief.completeness?.requiredReports || 2),
+      completeReports: Number(brief.completeness?.completeReports || 0),
+      requiredReports: Number(brief.completeness?.requiredReports || 2),
+      reportTypes: brief.completeness?.reportTypes || [],
+    },
+    curveCoverage,
     curveRegimes: metrics.curveRegimes || byKind('curve_regime'),
     materialChanges: metrics.materialChanges || byKind('material_change'),
     portDislocations: metrics.portDislocations || byKind('port_dislocation'),
     physicalPaperSignals: metrics.physicalPaperSignals || byKind('physical_paper'),
     drivers: { emerging, persistent, fading },
     risks: [...(metrics.risks || []), ...byKind('risk')],
-    warnings: metrics.warnings || byKind('data_quality').map((row) => row.summary),
+    warnings: [
+      ...curveCoverage.marks.filter((row) => row.status === 'published_na').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was published N/A${row.documentType === 'european_marketscan' ? ' in European Marketscan' : ''}${row.sourcePage ? ` page ${row.sourcePage}` : ''}.`),
+      ...curveCoverage.marks.filter((row) => row.status === 'not_detected').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was not detected in the completed report pair.`),
+      ...(metrics.warnings || byKind('data_quality').map((row) => row.summary)).filter((warning) => !/ is missing from the expected .* report snapshot\.$/i.test(String(warning))),
+    ],
     sourceRefs: brief.source_refs || [],
     shadow: curve.shadow,
   };
@@ -1259,7 +1395,7 @@ async function loadDeterministicAiObservationEvidence(client, importIds, sourceR
     })));
 }
 
-export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false } = {}) {
+export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false } = {}) {
   const date = isoDate(reportDate);
   if (!date) throw intelligenceError('A valid report date is required.');
   const reportsResult = await client.from('market_report_imports').select('id,source_hash,source_document_type,report_date').eq('report_date', date).in('source_document_type', ['bunkerwire', 'european_marketscan']).eq('status', 'completed');
@@ -1285,12 +1421,25 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     loadMarketIntelligenceCurve(client, { asOfDate: date, products: PRODUCTS, range: '3m' }),
     loadDeterministicAiObservationEvidence(client, importIds, sourceRefs),
   ]);
-  const deterministicMetrics = deterministicBriefMetrics(curve);
+  const curveCoverage = await curveAvailabilityForBrief(client, { report_date: date, source_refs: sourceRefs }, curve);
+  const availabilityWarnings = [
+    ...curveCoverage.marks.filter((row) => row.status === 'published_na').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was published N/A${row.documentType === 'european_marketscan' ? ' in European Marketscan' : ''}${row.sourcePage ? ` page ${row.sourcePage}` : ''}.`),
+    ...curveCoverage.marks.filter((row) => row.status === 'not_detected').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was not detected in the completed report pair.`),
+  ];
+  const baseMetrics = deterministicBriefMetrics(curve);
+  const deterministicMetrics = {
+    ...baseMetrics,
+    curveCoverage,
+    warnings: [
+      ...availabilityWarnings,
+      ...(baseMetrics.warnings || []).filter((warning) => !/ is missing from the expected .* report snapshot\.$/i.test(String(warning))),
+    ],
+  };
   const deterministicItems = deterministicBriefItems(deterministicMetrics);
   let reusedBrief = null;
   let ai = null;
-  if (reconcileDerived) {
-    const briefResult = await client.from('market_intelligence_briefs').select('id,ai_status,model_id').eq('report_date', date).order('revision', { ascending: false }).limit(1);
+  if (reconcileDerived || forceDeterministicRevision) {
+    const briefResult = await client.from('market_intelligence_briefs').select('id,source_hash,revision,ai_status,model_id').eq('report_date', date).order('revision', { ascending: false }).limit(1);
     if (briefResult.error) throw intelligenceError(`Derived brief reconciliation state could not be loaded: ${briefResult.error.message}`, 502, 'MARKET_BRIEF_RECONCILIATION_FAILED');
     reusedBrief = briefResult.data?.[0] || null;
     if (reusedBrief) {
@@ -1305,7 +1454,19 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
       ? await generateMarketCommentaryItems(commentaryContexts, { observationEvidence: deterministicObservationEvidence })
       : { status: 'unavailable', modelId: null, items: [] };
   }
-  const completeness = { complete: curve.complete, completeReports: types.size, requiredReports: 2, reportTypes: [...types].sort(), warningCount: curve.warnings.length };
+  const completeness = {
+    complete: types.size === 2,
+    completeReports: types.size,
+    requiredReports: 2,
+    reportTypes: [...types].sort(),
+    curveNumericComplete: curveCoverage.numericCount === curveCoverage.requiredCount,
+    curveEvidenceComplete: curveCoverage.complete,
+    numericCurveMarks: curveCoverage.numericCount,
+    requiredCurveMarks: curveCoverage.requiredCount,
+    publishedNaCount: curveCoverage.publishedNaCount,
+    missingCurveMarkCount: curveCoverage.missingCount,
+    warningCount: deterministicMetrics.warnings.length,
+  };
   const rulesState = await getMarketIntelligenceAlertRules(client);
   const reportIdByHash = new Map(sourceRefs.map((row) => [row.sourceHash, row.reportId]));
   const aiAlertItems = ai.items.map((item) => ({ ...item, sourceRefs: (item.sourceRefs || []).map((ref) => ({ ...ref, reportId: reportIdByHash.get(ref.sourceHash) || null })) }));
@@ -1334,11 +1495,25 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     if (!result.error) shadowRecorded += 1;
     else throw intelligenceError(`Curve shadow evidence could not be stored: ${result.error.message}`, 502, 'MARKET_CURVE_SHADOW_SAVE_FAILED');
   }
-  if (!reusedBrief) {
+  if (forceDeterministicRevision && reusedBrief) {
+    const save = await client.rpc('revise_market_intelligence_brief', {
+      p_report_date: date,
+      p_source_hash: sourceHash,
+      p_as_of_at: new Date().toISOString(),
+      p_completeness: completeness,
+      p_deterministic_metrics: deterministicMetrics,
+      p_ai_status: 'reused',
+      p_model_id: ai.modelId,
+      p_source_refs: sourceRefs,
+      p_items: [...deterministicItems, ...ai.items],
+      p_expected_revision: Number(reusedBrief.revision),
+    });
+    if (save.error) throw intelligenceError(`Market brief revision could not be stored: ${save.error.message}`, /STALE|SOURCE_CHANGED/.test(save.error.message || '') ? 409 : 502, 'MARKET_BRIEF_REVISION_FAILED');
+  } else if (!reusedBrief) {
     const save = await client.rpc('save_market_intelligence_brief', { p_report_date: date, p_source_hash: sourceHash, p_as_of_at: new Date().toISOString(), p_completeness: completeness, p_deterministic_metrics: deterministicMetrics, p_ai_status: ai.status, p_model_id: ai.modelId, p_source_refs: sourceRefs, p_items: [...deterministicItems, ...ai.items] });
     if (save.error) throw intelligenceError(`Market brief could not be stored: ${save.error.message}`, 502, 'MARKET_BRIEF_SAVE_FAILED');
   }
-  return { status: 'completed', reportDate: date, briefItemCount: deterministicItems.length + ai.items.length, aiStatus: ai.status, alertsPublished: alerts.published, shadowRecorded, reconciled: Boolean(reusedBrief) };
+  return { status: 'completed', reportDate: date, briefItemCount: deterministicItems.length + ai.items.length, aiStatus: ai.status, alertsPublished: alerts.published, shadowRecorded, reconciled: Boolean(reusedBrief), revised: Boolean(forceDeterministicRevision && reusedBrief), curveCoverage };
 }
 
 export const marketIntelligenceTradingInternals = Object.freeze({
@@ -1358,6 +1533,8 @@ export const marketIntelligenceTradingInternals = Object.freeze({
   companyShadowProjection,
   isoDate,
   latestBriefsByReportDate,
+  seriesProduct,
+  curveAvailabilityForBrief,
   publishNumericAlerts,
   hash,
 });

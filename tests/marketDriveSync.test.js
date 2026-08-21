@@ -184,7 +184,7 @@ test('reviewed archive replay binds the Drive manifest and derives deterministic
   assert.equal(result.archiveFingerprint, driveFingerprint);
   assert.equal(result.replayedCount, 1);
   assert.equal(client.rpcCalls.find(({ name }) => name === 'save_market_drive_report_import').payload.p_idempotency_key, `market-archive-replay-${'c'.repeat(64)}`);
-  assert.deepEqual(derivedCalls, [{ reportDate: '2026-08-19', commentaryContexts: [], publishAlerts: false, recordShadow: false, reconcileDerived: true }]);
+  assert.deepEqual(derivedCalls, [{ reportDate: '2026-08-19', commentaryContexts: [], publishAlerts: false, recordShadow: false, reconcileDerived: true, forceDeterministicRevision: true }]);
 });
 
 test('reviewed archive permits only exact source-hash-bound printed date overrides', async () => {

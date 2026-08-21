@@ -12,6 +12,37 @@ import { projectedMopsSettlement } from '../shared/plattsMarketModel.js';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
+test('19 August curve evidence keeps seven exact values and a published-N/A gasoil balance month', () => {
+  const parsed = parseMarketReportText(`
+    European Marketscan August 19, 2026
+    Marine Fuel 0.5% Derivatives August September October
+    August FOFS000 733.250 -1.200 September FOFS001 684.050 +0.550 October FOFS002 649.550 +1.800
+    ($/mt) August September October
+    FPLSM01 573.000 -2.000 FPLSM02 534.250 -0.750
+    BSGSL00 NA NANA MSGSL00 160.270 +0.420 MSHSL00 153.910 +0.570 London MOC
+  `, { documentType: 'european_marketscan' });
+  const exact = Object.fromEntries(parsed.observations
+    .filter((row) => ['FPLSM01', 'FPLSM02', 'FOFS000', 'FOFS001', 'FOFS002', 'MSGSL00', 'MSHSL00'].includes(row.sourceSymbol))
+    .map((row) => [row.sourceSymbol, row.price]));
+  assert.deepEqual(exact, {
+    FOFS000: 733.25, FOFS001: 684.05, FOFS002: 649.55,
+    FPLSM01: 573, FPLSM02: 534.25, MSGSL00: 160.27, MSHSL00: 153.91,
+  });
+  const balanceMonth = parsed.availabilityEvidence.find((row) => row.sourceSymbol === 'BSGSL00');
+  assert.equal(balanceMonth.status, 'published_na');
+  assert.equal(balanceMonth.sourcePage, 4);
+  assert.equal(balanceMonth.contractMonth, '2026-08-01');
+  assert.ok(!parsed.missingSymbols.includes('BSGSL00'));
+});
+
+test('curve product identity prefers canonical observation metadata and exact symbol mapping', () => {
+  const { seriesProduct } = marketIntelligenceTradingInternals;
+  assert.equal(seriesProduct({ source_symbol: 'FOFS001', product_key: 'vlsfo-m1', basis_metadata: { productKey: 'vlsfo-m1' } }, { basis_metadata: { productKey: 'vlsfo' } }), 'vlsfo');
+  assert.equal(seriesProduct({ source_symbol: 'FPLSM02', product_key: 'hsfo380-m2', basis_metadata: { productKey: 'hsfo380-m2' } }), 'hsfo380');
+  assert.equal(seriesProduct({ source_symbol: 'MSGSL00', product_key: 'gasoil-m1', basis_metadata: { productKey: 'gasoil-m1' } }), 'lsmgo');
+  assert.equal(seriesProduct({ source_symbol: 'UNKNOWN', product_key: 'vlsfo-m1', basis_metadata: { productKey: 'vlsfo-m1' } }), null);
+});
+
 test('printed FOFS contract months survive the May roll while the non-publication reprint is evidence-only', () => {
   const may1 = parseMarketReportText(`
     European Marketscan May 1, 2025
@@ -457,6 +488,19 @@ test('migration provides service-only governed market-intelligence storage and d
   assert.match(migration, /save_market_curve_shadow_cutover\(bigint,boolean,text,uuid,text,text,text,jsonb\)/i);
   assert.match(migration, /record_market_curve_shadow\(date,text,date,text,integer,text,text,text,numeric,numeric,numeric\)/i);
   assert.match(migration, /expire_market_forward_fallbacks_for_report\(date\)/i);
+});
+
+test('curve-evidence migration normalizes all eight series and stores immutable service-only availability', () => {
+  const migration = read('supabase/migrations/20260821032837_daily_brief_navigation_curve_evidence.sql');
+  for (const symbol of ['FPLSM01', 'FPLSM02', 'FOFS000', 'FOFS001', 'FOFS002', 'BSGSL00', 'MSGSL00', 'MSHSL00']) assert.match(migration, new RegExp(symbol));
+  assert.match(migration, /create table if not exists public\.market_report_series_availability/i);
+  assert.match(migration, /availability_status text not null check \(availability_status in \('published_na', 'not_detected'\)\)/i);
+  assert.match(migration, /market_report_series_availability_immutable/i);
+  assert.match(migration, /alter table public\.market_report_series_availability enable row level security/i);
+  assert.match(migration, /revoke all on table public\.market_report_series_availability from public, anon, authenticated/i);
+  assert.match(migration, /grant select, insert on table public\.market_report_series_availability to service_role/i);
+  assert.match(migration, /security invoker/gi);
+  assert.match(migration, /revise_market_intelligence_brief/i);
 });
 
 test('the reviewed SGO midpoint parser correction is exact, fail closed, and audit preserving', () => {

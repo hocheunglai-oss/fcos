@@ -285,24 +285,49 @@ function symbolObservation(text, symbol, documentType, reportDate) {
   return null;
 }
 
+function symbolAvailability(text, symbol, documentType, reportDate) {
+  const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Platts renders unavailable table cells as either "NA" or the compact
+  // adjacent-cell form "NANA". Match only immediately after the configured
+  // symbol so another row's N/A cannot be attributed to this series.
+  const publishedNa = new RegExp(`(?:^|\\s)${escaped}\\s+NA(?:\\s*NA)?(?:\\s|$)`, 'i').test(text)
+    || new RegExp(`(?:^|\\s)${escaped}\\s+NANA(?:\\s|$)`, 'i').test(text);
+  return {
+    sourceSymbol: symbol,
+    status: publishedNa ? 'published_na' : 'not_detected',
+    sourcePage: sourcePage || null,
+    ...observationContractMetadata(text, symbol, reportDate),
+  };
+}
+
 export function parseMarketReportText(rawText, { documentType = null, filename = '', pageTexts = null } = {}) {
   const text = normalizedReportText(rawText);
   const type = detectedDocumentType(text, documentType, filename);
   if (!type) throw marketError('Choose whether this is Bunkerwire or European Marketscan.', 400, 'MARKET_REPORT_TYPE_REQUIRED');
   const reportDate = reportDateFrom(text, filename);
   if (!reportDate) throw marketError('The report date could not be detected.', 400, 'MARKET_REPORT_DATE_MISSING');
-  const observations = DOCUMENT_SYMBOLS[type].map((symbol) => {
+  const parsedSymbols = DOCUMENT_SYMBOLS[type].map((symbol) => {
     const sourcePage = type === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
     const pageText = Array.isArray(pageTexts) && sourcePage ? normalizedReportText(pageTexts[sourcePage - 1] || '') : text;
-    return symbolObservation(pageText || text, symbol, type, reportDate);
-  }).filter(Boolean);
+    const sourceText = pageText || text;
+    return {
+      observation: symbolObservation(sourceText, symbol, type, reportDate),
+      availability: symbolAvailability(sourceText, symbol, type, reportDate),
+    };
+  });
+  const observations = parsedSymbols.map((row) => row.observation).filter(Boolean);
   if (!observations.length) throw marketError('No configured market symbols were found in this report.', 400, 'MARKET_REPORT_NO_VALUES');
-  const found = new Set(observations.map((row) => row.sourceSymbol));
+  const availabilityEvidence = parsedSymbols
+    .filter((row) => !row.observation)
+    .map((row) => row.availability);
   return {
     documentType: type,
     reportDate,
     observations,
-    missingSymbols: DOCUMENT_SYMBOLS[type].filter((symbol) => !found.has(symbol)),
+    availabilityEvidence,
+    publishedNaSymbols: availabilityEvidence.filter((row) => row.status === 'published_na').map((row) => row.sourceSymbol),
+    missingSymbols: availabilityEvidence.filter((row) => row.status === 'not_detected').map((row) => row.sourceSymbol),
     observationCount: observations.length,
   };
 }
@@ -787,6 +812,7 @@ export async function importMarketReport(client, profile, body = {}) {
     p_observations: preview.observations,
     p_actor_user_id: profile.id,
     p_actor_email: String(profile.email || '').toLowerCase(),
+    p_availability: preview.availabilityEvidence || [],
   });
   if (result.error) throw marketError(`The market report could not be imported: ${result.error.message}`, 502, 'MARKET_REPORT_IMPORT_FAILED');
   return { ...result.data, preview };

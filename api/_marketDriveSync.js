@@ -244,6 +244,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
       p_drive_modified_at: file.modifiedAt,
       p_report_date: parsed.reportDate,
       p_observations: parsed.observations,
+      p_availability: parsed.availabilityEvidence || [],
     });
     if (saved.error) throw syncError('A reviewed archive report could not be replayed.', 'MARKET_ARCHIVE_IMPORT_FAILED');
     if (saved.data?.mopsPublication?.status === 'conflict') {
@@ -263,6 +264,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
       publishAlerts: false,
       recordShadow: false,
       reconcileDerived: true,
+      forceDeterministicRevision: true,
     });
     if (derived.status === 'completed') briefCompletedCount += 1;
     else if (derived.status === 'waiting_for_pair') briefWaitingCount += 1;
@@ -454,6 +456,7 @@ export async function runMarketReportDriveSync(client, {
           p_drive_modified_at: file.modifiedAt,
           p_report_date: parsed.reportDate,
           p_observations: parsed.observations,
+          p_availability: parsed.availabilityEvidence || [],
         });
         if (saved.error) throw syncError('A parsed market report could not be saved.', 'MARKET_DRIVE_IMPORT_FAILED');
         const publicationStatus = saved.data?.mopsPublication?.status;

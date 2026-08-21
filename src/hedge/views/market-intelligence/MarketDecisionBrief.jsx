@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   FileSearch,
   RefreshCw,
@@ -141,28 +143,56 @@ function DriverColumn({ label, drivers, tone, sourceRefs, sourceDate }) {
   );
 }
 
-export function MarketDecisionBrief({ initialBrief = null }) {
+export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0 }) {
   const [brief, setBrief] = useState(initialBrief);
   const [busy, setBusy] = useState(!initialBrief);
   const [error, setError] = useState(null);
+  const mountedRef = useRef(true);
+  const refreshKeyRef = useRef(refreshKey);
 
-  const load = async ({ force = false } = {}) => {
+  const load = async ({ force = false, date = null, historyMode = 'replace' } = {}) => {
     setBusy(true);
     setError(null);
     try {
-      setBrief(await loadMarketIntelligenceBrief({}, { force, cache: !force }));
+      const nextBrief = await loadMarketIntelligenceBrief(date ? { date } : {}, { force, cache: !force });
+      if (!mountedRef.current) return;
+      setBrief(nextBrief);
+      if (nextBrief?.displayedDate && typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('marketBriefDate', nextBrief.displayedDate);
+        window.history[historyMode === 'push' ? 'pushState' : 'replaceState']({}, '', `${url.pathname}${url.search}${url.hash}`);
+      }
     } catch (nextError) {
-      setError(nextError);
+      if (mountedRef.current) setError(nextError);
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
   useEffect(() => {
-    load();
+    mountedRef.current = true;
+    const initialDate = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('marketBriefDate');
+    load({ date: initialDate });
+    const onPopState = () => {
+      const date = new URLSearchParams(window.location.search).get('marketBriefDate');
+      load({ date, force: false, historyMode: 'replace' });
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      mountedRef.current = false;
+      window.removeEventListener('popstate', onPopState);
+    };
   }, []); // The initial request is intentionally independent of background snapshot refreshes.
 
-  const completeness = brief?.completeness || brief?.reportCompleteness || {};
+  useEffect(() => {
+    if (refreshKeyRef.current === refreshKey) return;
+    refreshKeyRef.current = refreshKey;
+    const currentDate = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('marketBriefDate');
+    load({ date: currentDate, force: true });
+  }, [refreshKey]);
+
+  const completeness = brief?.reportCompleteness || brief?.completeness || {};
+  const curveCoverage = brief?.curveCoverage || {};
   const regimes = useMemo(() => {
     if (Array.isArray(brief?.curveRegimes)) return brief.curveRegimes;
     return Object.entries(brief?.curveRegimes || brief?.regimes || {}).map(([product, value]) => ({ product, ...(typeof value === 'object' ? value : { regime: value }) }));
@@ -192,12 +222,23 @@ export function MarketDecisionBrief({ initialBrief = null }) {
       {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
       <div className="market-brief-topbar">
         <div><strong>Daily Decision Brief</strong><span>Deterministic prices and signals, with concise source-linked commentary. No buy or sell recommendation.</span></div>
-        <Button size="sm" icon={RefreshCw} onClick={() => load({ force: true })} disabled={busy}>{busy ? 'Updating…' : 'Refresh brief'}</Button>
+        <div className="market-brief-topbar__actions">
+          <Button size="sm" icon={ChevronLeft} onClick={() => load({ date: brief?.previousAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.previousAvailableDate}>Previous</Button>
+          <div className="market-brief-date">
+            <span>Displaying report date</span>
+            <strong>{brief?.displayedDate ? formatDate(brief.displayedDate) : 'Unavailable'}</strong>
+            <StatusBadge tone={brief?.displayedDate && brief.displayedDate === brief?.latestAvailableDate ? 'positive' : 'neutral'}>{brief?.displayedDate && brief.displayedDate === brief?.latestAvailableDate ? 'Latest available' : 'Historical'}</StatusBadge>
+          </div>
+          <Button size="sm" icon={ChevronRight} onClick={() => load({ date: brief?.nextAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.nextAvailableDate}>Next</Button>
+          {brief?.displayedDate && brief.displayedDate !== brief?.latestAvailableDate ? <Button size="sm" onClick={() => load({ date: brief.latestAvailableDate, historyMode: 'push' })} disabled={busy}>Latest</Button> : null}
+          <Button size="sm" icon={RefreshCw} onClick={() => load({ date: brief?.displayedDate || null, force: true })} disabled={busy}>{busy ? 'Updating…' : 'Refresh brief'}</Button>
+        </div>
       </div>
+      {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />Reports for the requested date are not available. Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
       <div className="app-metric-grid app-metric-grid--4">
         <Metric label="Report completeness" value={completenessLabel} detail={`${completeReports}/${requiredReports} required reports`} tone={completeReports >= requiredReports ? 'green' : 'orange'} icon={completeReports >= requiredReports ? CheckCircle2 : AlertTriangle} />
         <Metric label="As of" value={brief?.asOfDate ? formatDate(brief.asOfDate) : 'Unavailable'} detail={brief?.asOfAt ? new Date(brief.asOfAt).toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) : brief?.asOfTime || brief?.assessmentSession || 'Assessment time not available'} tone="blue" icon={Clock3} />
-        <Metric label="Curve coverage" value={`${regimes.filter((row) => regimeLabel(row) !== 'Unavailable').length}/3 products`} detail="Exact BM / M1 / M2 report marks" tone="green" icon={Waves} />
+        <Metric label="Curve coverage" value={`${Number(curveCoverage.numericCount || 0)}/${Number(curveCoverage.requiredCount || 8)} numeric marks`} detail={`${Number(curveCoverage.publishedNaCount || 0)} published N/A · ${Number(curveCoverage.missingCount || 0)} genuinely missing`} tone={Number(curveCoverage.missingCount || 0) ? 'orange' : 'green'} icon={Waves} />
         <Metric label="Source risks" value={String(array(brief?.sourceWarnings || brief?.warnings).length)} detail="Missing, stale, conflict or parsing controls" tone={array(brief?.sourceWarnings || brief?.warnings).length ? 'orange' : 'green'} icon={ShieldAlert} />
       </div>
 

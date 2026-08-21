@@ -62,6 +62,15 @@ test('brief and alert views remain evidence-only and source-linked', () => {
   assert.match(brief, /Emerging/);
   assert.match(brief, /Persistent/);
   assert.match(brief, /Fading/);
+  assert.match(brief, /marketBriefDate/);
+  assert.match(brief, />Previous</);
+  assert.match(brief, />Next</);
+  assert.match(brief, />Latest</);
+  assert.match(brief, /Displaying report date/);
+  assert.match(brief, /Latest available/);
+  assert.match(brief, /Reports for the requested date are not available/);
+  assert.match(brief, /published N\/A/);
+  assert.match(brief, /genuinely missing/);
   assert.match(alerts, /previous 60-day 95th percentile/);
   assert.match(alerts, /at least 20 samples/);
   assert.match(alerts, /lookbackDays/);

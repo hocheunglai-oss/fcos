@@ -8,6 +8,7 @@ export const PAGE_METHODOLOGIES = {
     summary: "Markets combines a source-linked daily bunker brief, exact-date delivered/MOPS comparisons and report-derived contract-month curves without converting evidence into a trading recommendation.",
     steps: [
       "Daily Decision Brief presents report completeness, same-snapshot curve regimes, material moves, port dislocations, physical-versus-paper confirmation or divergence, supported drivers and risks. AI may paraphrase commentary with store:false, but it cannot create, adjust or delay a price.",
+      "Daily Decision Brief opens on the newest completed Bunkerwire and European Marketscan report pair on or before the Hong Kong date. Previous and Next skip incomplete dates; the displayed report date remains in the URL across refresh and browser navigation.",
       "Delivered & MOPS shows Hong Kong, Singapore, South Korea, South Korea West, Zhoushan and Kaohsiung in USD/MT. South Korea West HSFO and LSMGO remain explicit Not published gaps.",
       "Each matrix cell uses one three-month premium/discount sparkline and exact-date 1W, 1M and 3M statistics. Missing dates are never forward-filled, interpolated or replaced with a cargo proxy.",
       "Kaohsiung VLSFO is displayed with the local LS180 label; MF-380 is mapped to HSFO 380. These names do not change the source symbol or methodology basis.",
@@ -18,6 +19,7 @@ export const PAGE_METHODOLOGIES = {
       "Drivers & Alerts retains only concise non-verbatim bunker-relevant summaries, tags, confidence and report/page lineage. A numeric fact is dropped unless it validates against the cited page; no PDF, report text, prompt or raw model response is stored.",
       "Company alerts use the larger of a configured floor or the previous 60-day 95th percentile after at least 20 samples. Regime flips require two complete reports outside the controlled deadband and notifications remain in-app only.",
       "Report import extracts only allowlisted symbols, requires an entitlement confirmation, re-parses the PDF before saving, and stores immutable structured evidence plus a source hash rather than the report or its text. Conflicts are quarantined.",
+      "A value printed as N/A is retained as immutable availability evidence and remains distinct from an unreadable or absent symbol. Neither state creates a zero, estimate, fallback, or carried-forward value.",
       "FCOS checks the approved Bunkerwire and European Marketscan Google Drive folders hourly through the pinned vince.less@gmail.com server authorization. It imports only unseen checksums and refreshes an open Markets page shortly after each scheduled check. If browser reauthorization is required, use only the Vincent profile; normal scheduled processing uses the server OAuth refresh token.",
       "Only one European Marketscan report containing AMFSA00, PPXDK00 and POABC00 for the same date may publish MOPS. Estimates are replaced, matching actuals are verified, differing actuals are never overwritten, and monthly-average verification and hedge-expiry gates remain unchanged.",
     ],

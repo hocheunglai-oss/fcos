@@ -100,6 +100,19 @@ function stableReport(report) {
         basisMetadata: row.basisMetadata || null,
       }))
       .sort((left, right) => left.sourceSymbol.localeCompare(right.sourceSymbol)),
+    availabilityEvidence: (report.availabilityEvidence || [])
+      .map((row) => ({
+        sourceSymbol: row.sourceSymbol,
+        status: row.status,
+        sourcePage: row.sourcePage == null ? null : Number(row.sourcePage),
+        contractMonth: row.contractMonth || null,
+        printedContractMonth: row.printedContractMonth || null,
+        tenor: row.tenor || null,
+        unit: row.unit || null,
+        assessmentSession: row.assessmentSession || null,
+        basisMetadata: row.basisMetadata || null,
+      }))
+      .sort((left, right) => left.sourceSymbol.localeCompare(right.sourceSymbol)),
   };
 }
 
@@ -457,6 +470,7 @@ async function backfillDerivedBriefs(client, reports, sourceFilesByHash, { brief
       commentaryContexts,
       publishAlerts: false,
       recordShadow: false,
+      forceDeterministicRevision: !enrichCommentary,
     });
     if (result.status === 'completed') {
       summary.completed += 1;
@@ -482,6 +496,7 @@ export async function applyReplay(client, reports, sourceFilesByHash, options = 
       p_observations: report.observations,
       p_actor_user_id: null,
       p_actor_email: 'system@fcos.local',
+      p_availability: report.availabilityEvidence || [],
     });
     if (result.error) throw new Error(`Replay failed for ${report.reportDate} ${report.documentType}: ${result.error.message}`);
     if (result.data?.status === 'replayed') summary.replayed += 1;
