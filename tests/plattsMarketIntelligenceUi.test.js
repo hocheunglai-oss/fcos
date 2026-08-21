@@ -15,18 +15,20 @@ function read(path) {
 
 test('Markets opens on a four-view Platts-aligned daily decision brief', () => {
   const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
-  assert.match(workspace, /value: 'brief', label: 'Daily Decision Brief'/);
-  assert.match(workspace, /value: 'delivered', label: 'Delivered & MOPS'/);
-  assert.match(workspace, /value: 'curves', label: 'Forward Curves'/);
-  assert.match(workspace, /value: 'drivers', label: 'Drivers & Alerts'/);
+  assert.match(workspace, /value: 'brief', label: 'Overview'/);
+  assert.match(workspace, /value: 'delivered', label: 'Delivered prices'/);
+  assert.match(workspace, /value: 'curves', label: 'Forward curves'/);
+  assert.match(workspace, /value: 'drivers', label: 'Research & alerts'/);
   assert.match(workspace, /useState\(initialMarketTab\)/);
   assert.match(workspace, /new URLSearchParams\(window\.location\.search\)\.get\('tab'\)/);
   assert.match(workspace, /visitedTabs/);
   assert.match(workspace, /hidden=\{tab !== 'curves'\}/);
   assert.match(workspace, /<MarketsView embedded showLegacyForward=\{false\}/);
-  assert.match(workspace, /const \[mode, setMode\] = useState\('price'\)/);
+  assert.match(workspace, /initialFilters\.mode\) \? initialFilters\.mode : 'price'/);
   assert.match(workspace, /key === 'singapore'\) \? \['singapore'\]/);
-  assert.match(workspace, /const \[includeMops, setIncludeMops\] = useState\(true\)/);
+  assert.match(workspace, /initialFilters\.includeMops !== false/);
+  assert.match(workspace, /Market tools/);
+  assert.match(workspace, /mode="admin"/);
   assert.doesNotMatch(workspace, /aria-label="Forward Curves"><CargoForwardSummary/);
   assert.doesNotMatch(workspace, /aria-label="Drivers and Alerts"><MarketDriversAlerts[^\n]*<TradingSignals/);
   assert.ok(workspace.indexOf("value: 'hsfo380'") < workspace.indexOf("value: 'vlsfo'"));
@@ -47,7 +49,7 @@ test('forward curve UI requires exact outright fallback identity and shows contr
   assert.match(curves, /syncId="forward-structure"/);
   assert.match(curves, /syncId="cross-market-context"/);
   assert.match(curves, /\['USD\/MT', 'USD\/BBL'\]/);
-  assert.match(curves, /Legacy per-product forward adjustments are no longer trading inputs/);
+  assert.match(curves, /mode === 'admin'/);
   assert.match(curves, /row\.source/);
   assert.match(curves, /row\.expiresOn/);
   assert.match(curves, /isFallback \? 'authorized_fallback'/);
@@ -71,7 +73,8 @@ test('brief and alert views remain evidence-only and source-linked', () => {
   assert.match(brief, /Latest available/);
   assert.match(brief, /Reports for the requested date are not available/);
   assert.match(brief, /published N\/A/);
-  assert.match(brief, /genuinely missing/);
+  assert.match(brief, /Evidence & methodology/);
+  assert.match(brief, /Show all/);
   assert.match(alerts, /previous 60-day 95th percentile/);
   assert.match(alerts, /at least 20 samples/);
   assert.match(alerts, /lookbackDays/);
@@ -143,7 +146,8 @@ test('brief projections understand the authenticated backend DTO without hiding 
   const drivers = read('src/hedge/views/market-intelligence/MarketDriversAlerts.jsx');
   const curves = read('src/hedge/views/market-intelligence/MarketForwardCurves.jsx');
   assert.match(brief, /completeness\.complete === true \? requiredReports/);
-  assert.match(brief, /regimeLabel\(row\)/);
+  assert.match(brief, /curveCoverage/);
+  assert.match(brief, /MarketPriceBoard pulse=\{pulse\}/);
   assert.match(brief, /Array\.isArray\(drivers\)/);
   assert.match(brief, /sourceRefs/);
   assert.match(brief, /ref\.sourceHash && top\.sourceHash === ref\.sourceHash/);
@@ -158,12 +162,12 @@ test('brief projections understand the authenticated backend DTO without hiding 
 test('market data and alert-rule permissions remain separate', () => {
   const page = read('src/pages/Markets.jsx');
   const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
-  assert.match(page, /canManageMarketData=\{snapshot\.capabilities\?\.hedge_book_manage === true\}/);
-  assert.match(page, /canManageAlertRules=\{snapshot\.capabilities\?\.hedge_admin === true\}/);
-  assert.match(page, /canManageCurveCutover=\{snapshot\.capabilities\?\.hedge_admin === true\}/);
+  assert.match(page, /canManageMarketData=\{pulse\?\.capabilities\?\.hedge_book_manage === true\}/);
+  assert.match(page, /canManageAlertRules=\{pulse\?\.capabilities\?\.hedge_admin === true\}/);
+  assert.match(page, /canManageCurveCutover=\{pulse\?\.capabilities\?\.hedge_admin === true\}/);
   assert.match(read('api/_hedgeDeskService.js'), /capabilities:\s*\{[\s\S]*?hedge_book_manage:[\s\S]*?hedge_admin:/);
-  assert.match(workspace, /<MarketDriversAlerts readOnly=\{!canManageAlertRules\}/);
-  assert.match(workspace, /<MarketForwardCurves readOnly=\{!canManageMarketData\} canManageCutover=\{canManageCurveCutover\}/);
+  assert.match(workspace, /<MarketDriversAlerts readOnly=\{!canManageAlertRules\} mode="admin"/);
+  assert.match(workspace, /<MarketForwardCurves readOnly=\{!canManageMarketData\} canManageCutover=\{canManageCurveCutover\} mode="admin"/);
 });
 
 test('curve cutover review is hedge-admin-only, auditable, and fail closed', () => {
@@ -176,7 +180,6 @@ test('curve cutover review is hedge-admin-only, auditable, and fail closed', () 
   assert.match(curves, /cutoverScopes\.length === 8/);
   assert.match(curves, /cutoverScopeIdentities\.size === 8/);
   assert.match(curves, /PRODUCTS\.every\(\(product\) => cutoverScopeProducts\.has\(product\.value\)\)/);
-  assert.match(curves, /Chart product buttons do not narrow this required eight-scope review/);
   assert.match(curves, /Approval requires exactly eight unique scopes across HSFO 380, S0\.5% and LSMGO/);
   assert.match(curves, /meanSignedVariance/);
   assert.match(curves, /meanAbsoluteVariance/);
@@ -213,8 +216,8 @@ test('licensed archive reconciliation is administrator-only, batched, and no-ref
   assert.match(drivers, /cursor = canResume \? Number\(archiveProgress\.nextCursor \|\| 0\) : 0/);
   assert.match(drivers, /archiveFingerprint = canResume \? archiveProgress\.archiveFingerprint \|\| null : null/);
   assert.doesNotMatch(drivers, /setArchiveProgress\(null\)/);
-  assert.match(drivers, /832-file Drive manifest/);
-  assert.match(drivers, /831 unique PDFs and one byte duplicate/);
+  assert.match(drivers, /unique reports reconciled/);
+  assert.match(drivers, /byte duplicates retained as lineage/);
   assert.match(drivers, /PDF bytes and report prose are never stored/);
   assert.match(dispatcher, /marketIntelligenceArchiveReplay[\s\S]*requireCapability\([\s\S]*'hedge_admin'/);
   assert.match(dispatcher, /runMarketReportArchiveReplayBatch/);

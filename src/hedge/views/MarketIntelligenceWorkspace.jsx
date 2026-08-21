@@ -9,7 +9,7 @@ import {
   LineChart as LineChartIcon,
   RefreshCw,
   Scale,
-  Ship,
+  Settings2,
 } from 'lucide-react';
 import {
   CartesianGrid,
@@ -25,12 +25,12 @@ import {
 import { importMarketReport, loadMarketHistory, previewMarketReport } from '@/hedge/api/marketData';
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
+import { MarketSignedAxisTick, MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 import {
   Button,
   Drawer,
   Field,
   InlineError,
-  Metric,
   PageHeader,
   Panel,
   Select,
@@ -44,10 +44,10 @@ import { MarketsView } from './MarketsView';
 import './market-intelligence/marketIntelligence.css';
 
 const TABS = [
-  { value: 'brief', label: 'Daily Decision Brief' },
-  { value: 'delivered', label: 'Delivered & MOPS' },
-  { value: 'curves', label: 'Forward Curves' },
-  { value: 'drivers', label: 'Drivers & Alerts' },
+  { value: 'brief', label: 'Overview' },
+  { value: 'delivered', label: 'Delivered prices' },
+  { value: 'curves', label: 'Forward curves' },
+  { value: 'drivers', label: 'Research & alerts' },
 ];
 
 const TAB_VALUES = new Set(TABS.map((item) => item.value));
@@ -65,8 +65,24 @@ const PRODUCTS = [
 ];
 
 const PRODUCT_ORDER = new Map(PRODUCTS.map((product, index) => [product.value, index]));
+const DELIVERED_FILTERS_KEY = 'fcos:markets:delivered:v1';
 
 const PORT_COLORS = ['#2563eb', '#0f766e', '#d97706', '#7c3aed', '#db2777'];
+
+function storedFilters(key) {
+  if (typeof window === 'undefined') return {};
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(key) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFilters(key, value) {
+  if (typeof window === 'undefined') return;
+  try { window.sessionStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage may be unavailable. */ }
+}
 
 function sourceTone(value) {
   if (value === 'assessment') return 'positive';
@@ -88,9 +104,8 @@ function readFileAsBase64(file) {
   });
 }
 
-function signedMoney(value) {
-  if (value == null || !Number.isFinite(Number(value))) return '—';
-  return `${Number(value) >= 0 ? '+' : ''}${formatMoney(Number(value), { digits: 2 })}`;
+function MovementBadge({ value, unit = 'USD/MT' }) {
+  return <MarketSignedValue value={value} unit={unit} unavailableLabel="No prior move" variant="pill" />;
 }
 
 function SpreadSparkline({ points = [], color = '#2563eb' }) {
@@ -113,9 +128,9 @@ function HorizonStat({ label, value }) {
     <div className="market-horizon-stat">
       <strong>{label}</strong>
       {value?.matchedSamples ? <>
-        <span>Avg {signedMoney(value.average)}</span>
-        <small>{signedMoney(value.low)} to {signedMoney(value.high)}</small>
-        <small>Move {signedMoney(value.movement)} · n={value.matchedSamples}</small>
+        <span>Avg <MarketSignedValue value={value.average} /></span>
+        <small><MarketSignedValue value={value.low} /> to <MarketSignedValue value={value.high} /></small>
+        <small>Move <MarketSignedValue value={value.movement} /> · n={value.matchedSamples}</small>
       </> : <span>No match</span>}
     </div>
   );
@@ -145,7 +160,7 @@ function DeliveredTooltip({ active, payload, label, mode }) {
     <div className="app-chart-tooltip">
       <strong>{formatDate(label)}</strong>
       {payload.filter((item) => item.value != null).map((item) => (
-        <span key={item.dataKey} style={{ color: item.color }}>{item.name}: {mode === 'spread' ? signedMoney(item.value) : formatMoney(item.value, { digits: 2 })} USD/MT</span>
+        <span key={item.dataKey}><i aria-hidden="true" style={{ backgroundColor: item.color }} />{item.name}: {mode === 'spread' ? <MarketSignedValue value={item.value} unit="USD/MT" /> : `${formatMoney(item.value, { digits: 2 })} USD/MT`}</span>
       ))}
     </div>
   );
@@ -179,7 +194,7 @@ function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
           <LineChart data={data} syncId="delivered-mops" syncMethod="value" margin={{ top: 8, right: 16, left: 0, bottom: 2 }}>
             <CartesianGrid stroke="#e8ecef" vertical={false} />
             <XAxis dataKey="date" tickFormatter={(value) => value.slice(5)} tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={28} />
-            <YAxis tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} />
+            <YAxis tick={mode === 'spread' ? <MarketSignedAxisTick digits={0} /> : { fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} />
             <Tooltip content={<DeliveredTooltip mode={mode} />} />
             <Legend iconType="plainline" wrapperStyle={{ fontSize: 11, paddingTop: 5 }} />
             {mode === 'spread' ? <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" /> : null}
@@ -197,19 +212,29 @@ function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
 function DeliveredBunkers({ intelligence }) {
   const delivered = intelligence?.delivered || [];
   const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
-  const [selectedProducts, setSelectedProducts] = useState(() => PRODUCTS.map((item) => item.value));
-  const [selectedPorts, setSelectedPorts] = useState(() => ports.some(([key]) => key === 'singapore') ? ['singapore'] : ports.slice(0, 1).map(([key]) => key));
-  const [mode, setMode] = useState('price');
-  const [range, setRange] = useState('3m');
-  const [includeMops, setIncludeMops] = useState(true);
-  const [mobileProduct, setMobileProduct] = useState(PRODUCTS[0].value);
+  const initialFilters = useMemo(() => storedFilters(DELIVERED_FILTERS_KEY), []);
+  const validProductKeys = PRODUCTS.map((item) => item.value);
+  const validPortKeys = ports.map(([key]) => key);
+  const initialProducts = Array.isArray(initialFilters.products) ? initialFilters.products.filter((value) => validProductKeys.includes(value)) : [];
+  const initialPorts = Array.isArray(initialFilters.ports) ? initialFilters.ports.filter((value) => validPortKeys.includes(value)) : [];
+  const [selectedProducts, setSelectedProducts] = useState(() => initialProducts.length ? initialProducts : validProductKeys);
+  const [selectedPorts, setSelectedPorts] = useState(() => initialPorts.length ? initialPorts : ports.some(([key]) => key === 'singapore') ? ['singapore'] : validPortKeys.slice(0, 1));
+  const [mode, setMode] = useState(() => ['price', 'spread'].includes(initialFilters.mode) ? initialFilters.mode : 'price');
+  const [range, setRange] = useState(() => ['1w', '1m', '3m', '6m', '1y'].includes(initialFilters.range) ? initialFilters.range : '3m');
+  const [includeMops, setIncludeMops] = useState(() => initialFilters.includeMops !== false);
+  const [mobileProduct, setMobileProduct] = useState(() => initialProducts[0] || PRODUCTS[0].value);
   const [history, setHistory] = useState(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState(null);
+  const [detailRow, setDetailRow] = useState(null);
 
   useEffect(() => {
     if (!selectedProducts.includes(mobileProduct)) setMobileProduct(selectedProducts[0]);
   }, [mobileProduct, selectedProducts]);
+
+  useEffect(() => {
+    saveFilters(DELIVERED_FILTERS_KEY, { products: selectedProducts, ports: selectedPorts, mode, range, includeMops });
+  }, [includeMops, mode, range, selectedPorts, selectedProducts]);
 
   useEffect(() => {
     if (!intelligence?.available || !selectedProducts.length || !selectedPorts.length) return undefined;
@@ -229,21 +254,11 @@ function DeliveredBunkers({ intelligence }) {
 
   return (
     <div className="market-intelligence-stack">
-      <div className="app-callout app-callout--neutral"><Info size={15} /> Delivered Bunkers remain distinct physical assessments or posted prices; exact-date MOPS comparisons do not erase their product, location, quantity or delivery-window basis.</div>
-      <div className="app-metric-grid app-metric-grid--4">
-        {PRODUCTS.map((item) => {
-          const values = delivered.filter((row) => row.productKey === item.value && row.latest?.price != null);
-          const latestDate = values.map((row) => row.latest.priceDate).sort().at(-1);
-          return <Metric key={item.value} label={`${item.label} coverage`} value={`${values.length} ports`} detail={latestDate ? `Latest ${formatDate(latestDate)}` : 'No observation loaded'} tone={item.value === 'vlsfo' ? 'blue' : item.value === 'hsfo380' ? 'orange' : 'teal'} icon={Ship} />;
-        })}
-        <Metric label="Spread basis" value="Exact date" detail="No interpolation or cargo proxy" tone="green" icon={Scale} />
-      </div>
-
       {(intelligence?.conflicts || []).length ? <div className="app-callout app-callout--warning"><AlertTriangle size={16} /> Conflicting report observations are quarantined. Affected dates are excluded from premium / discount analytics until reviewed.</div> : null}
 
       <Panel className="market-matrix-panel">
         <div className="app-panel-header">
-          <div><h2>Major-port delivered prices and MOPS spread</h2><p>Latest USD/MT values with one three-month sparkline and exact-date 1W, 1M and 3M statistics.</p></div>
+          <div><h2>Major-port delivered prices</h2><p>Latest USD/MT value, published movement, and exact-date premium or discount. Select a cell for full evidence and statistics.</p></div>
           <StatusBadge tone="neutral">{ports.length} ports · 3 products</StatusBadge>
         </div>
         <div className="market-matrix-scroll">
@@ -258,26 +273,21 @@ function DeliveredBunkers({ intelligence }) {
                   const latestSpread = row.latestSpread;
                   return (
                     <td key={item.value}>
-                      <div className="market-price-cell">
+                      <button type="button" className="market-price-cell market-price-cell--compact" onClick={() => setDetailRow(row)} aria-label={`Open ${portLabel} ${item.label} delivered-price details`}>
                         <div className="market-price-cell__top">
                           <strong>{row.latest?.price == null ? '—' : formatMoney(row.latest.price, { digits: 2 })}</strong>
                           {row.aliasLabel ? <span className="market-alias-label">{row.aliasLabel}</span> : null}
                         </div>
+                        <MovementBadge value={row.latest?.dayChange} />
                         <div className="market-price-cell__spread">
-                          <span>{latestSpread?.spread == null ? 'No exact-date MOPS' : `${latestSpread.spread >= 0 ? 'Premium' : 'Discount'} ${signedMoney(latestSpread.spread)}`}</span>
+                          <span>{latestSpread?.spread == null ? 'No exact-date MOPS' : <>{latestSpread.spread >= 0 ? 'Premium' : 'Discount'} <MarketSignedValue value={latestSpread.spread} /></>}</span>
                           <small>{latestSpread?.date ? formatDate(latestSpread.date) : row.benchmark?.label || 'Benchmark unavailable'}</small>
-                        </div>
-                        <SpreadSparkline points={row.spreadHistory || []} color={item.color} />
-                        <div className="market-horizon-grid">
-                          <HorizonStat label="1W" value={row.horizonStats?.['1w']} />
-                          <HorizonStat label="1M" value={row.horizonStats?.['1m']} />
-                          <HorizonStat label="3M" value={row.horizonStats?.['3m']} />
                         </div>
                         <div className="market-price-cell__meta">
                           <StatusBadge tone={sourceTone(row.sourceType)}>{sourceLabel(row.sourceType)}</StatusBadge>
-                          <small>{marketSymbolLabel(row.sourceSymbol, { productKey: row.productKey, productLabel: row.productLabel, portLabel: row.portLabel, marketFamily: 'delivered' })}{row.latest?.stale ? ` · ${row.latest.staleDays}d old` : ''}</small>
+                          <small>{row.latest?.stale ? `${row.latest.staleDays}d old` : 'Current source date'}</small>
                         </div>
-                      </div>
+                      </button>
                     </td>
                   );
                 })}
@@ -285,7 +295,7 @@ function DeliveredBunkers({ intelligence }) {
             ))}</tbody>
           </table>
         </div>
-        <div className="app-callout app-callout--neutral"><Info size={15} /> Kaohsiung is CPC posted pricing: VLSFO is <strong>LS180</strong> and HSFO 380 is <strong>MF-380</strong>. South Korea (West) publishes VLSFO only.</div>
+        <details className="market-disclosure"><summary><Info size={14} /> Basis and publication notes</summary><div className="market-disclosure__body"><p>Delivered bunkers remain distinct physical assessments or posted prices; exact-date MOPS comparisons do not erase product, location, quantity, or delivery-window basis.</p><p>Kaohsiung is CPC posted pricing: VLSFO is <strong>LS180</strong> and HSFO 380 is <strong>MF-380</strong>. South Korea (West) publishes VLSFO only.</p></div></details>
       </Panel>
 
       <Panel className="app-chart-panel market-delivered-chart market-analytics-chart">
@@ -293,7 +303,7 @@ function DeliveredBunkers({ intelligence }) {
           <div><h2>Delivered price and premium / discount trends</h2><p>Product panels share the same date and tooltip position while retaining independent scales.</p></div>
           {historyBusy ? <StatusBadge tone="neutral">Updating…</StatusBadge> : <StatusBadge tone={history?.coverage?.complete ? 'positive' : 'warning'}>{history?.coverage?.matchedSpreads || 0} matched spreads</StatusBadge>}
         </div>
-        <div className="market-chart-controls">
+        <div className="market-chart-controls market-chart-controls--sticky">
           <MarketToggleGroup label="View" single options={[{ value: 'price', label: 'Delivered price' }, { value: 'spread', label: 'Premium vs MOPS' }]} selected={mode} onChange={setMode} />
           <MarketToggleGroup label="Range" single options={['1w', '1m', '3m', '6m', '1y'].map((value) => ({ value, label: value.toUpperCase() }))} selected={range} onChange={setRange} />
           <MarketToggleGroup label="Products" options={PRODUCTS} selected={selectedProducts} onChange={setSelectedProducts} />
@@ -310,6 +320,15 @@ function DeliveredBunkers({ intelligence }) {
         <div className="market-product-panels">{[...(history?.panels || [])].sort((left, right) => (PRODUCT_ORDER.get(left.productKey) ?? Number.MAX_SAFE_INTEGER) - (PRODUCT_ORDER.get(right.productKey) ?? Number.MAX_SAFE_INTEGER)).map((panel) => <DeliveredTrendPanel key={panel.productKey} panel={panel} mode={mode} visible={selectedProducts.includes(panel.productKey)} mobileActive={mobileProduct === panel.productKey} />)}</div>
         {history && !history.coverage?.complete ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> The selected horizon was paginated. Narrow the selection before using the chart for a complete comparison.</div> : null}
       </Panel>
+      <Drawer open={Boolean(detailRow)} onClose={() => setDetailRow(null)} title={detailRow ? `${detailRow.portLabel} · ${detailRow.productLabel}` : 'Delivered-price detail'} description="Exact-date delivered-price and MOPS evidence with retained three-month statistics." footer={<Button onClick={() => setDetailRow(null)}>Close</Button>}>
+        {detailRow ? <div className="market-delivered-detail">
+          <div className="market-delivered-detail__headline"><div><span>Latest delivered price</span><strong>{detailRow.latest?.price == null ? 'Unavailable' : `${formatMoney(detailRow.latest.price, { digits: 2 })} USD/MT`}</strong><small>{detailRow.latest?.priceDate ? formatDate(detailRow.latest.priceDate) : 'No source date'}</small></div><MovementBadge value={detailRow.latest?.dayChange} /></div>
+          <div className="market-price-cell__spread"><span>{detailRow.latestSpread?.spread == null ? 'No exact-date MOPS comparison' : <>{detailRow.latestSpread.spread >= 0 ? 'Premium' : 'Discount'} <MarketSignedValue value={detailRow.latestSpread.spread} unit="USD/MT" /></>}</span><small>{detailRow.latestSpread?.date ? formatDate(detailRow.latestSpread.date) : detailRow.benchmark?.label || 'Benchmark unavailable'}</small></div>
+          <SpreadSparkline points={detailRow.spreadHistory || []} color={PRODUCTS.find((item) => item.value === detailRow.productKey)?.color} />
+          <div className="market-horizon-grid"><HorizonStat label="1W" value={detailRow.horizonStats?.['1w']} /><HorizonStat label="1M" value={detailRow.horizonStats?.['1m']} /><HorizonStat label="3M" value={detailRow.horizonStats?.['3m']} /></div>
+          <div className="market-delivered-detail__source"><StatusBadge tone={sourceTone(detailRow.sourceType)}>{sourceLabel(detailRow.sourceType)}</StatusBadge><span>{marketSymbolLabel(detailRow.sourceSymbol, { productKey: detailRow.productKey, productLabel: detailRow.productLabel, portLabel: detailRow.portLabel, marketFamily: 'delivered' })}</span><small>{detailRow.basisNote || 'Exact licensed series basis retained.'}</small></div>
+        </div> : null}
+      </Drawer>
     </div>
   );
 }
@@ -348,25 +367,25 @@ export function TradingSignals({ intelligence }) {
           <Panel key={signal.productKey} className="market-signal-card">
             <div className="market-signal-card__icon"><Scale size={18} /></div>
             <span>{PRODUCTS.find((item) => item.value === signal.productKey)?.label || signal.productKey}</span>
-            {signal.available ? <><strong>{formatMoney(signal.spread, { digits: 2 })} spread</strong><small>{signal.cheapest.portLabel} {formatMoney(signal.cheapest.price, { digits: 2 })} → {signal.mostExpensive.portLabel} {formatMoney(signal.mostExpensive.price, { digits: 2 })}</small></> : <><strong>Unavailable</strong><small>No comparable port data</small></>}
+            {signal.available ? <><strong><MarketSignedValue value={signal.spread} unit="USD/MT" suffix="spread" /></strong><small>{signal.cheapest.portLabel} {formatMoney(signal.cheapest.price, { digits: 2 })} → {signal.mostExpensive.portLabel} {formatMoney(signal.mostExpensive.price, { digits: 2 })}</small></> : <><strong>Unavailable</strong><small>No comparable port data</small></>}
           </Panel>
         ))}
         <Panel className="market-signal-card">
           <div className="market-signal-card__icon"><Gauge size={18} /></div>
           <span>S0.5% forward structure</span>
           <strong>{intelligence?.signals?.forwardStructure?.label || 'Unavailable'}</strong>
-          <small>{intelligence?.signals?.forwardStructure ? `BM/M1 ${intelligence.signals.forwardStructure.bmM1 >= 0 ? '+' : ''}${intelligence.signals.forwardStructure.bmM1.toFixed(2)} · M1/M2 ${intelligence.signals.forwardStructure.m1M2 == null ? '—' : intelligence.signals.forwardStructure.m1M2.toFixed(2)}` : 'Import forward observations'}</small>
+          <small>{intelligence?.signals?.forwardStructure ? <>BM/M1 <MarketSignedValue value={intelligence.signals.forwardStructure.bmM1} /> · M1/M2 <MarketSignedValue value={intelligence.signals.forwardStructure.m1M2} /></> : 'Import forward observations'}</small>
         </Panel>
         <Panel className="market-signal-card">
           <div className="market-signal-card__icon"><Scale size={18} /></div>
           <span>S0.5% - HSFO 380 M1</span>
-          <strong>{intelligence?.signals?.vlsfoHsfoM1 == null ? 'Unavailable' : `${formatMoney(intelligence.signals.vlsfoHsfoM1, { digits: 2 })} USD/MT`}</strong>
+          <strong><MarketSignedValue value={intelligence?.signals?.vlsfoHsfoM1} unit="USD/MT" /></strong>
           <small>Product-switch economics before operational and compliance costs.</small>
         </Panel>
         <Panel className="market-signal-card">
           <div className="market-signal-card__icon"><ArrowUpRight size={18} /></div>
           <span>East-West M1</span>
-          <strong>{intelligence?.signals?.eastWestM1 == null ? 'Unavailable' : `${formatMoney(intelligence.signals.eastWestM1, { digits: 2 })} USD/MT`}</strong>
+          <strong><MarketSignedValue value={intelligence?.signals?.eastWestM1} unit="USD/MT" /></strong>
           <small>Singapore 380 CST versus Rotterdam 3.5% reference.</small>
         </Panel>
         <Panel className="market-signal-card">
@@ -387,13 +406,13 @@ export function TradingSignals({ intelligence }) {
           </div>
           <div className="market-quote-result">
             <div><span>Delivered reference</span><strong>{benchmark?.latest?.price == null ? 'Unavailable' : formatMoney(benchmark.latest.price, { digits: 2 })}</strong><small>{marketSymbolLabel(benchmark?.sourceSymbol, { productKey: benchmark?.productKey, productLabel: benchmark?.productLabel, portLabel: benchmark?.portLabel, marketFamily: 'delivered' })} · {sourceLabel(benchmark?.sourceType || 'unavailable')}</small></div>
-            <div className={quoteDifference == null ? '' : quoteDifference <= 0 ? 'is-positive' : 'is-warning'}><span>Quote vs reference</span><strong>{quoteDifference == null ? 'Enter a quote' : `${quoteDifference >= 0 ? '+' : ''}${formatMoney(quoteDifference, { digits: 2 })}`}</strong><small>{quoteDifference == null ? 'No comparison yet' : quoteDifference <= 0 ? 'Below selected reference' : 'Above selected reference'}</small></div>
+            <div><span>Quote vs reference</span><strong>{quoteDifference == null ? 'Enter a quote' : <MarketSignedValue value={quoteDifference} unit="USD/MT" />}</strong><small>{quoteDifference == null ? 'No comparison yet' : quoteDifference <= 0 ? 'Below selected reference' : 'Above selected reference'}</small></div>
           </div>
         </Panel>
 
         <Panel>
           <div className="app-panel-header"><div><h2>Basis and methodology alerts</h2><p>Flags missing, stale, or mixed-basis observations before trading use.</p></div></div>
-          <div className="market-alert-list">{alerts.length ? alerts.map((alert) => <div key={alert}><AlertTriangle size={16} /><span>{alert}</span></div>) : <div><Info size={16} /><span>No current methodology alert.</span></div>}</div>
+          <div className="market-alert-list">{alerts.length ? alerts.map((alert) => <div key={alert}><AlertTriangle size={16} /><MarketSignedText>{alert}</MarketSignedText></div>) : <div><Info size={16} /><span>No current methodology alert.</span></div>}</div>
         </Panel>
       </div>
 
@@ -475,7 +494,7 @@ function ReportImportDrawer({ open, onClose, onImported }) {
         <div className="app-form-section__title">Review · {formatDate(preview.reportDate)}</div>
         <div className="market-import-summary"><strong>{preview.observationCount} numeric values detected</strong><span>{preview.publishedNaSymbols?.length ? `${preview.publishedNaSymbols.length} explicitly published N/A: ${preview.publishedNaSymbols.map((symbol) => marketSymbolLabel(symbol)).join(', ')}` : 'No configured symbol is explicitly published N/A.'}</span><span>{preview.missingSymbols.length ? `${preview.missingSymbols.length} configured symbols not detected: ${preview.missingSymbols.map((symbol) => marketSymbolLabel(symbol)).join(', ')}` : 'No configured symbol is genuinely missing.'}</span></div>
         {importBlockers.length ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Import is blocked because {importBlockers.map((row) => marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })).join(', ')} has no unambiguous printed/validated contract month.</div> : null}
-        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })}</strong><span>{formatMoney(row.price, { digits: String(row.unit).toUpperCase() === 'USD/BBL' ? 3 : 2 })} {row.unit || 'Unit unavailable'}</span>{row?.basisMetadata?.publicationEligible === false ? <StatusBadge tone="warning">Non-publication reprint · evidence only</StatusBadge> : null}<small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Spot assessment'}</small><small>{row.dayChange == null ? 'No daily change' : `${row.dayChange >= 0 ? '+' : ''}${row.dayChange.toFixed(3)}`}</small></div>)}</div>
+        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })}</strong><span>{formatMoney(row.price, { digits: String(row.unit).toUpperCase() === 'USD/BBL' ? 3 : 2 })} {row.unit || 'Unit unavailable'}</span>{row?.basisMetadata?.publicationEligible === false ? <StatusBadge tone="warning">Non-publication reprint · evidence only</StatusBadge> : null}<small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Spot assessment'}</small><small>{row.dayChange == null ? 'No daily change' : <MarketSignedValue value={row.dayChange} digits={3} />}</small></div>)}</div>
         {(preview.availabilityEvidence || []).length ? <div className="market-import-rows">{preview.availabilityEvidence.map((row) => <div key={`availability:${row.sourceSymbol}`}><strong>{marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })}</strong><StatusBadge tone={row.status === 'published_na' ? 'warning' : 'neutral'}>{row.status === 'published_na' ? 'Published N/A' : 'Not detected'}</StatusBadge><small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Configured report symbol'}</small><small>No zero, estimate, or carried-forward value will be created.</small></div>)}</div> : null}
         <label className="app-check"><input type="checkbox" checked={entitlementConfirmed} onChange={(event) => setEntitlementConfirmed(event.target.checked)} /><span>I confirm FCOS is licensed to store these structured market observations for internal use.</span></label>
       </section> : null}
@@ -483,27 +502,55 @@ function ReportImportDrawer({ open, onClose, onImported }) {
   );
 }
 
-export function MarketIntelligenceWorkspace({ data, settings, canManageMarketData = false, canManageAlertRules = false, canManageCurveCutover = false, priceEntity, verifyMonth, reload }) {
+function MarketToolsDrawer({ open, onClose, onImport, data, settings, canManageMarketData, canManageAlertRules, canManageCurveCutover, priceEntity, verifyMonth, marketDataLoaded, marketDataLoading }) {
+  return <Drawer open={open} onClose={onClose} title="Market tools" description="Governed report, settlement, curve, and alert administration. Daily market reading remains unchanged." width="large" footer={<Button onClick={onClose}>Close</Button>}>
+    {marketDataLoading && !marketDataLoaded ? <div className="market-empty-inline market-empty-inline--compact"><RefreshCw className="animate-spin" size={20} /><div><strong>Loading governed market controls</strong><span>The current Markets workspace remains available.</span></div></div> : null}
+    <div className="market-tools-stack">
+      {canManageMarketData ? <details className="market-tools-section" open><summary>Licensed reports</summary><div><p>Import a complete licensed Bunkerwire or European Marketscan PDF for immediate ingestion.</p><Button variant="primary" icon={FileUp} onClick={onImport}>Import licensed report</Button></div></details> : null}
+      {canManageMarketData && marketDataLoaded ? <details className="market-tools-section"><summary>Settlement MOPS control</summary><div><MarketsView embedded showLegacyForward={false} data={data} settings={settings} readOnly={false} priceEntity={priceEntity} verifyMonth={verifyMonth} /></div></details> : null}
+      {canManageMarketData ? <details className="market-tools-section"><summary>Forward fallbacks and curve cutover</summary><div><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={canManageCurveCutover} mode="admin" /></div></details> : null}
+      {canManageAlertRules ? <details className="market-tools-section"><summary>Alert rules and archive reconciliation</summary><div><MarketDriversAlerts readOnly={!canManageAlertRules} mode="admin" /></div></details> : null}
+    </div>
+  </Drawer>;
+}
+
+export function MarketIntelligenceWorkspace({ data, pulse, marketDataLoaded = false, marketDataLoading = false, ensureMarketData, settings, canManageMarketData = false, canManageAlertRules = false, canManageCurveCutover = false, priceEntity, verifyMonth, reload }) {
   const [tab, setTab] = useState(initialMarketTab);
   const [visitedTabs, setVisitedTabs] = useState(() => new Set([initialMarketTab()]));
   const [importOpen, setImportOpen] = useState(false);
-  const [settlementOpen, setSettlementOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [briefRefreshKey, setBriefRefreshKey] = useState(0);
   const intelligence = data.marketIntelligence || {};
   const selectTab = (value) => {
     setVisitedTabs((current) => current.has(value) ? current : new Set([...current, value]));
     setTab(value);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', value);
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (value === 'delivered') ensureMarketData().catch(() => {});
+  };
+  useEffect(() => {
+    if (tab === 'delivered') ensureMarketData().catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Initial deep-link only; later selections load from selectTab.
+  const openTools = () => {
+    setToolsOpen(true);
+    ensureMarketData().catch(() => {});
+  };
+  const refreshOverview = () => {
+    reload({ silent: true, force: true }).catch(() => {});
   };
   return (
     <div className="app-page market-intelligence-workspace">
-      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Read the daily bunker decision brief, compare delivered prices with controlled MOPS, and inspect exact contract-month curves with source lineage." actions={canManageMarketData ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
-      <MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} />
+      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." actions={(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null} />
       <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
-      {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Daily Decision Brief"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} /></div> : null}
-      {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered and MOPS"><DeliveredBunkers intelligence={intelligence} /><Panel className="market-settlement-control"><div className="app-panel-header"><div><h2>Settlement MOPS control</h2><p>Add, correct and verify the publication ledger used by monthly settlement and paper-hedge expiry. This advanced surface contains no legacy forward-adjustment input.</p></div><Button size="sm" onClick={() => setSettlementOpen((value) => !value)}>{settlementOpen ? 'Hide settlement control' : 'Open settlement control'}</Button></div>{settlementOpen ? <MarketsView embedded showLegacyForward={false} data={data} settings={settings} readOnly={!canManageMarketData} priceEntity={priceEntity} verifyMonth={verifyMonth} /> : null}</Panel></div> : null}
-      {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward Curves"><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={canManageCurveCutover} /></div> : null}
-      {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Drivers and Alerts"><MarketDriversAlerts readOnly={!canManageAlertRules} /></div> : null}
-      {canManageMarketData ? <ReportImportDrawer open={importOpen} onClose={() => setImportOpen(false)} onImported={() => { setBriefRefreshKey((value) => value + 1); reload({ silent: true }).catch(() => {}); }} /> : null}
+      {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} onRefreshPulse={refreshOverview} intraday={<MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} />} /></div> : null}
+      {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered prices">{marketDataLoaded ? <DeliveredBunkers intelligence={intelligence} /> : <Panel><div className="market-empty-inline"><RefreshCw className={marketDataLoading ? 'animate-spin' : ''} size={20} /><div><strong>{marketDataLoading ? 'Loading delivered prices' : 'Delivered prices are ready to load'}</strong><span>The heavy history snapshot is requested only when this tab is opened.</span></div></div></Panel>}</div> : null}
+      {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward curves"><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={false} /></div> : null}
+      {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Research and alerts"><MarketDriversAlerts readOnly /></div> : null}
+      {(canManageMarketData || canManageAlertRules) ? <MarketToolsDrawer open={toolsOpen} onClose={() => setToolsOpen(false)} onImport={() => { setToolsOpen(false); setImportOpen(true); }} data={data} settings={settings} canManageMarketData={canManageMarketData} canManageAlertRules={canManageAlertRules} canManageCurveCutover={canManageCurveCutover} priceEntity={priceEntity} verifyMonth={verifyMonth} marketDataLoaded={marketDataLoaded} marketDataLoading={marketDataLoading} /> : null}
+      {canManageMarketData ? <ReportImportDrawer open={importOpen} onClose={() => setImportOpen(false)} onImported={() => { setBriefRefreshKey((value) => value + 1); Promise.all([reload({ silent: true }), ensureMarketData?.({ force: true })]).catch(() => {}); }} /> : null}
     </div>
   );
 }

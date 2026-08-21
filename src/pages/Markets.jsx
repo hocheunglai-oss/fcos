@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { MarketIntelligenceWorkspace } from '@/hedge/views/MarketIntelligenceWorkspace';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
-import { loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
+import { loadMarketPulseSnapshot, loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
@@ -13,26 +13,29 @@ const MARKET_DRIVE_REFRESH_OFFSET_MS = 2 * 60 * 1000;
 const MARKET_DRIVE_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export default function Markets() {
-  const [snapshot, setSnapshot] = useState(EMPTY);
+  const [pulse, setPulse] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [error, setError] = useState(null);
+  const snapshotRef = useRef(null);
+  const snapshotRequestRef = useRef(null);
 
   const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      const applySnapshot = (value) => {
-        const next = { ...EMPTY, ...(value || {}) };
-        setSnapshot(next);
+      const applyPulse = (value) => {
+        const next = value || null;
+        setPulse(next);
         return next;
       };
-      const next = applySnapshot(await loadMarketSnapshot({
-        ...navigationCacheOptions('operational', applySnapshot),
+      return applyPulse(await loadMarketPulseSnapshot({
+        ...navigationCacheOptions('operational', applyPulse),
         force,
       }));
-      return next;
     } catch (nextError) {
       setError(nextError);
       throw nextError;
@@ -40,6 +43,26 @@ export default function Markets() {
       setLoading(false);
       setRefreshing(false);
     }
+  }, []);
+
+  const ensureSnapshot = useCallback(async ({ force = false } = {}) => {
+    if (!force && snapshotRef.current) return snapshotRef.current;
+    if (!force && snapshotRequestRef.current) return snapshotRequestRef.current;
+    setSnapshotLoading(true);
+    const request = loadMarketSnapshot({
+      cache: !force,
+      force,
+    }).then((value) => {
+      const next = { ...EMPTY, ...(value || {}) };
+      snapshotRef.current = next;
+      setSnapshot(next);
+      return next;
+    }).finally(() => {
+      snapshotRequestRef.current = null;
+      setSnapshotLoading(false);
+    });
+    snapshotRequestRef.current = request;
+    return request;
   }, []);
 
   useEffect(() => { reload().catch(() => {}); }, [reload]);
@@ -60,16 +83,17 @@ export default function Markets() {
     };
   }, [reload]);
 
+  const effectiveSnapshot = snapshot || EMPTY;
   const settings = useMemo(() => ({
-    general: { ...DEFAULT_GENERAL, ...(snapshot.settings?.general || {}) },
-    forwardSpreads: snapshot.settings?.forwardSpreads || {},
-    forwardSpreadsUpdatedAt: snapshot.settings?.forwardSpreadsUpdatedAt || null,
+    general: { ...DEFAULT_GENERAL, ...(effectiveSnapshot.settings?.general || {}) },
+    forwardSpreads: effectiveSnapshot.settings?.forwardSpreads || {},
+    forwardSpreadsUpdatedAt: effectiveSnapshot.settings?.forwardSpreadsUpdatedAt || null,
     update: async () => {
       throw new Error('Legacy forward adjustments are no longer available. Use an exact contract-month fallback in Forward Curves.');
     },
-  }), [snapshot.settings]);
+  }), [effectiveSnapshot.settings]);
 
-  if (loading && !snapshot.mops.length) {
+  if (loading && !pulse) {
     return <div className="hedge-desk-root"><EmptyState title="Loading Markets" description="Preparing the daily brief, delivered prices and exact contract-month curves." icon={RefreshCw} /></div>;
   }
 
@@ -79,16 +103,20 @@ export default function Markets() {
         {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketIntelligenceWorkspace
-          data={{ mops: snapshot.mops || [], mopsMonthVerifications: snapshot.mopsMonthVerifications || [], marketIntelligence: snapshot.marketIntelligence || {} }}
+          data={{ mops: effectiveSnapshot.mops || [], mopsMonthVerifications: effectiveSnapshot.mopsMonthVerifications || [], marketIntelligence: effectiveSnapshot.marketIntelligence || {} }}
+          pulse={pulse}
+          marketDataLoaded={Boolean(snapshot)}
+          marketDataLoading={snapshotLoading}
+          ensureMarketData={ensureSnapshot}
           settings={settings}
           priceEntity={MarketPrice}
-          canManageMarketData={snapshot.capabilities?.hedge_book_manage === true}
-          canManageAlertRules={snapshot.capabilities?.hedge_admin === true}
-          canManageCurveCutover={snapshot.capabilities?.hedge_admin === true}
+          canManageMarketData={pulse?.capabilities?.hedge_book_manage === true}
+          canManageAlertRules={pulse?.capabilities?.hedge_admin === true}
+          canManageCurveCutover={pulse?.capabilities?.hedge_admin === true}
           reload={reload}
           verifyMonth={async (month, sourceMessage, expectedRevision) => {
             const result = await verifyMopsMonth(month, sourceMessage, expectedRevision);
-            await reload({ silent: true });
+            await Promise.all([reload({ silent: true }), ensureSnapshot({ force: true })]);
             return result;
           }}
         />

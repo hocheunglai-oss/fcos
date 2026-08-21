@@ -19,6 +19,7 @@ import {
 import { Button, Field, InlineError, Panel, StatusBadge } from '@/hedge/components/ui';
 import { formatDate } from '@/hedge/lib/domain';
 import { projectBriefDriver } from './briefProjection';
+import { MarketSignedText } from '@/components/markets/MarketSignedValue';
 
 const DEFAULT_RULES = {
   enabled: true,
@@ -88,7 +89,7 @@ function RuleToggle({ checked, onChange, children, disabled }) {
   return <label className="market-alert-toggle"><input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} disabled={disabled} /><span>{children}</span></label>;
 }
 
-export function MarketDriversAlerts({ readOnly }) {
+export function MarketDriversAlerts({ readOnly, mode = 'content' }) {
   const [brief, setBrief] = useState(null);
   const [rulesResponse, setRulesResponse] = useState(null);
   const [draft, setDraft] = useState(DEFAULT_RULES);
@@ -171,50 +172,46 @@ export function MarketDriversAlerts({ readOnly }) {
     }
   };
 
+  if (mode === 'admin') return <div className="market-intelligence-stack" data-testid="market-alert-admin-tools">
+    {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
+    <Panel>
+      <div className="app-panel-header"><div><h2>Company alert rules</h2><p>Numeric alerts use the larger of the configured floor or the previous 60-day 95th percentile, after at least 20 samples.</p></div>{readOnly ? <StatusBadge tone="neutral">View only</StatusBadge> : <StatusBadge tone="positive">Authorized</StatusBadge>}</div>
+      <div className="market-alert-rule-grid">
+        <Field label="Outright move floor (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.outrightFloorUsdMt} disabled={readOnly} onChange={(event) => setRule('outrightFloorUsdMt', Number(event.target.value))} /></Field>
+        <Field label="Spread move floor (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.spreadFloorUsdMt} disabled={readOnly} onChange={(event) => setRule('spreadFloorUsdMt', Number(event.target.value))} /></Field>
+        <Field label="Gasoil move floor (USD/bbl)"><input className="app-input" type="number" min="0" step="0.01" value={draft.gasoilFloorUsdBbl} disabled={readOnly} onChange={(event) => setRule('gasoilFloorUsdBbl', Number(event.target.value))} /></Field>
+        <Field label="Curve deadband (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.curveDeadbandUsdMt} disabled={readOnly} onChange={(event) => setRule('curveDeadbandUsdMt', Number(event.target.value))} /></Field>
+        <Field label="Gasoil deadband (USD/bbl)"><input className="app-input" type="number" min="0" step="0.01" value={draft.curveDeadbandUsdBbl} disabled={readOnly} onChange={(event) => setRule('curveDeadbandUsdBbl', Number(event.target.value))} /></Field>
+        <Field label="Lookback days"><input className="app-input" type="number" min="1" step="1" value={draft.lookbackDays} disabled={readOnly} onChange={(event) => setRule('lookbackDays', Number(event.target.value))} /></Field>
+        <Field label="Minimum samples"><input className="app-input" type="number" min="1" step="1" value={draft.minimumSamples} disabled={readOnly} onChange={(event) => setRule('minimumSamples', Number(event.target.value))} /></Field>
+        <Field label="Adaptive percentile" hint="0.95 means the 95th percentile."><input className="app-input" type="number" min="0.5" max="1" step="0.01" value={draft.percentile} disabled={readOnly} onChange={(event) => setRule('percentile', Number(event.target.value))} /></Field>
+      </div>
+      <div className="market-alert-toggle-grid"><RuleToggle checked={draft.enabled} onChange={(value) => setRule('enabled', value)} disabled={readOnly}>Enable company-wide in-app market alerts</RuleToggle></div>
+      <div className="app-callout app-callout--neutral"><CheckCircle2 size={15} /> Missing, stale, conflict and parsing alerts remain deterministic fixed controls. Curve-regime flips always require two complete reports outside the configured deadband.</div>
+      <div className="market-alert-rule-footer"><div>{readOnly ? <><LockKeyhole size={15} /> Only an authorized Markets manager may change company rules.</> : <><ShieldAlert size={15} /> Saving changes the company-wide in-app threshold policy.</>}</div>{!readOnly ? <Button variant="primary" icon={Save} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save alert rules'}</Button> : null}</div>
+    </Panel>
+    {!readOnly ? <Panel>
+      <div className="app-panel-header"><div><h2>Licensed archive reconciliation</h2><p>Idempotently revalidates structured price evidence and deterministic briefs. PDF bytes and report prose are never stored.</p></div><StatusBadge tone={archiveBusy ? 'warning' : archiveProgress?.complete ? 'positive' : 'neutral'}>{archiveBusy ? 'Reconciling…' : archiveProgress?.complete ? 'Complete' : 'Administrator'}</StatusBadge></div>
+      {archiveError ? <InlineError error={archiveError} /> : null}
+      {archiveProgress ? <div className="app-callout app-callout--neutral"><FileSearch size={15} /> {archiveProgress.nextCursor} of {archiveProgress.uniqueReportCount} unique reports reconciled · {archiveProgress.duplicateFileCount} byte duplicates retained as lineage · {archiveProgress.briefCompletedCount} deterministic dates in the latest batch.</div> : null}
+      <div className="market-alert-rule-footer"><div><ShieldAlert size={15} /> The pinned Drive manifest, report hashes, and zero-conflict ledger are revalidated before every batch.</div><Button variant="primary" icon={RefreshCw} onClick={reconcileArchive} disabled={archiveBusy}>{archiveBusy ? 'Reconciling archive…' : 'Reconcile licensed archive'}</Button></div>
+    </Panel> : null}
+  </div>;
+
   return (
     <div className="market-intelligence-stack" data-testid="market-drivers-alerts">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
       <Panel>
         <div className="app-panel-header"><div><h2>Drivers with report lineage</h2><p>Concise non-verbatim summaries only. Numeric facts are retained only when they validate against the cited report page.</p></div><StatusBadge tone={busy ? 'neutral' : visibleDrivers.length ? 'positive' : 'warning'}>{busy ? 'Loading…' : `${visibleDrivers.length} supported drivers`}</StatusBadge></div>
         <div className="market-driver-tag-row">{DRIVER_TAGS.map((tag) => <span key={tag}>{tag}</span>)}</div>
-        {visibleDrivers.length ? <div className="market-driver-evidence-grid">{visibleDrivers.map((driver, index) => <article key={driver.id || `${driver.lifecycle}:${driver.tag}:${index}`}><div><StatusBadge tone={driver.lifecycle === 'Emerging' ? 'warning' : driver.lifecycle === 'Persistent' || driver.lifecycle === 'Current' ? 'neutral' : 'positive'}>{driver.lifecycle}</StatusBadge>{driver.confidenceLabel ? <StatusBadge tone={Number(driver.confidence) >= 0.8 ? 'positive' : 'neutral'}>{driver.confidenceLabel}</StatusBadge> : null}</div><strong>{driver.tag || driver.title || driver.driverTags?.[0] || 'Bunker-market driver'}</strong><p>{textOf(driver)}</p><small>{[driver.port || driver.portKey, driver.product || driver.productKey, driver.horizon, driver.sourcePage ? `Report page ${driver.sourcePage}` : null, ...lineageFor(driver, sourceRefs, brief?.asOfDate)].filter(Boolean).join(' · ')}</small></article>)}</div> : <div className="market-empty-inline"><FileSearch size={20} /><div><strong>No supported commentary driver is available</strong><span>AI failure never delays or changes deterministic prices and signals.</span></div></div>}
+        {visibleDrivers.length ? <div className="market-driver-evidence-grid">{visibleDrivers.map((driver, index) => <article key={driver.id || `${driver.lifecycle}:${driver.tag}:${index}`}><div><StatusBadge tone={driver.lifecycle === 'Emerging' ? 'warning' : driver.lifecycle === 'Persistent' || driver.lifecycle === 'Current' ? 'neutral' : 'positive'}>{driver.lifecycle}</StatusBadge>{driver.confidenceLabel ? <StatusBadge tone={Number(driver.confidence) >= 0.8 ? 'positive' : 'neutral'}>{driver.confidenceLabel}</StatusBadge> : null}</div><strong>{driver.tag || driver.title || driver.driverTags?.[0] || 'Bunker-market driver'}</strong><p><MarketSignedText>{textOf(driver)}</MarketSignedText></p><small>{[driver.port || driver.portKey, driver.product || driver.productKey, driver.horizon, driver.sourcePage ? `Report page ${driver.sourcePage}` : null, ...lineageFor(driver, sourceRefs, brief?.asOfDate)].filter(Boolean).join(' · ')}</small></article>)}</div> : <div className="market-empty-inline"><FileSearch size={20} /><div><strong>No supported commentary driver is available</strong><span>AI failure never delays or changes deterministic prices and signals.</span></div></div>}
       </Panel>
 
       <Panel>
         <div className="app-panel-header"><div><h2>In-app market alerts</h2><p>Deduplicated by report, series, rule version and severity. FCOS sends no market-alert email.</p></div><StatusBadge tone={alertEvents.some((item) => ['critical', 'error'].includes(String(item.severity).toLowerCase())) ? 'negative' : 'neutral'}>{alertEvents.length} recent</StatusBadge></div>
-        {alertEvents.length ? <div className="market-alert-event-list">{alertEvents.map((event, index) => <article key={event.id || `${event.seriesKey || ''}:${event.ruleVersion || ''}:${index}`}><div className={`market-alert-event__icon market-alert-event__icon--${statusTone(event.severity || event.status)}`}><BellRing size={16} /></div><div><strong>{event.title || event.label || 'Market intelligence alert'}</strong><p>{textOf(event)}</p><small>{[event.severity, event.seriesLabel || event.seriesKey, event.reportDate, event.status].filter(Boolean).join(' · ')}</small></div></article>)}</div> : <div className="market-empty-inline"><CheckCircle2 size={20} /><div><strong>No active market alert</strong><span>Missing, stale, conflict and parsing controls remain enabled.</span></div></div>}
+        {alertEvents.length ? <div className="market-alert-event-list">{alertEvents.map((event, index) => <article key={event.id || `${event.seriesKey || ''}:${event.ruleVersion || ''}:${index}`}><div className={`market-alert-event__icon market-alert-event__icon--${statusTone(event.severity || event.status)}`}><BellRing size={16} /></div><div><strong><MarketSignedText>{event.title || event.label || 'Market intelligence alert'}</MarketSignedText></strong><p><MarketSignedText>{textOf(event)}</MarketSignedText></p><small>{[event.severity, event.seriesLabel || event.seriesKey, event.reportDate, event.status].filter(Boolean).join(' · ')}</small></div></article>)}</div> : <div className="market-empty-inline"><CheckCircle2 size={20} /><div><strong>No active market alert</strong><span>Missing, stale, conflict and parsing controls remain enabled.</span></div></div>}
       </Panel>
 
-      <Panel>
-        <div className="app-panel-header"><div><h2>Company alert rules</h2><p>Numeric alerts use the larger of the configured floor or the previous 60-day 95th percentile, after at least 20 samples.</p></div>{readOnly ? <StatusBadge tone="neutral">View only</StatusBadge> : <StatusBadge tone="positive">Authorized</StatusBadge>}</div>
-        <div className="market-alert-rule-grid">
-          <Field label="Outright move floor (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.outrightFloorUsdMt} disabled={readOnly} onChange={(event) => setRule('outrightFloorUsdMt', Number(event.target.value))} /></Field>
-          <Field label="Spread move floor (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.spreadFloorUsdMt} disabled={readOnly} onChange={(event) => setRule('spreadFloorUsdMt', Number(event.target.value))} /></Field>
-          <Field label="Gasoil move floor (USD/bbl)"><input className="app-input" type="number" min="0" step="0.01" value={draft.gasoilFloorUsdBbl} disabled={readOnly} onChange={(event) => setRule('gasoilFloorUsdBbl', Number(event.target.value))} /></Field>
-          <Field label="Curve deadband (USD/MT)"><input className="app-input" type="number" min="0" step="0.01" value={draft.curveDeadbandUsdMt} disabled={readOnly} onChange={(event) => setRule('curveDeadbandUsdMt', Number(event.target.value))} /></Field>
-          <Field label="Gasoil deadband (USD/bbl)"><input className="app-input" type="number" min="0" step="0.01" value={draft.curveDeadbandUsdBbl} disabled={readOnly} onChange={(event) => setRule('curveDeadbandUsdBbl', Number(event.target.value))} /></Field>
-          <Field label="Lookback days"><input className="app-input" type="number" min="1" step="1" value={draft.lookbackDays} disabled={readOnly} onChange={(event) => setRule('lookbackDays', Number(event.target.value))} /></Field>
-          <Field label="Minimum samples"><input className="app-input" type="number" min="1" step="1" value={draft.minimumSamples} disabled={readOnly} onChange={(event) => setRule('minimumSamples', Number(event.target.value))} /></Field>
-          <Field label="Adaptive percentile" hint="0.95 means the 95th percentile."><input className="app-input" type="number" min="0.5" max="1" step="0.01" value={draft.percentile} disabled={readOnly} onChange={(event) => setRule('percentile', Number(event.target.value))} /></Field>
-        </div>
-        <div className="market-alert-toggle-grid">
-          <RuleToggle checked={draft.enabled} onChange={(value) => setRule('enabled', value)} disabled={readOnly}>Enable company-wide in-app market alerts</RuleToggle>
-        </div>
-        <div className="app-callout app-callout--neutral"><CheckCircle2 size={15} /> Missing, stale, conflict and parsing alerts remain deterministic fixed controls. Curve-regime flips always require two complete reports outside the configured deadband.</div>
-        <div className="market-alert-rule-footer">
-          <div>{readOnly ? <><LockKeyhole size={15} /> Only an authorized Markets manager may change company rules.</> : <><ShieldAlert size={15} /> Saving changes the company-wide in-app threshold policy.</>}</div>
-          {!readOnly ? <Button variant="primary" icon={Save} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save alert rules'}</Button> : null}
-        </div>
-      </Panel>
-      {!readOnly ? <Panel>
-        <div className="app-panel-header"><div><h2>Licensed archive reconciliation</h2><p>Idempotently revalidates structured price evidence and deterministic briefs for the reviewed 1 January 2025 to 19 August 2026 archive. PDF bytes and report prose are never stored.</p></div><StatusBadge tone={archiveBusy ? 'warning' : archiveProgress?.complete ? 'positive' : 'neutral'}>{archiveBusy ? 'Reconciling…' : archiveProgress?.complete ? 'Complete' : 'Administrator'}</StatusBadge></div>
-        {archiveError ? <InlineError error={archiveError} /> : null}
-        {archiveProgress ? <div className="app-callout app-callout--neutral"><FileSearch size={15} /> {archiveProgress.nextCursor} of {archiveProgress.uniqueReportCount} unique reports reconciled · {archiveProgress.duplicateFileCount} byte duplicates retained as lineage · {archiveProgress.briefCompletedCount} deterministic dates in the latest batch.</div> : null}
-        <div className="market-alert-rule-footer">
-          <div><ShieldAlert size={15} /> The exact Google account, folders, 832-file Drive manifest (831 unique PDFs and one byte duplicate), and zero-conflict MOPS ledger are revalidated before every batch.</div>
-          <Button variant="primary" icon={RefreshCw} onClick={reconcileArchive} disabled={archiveBusy}>{archiveBusy ? 'Reconciling archive…' : 'Reconcile licensed archive'}</Button>
-        </div>
-      </Panel> : null}
       <div className="app-callout app-callout--neutral"><Info size={15} /> Markets intelligence is evidence support only. It does not execute trades or produce a buy or sell recommendation.</div>
     </div>
   );

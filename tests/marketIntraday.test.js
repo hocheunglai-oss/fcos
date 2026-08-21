@@ -114,6 +114,6 @@ test('intraday handlers, permissions, service-only schema and UI review are wire
   assert.match(strip, /Upload morning image/);
   assert.match(strip, /Paste MOC reference/);
   assert.match(strip, /Confirm provisional snapshot/);
-  assert.match(strip, /Official MOPS is unchanged/);
+  assert.match(strip, /Official MOPS unchanged/);
   assert.match(pulse, /Intraday paper · Provisional/);
 });

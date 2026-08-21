@@ -284,6 +284,22 @@
     padding: 1rem 1.25rem;
   }
 
+  .app-workspace-content--market-pulse .app-page-header,
+  .app-workspace-content--market-pulse .glass-page-header,
+  .app-workspace-content--market-pulse .market-overview-context,
+  .app-workspace-content--market-pulse .market-chart-controls--sticky {
+    margin-right: 5.75rem;
+  }
+
+  @media (max-width: 639px) {
+    .app-workspace-content--market-pulse .app-page-header,
+    .app-workspace-content--market-pulse .glass-page-header,
+    .app-workspace-content--market-pulse .market-overview-context,
+    .app-workspace-content--market-pulse .market-chart-controls--sticky {
+      margin-right: 3.25rem;
+    }
+  }
+
   .app-workspace-shell .app-page-header h1 {
     font-size: 1.375rem;
     line-height: 1.75rem;

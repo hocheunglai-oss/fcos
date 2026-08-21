@@ -4,7 +4,6 @@ import {
   CalendarRange,
   CheckCircle2,
   Clock3,
-  Edit3,
   LineChart as LineChartIcon,
   Plus,
   Scale,
@@ -29,6 +28,7 @@ import {
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
 import { Button, Drawer, Field, InlineError, Panel, Select, StatusBadge } from '@/hedge/components/ui';
+import { MarketSignedAxisTick, MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 
 const PRODUCTS = [
   { value: 'hsfo380', label: 'HSFO 380', short: 'HSFO', color: '#d97706', unit: 'USD/MT' },
@@ -37,6 +37,17 @@ const PRODUCTS = [
 ];
 const RANGES = ['1w', '1m', '3m', '6m', '1y'];
 const EMPTY_FALLBACK = { product: 'hsfo380', contractMonth: '', unit: 'USD/MT', asOfDate: '', outrightPrice: '', sourceNote: '', reason: '' };
+const CURVE_FILTERS_KEY = 'fcos:markets:curves:v1';
+
+function storedCurveFilters() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(CURVE_FILTERS_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
 
 function array(value) {
   return Array.isArray(value) ? value : [];
@@ -58,6 +69,10 @@ function productFor(value) {
 function formatPrice(value, unit = 'USD/MT') {
   if (value == null || !Number.isFinite(Number(value))) return '—';
   return `${formatMoney(Number(value), { digits: unit === 'USD/BBL' ? 3 : 2 })} ${unit}`;
+}
+
+function CurveMovement({ value, unit }) {
+  return <MarketSignedValue value={value} unit={unit} unavailableLabel="No prior move" variant="pill" />;
 }
 
 function normalizeSnapshot(payload) {
@@ -155,25 +170,25 @@ function CurveTooltip({ active, payload, label, series }) {
   if (!active || !payload?.length) return null;
   return <div className="app-chart-tooltip"><strong>{/^\d{4}-\d{2}$/.test(String(label)) ? monthLabel(label) : formatDate(label)}</strong>{payload.filter((item) => item.value != null).map((item) => {
     const definition = series.find((entry) => entry.key === item.dataKey);
-    return <span key={item.dataKey} style={{ color: item.color }}>{definition?.label || item.name}: {formatPrice(item.value, definition?.unit || 'USD/MT')}</span>;
+    return <span key={item.dataKey}><i aria-hidden="true" style={{ backgroundColor: item.color }} />{definition?.label || item.name}: {definition?.signed === false ? formatPrice(item.value, definition?.unit || 'USD/MT') : <MarketSignedValue value={item.value} unit={definition?.unit || 'USD/MT'} />}</span>;
   })}</div>;
 }
 
-function StructurePanel({ product, points, colors }) {
+function StructurePanel({ product, points, colors, mobileActive }) {
   const definition = PRODUCTS.find((item) => item.value === product);
   const unit = String(points.find((point) => point.unit)?.unit || definition?.unit || 'USD/MT').toUpperCase();
-  const series = [...new Map(points.map((row) => [row.key, { key: row.key, label: row.label || row.key, unit }])).values()];
+  const series = [...new Map(points.map((row) => [row.key, { key: row.key, label: row.label || row.key, unit, signed: true }])).values()];
   const data = historyRows(points);
   return (
-    <section className="market-product-panel is-mobile-active">
+    <section className={`market-product-panel${mobileActive ? ' is-mobile-active' : ''}`}>
       <div className="market-product-panel__title"><div><strong>{definition?.label || 'Other structure'}</strong><span>Independent {unit} scale</span></div><StatusBadge tone="neutral">{unit}</StatusBadge></div>
-      {data.length ? <div className="market-product-panel__chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} syncId="forward-structure" syncMethod="value" margin={{ top: 8, right: 18, bottom: 2, left: 4 }}><CartesianGrid stroke="#e8ecef" vertical={false} /><XAxis dataKey="date" tickFormatter={(value) => String(value).slice(5)} tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={26} /><YAxis tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} /><Tooltip content={<CurveTooltip series={series} />} /><Legend wrapperStyle={{ fontSize: 11 }} /><ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" />{series.map((item, index) => <Line key={item.key} type="monotone" dataKey={item.key} name={item.label} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls={false} />)}</LineChart></ResponsiveContainer></div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No exact structure history</strong><span>Missing report dates remain gaps.</span></div></div>}
+      {data.length ? <div className="market-product-panel__chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} syncId="forward-structure" syncMethod="value" margin={{ top: 8, right: 18, bottom: 2, left: 4 }}><CartesianGrid stroke="#e8ecef" vertical={false} /><XAxis dataKey="date" tickFormatter={(value) => String(value).slice(5)} tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={26} /><YAxis tick={<MarketSignedAxisTick digits={unit === 'USD/BBL' ? 1 : 0} />} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} /><Tooltip content={<CurveTooltip series={series} />} /><Legend wrapperStyle={{ fontSize: 11 }} /><ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" />{series.map((item, index) => <Line key={item.key} type="monotone" dataKey={item.key} name={item.label} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls={false} />)}</LineChart></ResponsiveContainer></div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No exact structure history</strong><span>Missing report dates remain gaps.</span></div></div>}
     </section>
   );
 }
 
 function ContextHistoryPanel({ unit, points, colors }) {
-  const series = [...new Map(points.map((row) => [row.key, { key: row.key, label: row.label || row.key, unit }])).values()];
+  const series = [...new Map(points.map((row) => [row.key, { key: row.key, label: row.label || row.key, unit, signed: /spread|east.?west|efs|cross.?grade|bm.?m1|m1.?m2/i.test(`${row.key} ${row.label}`) }])).values()];
   const data = historyRows(points);
   return (
     <section className="market-product-panel is-mobile-active">
@@ -181,6 +196,11 @@ function ContextHistoryPanel({ unit, points, colors }) {
       <div className="market-product-panel__chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} syncId="cross-market-context" syncMethod="value" margin={{ top: 8, right: 18, bottom: 2, left: 4 }}><CartesianGrid stroke="#e8ecef" vertical={false} /><XAxis dataKey="date" tickFormatter={(value) => String(value).slice(5)} tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={26} /><YAxis tick={{ fill: '#738091', fontSize: 10 }} axisLine={false} tickLine={false} width={58} domain={['auto', 'auto']} /><Tooltip content={<CurveTooltip series={series} />} /><Legend wrapperStyle={{ fontSize: 11 }} />{series.map((item, index) => <Line key={item.key} type="monotone" dataKey={item.key} name={item.label} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls={false} />)}</LineChart></ResponsiveContainer></div>
     </section>
   );
+}
+
+function ContextSignalValue({ signal, unit }) {
+  const signed = /spread|east.?west|efs|cross.?grade|bm.?m1|m1.?m2/i.test(`${signal.key || ''} ${signal.type || ''} ${signal.label || ''}`);
+  return signed ? <MarketSignedValue value={signal.value} unit={unit} /> : formatPrice(signal.value, unit);
 }
 
 function FallbackDrawer({ open, onClose, onSaved }) {
@@ -237,14 +257,17 @@ function SnapshotTable({ rows }) {
     <div className="market-matrix-scroll"><table className="market-curve-table"><thead><tr><th>Product</th>{months.map((month) => <th key={month}>{monthLabel(month)}</th>)}</tr></thead><tbody>{PRODUCTS.map((product) => <tr key={product.value}><th>{product.label}<small>{product.unit}</small></th>{months.map((month) => {
       const row = rows.find((entry) => entry.product === product.value && entry.contractMonth === month);
       const fallback = String(row?.status || row?.basis || '').toLowerCase().includes('fallback');
-      return <td key={month} className={!row || row.value == null ? 'is-unavailable' : ''}><strong>{formatPrice(row?.value, row?.unit || product.unit)}</strong><div>{row?.tenor || 'Exact month'}{row?.dailyChange != null ? ` · ${Number(row.dailyChange) >= 0 ? '+' : ''}${Number(row.dailyChange).toFixed(2)}` : ''}</div><StatusBadge tone={!row || row.value == null ? 'neutral' : fallback || row?.isPriorReport ? 'warning' : 'positive'}>{!row || row.value == null ? 'Unavailable' : fallback ? 'Authorized fallback' : row?.isPriorReport ? 'Prior report' : 'Verified report'}</StatusBadge>{row?.asOfDate ? <small>Source date {formatDate(row.asOfDate)}</small> : null}{row?.source || row?.sourceSymbol ? <small>{[row.source, marketSymbolLabel(row.sourceSymbol, { productKey: row.product, tenor: row.tenor, marketFamily: 'forward' })].filter(Boolean).join(' · ')}</small> : null}{fallback && row?.expiresAt ? <small>Expires {formatDate(row.expiresAt)}</small> : null}</td>;
+      return <td key={month} className={!row || row.value == null ? 'is-unavailable' : ''}><strong>{formatPrice(row?.value, row?.unit || product.unit)}</strong><div>{row?.tenor || 'Exact month'}</div><CurveMovement value={row?.dailyChange} unit={row?.unit || product.unit} /><StatusBadge tone={!row || row.value == null ? 'neutral' : fallback || row?.isPriorReport ? 'warning' : 'positive'}>{!row || row.value == null ? 'Unavailable' : fallback ? 'Authorized fallback' : row?.isPriorReport ? 'Prior report' : 'Verified report'}</StatusBadge>{row?.asOfDate ? <small>Source date {formatDate(row.asOfDate)}</small> : null}{row?.source || row?.sourceSymbol ? <small>{[row.source, marketSymbolLabel(row.sourceSymbol, { productKey: row.product, tenor: row.tenor, marketFamily: 'forward' })].filter(Boolean).join(' · ')}</small> : null}{fallback && row?.expiresAt ? <small>Expires {formatDate(row.expiresAt)}</small> : null}</td>;
     })}</tr>)}</tbody></table></div>
   );
 }
 
-export function MarketForwardCurves({ readOnly, canManageCutover = false }) {
-  const [range, setRange] = useState('1m');
-  const [selectedProducts, setSelectedProducts] = useState(PRODUCTS.map((item) => item.value));
+export function MarketForwardCurves({ readOnly, canManageCutover = false, mode = 'content' }) {
+  const initialFilters = useMemo(storedCurveFilters, []);
+  const initialProducts = Array.isArray(initialFilters.products) ? initialFilters.products.filter((value) => PRODUCTS.some((item) => item.value === value)) : [];
+  const [range, setRange] = useState(() => RANGES.includes(initialFilters.range) ? initialFilters.range : '1m');
+  const [selectedProducts, setSelectedProducts] = useState(() => initialProducts.length ? initialProducts : PRODUCTS.map((item) => item.value));
+  const [mobileProduct, setMobileProduct] = useState(() => initialProducts[0] || PRODUCTS[0].value);
   const [curve, setCurve] = useState(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState(null);
@@ -289,6 +312,15 @@ export function MarketForwardCurves({ readOnly, canManageCutover = false }) {
     if (next.length) setSelectedProducts(next);
   };
 
+  useEffect(() => {
+    if (!selectedProducts.includes(mobileProduct)) setMobileProduct(selectedProducts[0]);
+  }, [mobileProduct, selectedProducts]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.sessionStorage.setItem(CURVE_FILTERS_KEY, JSON.stringify({ range, products: selectedProducts })); } catch { /* Storage may be unavailable. */ }
+  }, [range, selectedProducts]);
+
   const approveCutover = async () => {
     if (!canManageCutover || !cutoverReady || cutoverApproved || !Number.isInteger(cutoverRevision) || cutoverRevision < 1 || !cutoverReasonValid) return;
     setCutoverBusy(true); setError(null);
@@ -317,28 +349,35 @@ export function MarketForwardCurves({ readOnly, canManageCutover = false }) {
     }
   };
 
+  const cutoverPanel = <Panel>
+    <div className="app-panel-header"><div><h2>Platts curve cutover review</h2><p>Legacy hedge valuation remains active until the governed shadow review is complete and an authorized Administrator approves the cutover.</p></div><StatusBadge tone={cutoverApproved ? 'positive' : cutoverReady ? 'warning' : 'neutral'}>{cutoverApproved ? 'Platts curve active' : cutoverReady ? 'Ready for variance review' : cutoverStatusReady ? 'Complete variance evidence unavailable' : 'Shadow mode'}</StatusBadge></div>
+    <div className="market-context-grid">
+      <article><Clock3 size={17} /><span>Publication days</span><strong>{shadow.publicationDayCount != null && Number.isFinite(Number(shadow.publicationDayCount)) ? Number(shadow.publicationDayCount) : '—'} / {shadow.minimumPublicationDays != null && Number.isFinite(Number(shadow.minimumPublicationDays)) ? Number(shadow.minimumPublicationDays) : '—'}</strong></article>
+      <article><Scale size={17} /><span>Reviewed comparisons</span><strong>{shadow.comparisonCount != null && Number.isFinite(Number(shadow.comparisonCount)) ? Number(shadow.comparisonCount) : '—'}</strong></article>
+      <article><CheckCircle2 size={17} /><span>Valuation mode</span><strong>{cutoverApproved ? 'Platts curve' : 'Legacy · shadow comparison'}</strong></article>
+    </div>
+    {cutoverScopes.length ? <><div className="market-matrix-scroll"><table className="market-curve-table"><thead><tr><th>Reviewed scope</th><th>Mean signed variance</th><th>Mean absolute variance</th><th>Maximum absolute variance</th><th>Evidence</th></tr></thead><tbody>{cutoverScopes.map((scope, index) => { const product = PRODUCTS.find((item) => item.value === productFor(scope.productKey || scope.product)); const unit = String(scope.unit || product?.unit || 'USD/MT').toUpperCase(); const contractMonth = scope.contractMonth || scope.contract_month; const readiness = scope.readiness || scope.status; return <tr key={scope.id || `${scope.productKey || scope.product}:${contractMonth}:${unit}:${index}`}><th>{product?.label || scope.productKey || scope.product || 'Product'}<small>{[contractMonth ? monthLabel(String(contractMonth).slice(0, 7)) : null, unit].filter(Boolean).join(' · ')}</small></th><td><strong><MarketSignedValue value={scope.meanSignedVariance} unit={unit} /></strong></td><td><strong>{formatPrice(scope.meanAbsoluteVariance, unit)}</strong></td><td><strong>{formatPrice(scope.maximumAbsoluteVariance, unit)}</strong></td><td>{readiness ? <StatusBadge tone={String(readiness).toLowerCase().includes('ready') ? 'positive' : 'warning'}>{readiness}</StatusBadge> : null}<small>{scope.comparisonCount != null ? `${scope.comparisonCount} comparisons` : 'Comparison count unavailable'}</small><small>{scope.reviewedThrough ? `Reviewed through ${formatDate(scope.reviewedThrough)}` : 'Review date unavailable'}</small></td></tr>; })}</tbody></table></div>{!hasCompleteCutoverScope ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Approval requires exactly eight unique scopes across HSFO 380, S0.5% and LSMGO. FCOS received {cutoverScopeIdentities.size} unique scopes, so approval is blocked.</div> : null}</> : <div className="market-empty-inline market-empty-inline--compact"><Scale size={20} /><div><strong>Variance evidence is unavailable</strong><span>Cutover approval remains blocked until all eight exact product, contract-month and unit scopes are returned.</span></div></div>}
+    {!cutoverApproved ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Fail closed: current and future hedge valuation remains on the legacy calculation until this exact shadow revision is approved.</div> : null}
+    {canManageCutover && !cutoverApproved ? <div className="market-cutover-review">
+      <Field label="Mandatory review reason" required hint="At least 8 characters. The saved reason is governed and audited."><textarea className="app-input app-textarea" rows={3} value={cutoverReason} onChange={(event) => setCutoverReason(event.target.value)} disabled={cutoverBusy} /></Field>
+      <div className="market-alert-rule-footer"><div><ShieldAlert size={15} /> {cutoverReady ? Number.isInteger(cutoverRevision) && cutoverRevision >= 1 ? `Approving shadow revision ${cutoverRevision}.` : 'Revision is unavailable; approval is blocked.' : cutoverStatusReady ? 'Auditable variance metrics are unavailable; approval is blocked.' : 'The minimum shadow period or variance review is not complete.'}</div><Button variant="primary" onClick={approveCutover} disabled={cutoverBusy || !cutoverReady || !Number.isInteger(cutoverRevision) || cutoverRevision < 1 || !cutoverReasonValid}>{cutoverBusy ? 'Approving…' : 'Approve Platts curve cutover'}</Button></div>
+    </div> : null}
+  </Panel>;
+
+  if (mode === 'admin') return <div className="market-intelligence-stack" data-testid="market-forward-admin-tools">
+    {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
+    <Panel><div className="app-panel-header"><div><h2>Exact forward fallback</h2><p>Add an expiring exact contract-month mark only when verified report evidence is unavailable.</p></div>{!readOnly ? <Button size="sm" icon={Plus} onClick={() => setFallbackOpen(true)}>Add fallback</Button> : <StatusBadge tone="neutral">View only</StatusBadge>}</div><SnapshotTable rows={snapshot} /></Panel>
+    {cutoverPanel}
+    <FallbackDrawer open={fallbackOpen} onClose={() => setFallbackOpen(false)} onSaved={(result) => { if (result?.curve) setCurve(result.curve); else load({ force: true }); }} />
+  </div>;
+
   return (
     <div className="market-intelligence-stack" data-testid="market-forward-curves">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
       <Panel>
-        <div className="app-panel-header"><div><h2>Exact contract-month snapshot</h2><p>Future M1 and M2 use their own report outright. A missing tenor is never interpolated, forward-filled or copied from another month.</p></div><div className="market-panel-actions"><StatusBadge tone={curve?.complete ? 'positive' : 'warning'}>{busy ? 'Updating…' : curve?.complete ? 'Complete snapshot' : 'Controlled gaps'}</StatusBadge>{snapshotDates.length > 1 || snapshot.some((row) => row.isPriorReport) ? <StatusBadge tone="warning">Mixed source dates</StatusBadge> : null}{!readOnly ? <Button size="sm" icon={Plus} onClick={() => setFallbackOpen(true)}>Add fallback</Button> : null}</div></div>
+        <div className="app-panel-header"><div><h2>Exact contract-month snapshot</h2><p>Future M1 and M2 use their own report outright. A missing tenor is never interpolated, forward-filled or copied from another month.</p></div><div className="market-panel-actions"><StatusBadge tone={curve?.complete ? 'positive' : 'warning'}>{busy ? 'Updating…' : curve?.complete ? 'Complete snapshot' : 'Controlled gaps'}</StatusBadge>{snapshotDates.length > 1 || snapshot.some((row) => row.isPriorReport) ? <StatusBadge tone="warning">Mixed source dates</StatusBadge> : null}</div></div>
         <SnapshotTable rows={snapshot} />
         <div className="app-callout app-callout--neutral"><CheckCircle2 size={15} /> Closed month uses the approved publication-day average. Current month uses actual days before the BM assessment plus BM for remaining publication days including its assessment date. SGO remains USD/BBL for settlement.</div>
-      </Panel>
-
-      <Panel>
-        <div className="app-panel-header"><div><h2>Platts curve cutover review</h2><p>Legacy hedge valuation remains active until the governed shadow review is complete and an authorized Administrator approves the cutover. Chart product buttons do not narrow this required eight-scope review.</p></div><StatusBadge tone={cutoverApproved ? 'positive' : cutoverReady ? 'warning' : 'neutral'}>{cutoverApproved ? 'Platts curve active' : cutoverReady ? 'Ready for variance review' : cutoverStatusReady ? 'Complete variance evidence unavailable' : 'Shadow mode'}</StatusBadge></div>
-        <div className="market-context-grid">
-          <article><Clock3 size={17} /><span>Publication days</span><strong>{shadow.publicationDayCount != null && Number.isFinite(Number(shadow.publicationDayCount)) ? Number(shadow.publicationDayCount) : '—'} / {shadow.minimumPublicationDays != null && Number.isFinite(Number(shadow.minimumPublicationDays)) ? Number(shadow.minimumPublicationDays) : '—'}</strong></article>
-          <article><Scale size={17} /><span>Reviewed comparisons</span><strong>{shadow.comparisonCount != null && Number.isFinite(Number(shadow.comparisonCount)) ? Number(shadow.comparisonCount) : '—'}</strong></article>
-          <article><CheckCircle2 size={17} /><span>Valuation mode</span><strong>{cutoverApproved ? 'Platts curve' : 'Legacy · shadow comparison'}</strong></article>
-        </div>
-        {cutoverScopes.length ? <><div className="market-matrix-scroll"><table className="market-curve-table"><thead><tr><th>Reviewed scope</th><th>Mean signed variance</th><th>Mean absolute variance</th><th>Maximum absolute variance</th><th>Evidence</th></tr></thead><tbody>{cutoverScopes.map((scope, index) => { const product = PRODUCTS.find((item) => item.value === productFor(scope.productKey || scope.product)); const unit = String(scope.unit || product?.unit || 'USD/MT').toUpperCase(); const contractMonth = scope.contractMonth || scope.contract_month; const readiness = scope.readiness || scope.status; return <tr key={scope.id || `${scope.productKey || scope.product}:${contractMonth}:${unit}:${index}`}><th>{product?.label || scope.productKey || scope.product || 'Product'}<small>{[contractMonth ? monthLabel(String(contractMonth).slice(0, 7)) : null, unit].filter(Boolean).join(' · ')}</small></th><td><strong>{formatPrice(scope.meanSignedVariance, unit)}</strong></td><td><strong>{formatPrice(scope.meanAbsoluteVariance, unit)}</strong></td><td><strong>{formatPrice(scope.maximumAbsoluteVariance, unit)}</strong></td><td>{readiness ? <StatusBadge tone={String(readiness).toLowerCase().includes('ready') ? 'positive' : 'warning'}>{readiness}</StatusBadge> : null}<small>{scope.comparisonCount != null ? `${scope.comparisonCount} comparisons` : 'Comparison count unavailable'}</small><small>{scope.reviewedThrough ? `Reviewed through ${formatDate(scope.reviewedThrough)}` : 'Review date unavailable'}</small></td></tr>; })}</tbody></table></div>{!hasCompleteCutoverScope ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Approval requires exactly eight unique scopes across HSFO 380, S0.5% and LSMGO. FCOS received {cutoverScopeIdentities.size} unique scopes, so approval is blocked.</div> : null}</> : <div className="market-empty-inline"><Scale size={20} /><div><strong>Variance evidence is unavailable</strong><span>Cutover approval remains blocked until all eight exact product, contract-month and unit scopes are returned.</span></div></div>}
-        {!cutoverApproved ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Fail closed: current and future hedge valuation remains on the legacy calculation until this exact shadow revision is approved.</div> : null}
-        {canManageCutover && !cutoverApproved ? <div className="market-cutover-review">
-          <Field label="Mandatory review reason" required hint="At least 8 characters. The saved reason is governed and audited."><textarea className="app-input app-textarea" rows={3} value={cutoverReason} onChange={(event) => setCutoverReason(event.target.value)} disabled={cutoverBusy} /></Field>
-          <div className="market-alert-rule-footer"><div><ShieldAlert size={15} /> {cutoverReady ? Number.isInteger(cutoverRevision) && cutoverRevision >= 1 ? `Approving shadow revision ${cutoverRevision}.` : 'Revision is unavailable; approval is blocked.' : cutoverStatusReady ? 'Auditable variance metrics are unavailable; approval is blocked.' : 'The minimum shadow period or variance review is not complete.'}</div><Button variant="primary" onClick={approveCutover} disabled={cutoverBusy || !cutoverReady || !Number.isInteger(cutoverRevision) || cutoverRevision < 1 || !cutoverReasonValid}>{cutoverBusy ? 'Approving…' : 'Approve Platts curve cutover'}</Button></div>
-        </div> : null}
       </Panel>
 
       <Panel className="market-curve-history-panel">
@@ -347,17 +386,15 @@ export function MarketForwardCurves({ readOnly, canManageCutover = false }) {
           <fieldset className="market-toggle-group"><legend>Range</legend><div>{RANGES.map((value) => <button key={value} type="button" className={range === value ? 'is-active' : ''} aria-pressed={range === value} onClick={() => setRange(value)}>{value.toUpperCase()}</button>)}</div></fieldset>
           <fieldset className="market-toggle-group"><legend>Products</legend><div>{PRODUCTS.map((product) => <button key={product.value} type="button" className={selectedProducts.includes(product.value) ? 'is-active' : ''} aria-pressed={selectedProducts.includes(product.value)} onClick={() => toggleProduct(product.value)}>{product.label}</button>)}</div></fieldset>
         </div>
-        {structurePanels.length ? <div className="market-product-panels">{structurePanels.map((panel) => <StructurePanel key={panel.product} product={panel.product} points={panel.points} colors={colors} />)}</div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No exact structure history for this selection</strong><span>FCOS leaves missing report dates visible rather than drawing across them.</span></div></div>}
+        <div className="market-mobile-product-tabs" role="tablist" aria-label="Forward-curve product">{selectedProducts.map((value) => { const product = PRODUCTS.find((item) => item.value === value); return <button key={value} type="button" role="tab" aria-selected={mobileProduct === value} className={mobileProduct === value ? 'is-active' : ''} onClick={() => setMobileProduct(value)}>{product?.label || value}</button>; })}</div>
+        {structurePanels.length ? <div className="market-product-panels">{structurePanels.map((panel) => <StructurePanel key={panel.product} product={panel.product} points={panel.points} colors={colors} mobileActive={mobileProduct === panel.product} />)}</div> : <div className="market-empty-inline"><LineChartIcon size={20} /><div><strong>No exact structure history for this selection</strong><span>FCOS leaves missing report dates visible rather than drawing across them.</span></div></div>}
       </Panel>
 
-      <Panel>
-        <div className="app-panel-header"><div><h2>Cross-market context</h2><p>Cross-grade, East-West, gasoil EFS, ICE Brent and ICE LSGO retain their exact contract-month and assessment-session basis.</p></div></div>
+      <details className="market-disclosure"><summary><CalendarRange size={14} /> Cross-market context ({contextPanels.length} unit panels · {signals.length} signals)</summary><div className="market-disclosure__body">
         {contextPanels.length ? <div className="market-product-panels market-context-history">{contextPanels.map((panel) => <ContextHistoryPanel key={panel.unit} unit={panel.unit} points={panel.points} colors={colors} />)}</div> : null}
-        {signals.length ? <div className="market-context-units">{['USD/MT', 'USD/BBL'].map((unit) => { const unitSignals = signals.filter((signal) => String(signal.unit || 'USD/MT').toUpperCase() === unit); return unitSignals.length ? <section key={unit}><div className="market-context-units__title">{unit}</div><div className="market-context-grid">{unitSignals.map((signal, index) => <article key={signal.id || `${signal.key || signal.type || signal.label}:${index}`}><Scale size={17} /><span>{signal.label || signal.type || signal.key}</span><strong>{formatPrice(signal.value, unit)}</strong><small>{[signal.contractMonth ? monthLabel(signal.contractMonth) : signal.date ? formatDate(signal.date) : null, signal.tenor, signal.basis, signal.sourceSymbol ? marketSymbolLabel(signal.sourceSymbol, { primaryLabel: signal.label || signal.type || signal.key, productKey: signal.productKey, tenor: signal.tenor, settlementBasis: signal.settlementBasis }) : null].filter(Boolean).join(' · ')}</small></article>)}</div></section> : null; })}</div> : !contextPanels.length ? <div className="market-empty-inline"><CalendarRange size={20} /><div><strong>No cross-market context loaded</strong><span>Missing context is not derived from report commentary.</span></div></div> : null}
-      </Panel>
-      {warnings.length ? <div className="market-history-warnings">{warnings.map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><span>{typeof warning === 'string' ? warning : warning?.message || warning?.summary || 'Market curve warning'}</span></div>)}</div> : null}
-      <div className="app-callout app-callout--warning"><Edit3 size={15} /> Legacy per-product forward adjustments are no longer trading inputs. Authorized fallbacks are exact outright contract-month marks with controlled expiry and can never override verified report data.</div>
-      <FallbackDrawer open={fallbackOpen} onClose={() => setFallbackOpen(false)} onSaved={(result) => { if (result?.curve) setCurve(result.curve); else load({ force: true }); }} />
+        {signals.length ? <div className="market-context-units">{['USD/MT', 'USD/BBL'].map((unit) => { const unitSignals = signals.filter((signal) => String(signal.unit || 'USD/MT').toUpperCase() === unit); return unitSignals.length ? <section key={unit}><div className="market-context-units__title">{unit}</div><div className="market-context-grid">{unitSignals.map((signal, index) => <article key={signal.id || `${signal.key || signal.type || signal.label}:${index}`}><Scale size={17} /><span>{signal.label || signal.type || signal.key}</span><strong><ContextSignalValue signal={signal} unit={unit} /></strong><small>{[signal.contractMonth ? monthLabel(signal.contractMonth) : signal.date ? formatDate(signal.date) : null, signal.tenor, signal.basis, signal.sourceSymbol ? marketSymbolLabel(signal.sourceSymbol, { primaryLabel: signal.label || signal.type || signal.key, productKey: signal.productKey, tenor: signal.tenor, settlementBasis: signal.settlementBasis }) : null].filter(Boolean).join(' · ')}</small></article>)}</div></section> : null; })}</div> : <div className="market-empty-inline market-empty-inline--compact"><CalendarRange size={20} /><div><strong>No cross-market context loaded</strong><span>Missing context is not derived from report commentary.</span></div></div>}
+      </div></details>
+      {warnings.length ? <details className="market-disclosure market-disclosure--warning"><summary><AlertTriangle size={14} /> Data notes ({warnings.length})</summary><div className="market-history-warnings">{warnings.map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><MarketSignedText>{typeof warning === 'string' ? warning : warning?.message || warning?.summary || 'Market curve warning'}</MarketSignedText></div>)}</div></details> : null}
     </div>
   );
 }

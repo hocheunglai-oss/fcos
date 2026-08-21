@@ -251,9 +251,9 @@ test('premium and MOPS migration preserves evidence, canonical dates and service
 test('Markets UI keeps delivered observations separate from the MOPS settlement surface', () => {
   const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
   const service = read('api/_hedgeDeskService.js');
-  assert.match(workspace, /Delivered Bunkers/);
-  assert.match(workspace, /Cargo & Forward/);
-  assert.match(workspace, /Trading Signals/);
+  assert.match(workspace, /Major-port delivered prices/);
+  assert.doesNotMatch(workspace, /<CargoForwardSummary intelligence=/);
+  assert.doesNotMatch(workspace, /<TradingSignals intelligence=/);
   assert.match(workspace, /VLSFO is <strong>LS180<\/strong>/);
   assert.match(workspace, /HSFO 380 is <strong>MF-380<\/strong>/);
   assert.match(workspace, /syncId="delivered-mops"/);
@@ -261,10 +261,11 @@ test('Markets UI keeps delivered observations separate from the MOPS settlement 
   assert.match(workspace, /Not published/);
   assert.ok(workspace.indexOf("value: 'hsfo380'") < workspace.indexOf("value: 'vlsfo'"));
   assert.ok(workspace.indexOf("value: 'vlsfo'") < workspace.indexOf("value: 'lsmgo'"));
-  assert.match(workspace, /useState\(PRODUCTS\[0\]\.value\)/);
+  assert.match(workspace, /initialProducts\[0\] \|\| PRODUCTS\[0\]\.value/);
   assert.match(workspace, /PRODUCT_ORDER\.get\(left\.productKey\)/);
   assert.match(workspace, /ports\.some\(\(\[key\]\) => key === 'singapore'\) \? \['singapore'\]/);
-  assert.match(workspace, /const \[includeMops, setIncludeMops\] = useState\(true\)/);
+  assert.match(workspace, /initialFilters\.includeMops !== false/);
+  assert.match(workspace, /fcos:markets:delivered:v1/);
   assert.match(service, /loadMarketIntelligence\(client\)/);
   assert.match(service, /loadMarketIntelligenceHistory\(client, body\)/);
   assert.match(service, /if \(String\(body\?\.entity \|\| ''\) !== 'MopsPrice'\)/);

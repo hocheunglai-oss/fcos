@@ -738,24 +738,24 @@ export default function Layout() {
       <div className="w-[72px] shrink-0" aria-hidden="true" />
 
       <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-slate-50">
-        {(versionUpdate || hasMarketsAccess) && <div className="pointer-events-none z-40 shrink-0">
-          {versionUpdate && (
-            <div className="pointer-events-auto border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm">
-                  <span className="font-semibold">New version available</span>
-                  <span className="ml-2 text-amber-800">Version {versionUpdate.version || APP_VERSION} is ready.</span>
-                </div>
-                <Button size="sm" onClick={updateToLatestVersion} className="gap-2 bg-amber-600 text-white hover:bg-amber-700">
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  Update Now
-                </Button>
+        {versionUpdate && (
+          <div className="pointer-events-auto z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm">
+                <span className="font-semibold">New version available</span>
+                <span className="ml-2 text-amber-800">Version {versionUpdate.version || APP_VERSION} is ready.</span>
               </div>
+              <Button size="sm" onClick={updateToLatestVersion} className="gap-2 bg-amber-600 text-white hover:bg-amber-700">
+                <RefreshCw className="h-3.5 w-3.5" />
+                Update Now
+              </Button>
             </div>
-          )}
+          </div>
+        )}
+        <div className={cn('relative min-h-0 flex-1', hasMarketsAccess && 'app-workspace-content--market-pulse')}>
           {hasMarketsAccess && (
             <div
-              className="app-market-pulse-dock flex h-14 items-start justify-end"
+              className="app-market-pulse-dock pointer-events-none absolute right-0 top-0 z-30"
               style={{
                 paddingTop: 'max(0.5rem, env(safe-area-inset-top))',
                 paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
@@ -763,14 +763,14 @@ export default function Layout() {
             >
               <div className="pointer-events-auto rounded-xl border border-white/80 bg-white/80 p-0.5 shadow-lg shadow-slate-900/10 backdrop-blur-xl supports-[backdrop-filter]:bg-white/70">
                 <Suspense fallback={null}>
-                  <MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} triggerClassName="h-9 w-9" />
+                  <MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} />
                 </Suspense>
               </div>
             </div>
           )}
-        </div>}
-        <div className={cn('min-h-0 flex-1', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
-          <Outlet />
+          <div className={cn('h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
+            <Outlet />
+          </div>
         </div>
       </main>
 

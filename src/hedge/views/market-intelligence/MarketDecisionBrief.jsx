@@ -4,18 +4,16 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   FileSearch,
   RefreshCw,
-  ShieldAlert,
   Waves,
 } from 'lucide-react';
 import { loadMarketIntelligenceBrief } from '@/hedge/api/marketData';
 import { formatDate } from '@/hedge/lib/domain';
-import { Button, InlineError, Metric, Panel, StatusBadge } from '@/hedge/components/ui';
+import { Button, InlineError, Panel, StatusBadge } from '@/hedge/components/ui';
+import { MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 import {
   projectBriefDriver,
   projectMaterialChange,
@@ -42,41 +40,11 @@ function textOf(item) {
   return item?.summary || item?.message || item?.text || item?.label || '';
 }
 
-function toneFor(value) {
-  const normalized = String(value || '').toLowerCase();
-  if (['complete', 'confirmed', 'positive', 'available', 'backwardation'].includes(normalized)) return 'positive';
-  if (['missing', 'conflict', 'negative', 'unavailable', 'error'].includes(normalized)) return 'negative';
-  if (['partial', 'stale', 'warning', 'mixed', 'divergence', 'contango'].includes(normalized)) return 'warning';
-  return 'neutral';
-}
-
 function directionIcon(direction) {
   const normalized = String(direction || '').toLowerCase();
   if (['up', 'higher', 'bullish', 'tightening', 'positive'].includes(normalized)) return ArrowUpRight;
   if (['down', 'lower', 'bearish', 'easing', 'negative'].includes(normalized)) return ArrowDownRight;
   return ArrowRight;
-}
-
-function regimeLabel(row) {
-  if (!row) return 'Unavailable';
-  if (row.regime || row.label || row.headlineSlope) return row.regime || row.label || row.headlineSlope;
-  const summary = typeof row.summary === 'string' ? row.summary : row.summary?.regime;
-  const named = /backwardation|contango|mixed|flat/i.exec(summary || '')?.[0];
-  if (named) return named[0].toUpperCase() + named.slice(1).toLowerCase();
-  if (Number.isFinite(Number(row.bmM1)) && Number.isFinite(Number(row.m1M2))) {
-    if (Number(row.bmM1) > 0 && Number(row.m1M2) > 0) return 'Backwardation';
-    if (Number(row.bmM1) < 0 && Number(row.m1M2) < 0) return 'Contango';
-    return 'Mixed';
-  }
-  return summary ? 'Available' : 'Unavailable';
-}
-
-function lifecycleOf(driver) {
-  const value = String(driver?.lifecycle || driver?.state || driver?.persistence || '').toLowerCase();
-  if (value === 'emerging') return 'Emerging';
-  if (value === 'persistent') return 'Persistent';
-  if (value === 'fading') return 'Fading';
-  return 'Current';
 }
 
 function normalizeRef(value) {
@@ -101,49 +69,83 @@ function lineageFor(item, sourceRefs, defaultDate) {
   });
 }
 
-function BriefList({ title, items, empty, icon: Icon = FileSearch, sourceRefs = [], sourceDate = null }) {
+function BriefList({ title, items, empty, icon: Icon = FileSearch, sourceRefs = [], sourceDate = null, limit = null }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = !limit || expanded ? items : items.slice(0, limit);
   return (
     <Panel className="market-brief-list">
-      <div className="app-panel-header"><div><h2>{title}</h2></div></div>
-      {items.length ? <div className="market-brief-items">{items.map((item, index) => {
+      <div className="app-panel-header"><div><h2>{title}</h2></div>{items.length ? <StatusBadge tone="neutral">{items.length}</StatusBadge> : null}</div>
+      {items.length ? <div className="market-brief-items">{visible.map((item, index) => {
         const DirectionIcon = directionIcon(item?.direction);
         const key = item?.id || `${title}:${item?.sourceReportId || ''}:${item?.sourcePage || ''}:${index}`;
         return (
           <article key={key} className="market-brief-item">
             <DirectionIcon size={17} aria-hidden="true" />
             <div>
-              <strong>{item?.title || item?.label || textOf(item)}</strong>
-              {item?.title || item?.label ? <p>{textOf(item)}</p> : null}
+              <strong><MarketSignedText>{item?.title || item?.label || textOf(item)}</MarketSignedText></strong>
+              {item?.title || item?.label ? <p><MarketSignedText>{textOf(item)}</MarketSignedText></p> : null}
               <div className="market-brief-item__meta">
                 {item?.product || item?.productKey ? <span>{PRODUCT_LABELS[item.product || item.productKey] || item.product || item.productKey}</span> : null}
                 {item?.port || item?.portKey ? <span>{item.port || item.portKey}</span> : null}
                 {item?.horizon ? <span>{item.horizon}</span> : null}
                 {item?.confidenceLabel ? <span>{item.confidenceLabel}</span> : null}
-                {item?.metricBasis ? <span>{item.metricBasis}</span> : null}
+                {item?.metricBasis ? <span><MarketSignedText>{item.metricBasis}</MarketSignedText></span> : null}
                 {item?.sourcePage ? <span>Report page {item.sourcePage}</span> : null}
                 {lineageFor(item, sourceRefs, sourceDate).map((lineage) => <span key={lineage}>{lineage}</span>)}
               </div>
             </div>
           </article>
         );
-      })}</div> : <div className="market-empty-inline"><Icon size={20} /><div><strong>{empty}</strong><span>No value is inferred from missing report evidence.</span></div></div>}
+      })}</div> : <div className="market-empty-inline market-empty-inline--compact"><Icon size={20} /><div><strong>{empty}</strong><span>No value is inferred from missing report evidence.</span></div></div>}
+      {limit && items.length > limit ? <Button size="sm" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Show highlights' : `Show all ${items.length}`}</Button> : null}
     </Panel>
   );
 }
 
-function DriverColumn({ label, drivers, tone, sourceRefs, sourceDate }) {
-  return (
-    <div className={`market-driver-column market-driver-column--${tone}`}>
-      <div className="market-driver-column__title"><span>{label}</span><strong>{drivers.length}</strong></div>
-      {drivers.length ? drivers.map((driver, index) => {
-        const Icon = directionIcon(driver?.direction);
-        return <div key={driver?.id || `${label}:${index}`} className="market-driver-row"><Icon size={15} /><div><strong>{driver?.tag || driver?.title || driver?.driverTags?.[0] || 'Market driver'}</strong><span>{textOf(driver)}</span><small>{[driver?.port || driver?.portKey, PRODUCT_LABELS[driver?.product || driver?.productKey] || driver?.product || driver?.productKey, driver?.horizon, driver?.confidenceLabel, ...lineageFor(driver, sourceRefs, sourceDate)].filter(Boolean).join(' · ')}</small></div></div>;
-      }) : <p>No source-supported driver in this state.</p>}
-    </div>
-  );
+function formatMarketValue(value, unit) {
+  if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
+  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: unit === 'USD/BBL' ? 3 : 2 })} ${unit}`;
 }
 
-export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0 }) {
+function Movement({ comparison }) {
+  return <MarketSignedValue
+    value={comparison?.available ? comparison.change : null}
+    unit={comparison?.unit}
+    suffix={comparison?.available ? `vs ${formatDate(comparison.previousDate)}` : ''}
+    unavailableLabel="No prior comparison"
+    variant="pill"
+  />;
+}
+
+function spreadFor(product, key) {
+  return array(product?.curve?.spreads).find((row) => row.key === key) || null;
+}
+
+function MarketPriceBoard({ pulse }) {
+  const products = array(pulse?.products);
+  return <Panel className="market-price-board-panel">
+    <div className="app-panel-header"><div><h2>Market at a glance</h2><p>Official prices, published-day movement, current-month estimate, and exact prompt structure.</p></div><StatusBadge tone={pulse?.complete ? 'positive' : 'warning'}>{pulse?.complete ? 'Current official data' : 'Controlled gaps'}</StatusBadge></div>
+    <div className="market-price-board" role="table" aria-label="Compact market price board">
+      <div className="market-price-board__header" role="row"><span>Product</span><span>Latest MOPS</span><span>Published move</span><span>Est. month average</span><span>BM−M1</span><span>M1−M2</span><span>Curve</span></div>
+      {products.map((product) => {
+        const bmM1 = spreadFor(product, 'bmM1');
+        const m1M2 = spreadFor(product, 'm1M2');
+        const status = product.curve?.status || 'unavailable';
+        return <article key={product.productKey} className={`market-price-board__row market-price-board__row--${product.productKey}`} role="row">
+          <div className="market-price-board__product"><strong>{product.productName}</strong><span>({product.sourceCode}) · {formatDate(product.latestMops?.publicationDate)}</span></div>
+          <strong>{formatMarketValue(product.latestMops?.value, product.unit)}</strong>
+          <Movement comparison={product.latestMops?.comparison} />
+          <div><strong>{formatMarketValue(product.monthlyEstimate?.value, product.unit)}</strong><span className="market-price-board__subtle">Calculated estimate</span></div>
+          <div className="market-price-board__spread"><strong><MarketSignedValue value={bmM1?.value} unit={bmM1?.unit || product.unit} /></strong>{bmM1?.comparison ? <Movement comparison={bmM1.comparison} /> : <span className="market-price-board__subtle">Not published</span>}</div>
+          <div className="market-price-board__spread"><strong><MarketSignedValue value={m1M2?.value} unit={m1M2?.unit || product.unit} /></strong>{m1M2?.comparison ? <Movement comparison={m1M2.comparison} /> : null}</div>
+          <span className={`market-curve-state market-curve-state--${status}`}>{status}</span>
+        </article>;
+      })}
+    </div>
+  </Panel>;
+}
+
+export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse = null, intraday = null, onRefreshPulse = null }) {
   const [brief, setBrief] = useState(initialBrief);
   const [busy, setBusy] = useState(!initialBrief);
   const [error, setError] = useState(null);
@@ -193,10 +195,6 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0 }) {
 
   const completeness = brief?.reportCompleteness || brief?.completeness || {};
   const curveCoverage = brief?.curveCoverage || {};
-  const regimes = useMemo(() => {
-    if (Array.isArray(brief?.curveRegimes)) return brief.curveRegimes;
-    return Object.entries(brief?.curveRegimes || brief?.regimes || {}).map(([product, value]) => ({ product, ...(typeof value === 'object' ? value : { regime: value }) }));
-  }, [brief]);
   const materialChanges = array(brief?.materialChanges || brief?.moves).map(projectMaterialChange);
   const dislocations = array(brief?.portDislocations || brief?.dislocations).map(projectPortDislocation);
   const physicalPaper = array(brief?.physicalPaperSignals || brief?.physicalVsPaper || brief?.physicalPaper).map(projectPhysicalPaperSignal);
@@ -208,20 +206,14 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0 }) {
     ...array(drivers.fading || brief?.fadingDrivers).map((item) => ({ ...item, lifecycle: item.lifecycle || 'Fading' })),
   ];
   const projectedDrivers = flatDrivers.map(projectBriefDriver);
-  const emerging = projectedDrivers.filter((driver) => lifecycleOf(driver) === 'Emerging');
-  const persistent = projectedDrivers.filter((driver) => lifecycleOf(driver) === 'Persistent');
-  const fading = projectedDrivers.filter((driver) => lifecycleOf(driver) === 'Fading');
-  const current = projectedDrivers.filter((driver) => lifecycleOf(driver) === 'Current');
   const risks = array(brief?.risks || brief?.risksToWatch);
   const requiredReports = Number(completeness.requiredReports ?? completeness.required ?? 2);
   const completeReports = Number(completeness.completeReports ?? (completeness.complete === true ? requiredReports : array(completeness.reportTypes).length));
-  const completenessLabel = completeness.label || (completeReports >= requiredReports ? 'Complete' : completeReports ? 'Partial' : 'Unavailable');
-
   return (
     <div className="market-intelligence-stack" data-testid="market-daily-decision-brief">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
-      <div className="market-brief-topbar">
-        <div><strong>Daily Decision Brief</strong><span>Deterministic prices and signals, with concise source-linked commentary. No buy or sell recommendation.</span></div>
+      <div className="market-overview-context">
+        <div className="market-overview-context__title"><strong>Overview</strong><span>Official prices and deterministic report evidence. No buy or sell recommendation.</span></div>
         <div className="market-brief-topbar__actions">
           <Button size="sm" icon={ChevronLeft} onClick={() => load({ date: brief?.previousAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.previousAvailableDate}>Previous</Button>
           <div className="market-brief-date">
@@ -231,47 +223,37 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0 }) {
           </div>
           <Button size="sm" icon={ChevronRight} onClick={() => load({ date: brief?.nextAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.nextAvailableDate}>Next</Button>
           {brief?.displayedDate && brief.displayedDate !== brief?.latestAvailableDate ? <Button size="sm" onClick={() => load({ date: brief.latestAvailableDate, historyMode: 'push' })} disabled={busy}>Latest</Button> : null}
-          <Button size="sm" icon={RefreshCw} onClick={() => load({ date: brief?.displayedDate || null, force: true })} disabled={busy}>{busy ? 'Updating…' : 'Refresh brief'}</Button>
+          <Button size="sm" icon={RefreshCw} onClick={() => { load({ date: brief?.displayedDate || null, force: true }); onRefreshPulse?.(); }} disabled={busy}>{busy ? 'Updating…' : 'Refresh'}</Button>
+        </div>
+        <div className="market-overview-context__quality">
+          <span>MOPS {formatDate(pulse?.latestMopsPublicationDate)}</span>
+          <StatusBadge tone={completeReports >= requiredReports ? 'positive' : 'warning'}>{completeReports}/{requiredReports} reports</StatusBadge>
+          <StatusBadge tone={Number(curveCoverage.missingCount || 0) ? 'warning' : 'positive'}>{Number(curveCoverage.numericCount || 0)}/{Number(curveCoverage.requiredCount || 8)} curve marks</StatusBadge>
+          {Number(curveCoverage.publishedNaCount || 0) ? <StatusBadge tone="neutral">{Number(curveCoverage.publishedNaCount)} published N/A</StatusBadge> : null}
+          <StatusBadge tone={array(brief?.sourceWarnings || brief?.warnings).length ? 'warning' : 'positive'}>{array(brief?.sourceWarnings || brief?.warnings).length} data notes</StatusBadge>
         </div>
       </div>
       {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />Reports for the requested date are not available. Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
-      <div className="app-metric-grid app-metric-grid--4">
-        <Metric label="Report completeness" value={completenessLabel} detail={`${completeReports}/${requiredReports} required reports`} tone={completeReports >= requiredReports ? 'green' : 'orange'} icon={completeReports >= requiredReports ? CheckCircle2 : AlertTriangle} />
-        <Metric label="As of" value={brief?.asOfDate ? formatDate(brief.asOfDate) : 'Unavailable'} detail={brief?.asOfAt ? new Date(brief.asOfAt).toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) : brief?.asOfTime || brief?.assessmentSession || 'Assessment time not available'} tone="blue" icon={Clock3} />
-        <Metric label="Curve coverage" value={`${Number(curveCoverage.numericCount || 0)}/${Number(curveCoverage.requiredCount || 8)} numeric marks`} detail={`${Number(curveCoverage.publishedNaCount || 0)} published N/A · ${Number(curveCoverage.missingCount || 0)} genuinely missing`} tone={Number(curveCoverage.missingCount || 0) ? 'orange' : 'green'} icon={Waves} />
-        <Metric label="Source risks" value={String(array(brief?.sourceWarnings || brief?.warnings).length)} detail="Missing, stale, conflict or parsing controls" tone={array(brief?.sourceWarnings || brief?.warnings).length ? 'orange' : 'green'} icon={ShieldAlert} />
-      </div>
+      <MarketPriceBoard pulse={pulse} />
+      {intraday}
 
-      {array(brief?.sourceWarnings || brief?.warnings).length ? <div className="market-history-warnings">{array(brief?.sourceWarnings || brief?.warnings).map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><span>{textOf(warning)}</span></div>)}</div> : null}
-
-      <Panel>
-        <div className="app-panel-header"><div><h2>Curve regime</h2><p>Front-minus-back is positive in backwardation. A gap remains a gap when an exact tenor is missing.</p></div><StatusBadge tone={toneFor(completenessLabel)}>{completenessLabel}</StatusBadge></div>
-        <div className="market-regime-grid">{['hsfo380', 'vlsfo', 'lsmgo'].map((product) => {
-          const row = regimes.find((entry) => { const entryProduct = entry.product || entry.productKey; return ['hsfo380', 'hsfo', 's380'].includes(product) ? ['hsfo380', 'hsfo', 's380'].includes(entryProduct) : product === 'vlsfo' ? ['vlsfo', 's05'].includes(entryProduct) : ['lsmgo', 'sgo'].includes(entryProduct); });
-          const regime = regimeLabel(row);
-          const summary = typeof row?.summary === 'string' ? row.summary : row?.summary?.text;
-          return <div key={product} className="market-regime-card"><span>{PRODUCT_LABELS[product]}</span><strong>{regime}</strong><small>{summary || [row?.bmM1 != null ? `BM–M1 ${row.bmM1}` : null, row?.m1M2 != null ? `M1–M2 ${row.m1M2}` : null].filter(Boolean).join(' · ') || 'Exact curve marks are incomplete.'}</small><StatusBadge tone={toneFor(regime)}>{row?.basis || 'Report derived'}</StatusBadge></div>;
-        })}</div>
-      </Panel>
+      {array(brief?.sourceWarnings || brief?.warnings).length ? <details className="market-disclosure market-disclosure--warning"><summary><AlertTriangle size={14} /> Data notes ({array(brief?.sourceWarnings || brief?.warnings).length})</summary><div className="market-history-warnings">{array(brief?.sourceWarnings || brief?.warnings).map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><MarketSignedText>{textOf(warning)}</MarketSignedText></div>)}</div></details> : null}
 
       <div className="market-brief-columns">
-        <BriefList title="Material daily changes" items={materialChanges} empty="No material move crossed its controlled threshold" icon={ArrowRight} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-        <BriefList title="Port dislocations" items={dislocations} empty="No exact-date port dislocation is available" icon={Waves} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
+        <BriefList title="What changed" items={materialChanges} empty="No material move crossed its controlled threshold" icon={ArrowRight} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
+        <BriefList title="Port dislocations" items={dislocations} empty="No exact-date port dislocation is available" icon={Waves} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
       </div>
-      <BriefList title="Physical versus paper" items={physicalPaper} empty="No same-snapshot confirmation or divergence is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-
-      <Panel>
-        <div className="app-panel-header"><div><h2>Bunker-market drivers</h2><p>Only source-supported availability, inventory, demand, lead-time, congestion, weather, refinery, flow, freight, sanctions, regulation and geopolitical drivers are retained.</p></div></div>
-        <div className="market-driver-grid">
-          <DriverColumn label="Emerging" drivers={emerging} tone="emerging" sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-          <DriverColumn label="Persistent" drivers={persistent} tone="persistent" sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-          <DriverColumn label="Fading" drivers={fading} tone="fading" sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-          {current.length ? <DriverColumn label="Current" drivers={current} tone="persistent" sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} /> : null}
+      <div className="market-brief-columns">
+        <BriefList title="Physical versus paper" items={physicalPaper} empty="No same-snapshot confirmation or divergence is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
+        <BriefList title="Drivers & risks" items={[...projectedDrivers, ...risks]} empty="No high-confidence driver or risk is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
+      </div>
+      <details className="market-disclosure">
+        <summary><FileSearch size={14} /> Evidence & methodology</summary>
+        <div className="market-disclosure__body">
+          {sourceRefs.length ? <div className="market-source-lineage">{sourceRefs.map((sourceRef, index) => { const ref = normalizeRef(sourceRef); const pages = refPages(ref); return <span key={ref.id || ref.reportId || `${ref.reportType}:${ref.reportDate}:${index}`}>{[ref.reportType || ref.documentType || 'Market report', (ref.reportDate || brief?.asOfDate) ? formatDate(ref.reportDate || brief?.asOfDate) : null, pages.length ? `${pages.length > 1 ? 'pages' : 'page'} ${pages.join(', ')}` : null].filter(Boolean).join(' · ')}</span>; })}</div> : null}
+          <p>Front-minus-back is positive in backwardation. Missing marks remain gaps. Commentary is concise, non-verbatim, source-linked, and cannot change a price or create a trading recommendation.</p>
         </div>
-      </Panel>
-      <BriefList title="Key risks to watch" items={risks} empty="No high-confidence risk item is available" icon={ShieldAlert} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} />
-      {sourceRefs.length ? <Panel><div className="app-panel-header"><div><h2>Source lineage</h2><p>Report references support the derived brief without storing licensed report text.</p></div></div><div className="market-source-lineage">{sourceRefs.map((sourceRef, index) => { const ref = normalizeRef(sourceRef); const pages = refPages(ref); return <span key={ref.id || ref.reportId || `${ref.reportType}:${ref.reportDate}:${index}`}>{[ref.reportType || ref.documentType || 'Market report', (ref.reportDate || brief?.asOfDate) ? formatDate(ref.reportDate || brief?.asOfDate) : null, pages.length ? `${pages.length > 1 ? 'pages' : 'page'} ${pages.join(', ')}` : null].filter(Boolean).join(' · ')}</span>; })}</div></Panel> : null}
-      <div className="app-callout app-callout--neutral"><FileSearch size={15} /> Commentary is a concise, non-verbatim aid with report and page lineage. It cannot change a price, fill a missing tenor, or create a trading recommendation.</div>
+      </details>
     </div>
   );
 }
