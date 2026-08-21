@@ -36,11 +36,48 @@ test('19 August curve evidence keeps seven exact values and a published-N/A gaso
 });
 
 test('curve product identity prefers canonical observation metadata and exact symbol mapping', () => {
-  const { seriesProduct } = marketIntelligenceTradingInternals;
+  const { observationProjection, seriesMarketFamily, seriesProduct } = marketIntelligenceTradingInternals;
   assert.equal(seriesProduct({ source_symbol: 'FOFS001', product_key: 'vlsfo-m1', basis_metadata: { productKey: 'vlsfo-m1' } }, { basis_metadata: { productKey: 'vlsfo' } }), 'vlsfo');
   assert.equal(seriesProduct({ source_symbol: 'FPLSM02', product_key: 'hsfo380-m2', basis_metadata: { productKey: 'hsfo380-m2' } }), 'hsfo380');
   assert.equal(seriesProduct({ source_symbol: 'MSGSL00', product_key: 'gasoil-m1', basis_metadata: { productKey: 'gasoil-m1' } }), 'lsmgo');
   assert.equal(seriesProduct({ source_symbol: 'UNKNOWN', product_key: 'vlsfo-m1', basis_metadata: { productKey: 'vlsfo-m1' } }), null);
+  assert.equal(seriesMarketFamily({ market_family: 'forward' }, { basis_metadata: { marketFamily: 'context' } }), 'context');
+  assert.equal(observationProjection(
+    { id: 'o1', series_id: 's1', price_date: '2026-08-19', price: 58.25, tenor: 'm1', observation_unit: 'USD/MT', quality_status: 'verified', basis_metadata: { productKey: 'hsfo380', marketFamily: 'context', settlementBasis: 'east_west_spread' } },
+    { id: 's1', source_symbol: 'FQLSM01', market_family: 'forward', unit: 'USD/MT' },
+    { id: 'r1', source_hash: 'a'.repeat(64), source_document_type: 'european_marketscan' },
+  ).marketFamily, 'context');
+});
+
+test('brief availability keeps page-four published N/A authoritative and removes stale missing warnings', async () => {
+  const { curveAvailabilityForBrief, uniqueBriefWarnings } = marketIntelligenceTradingInternals;
+  const definitions = [
+    ['h1', 'FPLSM01', 'hsfo380', 'm1'], ['h2', 'FPLSM02', 'hsfo380', 'm2'],
+    ['v0', 'FOFS000', 'vlsfo', 'bm'], ['v1', 'FOFS001', 'vlsfo', 'm1'], ['v2', 'FOFS002', 'vlsfo', 'm2'],
+    ['g0', 'BSGSL00', 'lsmgo', 'bm'], ['g1', 'MSGSL00', 'lsmgo', 'm1'], ['g2', 'MSHSL00', 'lsmgo', 'm2'],
+  ];
+  const series = definitions.map(([id, source_symbol, productKey, tenor]) => ({ id, source_symbol, product_key: `${productKey}-${tenor}`, tenor, unit: productKey === 'lsmgo' ? 'USD/BBL' : 'USD/MT', basis_metadata: { productKey } }));
+  const availability = [{ import_id: 'report', series_id: 'g0', availability_status: 'published_na', source_page: 4, contract_month: '2026-08-01', tenor: 'bm', observation_unit: 'USD/BBL', basis_metadata: { productKey: 'lsmgo' } }];
+  const client = {
+    from(table) {
+      if (table === 'market_intelligence_series') return { select: () => ({ eq: async () => ({ data: series, error: null }) }) };
+      if (table === 'market_report_series_availability') return { select: () => ({ in: async () => ({ data: availability, error: null }) }) };
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+  const numeric = definitions.filter(([id]) => id !== 'g0').map(([id, sourceSymbol, productKey, tenor], index) => ({ id, sourceSymbol, productKey, tenor: tenor.toUpperCase(), reportDate: '2026-08-19', qualityStatus: 'verified', value: 500 + index, unit: productKey === 'lsmgo' ? 'USD/BBL' : 'USD/MT' }));
+  const coverage = await curveAvailabilityForBrief(client, { report_date: '2026-08-19', source_refs: [{ reportId: 'report', documentType: 'european_marketscan' }] }, { snapshot: numeric });
+  assert.equal(coverage.numericCount, 7);
+  assert.equal(coverage.publishedNaCount, 1);
+  assert.equal(coverage.missingCount, 0);
+  assert.deepEqual(coverage.marks.find((row) => row.sourceSymbol === 'BSGSL00'), {
+    productKey: 'lsmgo', tenor: 'BM', status: 'published_na', sourceSymbol: 'BSGSL00', sourcePage: 4,
+    contractMonth: '2026-08-01', unit: 'USD/BBL', documentType: 'european_marketscan',
+  });
+  assert.deepEqual(uniqueBriefWarnings(coverage, [
+    'LSMGO BM was published N/A in European Marketscan page 3.',
+    'LSMGO BM is missing from the expected 2026-08-19 report snapshot.',
+  ]), ['LSMGO BM was published N/A in European Marketscan page 4.']);
 });
 
 test('printed FOFS contract months survive the May roll while the non-publication reprint is evidence-only', () => {

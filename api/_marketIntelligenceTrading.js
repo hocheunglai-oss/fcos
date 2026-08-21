@@ -19,6 +19,7 @@ const FORWARD_SYMBOL_PRODUCTS = Object.freeze({
   FOFS000: 'vlsfo', FOFS001: 'vlsfo', FOFS002: 'vlsfo',
   BSGSL00: 'lsmgo', MSGSL00: 'lsmgo', MSHSL00: 'lsmgo',
 });
+const MARKET_FAMILIES = new Set(['delivered', 'cargo', 'forward', 'context', 'compliance']);
 const SGO_BBL_PER_MT = 7.45;
 const RANGES = Object.freeze({ '1w': 7, '1m': 31, '3m': 93, '6m': 186, '1y': 366 });
 const DEFAULT_RULES = Object.freeze({
@@ -268,6 +269,13 @@ function seriesProduct(series, observation = null) {
     || canonicalProduct(series?.product_key);
 }
 
+function seriesMarketFamily(series, observation = null) {
+  const observed = String(observation?.basis_metadata?.marketFamily || '').toLowerCase();
+  if (MARKET_FAMILIES.has(observed)) return observed;
+  const configured = String(series?.market_family || '').toLowerCase();
+  return MARKET_FAMILIES.has(configured) ? configured : null;
+}
+
 function observationProjection(row, series, report) {
   return {
     id: row.id,
@@ -286,7 +294,7 @@ function observationProjection(row, series, report) {
     sourcePage: row.source_page,
     qualityStatus: row.quality_status,
     assessmentSession: row.assessment_session || series?.assessment_session,
-    marketFamily: series?.market_family,
+    marketFamily: seriesMarketFamily(series, row),
     settlementBasis: row.basis_metadata?.settlementBasis || series?.basis_metadata?.settlementBasis || null,
     source: report?.source_document_type || null,
     publicationEligible: row.basis_metadata?.publicationEligible !== false,
@@ -908,6 +916,26 @@ async function curveAvailabilityForBrief(client, brief, curve) {
   };
 }
 
+function isLegacyCurveMissingWarning(value) {
+  const text = typeof value === 'string' ? value : value?.summary;
+  return / is missing from the expected .* report snapshot\.$/i.test(String(text || ''));
+}
+
+function availabilityWarning(row) {
+  const label = `${row.productKey.toUpperCase()} ${row.tenor}`;
+  if (row.status === 'published_na') return `${label} was published N/A${row.documentType === 'european_marketscan' ? ' in European Marketscan' : ''}${row.sourcePage ? ` page ${row.sourcePage}` : ''}.`;
+  return `${label} was not detected in the completed report pair.`;
+}
+
+function uniqueBriefWarnings(curveCoverage, storedWarnings = []) {
+  const authoritative = curveCoverage.marks
+    .filter((row) => row.status === 'published_na' || row.status === 'not_detected')
+    .map(availabilityWarning);
+  const retained = (storedWarnings || []).filter((warning) => !isLegacyCurveMissingWarning(warning)
+    && !/ was (?:published N\/A|not detected in the completed report pair)/i.test(String(warning)));
+  return [...new Set([...authoritative, ...retained])];
+}
+
 export async function loadMarketIntelligenceBrief(client, request = {}) {
   const today = isoDate(new Date());
   const requestedDate = request.date == null || request.date === '' ? today : isoDate(request.date);
@@ -999,12 +1027,8 @@ export async function loadMarketIntelligenceBrief(client, request = {}) {
     portDislocations: metrics.portDislocations || byKind('port_dislocation'),
     physicalPaperSignals: metrics.physicalPaperSignals || byKind('physical_paper'),
     drivers: { emerging, persistent, fading },
-    risks: [...(metrics.risks || []), ...byKind('risk')],
-    warnings: [
-      ...curveCoverage.marks.filter((row) => row.status === 'published_na').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was published N/A${row.documentType === 'european_marketscan' ? ' in European Marketscan' : ''}${row.sourcePage ? ` page ${row.sourcePage}` : ''}.`),
-      ...curveCoverage.marks.filter((row) => row.status === 'not_detected').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was not detected in the completed report pair.`),
-      ...(metrics.warnings || byKind('data_quality').map((row) => row.summary)).filter((warning) => !/ is missing from the expected .* report snapshot\.$/i.test(String(warning))),
-    ],
+    risks: [...(metrics.risks || []), ...byKind('risk')].filter((row) => !isLegacyCurveMissingWarning(row)),
+    warnings: uniqueBriefWarnings(curveCoverage, metrics.warnings || byKind('data_quality').map((row) => row.summary)),
     sourceRefs: brief.source_refs || [],
     shadow: curve.shadow,
   };
@@ -1422,18 +1446,15 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     loadDeterministicAiObservationEvidence(client, importIds, sourceRefs),
   ]);
   const curveCoverage = await curveAvailabilityForBrief(client, { report_date: date, source_refs: sourceRefs }, curve);
-  const availabilityWarnings = [
-    ...curveCoverage.marks.filter((row) => row.status === 'published_na').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was published N/A${row.documentType === 'european_marketscan' ? ' in European Marketscan' : ''}${row.sourcePage ? ` page ${row.sourcePage}` : ''}.`),
-    ...curveCoverage.marks.filter((row) => row.status === 'not_detected').map((row) => `${row.productKey.toUpperCase()} ${row.tenor} was not detected in the completed report pair.`),
-  ];
+  const availabilityWarnings = curveCoverage.marks
+    .filter((row) => row.status === 'published_na' || row.status === 'not_detected')
+    .map(availabilityWarning);
   const baseMetrics = deterministicBriefMetrics(curve);
   const deterministicMetrics = {
     ...baseMetrics,
+    risks: (baseMetrics.risks || []).filter((row) => !isLegacyCurveMissingWarning(row)),
     curveCoverage,
-    warnings: [
-      ...availabilityWarnings,
-      ...(baseMetrics.warnings || []).filter((warning) => !/ is missing from the expected .* report snapshot\.$/i.test(String(warning))),
-    ],
+    warnings: uniqueBriefWarnings(curveCoverage, [...availabilityWarnings, ...(baseMetrics.warnings || [])]),
   };
   const deterministicItems = deterministicBriefItems(deterministicMetrics);
   let reusedBrief = null;
@@ -1534,7 +1555,11 @@ export const marketIntelligenceTradingInternals = Object.freeze({
   isoDate,
   latestBriefsByReportDate,
   seriesProduct,
+  seriesMarketFamily,
+  observationProjection,
   curveAvailabilityForBrief,
+  isLegacyCurveMissingWarning,
+  uniqueBriefWarnings,
   publishNumericAlerts,
   hash,
 });
