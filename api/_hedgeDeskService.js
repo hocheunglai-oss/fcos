@@ -15,6 +15,7 @@ import {
   previewMarketReport,
 } from './_marketIntelligence.js';
 import { loadGovernedMarketValuation, processMarketIntelligenceDate } from './_marketIntelligenceTrading.js';
+import { reconcileMarketIntradayDate } from './_marketIntraday.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -711,7 +712,9 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
       reportDate: imported.preview.reportDate,
       commentaryContexts: [],
     });
-    return { ...imported, derived };
+    const intradayReconciliation = await reconcileMarketIntradayDate(client, imported.preview.reportDate, profile)
+      .catch(() => ({ insertedCount: 0, status: 'deferred' }));
+    return { ...imported, derived, intradayReconciliation };
   }
 
   if (action === 'save_spreads') {

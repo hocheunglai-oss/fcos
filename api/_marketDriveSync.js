@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
 import { processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
+import { reconcileMarketIntradayDate } from './_marketIntraday.js';
 
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
@@ -504,6 +505,8 @@ export async function runMarketReportDriveSync(client, {
           reconcileDerived: !touched,
         });
         if (derived.status === 'completed') {
+          await reconcileMarketIntradayDate(client, reportDate, { email: 'market-sync@fcos.internal' })
+            .catch(() => ({ insertedCount: 0, status: 'deferred' }));
           summary.briefCompletedCount += 1;
           if (!touched) summary.briefReconciledCount += 1;
           summary.marketAlertsPublishedCount += Number(derived.alertsPublished || 0);

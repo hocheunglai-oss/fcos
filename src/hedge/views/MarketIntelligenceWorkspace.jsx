@@ -39,6 +39,7 @@ import {
 import { MarketDecisionBrief } from './market-intelligence/MarketDecisionBrief';
 import { MarketDriversAlerts } from './market-intelligence/MarketDriversAlerts';
 import { MarketForwardCurves } from './market-intelligence/MarketForwardCurves';
+import { MarketIntradayStrip } from './market-intelligence/MarketIntradayStrip';
 import { MarketsView } from './MarketsView';
 import './market-intelligence/marketIntelligence.css';
 
@@ -496,6 +497,7 @@ export function MarketIntelligenceWorkspace({ data, settings, canManageMarketDat
   return (
     <div className="app-page market-intelligence-workspace">
       <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Read the daily bunker decision brief, compare delivered prices with controlled MOPS, and inspect exact contract-month curves with source lineage." actions={canManageMarketData ? <Button variant="primary" icon={FileUp} onClick={() => setImportOpen(true)}>Import report</Button> : null} />
+      <MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} />
       <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
       {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Daily Decision Brief"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} /></div> : null}
       {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered and MOPS"><DeliveredBunkers intelligence={intelligence} /><Panel className="market-settlement-control"><div className="app-panel-header"><div><h2>Settlement MOPS control</h2><p>Add, correct and verify the publication ledger used by monthly settlement and paper-hedge expiry. This advanced surface contains no legacy forward-adjustment input.</p></div><Button size="sm" onClick={() => setSettlementOpen((value) => !value)}>{settlementOpen ? 'Hide settlement control' : 'Open settlement control'}</Button></div>{settlementOpen ? <MarketsView embedded showLegacyForward={false} data={data} settings={settings} readOnly={!canManageMarketData} priceEntity={priceEntity} verifyMonth={verifyMonth} /> : null}</Panel></div> : null}

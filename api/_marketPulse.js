@@ -1,5 +1,6 @@
 import { calcMopsAverage, hktThisMonth, hktToday, latestMops } from '../src/hedge/lib/domain.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
+import { loadLatestIntradayPulse } from './_marketIntraday.js';
 
 const PRODUCTS = Object.freeze([
   { productKey: 'hsfo380', name: 'HSFO 380 MOPS', code: 'PPXDK00', field: 's380', unit: 'USD/MT', spreads: ['m1M2'] },
@@ -66,6 +67,7 @@ export function buildMarketPulseSnapshot({
   previousMopsRow = null,
   latestBrief = null,
   previousBrief = null,
+  intraday = null,
   generatedAt = new Date().toISOString(),
   month = hktThisMonth(),
 } = {}) {
@@ -152,6 +154,7 @@ export function buildMarketPulseSnapshot({
     reportCompleteness,
     curveCompleteness,
     products,
+    intraday,
     warnings: [...new Set(warnings)],
     methodology: {
       monthlyEstimate: 'Same current-month weighted-average calculation used in Markets, carrying the latest available value across remaining publication days.',
@@ -163,7 +166,7 @@ export function buildMarketPulseSnapshot({
 
 async function loadUncachedMarketPulse(client) {
   const month = hktThisMonth();
-  const [mopsResult, latestResult, briefResult] = await Promise.all([
+  const [mopsResult, latestResult, briefResult, intraday] = await Promise.all([
     client.from('hedge_market_prices')
       .select('price_date,s380,s05,sgo,is_estimate,verification_status')
       .gte('price_date', `${month}-01`)
@@ -181,6 +184,7 @@ async function loadUncachedMarketPulse(client) {
       .order('report_date', { ascending: false })
       .order('revision', { ascending: false })
       .limit(1),
+    loadLatestIntradayPulse(client),
   ]);
   const error = mopsResult.error || latestResult.error || briefResult.error;
   if (error) throw pulseError(`Market Pulse could not be loaded: ${error.message}`);
@@ -202,6 +206,7 @@ async function loadUncachedMarketPulse(client) {
     previousMopsRow: latestResult.data?.[1] || null,
     latestBrief,
     previousBrief,
+    intraday,
     month,
   });
 }
@@ -209,12 +214,12 @@ async function loadUncachedMarketPulse(client) {
 export async function loadMarketPulseSnapshot(client, request = {}) {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'market-pulse-snapshot',
-    version: '3',
+    version: '4',
     accessScope: 'markets',
     apiVersion: 'supabase-market-intelligence-v1',
     payload: { month: hktThisMonth() },
     ttlSeconds: 60,
-    tags: ['markets', 'hedge:markets', 'market:intelligence', 'market:pulse'],
+    tags: ['markets', 'hedge:markets', 'market:intelligence', 'market:pulse', 'market:intraday'],
     force: request.force === true,
     loader: () => loadUncachedMarketPulse(client),
   });

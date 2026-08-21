@@ -56,6 +56,14 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatTimestamp(value) {
+  if (!value) return 'time unavailable';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Hong_Kong', timeZoneName: 'short',
+  }).format(date);
+}
+
 function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets }) {
   const reportLabel = data?.curveReportDate ? `Curve report ${formatDate(data.curveReportDate)}` : 'Curve report unavailable';
   return (
@@ -104,6 +112,20 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets })
               </span>
               {data.curveCompleteness?.publishedNa > 0 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 ring-1 ring-inset ring-slate-500/20">{data.curveCompleteness.publishedNa} published N/A</span>}
             </div>
+
+            {data.intraday ? <section className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><div className="text-xs font-semibold">Intraday paper · Provisional</div><div className="mt-0.5 text-[10px] text-amber-800">{data.intraday.sourceLabel} · {formatDate(data.intraday.marketDate)} · received {formatTimestamp(data.intraday.receivedAt)}</div></div>
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-semibold ring-1 ring-inset ring-amber-500/30">Official MOPS unchanged</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {(data.intraday.observations || []).slice(0, 8).map((row) => <div key={`${row.productKey}:${row.contractMonth}:${row.quoteState}`} className="rounded-md bg-white/70 px-2 py-1.5">
+                  <div className="text-[10px] font-semibold">{row.productLabel} · {String(row.contractMonth).slice(0, 7)}</div>
+                  <div className="text-[11px]">{formatMarketValue(row.price, row.unit)}</div>
+                  <div className="text-[9px] text-amber-800">{row.reportedChange == null ? 'No supplied prior-close change' : `${formatSpread(row.reportedChange, row.unit)} vs prior close`}</div>
+                </div>)}
+              </div>
+            </section> : null}
 
             <div className="space-y-2">
               {(data.products || []).map((product) => (

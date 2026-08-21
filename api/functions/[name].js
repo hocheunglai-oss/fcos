@@ -208,6 +208,7 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
+import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, reconcileMarketIntradayDate, saveMarketIntradaySnapshot } from '../_marketIntraday.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
@@ -1434,6 +1435,9 @@ const HANDLER_MODULE_ACCESS = {
   marketIntelligenceAlertRulesSave: ['markets'],
   marketIntelligenceCurveCutoverSave: ['markets'],
   marketIntelligenceArchiveReplay: ['markets'],
+  marketIntradaySnapshotPreview: ['markets'],
+  marketIntradaySnapshotSave: ['markets'],
+  marketIntradayTimeline: ['markets'],
   hedgeDeskParseMops: ['hedge_desk', 'markets'],
   hedgeDeskGenerateInvoice: ['hedge_desk'],
   hedgeDeskSaveInvoicePdf: ['hedge_desk'],
@@ -18552,6 +18556,26 @@ async function marketIntelligenceArchiveReplay(body = {}, req = null, accessCont
   return result;
 }
 
+async function marketIntradaySnapshotPreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Market-data management permission is required to review a provisional paper snapshot.');
+  return previewMarketIntradaySnapshot(context.profile, body);
+}
+
+async function marketIntradaySnapshotSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Market-data management permission is required to save a provisional paper snapshot.');
+  const saved = await saveMarketIntradaySnapshot(context.client, context.profile, body);
+  await reconcileMarketIntradayDate(context.client, body.marketDate, context.profile).catch(() => ({ insertedCount: 0 }));
+  await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence', 'market:pulse', 'market:intraday']);
+  return saved;
+}
+
+async function marketIntradayTimeline(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadMarketIntradayTimeline(context.client, body);
+}
+
 async function hedgeDeskParseMops(body = {}) {
   return { ok: true, ...parseMopsText(body.raw_input || body.text || body.input || '') };
 }
@@ -19162,6 +19186,9 @@ const handlers = {
   marketIntelligenceAlertRulesSave,
   marketIntelligenceCurveCutoverSave,
   marketIntelligenceArchiveReplay,
+  marketIntradaySnapshotPreview,
+  marketIntradaySnapshotSave,
+  marketIntradayTimeline,
   hedgeDeskParseMops,
   hedgeDeskGenerateInvoice,
   hedgeDeskSaveInvoicePdf,

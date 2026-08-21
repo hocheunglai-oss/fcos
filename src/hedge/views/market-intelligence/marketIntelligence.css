@@ -1,5 +1,29 @@
 .market-intelligence-workspace > [role="tabpanel"]:not([hidden]) { display: grid; gap: 20px; }
 
+.market-intraday-strip { display: grid; gap: 14px; }
+.market-intraday-strip__header { align-items: flex-start; }
+.market-intraday-date { display: grid; gap: 3px; min-width: 145px; color: var(--app-text-muted); font-size: 10px; font-weight: 750; }
+.market-intraday-date .app-input { height: 34px; }
+.market-intraday-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.market-intraday-column { min-width: 0; overflow: hidden; border: 1px solid var(--app-border); border-radius: 10px; background: var(--app-surface-soft); }
+.market-intraday-column__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--app-border); }
+.market-intraday-column__header > div { display: grid; gap: 2px; }
+.market-intraday-column__header strong { font-size: 13px; }
+.market-intraday-column__header span { color: var(--app-text-muted); font-size: 10px; }
+.market-intraday-observation-list { display: grid; }
+.market-intraday-observation-list article { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(150px, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--app-border); }
+.market-intraday-observation-list article:first-child { border-top: 0; }
+.market-intraday-observation-list article > div { display: grid; gap: 2px; }
+.market-intraday-observation-list article strong { font-size: 12px; }
+.market-intraday-observation-list article span { color: var(--app-text-muted); font-size: 9px; }
+.market-intraday-empty { margin: 0; padding: 24px 12px; color: var(--app-text-muted); font-size: 11px; text-align: center; }
+.market-intraday-derived { display: flex; flex-wrap: wrap; gap: 7px; }
+.market-intraday-derived > span { padding: 7px 9px; border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-surface-soft); color: var(--app-text-secondary); font-size: 10px; }
+.market-intraday-derived strong { color: var(--app-text); }
+.market-intraday-source-text { min-height: 160px; resize: vertical; }
+.market-intraday-review-rows { display: grid; gap: 9px; margin: 10px 0; }
+.market-intraday-review-row { display: grid; grid-template-columns: 1.1fr 1fr 1fr 1fr 1fr .75fr auto; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--app-border); border-radius: 9px; background: var(--app-surface-soft); }
+
 .market-brief-topbar,
 .market-panel-actions,
 .market-alert-rule-footer {
@@ -144,6 +168,7 @@
 .market-alert-rule-footer > div { display: flex; align-items: center; gap: 7px; color: var(--app-text-muted); font-size: 10px; }
 
 @media (max-width: 1000px) {
+  .market-intraday-review-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .market-regime-grid,
   .market-context-grid,
   .market-driver-evidence-grid,
@@ -153,6 +178,11 @@
 }
 
 @media (max-width: 700px) {
+  .market-intraday-columns,
+  .market-intraday-review-row { grid-template-columns: 1fr; }
+  .market-intraday-strip__header .market-panel-actions { width: 100%; }
+  .market-intraday-date { width: 100%; }
+  .market-intraday-observation-list article { grid-template-columns: 1fr; }
   .market-brief-topbar,
   .market-alert-rule-footer { align-items: stretch; flex-direction: column; }
   .market-brief-topbar .market-brief-topbar__actions { justify-content: flex-start; }

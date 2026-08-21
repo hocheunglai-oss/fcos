@@ -132,3 +132,27 @@ export function replayMarketIntelligenceArchive(payload, options = {}) {
     ...options,
   });
 }
+
+export function previewMarketIntradaySnapshot(payload, options = {}) {
+  return requestMarketIntelligence('marketIntradaySnapshotPreview', payload, {
+    cache: false,
+    ...options,
+  });
+}
+
+export function saveMarketIntradaySnapshot(payload, options = {}) {
+  return requestMarketIntelligence('marketIntradaySnapshotSave', payload, {
+    cache: false,
+    invalidateCache: true,
+    ...options,
+  });
+}
+
+export function loadMarketIntradayTimeline(payload = {}, options = {}) {
+  return requestMarketIntelligence('marketIntradayTimeline', payload, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-intraday'],
+    ...options,
+  });
+}

@@ -2,6 +2,9 @@ const PLATTS_HOLIDAY_URL = "https://www.spglobal.com/energy/en/pricing-benchmark
 const PLATTS_METHODOLOGY_URL = "https://www.spglobal.com/energy/en/pricing-benchmarks/our-methodology/methodology-specifications/refined-products";
 const PLATTS_FORWARD_CURVE_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/risk/forward-curve-oil-specifications.pdf";
 const PLATTS_BUNKER_FUELS_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/shipping/bunker-fuels-specifications.pdf";
+const PLATTS_ASSESSMENT_GUIDE_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/platts-assessments-methodology-guide.pdf";
+const PLATTS_OIL_TIMING_URL = "https://www.spglobal.com/content/dam/spglobal/ci/en/documents/platts/en/our-methodology/methodology-specifications/oil-timing-increment-guidelines.pdf";
+const PLATTS_ASIA_REFINED_URL = "https://www.spglobal.com/platts/plattscontent/_assets/_files/en/our-methodology/methodology-specifications/asia-refined-oil-products-methodology.pdf";
 
 export const PAGE_METHODOLOGIES = {
   Markets: {
@@ -9,6 +12,8 @@ export const PAGE_METHODOLOGIES = {
     steps: [
       "Daily Decision Brief presents report completeness, same-snapshot curve regimes, material moves, port dislocations, physical-versus-paper confirmation or divergence, supported drivers and risks. AI may paraphrase commentary with store:false, but it cannot create, adjust or delay a price.",
       "Daily Decision Brief opens on the newest completed Bunkerwire and European Marketscan report pair on or before the Hong Kong date. Previous and Next skip incomplete dates; the displayed report date remains in the URL across refresh and browser navigation.",
+      "Intraday paper market retains reviewed morning indications and provisional Asia MOC references as immutable structured history. Screenshot extraction uses protected store:false vision and requires row-by-row user review; raw images, pasted text, prompts and model responses are not stored. 180 CST is ignored.",
+      "Asia MOC is a controlled assessment process using tested market evidence, not a formula. Intraday references may show exact same-date and same-contract movements, structures and a BM-based provisional monthly estimate, but they never become official MOPS, settlement evidence, automatic fallbacks or hedge marks.",
       "Delivered & MOPS shows Hong Kong, Singapore, South Korea, South Korea West, Zhoushan and Kaohsiung in USD/MT. South Korea West HSFO and LSMGO remain explicit Not published gaps.",
       "Each matrix cell uses one three-month premium/discount sparkline and exact-date 1W, 1M and 3M statistics. Missing dates are never forward-filled, interpolated or replaced with a cargo proxy.",
       "Kaohsiung VLSFO is displayed with the local LS180 label; MF-380 is mapped to HSFO 380. These names do not change the source symbol or methodology basis.",
@@ -27,6 +32,9 @@ export const PAGE_METHODOLOGIES = {
       { label: "S&P Global refined products assessment methodology", url: PLATTS_METHODOLOGY_URL },
       { label: "S&P Global Platts forward curve oil specifications", url: PLATTS_FORWARD_CURVE_URL },
       { label: "S&P Global Platts global bunker fuels specifications", url: PLATTS_BUNKER_FUELS_URL },
+      { label: "S&P Global Platts assessment methodology guide", url: PLATTS_ASSESSMENT_GUIDE_URL },
+      { label: "S&P Global Platts oil timing and increment guidelines", url: PLATTS_OIL_TIMING_URL },
+      { label: "S&P Global Platts Asia refined oil products methodology", url: PLATTS_ASIA_REFINED_URL },
     ],
   },
   "Position control": {

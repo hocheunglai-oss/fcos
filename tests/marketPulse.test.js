@@ -134,10 +134,10 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(handler, /async function marketPulseSnapshot/);
   assert.match(policy, /marketPulseSnapshot: readPolicy\(\{"cache":"server"/);
   assert.match(api, /ttlSeconds: 60/);
-  assert.match(api, /version: '3'/);
+  assert.match(api, /version: '4'/);
   assert.match(api, /previousMopsRow/);
   assert.match(api, /previousBrief/);
-  assert.match(api, /tags: \['markets', 'hedge:markets', 'market:intelligence', 'market:pulse'\]/);
+  assert.match(api, /tags: \['markets', 'hedge:markets', 'market:intelligence', 'market:pulse', 'market:intraday'\]/);
   assert.match(handler, /expireRuntimeCacheTags\(\['markets', 'hedge:markets', 'market:intelligence', 'market:pulse'\]\)/);
   assert.match(client, /requestMarketIntelligence\('marketPulseSnapshot'/);
   assert.match(layout, /hasModuleAccess\('markets'\)/);
