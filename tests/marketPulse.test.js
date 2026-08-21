@@ -70,10 +70,12 @@ test('Market Pulse keeps absent curve evidence unavailable and exposes product n
   assert.match(pulse.warnings.join(' '), /No completed Bunkerwire/);
 });
 
-test('interim Brent contract fails closed when TradingView cannot embed the exact ICE symbol', () => {
+test('interim Brent contract exposes only the exact external TradingView chart', () => {
   const brent = tradingViewIndicativeBrent();
-  assert.equal(brent.mode, 'unavailable');
-  assert.equal(brent.attemptedMode, 'tradingview_indicative');
+  assert.equal(brent.mode, 'tradingview_indicative');
+  assert.equal(brent.availability, 'external_only');
+  assert.equal(brent.embedAvailable, false);
+  assert.equal(brent.displayMode, 'external_popout');
   assert.equal(brent.symbol, 'ICEEUR:BRN1!');
   assert.equal(brent.followsSingaporeCutoff, false);
   assert.equal(brent.quote, null);
@@ -143,7 +145,10 @@ test('Market Pulse handler, permissions, caching and isolated TradingView UI are
   assert.match(brentModel, /ICEEUR:BRN1!/);
   assert.match(widget, /TRADINGVIEW_BRENT_SYMBOL/);
   assert.match(widget, /Indicative · provider delay may apply/);
-  assert.match(widget, /not permitted in TradingView website widgets/);
+  assert.match(widget, /Open the exact front-month ICE Brent chart/);
+  assert.match(widget, /window\.open\('about:blank', 'fcos-ice-brent-chart'/);
+  assert.match(widget, /popup\.opener = null/);
+  assert.match(widget, /blocks this ICE symbol in embedded widgets/);
   assert.match(widget, /Not used by FCOS calculations/);
   assert.match(widget, /https:\/\/www\.tradingview\.com\/symbols\/ICEEUR-BRN1!/);
   assert.doesNotMatch(widget, /fetch\(|appClient|localStorage|document\.createElement/);

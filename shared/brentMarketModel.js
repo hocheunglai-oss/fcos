@@ -37,14 +37,16 @@ export function singaporePricingDay(timestamp, eligiblePricingDates = []) {
 
 export function tradingViewIndicativeBrent() {
   return {
-    mode: 'unavailable',
-    attemptedMode: 'tradingview_indicative',
+    mode: 'tradingview_indicative',
+    availability: 'external_only',
+    embedAvailable: false,
+    displayMode: 'external_popout',
     instrumentName: 'Front-month ICE Brent',
     symbol: TRADINGVIEW_BRENT_SYMBOL,
     unit: 'USD/BBL',
     provider: 'TradingView',
     disclosure: 'Indicative · provider delay may apply',
-    reason: 'TradingView does not permit ICEEUR:BRN1! to be displayed in website widgets.',
+    reason: 'TradingView permits the exact ICEEUR:BRN1! chart on its own site but not in website widgets.',
     followsSingaporeCutoff: false,
     singaporeCutoff: '16:30 Asia/Singapore',
     activeContract: null,
