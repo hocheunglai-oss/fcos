@@ -295,6 +295,9 @@ function observationProjection(row, series, report) {
     qualityStatus: row.quality_status,
     assessmentSession: row.assessment_session || series?.assessment_session,
     marketFamily: seriesMarketFamily(series, row),
+    portKey: row.basis_metadata?.portKey || series?.port_key || null,
+    portLabel: series?.port_label || null,
+    productLabel: series?.product_label || null,
     settlementBasis: row.basis_metadata?.settlementBasis || series?.basis_metadata?.settlementBasis || null,
     source: report?.source_document_type || null,
     publicationEligible: row.basis_metadata?.publicationEligible !== false,
@@ -303,7 +306,7 @@ function observationProjection(row, series, report) {
 
 async function loadCurveRows(client, { startDate, endDate }) {
   const [seriesResult, imports, observations, fallbacksResult, shadowResult, shadowControlResult] = await Promise.all([
-    client.from('market_intelligence_series').select('id,market_family,product_key,source_symbol,unit,tenor,assessment_session,basis_metadata').eq('active', true),
+    client.from('market_intelligence_series').select('id,market_family,port_key,port_label,product_key,product_label,source_symbol,unit,tenor,assessment_session,basis_metadata').eq('active', true),
     allRows(() => client.from('market_report_imports').select('id,source_hash,source_document_type,report_date').gte('report_date', startDate).lte('report_date', endDate).order('report_date', { ascending: true })),
     allRows(() => client.from('market_price_observations').select('id,series_id,import_id,price_date,price,day_change,quality_status,source_hash,source_page,contract_month,printed_contract_month,tenor,observation_unit,assessment_session,basis_metadata').gte('price_date', startDate).lte('price_date', endDate).order('price_date', { ascending: true })),
     client.from('market_forward_fallback_marks').select('id,product_key,contract_month,unit,outright_value,as_of_date,status,expires_on,revision').eq('status', 'active').gt('expires_on', endDate).order('as_of_date', { ascending: false }),
@@ -428,7 +431,7 @@ function physicalMetrics(observations, asOfDate, products) {
     const assessed = rows.filter((row) => row.productKey === productKey && row.marketFamily === 'delivered' && row.assessmentSession !== 'posted');
     if (assessed.length >= 2) {
       const ordered = [...assessed].sort((a, b) => a.value - b.value);
-      portDislocations.push({ productKey, lowPort: ordered[0].sourceSymbol, highPort: ordered.at(-1).sourceSymbol, dispersion: number((ordered.at(-1).value - ordered[0].value).toFixed(3)), unit: 'USD/MT', sampleCount: assessed.length, sourceRefs: [ordered[0], ordered.at(-1)].map((item) => ({ reportId: item.reportId, reportDate: item.reportDate, seriesId: item.seriesId, sourceHash: item.sourceHash, sourcePage: item.sourcePage, page: item.sourcePage, sourceSymbol: item.sourceSymbol })) });
+      portDislocations.push({ productKey, lowPort: ordered[0].portLabel || ordered[0].portKey || ordered[0].sourceSymbol, lowPortSymbol: ordered[0].sourceSymbol, highPort: ordered.at(-1).portLabel || ordered.at(-1).portKey || ordered.at(-1).sourceSymbol, highPortSymbol: ordered.at(-1).sourceSymbol, dispersion: number((ordered.at(-1).value - ordered[0].value).toFixed(3)), unit: 'USD/MT', sampleCount: assessed.length, sourceRefs: [ordered[0], ordered.at(-1)].map((item) => ({ reportId: item.reportId, reportDate: item.reportDate, seriesId: item.seriesId, sourceHash: item.sourceHash, sourcePage: item.sourcePage, page: item.sourcePage, sourceSymbol: item.sourceSymbol })) });
     }
     const physicalMoves = assessed.map((row) => row.dayChange).filter((value) => value != null);
     const benchmark = rows.find((row) => row.productKey === productKey && row.marketFamily === 'cargo');

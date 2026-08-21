@@ -7,6 +7,7 @@ import {
   projectPhysicalPaperSignal,
   projectPortDislocation,
 } from '../src/hedge/views/market-intelligence/briefProjection.js';
+import { marketSymbolLabel } from '../src/hedge/lib/marketLabels.js';
 
 function read(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -91,12 +92,12 @@ test('daily brief renders exact deterministic backend metrics with figures and b
   });
   assert.equal(move.title, 'S0.5% M1 daily move');
   assert.equal(move.summary, 'The exact Sept 2026 M1 outright moved +12.50 USD/MT.');
-  assert.equal(move.metricBasis, 'AAOAJ00 · Sept 2026 · M1 · report daily change');
+  assert.equal(move.metricBasis, 'S0.5% M1 outright (AAOAJ00) · Sept 2026 · report daily change');
   assert.equal(move.sourceRefs[0].sourceHash, 'report-1');
 
-  const ports = projectPortDislocation({ productKey: 'hsfo380', lowPort: 'PPXDK00', highPort: 'AAXJQ00', dispersion: 24.75, unit: 'USD/MT', sampleCount: 4 });
+  const ports = projectPortDislocation({ productKey: 'hsfo380', lowPort: 'South Korea', lowPortSymbol: 'PUAFR00', highPort: 'Hong Kong', highPortSymbol: 'PUAER00', dispersion: 24.75, unit: 'USD/MT', sampleCount: 4 });
   assert.equal(ports.title, 'HSFO 380 delivered-port dispersion');
-  assert.equal(ports.summary, 'AAXJQ00 was +24.75 USD/MT above PPXDK00 across 4 same-date assessed ports.');
+  assert.equal(ports.summary, 'Hong Kong HSFO 380 delivered (PUAER00) was +24.75 USD/MT above South Korea HSFO 380 delivered (PUAFR00) across 4 same-date assessed ports.');
   assert.equal(ports.metricBasis, 'Same-date assessed delivered prices');
 
   const signal = projectPhysicalPaperSignal({ productKey: 'lsmgo', reportDate: '2026-08-21', state: 'divergent', physicalMove: -11, paperMove: 14.9, unit: 'USD/MT', originalPaperMove: 2, originalPaperUnit: 'USD/BBL', conversionFactor: 7.45 });
@@ -106,6 +107,17 @@ test('daily brief renders exact deterministic backend metrics with figures and b
 
   const unavailable = projectPhysicalPaperSignal({ productKey: 'hsfo380', state: 'unavailable', reportDate: '2026-08-21' });
   assert.match(unavailable.summary, /makes no relationship inference/);
+});
+
+test('Markets leads with human assessment names and retains Platts codes in brackets', () => {
+  assert.equal(marketSymbolLabel('PUAER00'), 'Hong Kong HSFO 380 delivered (PUAER00)');
+  assert.equal(marketSymbolLabel('FOFS001'), 'S0.5% M1 outright (FOFS001)');
+  assert.equal(marketSymbolLabel('UNLISTED', { productKey: 'lsmgo', tenor: 'M2', marketFamily: 'forward' }), 'LSMGO M2 outright (UNLISTED)');
+  const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
+  const curves = read('src/hedge/views/market-intelligence/MarketForwardCurves.jsx');
+  assert.match(workspace, /marketSymbolLabel\(row\.sourceSymbol/);
+  assert.match(workspace, /marketSymbolLabel\(benchmark\?\.sourceSymbol/);
+  assert.match(curves, /marketSymbolLabel\(row\.sourceSymbol/);
 });
 
 test('brief drivers project exact product, port, and numeric confidence fields', () => {

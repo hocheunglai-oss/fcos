@@ -1,3 +1,5 @@
+import { marketProductLabel, marketSymbolLabel } from '../../lib/marketLabels.js';
+
 const PRODUCT_LABELS = {
   hsfo380: 'HSFO 380',
   hsfo: 'HSFO 380',
@@ -21,7 +23,7 @@ function monthLabel(value) {
 }
 
 export function briefProductLabel(productKey) {
-  return PRODUCT_LABELS[String(productKey || '').toLowerCase()] || productKey || 'Market';
+  return marketProductLabel(productKey, PRODUCT_LABELS[String(productKey || '').toLowerCase()]);
 }
 
 export function formatBriefMetric(value, unit = 'USD/MT') {
@@ -44,7 +46,7 @@ export function projectMaterialChange(row = {}) {
     title: `${product} ${tenor} daily move`,
     summary: `The exact${contract ? ` ${contract}` : ''} ${tenor} outright moved ${formatBriefMetric(row.change, row.unit)}.`,
     direction: change == null ? 'neutral' : change > 0 ? 'up' : change < 0 ? 'down' : 'neutral',
-    metricBasis: [row.sourceSymbol, contract, tenor, 'report daily change'].filter(Boolean).join(' · '),
+    metricBasis: [marketSymbolLabel(row.sourceSymbol, { productKey: row.productKey, tenor, marketFamily: 'forward' }), contract, 'report daily change'].filter(Boolean).join(' · '),
   };
 }
 
@@ -52,12 +54,22 @@ export function projectPortDislocation(row = {}) {
   const product = briefProductLabel(row.productKey);
   const sampleCount = number(row.sampleCount);
   const portCount = sampleCount == null ? 'the available' : `${sampleCount}`;
+  const high = marketSymbolLabel(row.highPortSymbol || row.highPort, {
+    productKey: row.productKey,
+    portLabel: row.highPortSymbol ? row.highPort : null,
+    marketFamily: 'delivered',
+  });
+  const low = marketSymbolLabel(row.lowPortSymbol || row.lowPort, {
+    productKey: row.productKey,
+    portLabel: row.lowPortSymbol ? row.lowPort : null,
+    marketFamily: 'delivered',
+  });
   return {
     ...row,
     product: row.productKey,
     title: `${product} delivered-port dispersion`,
-    summary: row.highPort && row.lowPort
-      ? `${row.highPort} was ${formatBriefMetric(row.dispersion, row.unit)} above ${row.lowPort} across ${portCount} same-date assessed ports.`
+    summary: (row.highPort || row.highPortSymbol) && (row.lowPort || row.lowPortSymbol)
+      ? `${high} was ${formatBriefMetric(row.dispersion, row.unit)} above ${low} across ${portCount} same-date assessed ports.`
       : `Same-date assessed-port dispersion was ${formatBriefMetric(row.dispersion, row.unit)}.`,
     direction: 'mixed',
     metricBasis: 'Same-date assessed delivered prices',

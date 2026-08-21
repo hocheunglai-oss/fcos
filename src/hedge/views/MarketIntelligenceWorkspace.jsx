@@ -24,6 +24,7 @@ import {
 } from 'recharts';
 import { importMarketReport, loadMarketHistory, previewMarketReport } from '@/hedge/api/marketData';
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
+import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
 import {
   Button,
   Drawer,
@@ -273,7 +274,7 @@ function DeliveredBunkers({ intelligence }) {
                         </div>
                         <div className="market-price-cell__meta">
                           <StatusBadge tone={sourceTone(row.sourceType)}>{sourceLabel(row.sourceType)}</StatusBadge>
-                          <small>{row.sourceSymbol}{row.latest?.stale ? ` · ${row.latest.staleDays}d old` : ''}</small>
+                          <small>{marketSymbolLabel(row.sourceSymbol, { productKey: row.productKey, productLabel: row.productLabel, portLabel: row.portLabel, marketFamily: 'delivered' })}{row.latest?.stale ? ` · ${row.latest.staleDays}d old` : ''}</small>
                         </div>
                       </div>
                     </td>
@@ -322,7 +323,7 @@ export function CargoForwardSummary({ intelligence }) {
         <div key={row.id} className="market-forward-card">
           <span>{row.productLabel}</span>
           <strong>{row.latest?.price == null ? '—' : formatMoney(row.latest.price, { digits: 3 })}</strong>
-          <small>{row.aliasLabel ? `${row.aliasLabel} · ` : ''}{row.sourceSymbol || 'No symbol'} · {row.unit}</small>
+          <small>{marketSymbolLabel(row.sourceSymbol, { primaryLabel: [row.productLabel, row.aliasLabel].filter(Boolean).join(' · '), productKey: row.productKey, marketFamily: row.marketFamily })} · {row.unit}</small>
         </div>
       ))}</div>
     </Panel>
@@ -384,7 +385,7 @@ export function TradingSignals({ intelligence }) {
             <Field label="Supplier quote (USD/MT)"><input className="app-input" type="number" step="any" value={quote} onChange={(event) => setQuote(event.target.value)} /></Field>
           </div>
           <div className="market-quote-result">
-            <div><span>Delivered reference</span><strong>{benchmark?.latest?.price == null ? 'Unavailable' : formatMoney(benchmark.latest.price, { digits: 2 })}</strong><small>{benchmark?.sourceSymbol || 'No exact series'} · {sourceLabel(benchmark?.sourceType || 'unavailable')}</small></div>
+            <div><span>Delivered reference</span><strong>{benchmark?.latest?.price == null ? 'Unavailable' : formatMoney(benchmark.latest.price, { digits: 2 })}</strong><small>{marketSymbolLabel(benchmark?.sourceSymbol, { productKey: benchmark?.productKey, productLabel: benchmark?.productLabel, portLabel: benchmark?.portLabel, marketFamily: 'delivered' })} · {sourceLabel(benchmark?.sourceType || 'unavailable')}</small></div>
             <div className={quoteDifference == null ? '' : quoteDifference <= 0 ? 'is-positive' : 'is-warning'}><span>Quote vs reference</span><strong>{quoteDifference == null ? 'Enter a quote' : `${quoteDifference >= 0 ? '+' : ''}${formatMoney(quoteDifference, { digits: 2 })}`}</strong><small>{quoteDifference == null ? 'No comparison yet' : quoteDifference <= 0 ? 'Below selected reference' : 'Above selected reference'}</small></div>
           </div>
         </Panel>
@@ -471,10 +472,10 @@ function ReportImportDrawer({ open, onClose, onImported }) {
       </section>
       {preview ? <section className="app-form-section">
         <div className="app-form-section__title">Review · {formatDate(preview.reportDate)}</div>
-        <div className="market-import-summary"><strong>{preview.observationCount} numeric values detected</strong><span>{preview.publishedNaSymbols?.length ? `${preview.publishedNaSymbols.length} explicitly published N/A: ${preview.publishedNaSymbols.join(', ')}` : 'No configured symbol is explicitly published N/A.'}</span><span>{preview.missingSymbols.length ? `${preview.missingSymbols.length} configured symbols not detected: ${preview.missingSymbols.join(', ')}` : 'No configured symbol is genuinely missing.'}</span></div>
-        {importBlockers.length ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Import is blocked because {importBlockers.map((row) => row.sourceSymbol).join(', ')} has no unambiguous printed/validated contract month.</div> : null}
-        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{row.sourceSymbol}</strong><span>{formatMoney(row.price, { digits: String(row.unit).toUpperCase() === 'USD/BBL' ? 3 : 2 })} {row.unit || 'Unit unavailable'}</span>{row?.basisMetadata?.publicationEligible === false ? <StatusBadge tone="warning">Non-publication reprint · evidence only</StatusBadge> : null}<small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Spot assessment'}</small><small>{row.dayChange == null ? 'No daily change' : `${row.dayChange >= 0 ? '+' : ''}${row.dayChange.toFixed(3)}`}</small></div>)}</div>
-        {(preview.availabilityEvidence || []).length ? <div className="market-import-rows">{preview.availabilityEvidence.map((row) => <div key={`availability:${row.sourceSymbol}`}><strong>{row.sourceSymbol}</strong><StatusBadge tone={row.status === 'published_na' ? 'warning' : 'neutral'}>{row.status === 'published_na' ? 'Published N/A' : 'Not detected'}</StatusBadge><small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Configured report symbol'}</small><small>No zero, estimate, or carried-forward value will be created.</small></div>)}</div> : null}
+        <div className="market-import-summary"><strong>{preview.observationCount} numeric values detected</strong><span>{preview.publishedNaSymbols?.length ? `${preview.publishedNaSymbols.length} explicitly published N/A: ${preview.publishedNaSymbols.map((symbol) => marketSymbolLabel(symbol)).join(', ')}` : 'No configured symbol is explicitly published N/A.'}</span><span>{preview.missingSymbols.length ? `${preview.missingSymbols.length} configured symbols not detected: ${preview.missingSymbols.map((symbol) => marketSymbolLabel(symbol)).join(', ')}` : 'No configured symbol is genuinely missing.'}</span></div>
+        {importBlockers.length ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> Import is blocked because {importBlockers.map((row) => marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })).join(', ')} has no unambiguous printed/validated contract month.</div> : null}
+        <div className="market-import-rows">{preview.observations.map((row) => <div key={row.sourceSymbol}><strong>{marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })}</strong><span>{formatMoney(row.price, { digits: String(row.unit).toUpperCase() === 'USD/BBL' ? 3 : 2 })} {row.unit || 'Unit unavailable'}</span>{row?.basisMetadata?.publicationEligible === false ? <StatusBadge tone="warning">Non-publication reprint · evidence only</StatusBadge> : null}<small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Spot assessment'}</small><small>{row.dayChange == null ? 'No daily change' : `${row.dayChange >= 0 ? '+' : ''}${row.dayChange.toFixed(3)}`}</small></div>)}</div>
+        {(preview.availabilityEvidence || []).length ? <div className="market-import-rows">{preview.availabilityEvidence.map((row) => <div key={`availability:${row.sourceSymbol}`}><strong>{marketSymbolLabel(row.sourceSymbol, { productKey: row?.basisMetadata?.productKey, tenor: row.tenor, marketFamily: row?.basisMetadata?.marketFamily, settlementBasis: row?.basisMetadata?.settlementBasis })}</strong><StatusBadge tone={row.status === 'published_na' ? 'warning' : 'neutral'}>{row.status === 'published_na' ? 'Published N/A' : 'Not detected'}</StatusBadge><small>{[row.tenor ? String(row.tenor).toUpperCase() : null, row.printedContractMonth || row.contractMonth, row.assessmentSession, row.sourcePage ? `page ${row.sourcePage}` : null].filter(Boolean).join(' · ') || 'Configured report symbol'}</small><small>No zero, estimate, or carried-forward value will be created.</small></div>)}</div> : null}
         <label className="app-check"><input type="checkbox" checked={entitlementConfirmed} onChange={(event) => setEntitlementConfirmed(event.target.checked)} /><span>I confirm FCOS is licensed to store these structured market observations for internal use.</span></label>
       </section> : null}
     </Drawer>
