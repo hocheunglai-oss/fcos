@@ -246,6 +246,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
       p_report_date: parsed.reportDate,
       p_observations: parsed.observations,
       p_availability: parsed.availabilityEvidence || [],
+      p_library_observations: parsed.libraryObservations || [],
     });
     if (saved.error) throw syncError('A reviewed archive report could not be replayed.', 'MARKET_ARCHIVE_IMPORT_FAILED');
     if (saved.data?.mopsPublication?.status === 'conflict') {
@@ -289,22 +290,25 @@ export async function runMarketReportArchiveReplayBatch(client, {
   };
 }
 
-async function loadKnownMd5(client) {
-  const known = new Set();
+async function loadStoredReportIndex(client) {
+  const completeMd5 = new Set();
+  const storedByMd5 = new Map();
   for (let offset = 0; ; offset += 1000) {
     const result = await client
       .from('market_report_imports')
-      .select('source_md5')
+      .select('id,source_md5,source_hash,source_document_type,report_date,library_observation_count')
       .not('source_md5', 'is', null)
       .range(offset, offset + 999);
     if (result.error) throw syncError('Stored market-report checksums could not be loaded.', 'MARKET_DRIVE_CHECKSUMS_FAILED');
     for (const row of result.data || []) {
       const md5 = safeMd5(row.source_md5);
-      if (md5) known.add(md5);
+      if (!md5) continue;
+      storedByMd5.set(md5, row);
+      if (Number(row.library_observation_count || 0) > 0) completeMd5.add(md5);
     }
     if ((result.data || []).length < 1000) break;
   }
-  return known;
+  return { completeMd5, storedByMd5 };
 }
 
 export async function loadPendingMarketIntelligenceDates(client, { now = new Date(), limit = 5 } = {}) {
@@ -412,20 +416,23 @@ export async function runMarketReportDriveSync(client, {
     briefReconciledCount: 0,
     marketAlertsPublishedCount: 0,
     marketShadowRecordedCount: 0,
+    libraryObservationCount: 0,
+    libraryRepairedCount: 0,
   };
   try {
     await verifyDriveAuthority(fetchImpl, accessToken, config);
-    const [knownMd5, ...folderFiles] = await Promise.all([
-      loadKnownMd5(client),
+    const [storedReportIndex, ...folderFiles] = await Promise.all([
+      loadStoredReportIndex(client),
       ...config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)),
     ]);
+    const { completeMd5, storedByMd5 } = storedReportIndex;
     const files = folderFiles.flat().sort((left, right) => String(left.modifiedAt || '').localeCompare(String(right.modifiedAt || '')) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     summary.discoveredCount = files.length;
 
     const candidates = [];
     const queuedMd5 = new Set();
     for (const file of files) {
-      if (file.md5 && (knownMd5.has(file.md5) || queuedMd5.has(file.md5))) {
+      if (file.md5 && (completeMd5.has(file.md5) || queuedMd5.has(file.md5))) {
         summary.skippedCount += 1;
         continue;
       }
@@ -443,22 +450,34 @@ export async function runMarketReportDriveSync(client, {
         const buffer = await driveBuffer(fetchImpl, accessToken, file.id);
         const md5 = createHash('md5').update(buffer).digest('hex');
         if (file.md5 && md5 !== file.md5) throw syncError('Google Drive market-report checksum validation failed.', 'MARKET_DRIVE_CHECKSUM_MISMATCH');
-        if (knownMd5.has(md5)) {
+        if (completeMd5.has(md5)) {
           summary.skippedCount += 1;
           continue;
         }
         const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name, includeCommentaryContext: true });
-        const saved = await client.rpc('save_market_drive_report_import', {
-          p_idempotency_key: `market-drive-${parsed.sourceHash}`,
-          p_source_document_type: file.documentType,
-          p_source_hash: parsed.sourceHash,
-          p_source_md5: md5,
-          p_drive_file_id: file.id,
-          p_drive_modified_at: file.modifiedAt,
-          p_report_date: parsed.reportDate,
-          p_observations: parsed.observations,
-          p_availability: parsed.availabilityEvidence || [],
-        });
+        const storedImport = storedByMd5.get(md5);
+        if (storedImport && (storedImport.source_hash !== parsed.sourceHash
+          || storedImport.source_document_type !== file.documentType
+          || storedImport.report_date !== parsed.reportDate)) {
+          throw syncError('A stored report checksum no longer matches its immutable identity.', 'MARKET_DRIVE_STORED_IDENTITY_MISMATCH', 409);
+        }
+        const saved = storedImport
+          ? await client.rpc('record_market_report_product_library', {
+            p_import_id: storedImport.id,
+            p_observations: parsed.libraryObservations || [],
+          })
+          : await client.rpc('save_market_drive_report_import', {
+            p_idempotency_key: `market-drive-${parsed.sourceHash}`,
+            p_source_document_type: file.documentType,
+            p_source_hash: parsed.sourceHash,
+            p_source_md5: md5,
+            p_drive_file_id: file.id,
+            p_drive_modified_at: file.modifiedAt,
+            p_report_date: parsed.reportDate,
+            p_observations: parsed.observations,
+            p_availability: parsed.availabilityEvidence || [],
+            p_library_observations: parsed.libraryObservations || [],
+          });
         if (saved.error) throw syncError('A parsed market report could not be saved.', 'MARKET_DRIVE_IMPORT_FAILED');
         const publicationStatus = saved.data?.mopsPublication?.status;
         if (publicationStatus === 'published') summary.mopsPublishedCount += 1;
@@ -468,10 +487,12 @@ export async function runMarketReportDriveSync(client, {
           summary.mopsConflictCount += 1;
           throw syncError('A licensed report conflicts with the authoritative MOPS ledger.', saved.data?.mopsPublication?.conflictCode || 'MOPS_LEDGER_VALUE_MISMATCH');
         }
-        knownMd5.add(md5);
+        completeMd5.add(md5);
         summary.importedCount += 1;
-        touchedReportDates.add(parsed.reportDate);
-        if (Array.isArray(parsed.commentaryContext) && parsed.commentaryContext.length) {
+        summary.libraryObservationCount += Number(saved.data?.libraryObservationCount || 0);
+        if (storedImport) summary.libraryRepairedCount += 1;
+        else touchedReportDates.add(parsed.reportDate);
+        if (!storedImport && Array.isArray(parsed.commentaryContext) && parsed.commentaryContext.length) {
           const contexts = commentaryByDate.get(parsed.reportDate) || [];
           contexts.push({ sourceHash: parsed.sourceHash, documentType: file.documentType, commentaryContext: parsed.commentaryContext });
           commentaryByDate.set(parsed.reportDate, contexts);

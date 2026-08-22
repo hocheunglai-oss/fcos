@@ -2,21 +2,26 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   BellRing,
+  BrainCircuit,
   CheckCircle2,
   FileSearch,
   Info,
   LockKeyhole,
   RefreshCw,
   Save,
+  Search,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 import {
+  analyzeMarketReportLibrary,
   loadMarketIntelligenceAlertRules,
   loadMarketIntelligenceBrief,
+  loadMarketReportCatalogue,
   replayMarketIntelligenceArchive,
   saveMarketIntelligenceAlertRules,
 } from '@/hedge/api/marketData';
-import { Button, Field, InlineError, Panel, StatusBadge } from '@/hedge/components/ui';
+import { Button, Field, InlineError, Panel, Select, StatusBadge } from '@/hedge/components/ui';
 import { formatDate } from '@/hedge/lib/domain';
 import { projectBriefDriver } from './briefProjection';
 import { MarketSignedText } from '@/components/markets/MarketSignedValue';
@@ -87,6 +92,113 @@ function lineageFor(driver, refs, defaultDate) {
 
 function RuleToggle({ checked, onChange, children, disabled }) {
   return <label className="market-alert-toggle"><input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} disabled={disabled} /><span>{children}</span></label>;
+}
+
+function reportTypeLabel(value) {
+  return value === 'bunkerwire' ? 'Bunkerwire' : value === 'european_marketscan' ? 'European Marketscan' : value;
+}
+
+function factLabel(fact) {
+  if (!fact) return 'Evidence unavailable';
+  const section = fact.sectionName && fact.sectionName !== fact.productName ? ` · ${fact.sectionName}` : '';
+  if (fact.kind === 'series') return `${fact.productName} (${fact.sourceSymbol})${section} · deterministic period statistics`;
+  return `${fact.productName} (${fact.sourceSymbol})${section} · ${formatDate(fact.date)}${fact.price == null ? ` · ${fact.state === 'published_na' ? 'Published N/A' : 'Unavailable'}` : ` · ${fact.price} ${fact.unit || 'unit unavailable'}`}`;
+}
+
+function LibraryStat({ label, value }) {
+  return <span><small>{label}</small><strong>{value ?? '—'}</strong></span>;
+}
+
+function MarketReportLibraryAnalysis() {
+  const [catalogueResponse, setCatalogueResponse] = useState(null);
+  const [selectedKeys, setSelectedKeys] = useState([]);
+  const [query, setQuery] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [startDate, setStartDate] = useState('2025-01-01');
+  const [endDate, setEndDate] = useState('');
+  const [prompt, setPrompt] = useState('Compare the selected products over this period and explain the most material changes, ranges, and differences.');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadCatalogue = async ({ force = false } = {}) => {
+    setBusy(true); setError(null);
+    try {
+      const next = await loadMarketReportCatalogue({}, { force, cache: !force });
+      setCatalogueResponse(next);
+      setModelId((current) => current || next?.defaults?.modelId || '');
+      setStartDate((current) => current || next?.defaults?.startDate || '2025-01-01');
+      setEndDate((current) => current || next?.defaults?.endDate || '');
+    } catch (nextError) { setError(nextError); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { loadCatalogue(); }, []);
+
+  const catalogue = array(catalogueResponse?.catalogue);
+  const selected = selectedKeys.map((key) => catalogue.find((row) => row.key === key)).filter(Boolean);
+  const searchResults = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const filtered = catalogue.filter((row) => !selectedKeys.includes(row.key) && (!normalized
+      || row.sourceSymbol.toLowerCase().includes(normalized)
+      || row.productName.toLowerCase().includes(normalized)));
+    return filtered.slice(0, 80);
+  }, [catalogue, query, selectedKeys]);
+  const maxSelected = Number(catalogueResponse?.defaults?.maxSelectedSeries || 8);
+  const toggle = (key) => setSelectedKeys((current) => current.includes(key)
+    ? current.filter((value) => value !== key)
+    : current.length < maxSelected ? [...current, key] : current);
+  const analyze = async () => {
+    setAnalysisBusy(true); setError(null); setResult(null);
+    try {
+      setResult(await analyzeMarketReportLibrary({ seriesKeys: selectedKeys, startDate, endDate, prompt, modelId }));
+    } catch (nextError) { setError(nextError); }
+    finally { setAnalysisBusy(false); }
+  };
+  const evidenceById = new Map(array(result?.evidence).map((fact) => [fact.id, fact]));
+
+  return <Panel className="market-library-panel">
+    <div className="app-panel-header">
+      <div><h2>Licensed report price library</h2><p>Query structured product names, codes and reported prices from Bunkerwire and European Marketscan. Choose the AI model for each analysis.</p></div>
+      <StatusBadge tone={catalogueResponse?.available ? 'positive' : busy ? 'neutral' : 'warning'}>{busy ? 'Loading…' : `${catalogueResponse?.coverage?.productCodeCount || 0} product codes`}</StatusBadge>
+    </div>
+    {error ? <InlineError error={error} action={!catalogueResponse ? <Button onClick={() => loadCatalogue({ force: true })}>Retry</Button> : null} /> : null}
+    {catalogueResponse ? <>
+      <div className="market-library-coverage">
+        <LibraryStat label="Reports stored" value={catalogueResponse.coverage?.importedReportCount || 0} />
+        <LibraryStat label="Price observations" value={(catalogueResponse.coverage?.structuredObservationCount || 0).toLocaleString()} />
+        <LibraryStat label="First report" value={catalogueResponse.coverage?.earliestReportDate ? formatDate(catalogueResponse.coverage.earliestReportDate) : '—'} />
+        <LibraryStat label="Latest report" value={catalogueResponse.coverage?.latestReportDate ? formatDate(catalogueResponse.coverage.latestReportDate) : '—'} />
+      </div>
+      {catalogueResponse.coverage?.pendingBackfillReportCount ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /> {catalogueResponse.coverage.pendingBackfillReportCount} imported reports are awaiting structured-library backfill. Hourly reconciliation and the governed archive replay will complete them.</div> : null}
+      <div className="market-library-builder">
+        <div className="market-library-picker">
+          <Field label={`Products (${selectedKeys.length}/${maxSelected})`} hint="Search by the product name or report code. The exact report and native unit remain separate.">
+            <div className="market-library-search"><Search size={16} /><input className="app-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search product or code" /></div>
+          </Field>
+          {selected.length ? <div className="market-library-selected">{selected.map((row) => <button type="button" key={row.key} onClick={() => toggle(row.key)} aria-label={`Remove ${row.productName} ${row.sourceSymbol}`}><span><strong>{row.productName}</strong><small>{[row.sectionName, row.sourceSymbol, reportTypeLabel(row.documentType), row.unit || 'Unit unavailable'].filter(Boolean).join(' · ')}</small></span><X size={14} /></button>)}</div> : <div className="market-empty-inline market-empty-inline--compact"><FileSearch size={18} /><div><strong>No product selected</strong><span>Choose up to {maxSelected} exact report series.</span></div></div>}
+          <div className="market-library-results" role="listbox" aria-label="Report product search results">{searchResults.map((row) => <button type="button" role="option" aria-selected="false" key={row.key} disabled={selectedKeys.length >= maxSelected} onClick={() => toggle(row.key)}><span><strong>{row.productName}</strong><small>{[row.sectionName, reportTypeLabel(row.documentType), row.unit || 'Unit unavailable', `${row.numericObservationCount} values`].filter(Boolean).join(' · ')}</small></span><code>{row.sourceSymbol}</code></button>)}</div>
+        </div>
+        <div className="market-library-question">
+          <div className="app-form-grid app-form-grid--2">
+            <Field label="From"><input className="app-input" type="date" min="2025-01-01" max={endDate || undefined} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
+            <Field label="To"><input className="app-input" type="date" min={startDate || '2025-01-01'} max={catalogueResponse.defaults?.endDate} value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field>
+          </div>
+          <Field label="AI model"><Select value={modelId} onChange={(event) => setModelId(event.target.value)}>{array(catalogueResponse.models).map((model) => <option key={model.id} value={model.id}>{model.label}{model.recommended ? ' · Recommended' : ''} · {model.costTier}</option>)}</Select></Field>
+          <Field label="Analysis question" hint="The model receives only the selected structured facts and deterministic statistics."><textarea className="app-input market-library-prompt" rows="5" maxLength="1200" value={prompt} onChange={(event) => setPrompt(event.target.value)} /></Field>
+          <Button variant="primary" icon={BrainCircuit} onClick={analyze} disabled={analysisBusy || !selectedKeys.length || !startDate || !endDate || prompt.trim().length < 3}>{analysisBusy ? 'Analyzing structured evidence…' : 'Analyze selected prices'}</Button>
+          <div className="app-callout app-callout--neutral"><LockKeyhole size={15} /> PDF text, prompts and model responses are not stored. Deterministic prices stay authoritative.</div>
+        </div>
+      </div>
+    </> : null}
+    {result ? <div className="market-library-analysis">
+      <div className="market-library-analysis__header"><div><strong>{result.model?.label || result.modelId}</strong><span>{formatDate(result.range?.startDate)} to {formatDate(result.range?.endDate)} · {result.coverage?.totalPoints || 0} structured points</span></div>{result.coverage?.sampledForModel ? <StatusBadge tone="warning">AI context sampled · statistics complete</StatusBadge> : <StatusBadge tone="positive">Complete AI context</StatusBadge>}</div>
+      <p className="market-library-analysis__summary"><MarketSignedText>{result.analysis?.summary}</MarketSignedText></p>
+      <div className="market-library-findings">{array(result.analysis?.findings).map((finding, index) => <article key={`${finding.title}:${index}`}><strong><MarketSignedText>{finding.title}</MarketSignedText></strong><p><MarketSignedText>{finding.explanation}</MarketSignedText></p><details><summary>Evidence ({finding.evidenceIds?.length || 0})</summary><ul>{array(finding.evidenceIds).map((id) => <li key={id}>{factLabel(evidenceById.get(id))}</li>)}</ul></details></article>)}</div>
+      {array(result.analysis?.caveats).length ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} /><div><strong>Analysis limits</strong><ul>{result.analysis.caveats.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul></div></div> : null}
+      <details className="market-disclosure"><summary><Info size={14} /> Deterministic statistics and coverage</summary><div className="market-library-series-stats">{array(result.deterministicSeries).map((series) => <article key={series.key}><strong>{series.productName} <code>{series.sourceSymbol}</code></strong><small>{[series.sectionName, reportTypeLabel(series.documentType), series.unit || 'Unit unavailable'].filter(Boolean).join(' · ')}</small><div><LibraryStat label="Latest" value={series.stats?.latestPrice ?? '—'} /><LibraryStat label="Average" value={series.stats?.average ?? '—'} /><LibraryStat label="Low" value={series.stats?.low ?? '—'} /><LibraryStat label="High" value={series.stats?.high ?? '—'} /><LibraryStat label="Numeric dates" value={series.stats?.numericDateCount || 0} /><LibraryStat label="N/A dates" value={series.stats?.publishedNaDateCount || 0} /></div></article>)}</div></details>
+    </div> : null}
+  </Panel>;
 }
 
 export function MarketDriversAlerts({ readOnly, mode = 'content' }) {
@@ -201,6 +313,7 @@ export function MarketDriversAlerts({ readOnly, mode = 'content' }) {
   return (
     <div className="market-intelligence-stack" data-testid="market-drivers-alerts">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
+      <MarketReportLibraryAnalysis />
       <Panel>
         <div className="app-panel-header"><div><h2>Drivers with report lineage</h2><p>Concise non-verbatim summaries only. Numeric facts are retained only when they validate against the cited report page.</p></div><StatusBadge tone={busy ? 'neutral' : visibleDrivers.length ? 'positive' : 'warning'}>{busy ? 'Loading…' : `${visibleDrivers.length} supported drivers`}</StatusBadge></div>
         <div className="market-driver-tag-row">{DRIVER_TAGS.map((tag) => <span key={tag}>{tag}</span>)}</div>

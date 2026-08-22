@@ -208,6 +208,7 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
+import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, reconcileMarketIntradayDate, saveMarketIntradaySnapshot } from '../_marketIntraday.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
@@ -1429,6 +1430,8 @@ const HANDLER_MODULE_ACCESS = {
   marketPulseSnapshot: ['markets'],
   marketIntelligenceBrief: ['markets'],
   marketIntelligenceCurve: ['markets'],
+  marketReportCatalogue: ['markets'],
+  marketReportAnalysis: ['markets'],
   marketIntelligenceValuation: ['markets'],
   marketForwardFallbackSave: ['markets'],
   marketIntelligenceAlertRulesGet: ['markets'],
@@ -18527,6 +18530,18 @@ async function marketIntelligenceCurve(body = {}, req = null, accessContext = nu
   return loadMarketIntelligenceCurve(context.client, body);
 }
 
+async function marketReportCatalogue(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return loadMarketReportCatalogue(context.client, body);
+}
+
+async function marketReportAnalysis(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return analyzeMarketReportLibrary(context.client, context.profile, body, {
+    onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
+  });
+}
+
 async function marketIntelligenceValuation(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return loadGovernedMarketValuation(context.client, body);
@@ -19192,6 +19207,8 @@ const handlers = {
   marketPulseSnapshot,
   marketIntelligenceBrief,
   marketIntelligenceCurve,
+  marketReportCatalogue,
+  marketReportAnalysis,
   marketIntelligenceValuation,
   marketForwardFallbackSave,
   marketIntelligenceAlertRulesGet,

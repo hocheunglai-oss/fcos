@@ -15,7 +15,7 @@ const DEFAULT_SUPABASE_URL = 'https://pjforfvchygdyqfcgpmw.supabase.co';
 function usage() {
   return [
     'Usage: node scripts/replay-market-report-archive.mjs --archive <directory> [--start YYYY-MM-DD]',
-    '       [--local-only] [--brief-start YYYY-MM-DD] [--enrich-commentary]',
+    '       [--local-only] [--library-only] [--brief-start YYYY-MM-DD] [--enrich-commentary]',
     '       [--apply --expected-manifest-hash <sha256> --expected-impact-hash <sha256>]',
     '',
     'Impact mode is read-only and is the default. Apply mode replays immutable report evidence and',
@@ -25,13 +25,14 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { archive: '', start: DEFAULT_START_DATE, briefStart: '', apply: false, localOnly: false, enrichCommentary: false, expectedManifestHash: '', expectedImpactHash: '' };
+  const options = { archive: '', start: DEFAULT_START_DATE, briefStart: '', apply: false, localOnly: false, libraryOnly: false, enrichCommentary: false, expectedManifestHash: '', expectedImpactHash: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--archive') options.archive = argv[++index] || '';
     else if (argument === '--start') options.start = argv[++index] || '';
     else if (argument === '--apply') options.apply = true;
     else if (argument === '--local-only') options.localOnly = true;
+    else if (argument === '--library-only') options.libraryOnly = true;
     else if (argument === '--brief-start') options.briefStart = argv[++index] || '';
     else if (argument === '--enrich-commentary') options.enrichCommentary = true;
     else if (argument === '--expected-manifest-hash') options.expectedManifestHash = argv[++index] || '';
@@ -49,6 +50,7 @@ function parseArgs(argv) {
   }
   if (options.apply && options.localOnly) throw new Error('Apply mode cannot be combined with --local-only.');
   if (options.enrichCommentary && !options.apply) throw new Error('--enrich-commentary is available only in reviewed apply mode.');
+  if (options.enrichCommentary && options.libraryOnly) throw new Error('--enrich-commentary cannot be combined with --library-only.');
   return options;
 }
 
@@ -113,6 +115,22 @@ function stableReport(report) {
         basisMetadata: row.basisMetadata || null,
       }))
       .sort((left, right) => left.sourceSymbol.localeCompare(right.sourceSymbol)),
+    libraryObservations: (report.libraryObservations || [])
+      .map((row) => ({
+        sourcePage: Number(row.sourcePage),
+        sourceOrder: Number(row.sourceOrder),
+        rowHash: row.rowHash,
+        sourceSymbol: row.sourceSymbol,
+        productName: row.productName,
+        sectionName: row.sectionName || null,
+        unit: row.unit || null,
+        quoteState: row.quoteState,
+        price: row.price == null ? null : Number(row.price),
+        bid: row.bid == null ? null : Number(row.bid),
+        ask: row.ask == null ? null : Number(row.ask),
+        dayChange: row.dayChange == null ? null : Number(row.dayChange),
+      }))
+      .sort((left, right) => left.sourcePage - right.sourcePage || left.sourceOrder - right.sourceOrder || left.rowHash.localeCompare(right.rowHash)),
   };
 }
 
@@ -300,6 +318,7 @@ export function buildMarketArchiveAudit(archive) {
   const stableReports = [...(archive.reports || [])].sort((left, right) => left.reportDate.localeCompare(right.reportDate)
     || left.documentType.localeCompare(right.documentType)
     || left.sourceHash.localeCompare(right.sourceHash));
+  const libraryRows = stableReports.flatMap((report) => (report.libraryObservations || []).map((row) => ({ ...row, documentType: report.documentType })));
   const sourceFileManifest = (archive.sourceFileManifest || (archive.sourceFileReports || stableReports).map((report, index) => ({
     file: `source-${String(index).padStart(6, '0')}.pdf`,
     sourceHash: report.sourceHash,
@@ -332,6 +351,13 @@ export function buildMarketArchiveAudit(archive) {
     distinctReportDates: new Set(stableReports.map((report) => report.reportDate)).size,
     completeEuropeanMarketscanSourceFiles: archive.completeEuropeanMarketscanSourceFiles || 0,
     completeEuropeanMarketscanTriples: stableReports.filter((report) => exactMopsTriple(report) != null).length,
+    libraryObservationCount: libraryRows.length,
+    libraryNumericObservationCount: libraryRows.filter((row) => row.quoteState === 'numeric').length,
+    libraryPublishedNaCount: libraryRows.filter((row) => row.quoteState === 'published_na').length,
+    libraryProductCodeCount: new Set(libraryRows.map((row) => row.sourceSymbol)).size,
+    libraryReportSeriesCount: new Set(libraryRows.map((row) => `${row.documentType}:${row.sourceSymbol}`)).size,
+    libraryProductVariantCount: new Set(libraryRows.map((row) => JSON.stringify([row.documentType, row.sourceSymbol, row.productName, row.sectionName || null, row.unit || null]))).size,
+    libraryMissingUnitCount: libraryRows.filter((row) => !row.unit).length,
     sourceFileSymbolCounts: symbolCounts(archive.sourceFileReports || stableReports),
     uniqueReportSymbolCounts: symbolCounts(stableReports),
     contractMonthIssues: forwardContractMonthIssues(stableReports),
@@ -486,21 +512,63 @@ async function backfillDerivedBriefs(client, reports, sourceFilesByHash, { brief
 }
 
 export async function applyReplay(client, reports, sourceFilesByHash, options = {}) {
-  const summary = { reports: reports.length, completed: 0, replayed: 0, quarantined: 0, published: 0, matched: 0, incomplete: 0, conflicts: 0 };
+  const summary = {
+    reports: reports.length,
+    completed: 0,
+    replayed: 0,
+    quarantined: 0,
+    published: 0,
+    matched: 0,
+    incomplete: 0,
+    conflicts: 0,
+    libraryObservationCount: 0,
+    libraryInsertedCount: 0,
+  };
+  let importsBySourceHash = null;
+  if (options.libraryOnly) {
+    const imports = [];
+    for (let offset = 0; ; offset += 1000) {
+      const page = await client
+        .from('market_report_imports')
+        .select('id,source_hash,source_document_type,report_date')
+        .gte('report_date', options.start || DEFAULT_START_DATE)
+        .order('report_date', { ascending: true })
+        .range(offset, offset + 999);
+      if (page.error) throw new Error(`Stored market report imports could not be loaded: ${page.error.message}`);
+      imports.push(...(page.data || []));
+      if ((page.data || []).length < 1000) break;
+    }
+    importsBySourceHash = new Map(imports.map((row) => [row.source_hash, row]));
+  }
   for (const [index, report] of reports.entries()) {
-    const result = await client.rpc('save_market_report_import', {
-      p_idempotency_key: `market-replay:${report.sourceHash}`,
-      p_source_document_type: report.documentType,
-      p_source_hash: report.sourceHash,
-      p_report_date: report.reportDate,
-      p_observations: report.observations,
-      p_actor_user_id: null,
-      p_actor_email: 'system@fcos.local',
-      p_availability: report.availabilityEvidence || [],
-    });
+    const storedImport = importsBySourceHash?.get(report.sourceHash);
+    if (options.libraryOnly && (!storedImport
+      || storedImport.source_document_type !== report.documentType
+      || storedImport.report_date !== report.reportDate)) {
+      throw new Error(`Imported report identity was not found for library backfill: ${report.reportDate} ${report.documentType}`);
+    }
+    const result = options.libraryOnly
+      ? await client.rpc('record_market_report_product_library', {
+        p_import_id: storedImport.id,
+        p_observations: report.libraryObservations || [],
+      })
+      : await client.rpc('save_market_report_import', {
+        p_idempotency_key: `market-replay:${report.sourceHash}`,
+        p_source_document_type: report.documentType,
+        p_source_hash: report.sourceHash,
+        p_report_date: report.reportDate,
+        p_observations: report.observations,
+        p_actor_user_id: null,
+        p_actor_email: 'system@fcos.local',
+        p_availability: report.availabilityEvidence || [],
+        p_library_observations: report.libraryObservations || [],
+      });
     if (result.error) throw new Error(`Replay failed for ${report.reportDate} ${report.documentType}: ${result.error.message}`);
-    if (result.data?.status === 'replayed') summary.replayed += 1;
+    if (options.libraryOnly) summary.completed += 1;
+    else if (result.data?.status === 'replayed') summary.replayed += 1;
     else summary.completed += 1;
+    summary.libraryObservationCount += Number(result.data?.libraryObservationCount || 0);
+    summary.libraryInsertedCount += Number(result.data?.libraryInsertedCount || 0);
     summary.quarantined += Number(result.data?.quarantinedCount || 0);
     const publication = result.data?.mopsPublication?.status;
     if (publication === 'published') summary.published += 1;
@@ -511,7 +579,12 @@ export async function applyReplay(client, reports, sourceFilesByHash, options = 
       console.error(`Structured market replay: ${index + 1}/${reports.length} reports processed.`);
     }
   }
-  return { ...summary, derivedBriefs: await backfillDerivedBriefs(client, reports, sourceFilesByHash, options) };
+  return {
+    ...summary,
+    derivedBriefs: options.libraryOnly
+      ? { skipped: true, reason: 'library_only' }
+      : await backfillDerivedBriefs(client, reports, sourceFilesByHash, options),
+  };
 }
 
 async function main() {

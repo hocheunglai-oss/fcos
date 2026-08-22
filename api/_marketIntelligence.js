@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { contractMonthForTenor, shiftContractMonth } from '../shared/plattsMarketModel.js';
+import { extractMarketReportLibrary, marketReportPageText } from './_marketReportLibrary.js';
 
 const MAX_REPORT_BYTES = 5_000_000;
 const REPORT_TYPES = new Set(['bunkerwire', 'european_marketscan']);
@@ -357,7 +358,7 @@ export async function parseMarketReportPdf(buffer, { documentType = null, filena
     parsed = await pdfParse(validated, {
       pagerender: async (pageData) => {
         const content = await pageData.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
-        const pageText = content.items.map((item) => String(item.str || '')).join(' ');
+        const pageText = marketReportPageText(content.items);
         pageTexts.push(pageText);
         return pageText;
       },
@@ -366,8 +367,17 @@ export async function parseMarketReportPdf(buffer, { documentType = null, filena
     throw marketError('The PDF text could not be read. Use an unlocked Bunkerwire or European Marketscan report.', 400, 'MARKET_REPORT_UNREADABLE');
   }
   const preview = parseMarketReportText(parsed.text, { documentType, filename, pageTexts });
+  const library = extractMarketReportLibrary(pageTexts, {
+    documentType: preview.documentType,
+    knownBasis: SYMBOL_BASIS,
+  });
   return {
     ...preview,
+    libraryObservations: library.observations,
+    libraryObservationCount: library.observationCount,
+    libraryNumericCount: library.numericCount,
+    libraryPublishedNaCount: library.publishedNaCount,
+    libraryProductCodeCount: library.productCodeCount,
     sourceHash: createHash('sha256').update(validated).digest('hex'),
     sourceBytes: validated.length,
     ...(includeCommentaryContext ? { commentaryContext: pageTexts.map((text, index) => ({ page: index + 1, text })).filter((row) => row.text) } : {}),
@@ -813,6 +823,7 @@ export async function importMarketReport(client, profile, body = {}) {
     p_actor_user_id: profile.id,
     p_actor_email: String(profile.email || '').toLowerCase(),
     p_availability: preview.availabilityEvidence || [],
+    p_library_observations: preview.libraryObservations || [],
   });
   if (result.error) throw marketError(`The market report could not be imported: ${result.error.message}`, 502, 'MARKET_REPORT_IMPORT_FAILED');
   return { ...result.data, preview };

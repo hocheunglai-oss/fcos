@@ -90,6 +90,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   marketPulseSnapshot: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   marketIntelligenceBrief: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   marketIntelligenceCurve: readPolicy({"cache":"none","externalAction":false,"capability":null}),
+  marketReportCatalogue: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  marketReportAnalysis: readPolicy({"cache":"none","externalAction":true,"capability":null}),
   marketIntelligenceValuation: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   marketForwardFallbackSave: mutationPolicy({"cache":"none","externalAction":false,"capability":"hedge_book_manage"}),
   marketIntelligenceAlertRulesGet: readPolicy({"cache":"none","externalAction":false,"capability":null}),

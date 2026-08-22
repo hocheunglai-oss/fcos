@@ -92,6 +92,22 @@ export function loadMarketIntelligenceCurve(payload = {}, options = {}) {
   });
 }
 
+export function loadMarketReportCatalogue(payload = {}, options = {}) {
+  return requestMarketIntelligence('marketReportCatalogue', payload, {
+    cache: true,
+    cacheTtlMs: 60_000,
+    cacheTags: ['markets', 'market-report-catalogue'],
+    ...options,
+  });
+}
+
+export function analyzeMarketReportLibrary(payload, options = {}) {
+  return requestMarketIntelligence('marketReportAnalysis', payload, {
+    cache: false,
+    ...options,
+  });
+}
+
 export function saveMarketForwardFallback(payload, options = {}) {
   return requestMarketIntelligence('marketForwardFallbackSave', payload, {
     cache: false,

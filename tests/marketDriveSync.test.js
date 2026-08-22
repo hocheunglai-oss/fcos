@@ -20,7 +20,7 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [], publicationStatus = null, pairedImports = [], briefs = [] } = {}) {
+function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = null, pairedImports = [], briefs = [] } = {}) {
   const rpcCalls = [];
   return {
     rpcCalls,
@@ -29,12 +29,16 @@ function clientMock({ knownMd5 = [], publicationStatus = null, pairedImports = [
       if (name === 'reserve_market_report_sync_run') return { data: { reserved: true, status: 'running' }, error: null };
       if (name === 'finish_market_report_sync_run') return { data: { status: payload.p_status }, error: null };
       if (name === 'save_market_drive_report_import') return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
+      if (name === 'record_market_report_product_library') return { data: { libraryObservationCount: payload.p_observations.length, libraryInsertedCount: payload.p_observations.length }, error: null };
       return { data: null, error: new Error('Unexpected RPC') };
     },
     from: (table) => ({
       select: (columns) => {
-        if (table === 'market_report_imports' && columns === 'source_md5') return {
-          not: () => ({ range: async () => ({ data: knownMd5.map((source_md5) => ({ source_md5 })), error: null }) }),
+        if (table === 'market_report_imports' && columns === 'id,source_md5,source_hash,source_document_type,report_date,library_observation_count') return {
+          not: () => ({ range: async () => ({ data: [
+            ...knownMd5.map((source_md5) => ({ id: `import-${source_md5}`, source_md5, library_observation_count: 1 })),
+            ...storedReports,
+          ], error: null }) }),
         };
         if (table === 'market_report_imports' && columns === 'report_date,source_document_type') return {
           gte: () => ({ order: () => ({ limit: async () => ({ data: pairedImports, error: null }) }) }),
@@ -149,13 +153,35 @@ test('hourly sync parses and atomically stores an unseen report', async () => {
   const drive = driveFetch({ files: [{ id: 'reportfile67890', name: 'EUM_20260820.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-20T09:02:00Z', documentType: 'european_marketscan' }], pdf });
   const result = await runMarketReportDriveSync(client, {
     accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-20T09:20:00Z'),
-    parseReport: async () => ({ sourceHash: 'a'.repeat(64), reportDate: '2026-08-20', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }] }),
+    parseReport: async () => ({ sourceHash: 'a'.repeat(64), reportDate: '2026-08-20', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }], libraryObservations: [{ rowHash: 'd'.repeat(64), sourcePage: 1, sourceOrder: 1, sourceSymbol: 'AMFSA00', productName: '0.5% FOB Singapore cargo', unit: 'USD/MT', quoteState: 'numeric', price: 700 }] }),
   });
   assert.equal(result.importedCount, 1);
   const saved = client.rpcCalls.find(({ name }) => name === 'save_market_drive_report_import');
   assert.equal(saved.payload.p_source_md5, md5);
   assert.equal(saved.payload.p_source_document_type, 'european_marketscan');
   assert.deepEqual(saved.payload.p_observations, [{ sourceSymbol: 'AMFSA00', price: 700 }]);
+  assert.equal(saved.payload.p_library_observations[0].productName, '0.5% FOB Singapore cargo');
+});
+
+test('hourly sync repairs a stored report library without replaying governed evidence', async () => {
+  const pdf = Buffer.from('%PDF-library-repair');
+  const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');
+  const sourceHash = 'e'.repeat(64);
+  const client = clientMock({ storedReports: [{
+    id: 'stored-import-id', source_md5: md5, source_hash: sourceHash,
+    source_document_type: 'bunkerwire', report_date: '2026-08-20', library_observation_count: 0,
+  }] });
+  const drive = driveFetch({ files: [{ id: 'reportfile98765', name: 'BW_20260820.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-20T09:02:00Z', documentType: 'bunkerwire' }], pdf });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-20T10:20:00Z'),
+    parseReport: async () => ({ sourceHash, reportDate: '2026-08-20', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }], libraryObservations: [{ rowHash: 'f'.repeat(64), sourcePage: 1, sourceOrder: 1, sourceSymbol: 'MFSPD00', productName: 'Singapore', unit: 'USD/MT', quoteState: 'numeric', price: 700 }] }),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.libraryRepairedCount, 1);
+  assert.equal(client.rpcCalls.some(({ name }) => name === 'save_market_drive_report_import'), false);
+  const repaired = client.rpcCalls.find(({ name }) => name === 'record_market_report_product_library');
+  assert.equal(repaired.payload.p_import_id, 'stored-import-id');
+  assert.equal(repaired.payload.p_observations[0].sourceSymbol, 'MFSPD00');
 });
 
 test('reviewed archive replay binds the Drive manifest and derives deterministic briefs without commentary', async () => {
