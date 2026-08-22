@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { loadPendingMarketIntelligenceDates, marketDriveRunKey, runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../api/_marketDriveSync.js';
+import { loadPendingMarketIntelligenceDates, marketDriveRunKey, prioritizeMarketDriveCandidates, runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../api/_marketDriveSync.js';
 
 const config = {
   accountEmail: 'vince.less@gmail.com',
@@ -93,6 +93,21 @@ function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buff
 
 test('market Drive run keys are stable UTC-hour idempotency boundaries', () => {
   assert.equal(marketDriveRunKey(new Date('2026-08-20T09:59:59.999Z')), 'market-drive:2026-08-20T09');
+});
+
+test('hourly sync prioritizes unseen reports, then current library repairs, before legacy cleanup', () => {
+  const storedByMd5 = new Map([
+    ['a'.repeat(32), { report_date: '2024-01-02' }],
+    ['b'.repeat(32), { report_date: '2026-08-20' }],
+    ['c'.repeat(32), { report_date: '2025-01-02' }],
+  ]);
+  const ordered = prioritizeMarketDriveCandidates([
+    { id: 'legacy', md5: 'a'.repeat(32), modifiedAt: '2024-01-02T00:00:00Z' },
+    { id: 'current', md5: 'b'.repeat(32), modifiedAt: '2026-08-20T00:00:00Z' },
+    { id: 'new', md5: 'd'.repeat(32), modifiedAt: '2026-08-21T00:00:00Z' },
+    { id: 'first-current', md5: 'c'.repeat(32), modifiedAt: '2025-01-02T00:00:00Z' },
+  ], storedByMd5);
+  assert.deepEqual(ordered.map((row) => row.id), ['new', 'current', 'first-current', 'legacy']);
 });
 
 test('hourly sync accepts exact approved folders linked through root shortcuts', async () => {

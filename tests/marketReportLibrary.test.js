@@ -156,3 +156,21 @@ test('report catalogue is materialized and refreshed only for series touched by 
   assert.match(sql, /revoke all on table public\.market_report_product_catalogue from public, anon, authenticated/i);
   assert.doesNotMatch(sql, /grant (?:all|select).* to (?:anon|authenticated)/i);
 });
+
+test('report product observations use one bounded validated bulk insert', () => {
+  const sql = fs.readFileSync(new URL('../supabase/migrations/20260822061640_bulk_market_report_library_recording.sql', import.meta.url), 'utf8');
+  assert.match(sql, /jsonb_array_length[\s\S]*> 2500/i);
+  assert.match(sql, /jsonb_to_recordset/i);
+  assert.match(sql, /get diagnostics v_inserted = row_count/i);
+  assert.match(sql, /on conflict \(import_id, row_hash\) do nothing/i);
+  assert.doesNotMatch(sql, /for\s+v_item\s+in/i);
+  assert.match(sql, /revoke all on function public\.record_market_report_product_library\(uuid,jsonb\) from public, anon, authenticated/i);
+});
+
+test('report catalogue and incremental refresh remain scoped to 1 January 2025 onward', () => {
+  const sql = fs.readFileSync(new URL('../supabase/migrations/20260822063020_scope_market_report_catalogue_from_2025.sql', import.meta.url), 'utf8');
+  assert.match(sql, /truncate table public\.market_report_product_catalogue/i);
+  assert.ok((sql.match(/report_date >= date '2025-01-01'/gi) || []).length >= 4);
+  assert.match(sql, /where import_id = new\.id[\s\S]*report_date >= date '2025-01-01'/i);
+  assert.match(sql, /revoke all on function public\.refresh_market_report_product_catalogue_for_import\(\) from public, anon, authenticated/i);
+});

@@ -368,6 +368,27 @@ export function marketDriveRunKey(now = new Date()) {
   return `market-drive:${date.toISOString().slice(0, 13)}`;
 }
 
+export function prioritizeMarketDriveCandidates(files = [], storedByMd5 = new Map()) {
+  const priority = (file) => {
+    const stored = storedByMd5.get(safeMd5(file?.md5));
+    if (!stored) return 0;
+    return String(stored.report_date || '') >= '2025-01-01' ? 1 : 2;
+  };
+  return [...files].sort((left, right) => {
+    const rankDifference = priority(left) - priority(right);
+    if (rankDifference) return rankDifference;
+    const leftStored = storedByMd5.get(safeMd5(left?.md5));
+    const rightStored = storedByMd5.get(safeMd5(right?.md5));
+    if (leftStored && rightStored) {
+      const reportDateDifference = String(rightStored.report_date || '').localeCompare(String(leftStored.report_date || ''));
+      if (reportDateDifference) return reportDateDifference;
+    }
+    return String(left?.modifiedAt || '').localeCompare(String(right?.modifiedAt || ''))
+      || String(left?.name || '').localeCompare(String(right?.name || ''))
+      || String(left?.id || '').localeCompare(String(right?.id || ''));
+  });
+}
+
 async function finishRun(client, runKey, summary, status, errorCode = null) {
   const result = await client.rpc('finish_market_report_sync_run', {
     p_run_key: runKey,
@@ -439,12 +460,13 @@ export async function runMarketReportDriveSync(client, {
       if (file.md5) queuedMd5.add(file.md5);
       candidates.push(file);
     }
+    const orderedCandidates = prioritizeMarketDriveCandidates(candidates, storedByMd5);
     const limit = Math.max(1, Math.min(Number(importLimit) || DEFAULT_IMPORT_LIMIT, 50));
-    summary.deferredCount = Math.max(0, candidates.length - limit);
+    summary.deferredCount = Math.max(0, orderedCandidates.length - limit);
 
     const touchedReportDates = new Set();
     const commentaryByDate = new Map();
-    for (const file of candidates.slice(0, limit)) {
+    for (const file of orderedCandidates.slice(0, limit)) {
       try {
         if (file.size > marketReportLimits.maxBytes) throw syncError('A market report exceeds the configured PDF limit.', 'MARKET_REPORT_TOO_LARGE');
         const buffer = await driveBuffer(fetchImpl, accessToken, file.id);
