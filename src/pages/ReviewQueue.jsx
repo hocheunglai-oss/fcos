@@ -16,7 +16,6 @@ import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
-import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
 import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
 import { classifyExceptionReviewStem } from '@/lib/exceptionReviewClassifier';
 import {
@@ -88,12 +87,6 @@ export default function ReviewQueue() {
   const [selectedWorkflowRow, setSelectedWorkflowRow] = useState(null);
   const [workflowSaving, setWorkflowSaving] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
-  const [backboneHandoffs, setBackboneHandoffs] = useState([]);
-  const [backboneHandoffError, setBackboneHandoffError] = useState('');
-  const [selectedBackboneHandoff, setSelectedBackboneHandoff] = useState(null);
-  const [backboneHandoffDetail, setBackboneHandoffDetail] = useState(null);
-  const [backboneHandoffDetailError, setBackboneHandoffDetailError] = useState('');
-  const [backboneHandoffDetailLoading, setBackboneHandoffDetailLoading] = useState(false);
   const [workflowForm, setWorkflowForm] = useState({
     status: 'Open', department: 'Unassigned', ownerUserId: '', priority: 'High', dueDate: '', latestNote: '', resolutionNote: '',
   });
@@ -116,7 +109,6 @@ export default function ReviewQueue() {
     workflowRequestRef.current += 1;
     setLoading(true);
     setError(null);
-    setBackboneHandoffError('');
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
     const applyExceptionData = (res) => {
       setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
@@ -138,26 +130,17 @@ export default function ReviewQueue() {
         }
       });
     };
-    const [, handoffsRes] = await Promise.all([
-      requestExceptionData({
-        name: 'salesforceDashboardFiltered',
-        payload: {
+    await requestExceptionData({
+      name: 'salesforceDashboardFiltered',
+      payload: {
         mode: 'exception_review',
         trendYear: THIS_YEAR,
         dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
         dateWindows,
-        },
-        force: options.force,
-        apply: applyExceptionData,
-      }),
-      appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: false, force: options.force }),
-    ]);
-    if (handoffsRes.data?.error) {
-      setBackboneHandoffError(handoffsRes.data.error);
-      setBackboneHandoffs([]);
-    } else {
-      setBackboneHandoffs(handoffsRes.data?.handoffs || []);
-    }
+      },
+      force: options.force,
+      apply: applyExceptionData,
+    });
     setLoading(false);
   };
 
@@ -234,20 +217,6 @@ export default function ReviewQueue() {
       },
     }));
     setSelectedWorkflowRow(null);
-  };
-
-  const openBackboneHandoff = async (handoff) => {
-    setSelectedBackboneHandoff(handoff);
-    setBackboneHandoffDetail(null);
-    setBackboneHandoffDetailError('');
-    setBackboneHandoffDetailLoading(true);
-    const res = await appClient.functions.invoke('backboneFinanceHandoffDetail', { handoffId: handoff.handoffId }, { cache: true });
-    setBackboneHandoffDetailLoading(false);
-    if (res.data?.error) {
-      setBackboneHandoffDetailError(res.data.error);
-      return;
-    }
-    setBackboneHandoffDetail(res.data);
   };
 
   const exportCsv = () => {
@@ -402,13 +371,6 @@ export default function ReviewQueue() {
         </div>
       )}
 
-      <BackboneFinanceHandoffPanel
-        handoffs={backboneHandoffs}
-        loading={loading && !data}
-        error={backboneHandoffError}
-        onOpen={openBackboneHandoff}
-      />
-
       <TableShell
         title="Exception List"
         meta={`${reviewRows.length.toLocaleString()} matching items`}
@@ -520,19 +482,6 @@ export default function ReviewQueue() {
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
         onUpdated={() => load(selectedYears, selectedMonths, { force: true })}
-      />
-
-      <BackboneFinanceHandoffDialog
-        selected={selectedBackboneHandoff}
-        detail={backboneHandoffDetail}
-        loading={backboneHandoffDetailLoading}
-        error={backboneHandoffDetailError}
-        onOpenChange={(open) => {
-          if (open) return;
-          setSelectedBackboneHandoff(null);
-          setBackboneHandoffDetail(null);
-          setBackboneHandoffDetailError('');
-        }}
       />
 
       <Dialog open={Boolean(selectedWorkflowRow)} onOpenChange={(open) => !open && setSelectedWorkflowRow(null)}>
