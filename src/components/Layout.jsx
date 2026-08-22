@@ -813,7 +813,7 @@ export default function Layout() {
         </TooltipProvider>
       </aside>
 
-      <div className="w-[72px] shrink-0" aria-hidden="true" />
+      <div className="app-workspace-sidebar-spacer w-[72px] shrink-0" aria-hidden="true" />
 
       <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
         {versionUpdate && (

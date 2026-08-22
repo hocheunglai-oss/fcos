@@ -14,14 +14,14 @@ export default function WorkspaceViewBar({
   return (
     <div
       className={cn(
-        'app-navigation-material flex flex-col gap-3 rounded-[var(--radius-control)] border border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between',
+        'app-navigation-material flex items-center gap-3 overflow-x-auto rounded-[var(--radius-control)] border border-border px-3 py-2.5 sm:justify-between',
         sticky && 'sticky top-0 z-30 rounded-none border-x-0 border-t-0',
         className,
       )}
       role="region"
       aria-label="Workspace views"
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-1" role="tablist" aria-label="Workspace views">
+      <div className="flex min-w-max items-center gap-1" role="tablist" aria-label="Workspace views">
         {views.map((view) => {
           const Icon = view.icon;
           const selected = value === view.id;
@@ -50,7 +50,7 @@ export default function WorkspaceViewBar({
         })}
       </div>
       {(status || trailing) ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {status}
           {trailing}
         </div>

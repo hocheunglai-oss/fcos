@@ -37,4 +37,7 @@ test('shared controls use system-shaped materials while financial content remain
   assert.match(table, /material-table/);
   assert.match(sheet, /glass-floating/);
   assert.match(shell, /material-panel/);
+  const viewBar = await read('src/components/common/WorkspaceViewBar.jsx');
+  assert.match(viewBar, /overflow-x-auto/);
+  assert.match(viewBar, /min-w-max/);
 });

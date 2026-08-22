@@ -550,6 +550,18 @@
 }
 
 @media (max-width: 639px) {
+  .app-workspace-sidebar {
+    width: 3.5rem !important;
+  }
+
+  .app-workspace-sidebar-spacer {
+    width: 3.5rem !important;
+  }
+
+  .app-workspace-sidebar .app-navigation-material {
+    width: 3.5rem;
+  }
+
   .account-insight-window {
     border-radius: var(--radius-window) var(--radius-window) 0 0;
   }
