@@ -22,7 +22,7 @@ export default function EmailRouter() {
   };
 
   return (
-    <div className="p-4 lg:p-6">
+    <div className="workspace-tools p-4 lg:p-6">
       <EmailRouterWorkspace settingsOpen={settingsOpen} onSettingsOpenChange={changeSettingsOpen} />
     </div>
   );

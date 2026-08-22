@@ -95,7 +95,7 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
   }, [rows, sources]);
 
   return (
-    <div className="mx-auto min-h-screen max-w-[1440px] bg-background p-4 sm:p-6 lg:p-8">
+    <div className="workspace-administration-canvas mx-auto min-h-screen max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administrator audit"

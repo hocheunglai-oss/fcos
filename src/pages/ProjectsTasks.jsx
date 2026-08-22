@@ -1362,7 +1362,7 @@ export default function ProjectsTasks() {
 
   return (
     <TooltipProvider delayDuration={250}>
-      <div className="space-y-4">
+      <div className="workspace-collaboration space-y-4">
         <PageHeader
           icon={FolderKanban}
           eyebrow="Daily Work"

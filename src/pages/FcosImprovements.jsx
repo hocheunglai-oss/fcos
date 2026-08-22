@@ -161,9 +161,9 @@ function proposalSummary(proposal, users = []) {
 }
 
 function ProposalBadge({ state }) {
-  if (state === 'approved') return <Badge className="border-emerald-200 bg-emerald-50 text-emerald-800">Approved</Badge>;
-  if (state === 'rejected') return <Badge className="border-slate-200 bg-slate-100 text-slate-700">Rejected</Badge>;
-  return <Badge className="border-amber-200 bg-amber-50 text-amber-900">Pending Approval</Badge>;
+  if (state === 'approved') return <Badge className="border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">Approved</Badge>;
+  if (state === 'rejected') return <Badge className="border-border bg-muted text-muted-foreground">Rejected</Badge>;
+  return <Badge className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">Pending Approval</Badge>;
 }
 
 function Field({ label, children, required = false, hint }) {
@@ -423,7 +423,7 @@ export default function FcosImprovements() {
   const selectedStatusTransition = allowedStatusTransitions.find((transition) => transition.status === nextStatus);
 
   return (
-    <div className="space-y-4">
+    <div className="workspace-collaboration space-y-4">
       <PageHeader
         icon={Lightbulb}
         eyebrow="Personal"

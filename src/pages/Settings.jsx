@@ -82,7 +82,7 @@ function sameWorkspaceSettings(a, b) {
 
 function SettingsPanel({ title, description, icon: Icon, meta, children }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="material-panel rounded-lg border border-border bg-card p-4">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           {Icon && (
@@ -923,7 +923,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   }[section];
 
   return (
-    <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
+    <div className="workspace-administration-canvas mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={Settings}
         eyebrow={pageMeta.eyebrow}

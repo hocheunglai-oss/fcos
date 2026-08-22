@@ -976,7 +976,7 @@ export default function GrowthCoaching() {
 
   return (
     <TooltipProvider>
-      <div className="space-y-6">
+      <div className="workspace-collaboration space-y-6">
         <PageHeader
           icon={Target}
           eyebrow="Daily Work"

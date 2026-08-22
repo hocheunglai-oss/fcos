@@ -46,12 +46,12 @@ function sourceLabel(source) {
 }
 
 function sourceBadgeClass(source) {
-  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10";
-  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10";
-  if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10";
-  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10";
-  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10";
-  return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10" : "bg-blue-50 text-blue-800 ring-blue-700/10";
+  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25";
+  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25";
+  if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25";
+  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25";
+  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25";
+  return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25" : "bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25";
 }
 
 export default function WorkNotifications() {
@@ -186,14 +186,14 @@ export default function WorkNotifications() {
       }}
     >
       <PopoverTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8 shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-950" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
+        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
           {unreadCount ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
           {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
-          {hasUnavailableSources && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full border border-white bg-amber-500" />}
+          {hasUnavailableSources && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full border border-background bg-amber-500" />}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[calc(100vw-24px)] max-w-[400px] p-0">
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
+      <PopoverContent align="end" className="glass-floating w-[calc(100vw-24px)] max-w-[400px] overflow-hidden p-0">
+        <div className="app-navigation-caption-material flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold">Notifications</div>
             <div className="text-xs text-muted-foreground">{unreadCount.toLocaleString()} unread</div>
@@ -237,7 +237,7 @@ export default function WorkNotifications() {
         </div>
 
         {hasUnavailableSources && (
-          <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950">
+          <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{unavailableLabel} notifications are temporarily unavailable.</span>
           </div>
@@ -252,9 +252,9 @@ export default function WorkNotifications() {
           ) : notifications.length ? (
             <div className="divide-y divide-border">
               {notifications.map((notification) => (
-                <div key={notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70")}>
+                <div key={notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
                   <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
-                    <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-slate-300" : "bg-blue-600")} />
+                    <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">
                         <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>

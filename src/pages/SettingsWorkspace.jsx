@@ -64,7 +64,7 @@ function normalizeLegacySection(section, panel) {
 
 function FcosUpdatesSection({ methodologyAction }) {
   return (
-    <div className="mx-auto max-w-7xl p-6 lg:p-8">
+    <div className="workspace-administration-canvas mx-auto max-w-7xl p-6 lg:p-8">
       <PageHeader
         icon={Megaphone}
         eyebrow="Administration"
@@ -131,8 +131,8 @@ export default function SettingsWorkspace() {
   const requestSignOut = () => window.dispatchEvent(new CustomEvent('fcos:sign-out-requested'));
 
   return (
-    <div className="min-h-full bg-slate-50 lg:grid lg:grid-cols-[212px_minmax(0,1fr)]">
-      <aside className="flex flex-col border-b border-slate-200 bg-white p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
+    <div className="workspace-administration min-h-full lg:grid lg:grid-cols-[212px_minmax(0,1fr)]">
+      <aside className="app-navigation-material settings-navigation flex flex-col border-b border-border p-3 lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r lg:p-4">
         <div className="mb-4 hidden items-center gap-2 px-2 lg:flex">
           <Activity className="h-4 w-4 text-blue-700" />
           <span className="text-sm font-semibold">Settings</span>
@@ -168,7 +168,7 @@ export default function SettingsWorkspace() {
           ))}
         </nav>
 
-        <div className="mt-5 hidden border-t border-slate-200 pt-4 lg:block">
+        <div className="mt-5 hidden border-t border-border pt-4 lg:block">
           <div className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related workflow settings</div>
           <div className="mt-1 space-y-1 text-xs">
             {hasModuleAccess('email_router') && isAdministrator && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/email-router?tab=routing-setup">Email Router setup</Link>}
@@ -177,19 +177,19 @@ export default function SettingsWorkspace() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3 lg:mt-auto lg:block lg:space-y-1">
+        <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border pt-3 lg:mt-auto lg:block lg:space-y-1">
           <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-3 text-xs font-medium" onClick={openVersionAudit} title="Open Version Audit Trail">
             <History className="h-4 w-4 shrink-0" />
             <span className="truncate">Version {APP_VERSION}</span>
           </Button>
-          <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-3 text-xs font-medium text-red-700 hover:bg-red-50 hover:text-red-800" onClick={requestSignOut}>
+          <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-3 text-xs font-medium text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/50 dark:hover:text-red-200" onClick={requestSignOut}>
             <LogOut className="h-4 w-4 shrink-0" />
             <span>Sign out</span>
           </Button>
         </div>
       </aside>
 
-      <main className="min-w-0">
+      <main className="settings-content min-w-0">
         {active === 'my' && <SettingsPage section="my" methodologyAction={methodologyAction} />}
         {active === 'people' && <AdminControl methodologyAction={methodologyAction} />}
         {active === 'email-delivery' && <SettingsPage section="email-delivery" methodologyAction={methodologyAction} />}

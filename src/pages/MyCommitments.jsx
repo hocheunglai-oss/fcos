@@ -156,7 +156,7 @@ export default function MyCommitments() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="workspace-collaboration space-y-5">
       <PageHeader
         icon={UserRoundCheck}
         eyebrow="Daily Work"

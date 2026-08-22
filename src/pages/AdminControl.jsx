@@ -675,7 +675,7 @@ export default function AdminControl({ methodologyAction = null }) {
   };
 
   return (
-    <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
+    <div className="workspace-administration-canvas mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administration"

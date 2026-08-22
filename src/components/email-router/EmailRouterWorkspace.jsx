@@ -567,7 +567,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     className={className}
   />;
 
-  return <div>
+  return <div className="email-router-workspace">
     <PageHeader
       title="Email Router"
       status={<div className="flex flex-wrap items-center gap-2"><ResultNotice result={actionResult} compact /><EmailRouterFreshness onOpenOperations={() => setOperationsOpen(true)} />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
@@ -575,8 +575,8 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
       compact
       className="mb-3"
     />
-    <section className="flex min-h-[620px] flex-col overflow-hidden border border-border bg-background xl:h-[calc(100dvh-8rem)]">
-      <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2">
+    <section className="material-panel flex min-h-[620px] flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-card xl:h-[calc(100dvh-8rem)]">
+      <div className="app-navigation-caption-material email-router-commandbar flex shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2">
         <Tabs value={folder} onValueChange={setFolder} className="shrink-0"><TabsList><TabsTrigger value="inbox" className="shrink-0 gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="shrink-0 gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="shrink-0 gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger><TabsTrigger value="market_report" className="shrink-0 gap-1.5"><Newspaper className="h-3.5 w-3.5" />Market Report</TabsTrigger><TabsTrigger value="trash" className="shrink-0 gap-1.5"><Trash2 className="h-3.5 w-3.5" />Trash</TabsTrigger><TabsTrigger value="junk" className="shrink-0 gap-1.5 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 data-[state=active]:border-red-600 data-[state=active]:bg-red-600 data-[state=active]:text-white"><ShieldAlert className="h-3.5 w-3.5" />Junk</TabsTrigger></TabsList></Tabs>
         <span className="h-7 shrink-0 border-l border-border" aria-hidden="true" />
         <span className="shrink-0 text-[11px] font-semibold uppercase text-blue-700">Actions</span>
