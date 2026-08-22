@@ -326,7 +326,7 @@ export default function CashflowForecast() {
   ];
 
   return (
-    <div className="min-h-screen bg-background px-4 py-5 md:px-6">
+    <div className="workspace-operations min-h-screen px-4 py-5 md:px-6">
       <PageHeader
         icon={WalletCards}
         eyebrow="AR and AP forecast"

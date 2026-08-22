@@ -172,8 +172,8 @@ export default function PaymentCollections() {
   };
 
   return (
-    <div className="min-h-full bg-slate-50">
-      <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
+    <div className="workspace-operations min-h-full">
+      <div className="app-navigation-material sticky top-0 z-30 border-b border-border px-4 py-2.5 lg:px-8">
         <WorkspaceViewBar
           className="border-0 bg-transparent p-0"
           views={availableTabs.map((tab) => ({

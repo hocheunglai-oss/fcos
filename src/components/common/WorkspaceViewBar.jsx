@@ -14,8 +14,8 @@ export default function WorkspaceViewBar({
   return (
     <div
       className={cn(
-        'flex flex-col gap-3 border border-border bg-card px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between',
-        sticky && 'sticky top-0 z-30 border-x-0 border-t-0 bg-card/95 backdrop-blur',
+        'app-navigation-material flex flex-col gap-3 rounded-[var(--radius-control)] border border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between',
+        sticky && 'sticky top-0 z-30 rounded-none border-x-0 border-t-0',
         className,
       )}
       role="region"

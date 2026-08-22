@@ -525,6 +525,30 @@
   background: hsl(var(--muted) / 0.45);
 }
 
+/* Operational and financial workspaces */
+.workspace-operations {
+  background:
+    linear-gradient(180deg, hsl(var(--workspace-material-subtle) / 0.5), transparent 18rem),
+    hsl(var(--workspace-canvas));
+}
+
+.workspace-operations .material-panel,
+.workspace-operations .material-table,
+.workspace-operations .recharts-wrapper,
+.workspace-operations .recharts-responsive-container {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.workspace-operations :where(.divide-y, tbody) > :where(* + *) {
+  border-color: hsl(var(--workspace-border) / 0.66);
+}
+
+.workspace-operations [role='dialog'],
+.workspace-operations [role='alertdialog'] {
+  border-radius: var(--radius-window);
+}
+
 @media (max-width: 639px) {
   .account-insight-window {
     border-radius: var(--radius-window) var(--radius-window) 0 0;

@@ -1,6 +1,6 @@
 export default function StateBlock({ icon: Icon, title, description, action }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center text-muted-foreground">
+    <div className="material-panel flex flex-col items-center justify-center gap-3 rounded-[var(--radius-panel)] border border-dashed border-border bg-card py-16 text-center text-muted-foreground">
       {Icon && <Icon className="h-9 w-9 opacity-25" />}
       <div>
         <p className="text-sm font-medium text-foreground">{title}</p>

@@ -2023,7 +2023,7 @@ export default function DisputeWorkflow() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
+    <div className="workspace-operations flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
       <PageHeader
         icon={FileCheck2}
         eyebrow="Dispute workflow"

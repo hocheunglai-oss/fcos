@@ -342,7 +342,7 @@ export default function UnofficialCompensation() {
   };
 
   return (
-    <div className="space-y-5 p-4 sm:p-6">
+    <div className="workspace-operations space-y-5 p-4 sm:p-6">
       <PageHeader
         icon={CircleDollarSign}
         title="Unofficial Compensation"
@@ -467,7 +467,7 @@ function AccountDetails({ account, instanceUrl, canChangeStatus, onRecovery, onS
   return <div className="space-y-4">
     {!!account.issues?.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data issues</div><ul className="mt-2 space-y-1 text-sm text-amber-800">{account.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></div>}
     {!canChangeStatus && <div className="rounded-md border bg-slate-50 px-4 py-3 text-sm text-muted-foreground">Salesforce claim status can be changed only by Finance, an Administrator, or the General Manager.</div>}
-    {account.groups.map((group) => <section key={group.key} className="overflow-hidden rounded-md border bg-white">
+    {account.groups.map((group) => <section key={group.key} className="material-panel overflow-hidden rounded-[var(--radius-control)] border border-border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3"><div><div className="font-semibold">{group.contactName}</div><div className="text-xs text-muted-foreground">{group.currencyIsoCode} · {group.openClaimCount} open claim{group.openClaimCount === 1 ? '' : 's'}</div></div><div className="flex flex-wrap gap-2">{group.openClaimCount > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onRecovery(account, group)}><HandCoins className="mr-1.5 h-3.5 w-3.5" />Record Recovery</Button>}{canChangeStatus && group.openClaimCount > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Closed')}>Close Group</Button>}{canChangeStatus && group.openClaimCount === 0 && group.claims.length > 0 && <Button type="button" size="sm" variant="outline" onClick={() => onStatus(group, 'Opened')}>Open Group</Button>}</div></div>
       <div className="grid divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0"><SummaryMetric label="Agreed" value={formatMoney(group.agreedAmount, group.currencyIsoCode)} /><SummaryMetric label="Recovered" value={formatMoney(group.recoveredAmount, group.currencyIsoCode)} /><SummaryMetric label="Outstanding" value={formatMoney(group.outstandingAmount, group.currencyIsoCode)} tone={group.outstandingAmount > 0.005 ? 'warning' : 'normal'} /></div>
       <div className="grid gap-4 border-t p-4 xl:grid-cols-2">
