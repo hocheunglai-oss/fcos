@@ -145,3 +145,14 @@ test('market report library migration is immutable, service-only and atomically 
   assert.match(sql, /save_market_drive_report_import\([\s\S]*p_library_observations jsonb/i);
   assert.doesNotMatch(sql, /pdf_bytes|report_text|raw_response/i);
 });
+
+test('report catalogue is materialized and refreshed only for series touched by an import', () => {
+  const sql = fs.readFileSync(new URL('../supabase/migrations/20260822053620_materialize_market_report_product_catalogue.sql', import.meta.url), 'utf8');
+  assert.match(sql, /create table public\.market_report_product_catalogue/i);
+  assert.match(sql, /market_report_product_observations_series_latest_idx/i);
+  assert.match(sql, /after update of library_observation_count/i);
+  assert.match(sql, /where import_id = new\.id/i);
+  assert.match(sql, /pg_advisory_xact_lock/i);
+  assert.match(sql, /revoke all on table public\.market_report_product_catalogue from public, anon, authenticated/i);
+  assert.doesNotMatch(sql, /grant (?:all|select).* to (?:anon|authenticated)/i);
+});
