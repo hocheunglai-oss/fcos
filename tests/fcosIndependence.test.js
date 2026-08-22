@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ignoredDirectories = new Set(['.git', 'dist', 'node_modules']);
+const ignoredDirectories = new Set(['.git', '.vercel', 'dist', 'node_modules']);
 const ignoredFiles = new Set([fileURLToPath(import.meta.url)]);
 const textExtensions = new Set(['.cjs', '.css', '.html', '.js', '.jsx', '.json', '.md', '.mjs', '.sql', '.ts', '.tsx', '.yaml', '.yml']);
 
