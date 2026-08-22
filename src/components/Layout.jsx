@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ClipboardCheck,
   DollarSign,
@@ -17,6 +17,7 @@ import {
   MailSearch,
   RotateCcw,
   Save,
+  Search,
   Sprout,
   ReceiptText,
   RefreshCw,
@@ -39,9 +40,12 @@ import WorkNotifications from '@/components/WorkNotifications';
 import EmailRouterBackgroundSync from '@/components/email-router/EmailRouterBackgroundSync';
 import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
+import { applyAppearancePreferences, listenForSystemAppearance, readAppearancePreferences } from '@/lib/appearancePreferences';
+import { WorkspaceChromeProvider } from '@/components/workspace/WorkspaceChrome';
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
 const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
+const WorkspaceCommandPalette = lazy(() => import('@/components/workspace/WorkspaceCommandPalette'));
 
 function StaticDragDropContext({ children }) {
   return children;
@@ -159,12 +163,15 @@ function normalizedNavigationPreferences(value = {}) {
 
 export default function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, logout, hasModuleAccess, authMode, bootstrapPreferences } = useAuth();
   const [density, setDensity] = useState(() => localStorage.getItem('table-density') || 'compact');
   const [dirtyState, setDirtyState] = useState({ dirty: false, message: '' });
   const [versionOpen, setVersionOpen] = useState(false);
   const [versionUpdate, setVersionUpdate] = useState(null);
   const [marketPulseOpen, setMarketPulseOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [appearancePreferences, setAppearancePreferences] = useState(readAppearancePreferences);
   const [sidebarFixed, setSidebarFixed] = useState(() => localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true');
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [navigationPreferences, setNavigationPreferences] = useState(() => normalizedNavigationPreferences(DEFAULT_NAVIGATION_PREFERENCES));
@@ -174,6 +181,7 @@ export default function Layout() {
   const [navigationError, setNavigationError] = useState('');
   const [dragAndDrop, setDragAndDrop] = useState(null);
   const currentBuildIdRef = useRef(null);
+  const workspaceScrollRef = useRef(null);
 
   const DragDropContext = dragAndDrop?.DragDropContext || StaticDragDropContext;
   const Droppable = dragAndDrop?.Droppable || StaticDroppable;
@@ -214,6 +222,11 @@ export default function Layout() {
   }, [density]);
 
   useEffect(() => {
+    applyAppearancePreferences(appearancePreferences);
+    return listenForSystemAppearance(appearancePreferences, setAppearancePreferences);
+  }, [appearancePreferences]);
+
+  useEffect(() => {
     localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarFixed));
     localStorage.removeItem(LEGACY_SIDEBAR_HIDDEN_STORAGE_KEY);
   }, [sidebarFixed]);
@@ -232,6 +245,11 @@ export default function Layout() {
       if (!preferences) return;
       setSidebarFixed(preferences.sidebarMode === 'fixed');
       setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
+      const nextAppearance = applyAppearancePreferences({
+        appearanceMode: preferences.appearanceMode,
+        glassIntensity: preferences.glassIntensity,
+      });
+      setAppearancePreferences(nextAppearance);
       saveDocumentSettings({
         showOnlyRelevant: preferences.documentShowOnlyRelevant,
         relevantSourceGroups: preferences.documentSourceGroups,
@@ -253,11 +271,14 @@ export default function Layout() {
       if (!cancelled && workspaceResponse.data?.preferences) {
         let workspacePreferences = workspaceResponse.data.preferences;
         if (!workspacePreferences.initialized) {
+          const currentAppearance = readAppearancePreferences();
           const migrated = await appClient.functions.invoke('workspacePreferencesSave', {
             sidebarMode: 'auto_hide',
             tableDensity: density,
             documentShowOnlyRelevant: browserDocumentSettings.showOnlyRelevant,
             documentSourceGroups: browserDocumentSettings.relevantSourceGroups,
+            appearanceMode: currentAppearance.appearanceMode,
+            glassIntensity: currentAppearance.glassIntensity,
             expectedRevision: workspacePreferences.revision,
           });
           if (migrated.data?.preferences) workspacePreferences = migrated.data.preferences;
@@ -284,6 +305,13 @@ export default function Layout() {
       const preferences = event.detail || {};
       if (preferences.sidebarMode) setSidebarFixed(preferences.sidebarMode === 'fixed');
       if (preferences.tableDensity) setDensity(preferences.tableDensity === 'comfort' ? 'comfort' : 'compact');
+      if (preferences.appearanceMode || preferences.glassIntensity) {
+        const nextAppearance = applyAppearancePreferences({
+          appearanceMode: preferences.appearanceMode,
+          glassIntensity: preferences.glassIntensity,
+        });
+        setAppearancePreferences(nextAppearance);
+      }
       if (preferences.revision != null) {
         setNavigationPreferences((current) => ({ ...current, revision: Number(preferences.revision) }));
       }
@@ -295,6 +323,47 @@ export default function Layout() {
       window.removeEventListener('fcos:workspace-preferences-updated', applyPreferences);
     };
   }, [navigationPreferences]);
+
+  useEffect(() => {
+    const targetIsTyping = (target) => target instanceof HTMLElement && (
+      target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+    );
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || targetIsTyping(event.target)) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+      if (event.metaKey && event.key === ',') {
+        event.preventDefault();
+        navigate('/settings');
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (commandPaletteOpen) setCommandPaletteOpen(false);
+        else if (marketPulseOpen) setMarketPulseOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [commandPaletteOpen, marketPulseOpen, navigate]);
+
+  useEffect(() => {
+    if (pageOwnsScroll) return undefined;
+    const node = workspaceScrollRef.current;
+    if (!node) return undefined;
+    const key = `fcos:workspace-scroll:${location.pathname}${location.search}`;
+    const restored = Number(window.sessionStorage.getItem(key) || 0);
+    const frame = window.requestAnimationFrame(() => { node.scrollTop = Number.isFinite(restored) ? restored : 0; });
+    const remember = () => window.sessionStorage.setItem(key, String(node.scrollTop));
+    node.addEventListener('scroll', remember, { passive: true });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      remember();
+      node.removeEventListener('scroll', remember);
+    };
+  }, [location.pathname, location.search, pageOwnsScroll]);
 
   const startNavigationEditing = async () => {
     if (!dragAndDrop) {
@@ -459,6 +528,7 @@ export default function Layout() {
   };
 
   return (
+    <WorkspaceChromeProvider>
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
       <EmailRouterBackgroundSync enabled={hasModuleAccess('email_router')} />
       <aside
@@ -467,19 +537,19 @@ export default function Layout() {
         className={cn(
           'app-workspace-sidebar fixed inset-y-0 left-0 z-[45] flex shrink-0 translate-x-0 flex-col transition-[width] duration-200 ease-out',
           navigationEditing ? 'w-[248px]' : sidebarShowsCaptions ? 'w-[232px]' : 'w-[72px]',
-          navigationEditing && 'border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/[0.64]',
+          navigationEditing && 'app-navigation-material border-r',
         )}
       >
         {!navigationEditing && (
           <div
-            className="pointer-events-none absolute inset-y-0 left-0 z-0 w-[72px] border-r border-white/70 bg-white/[0.72] shadow-[8px_0_30px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/[0.64]"
+            className="app-navigation-material pointer-events-none absolute inset-y-0 left-0 z-0 w-[72px] border-r"
             aria-hidden="true"
           />
         )}
         {sidebarShowsCaptions && (
           <div
             data-sidebar-caption-glass="true"
-            className="pointer-events-none absolute inset-y-2 left-[64px] right-1 z-0 rounded-r-xl border border-l-0 border-white/55 bg-white/[0.18] shadow-[12px_0_32px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-lg backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.12]"
+            className="app-navigation-caption-material pointer-events-none absolute inset-y-2 left-[64px] right-1 z-0 rounded-r-[18px] border border-l-0"
             aria-hidden="true"
           />
         )}
@@ -666,6 +736,10 @@ export default function Layout() {
               </>
             ) : sidebarShowsCaptions ? (
               <>
+                <button type="button" onClick={() => setCommandPaletteOpen(true)} className="group flex h-10 w-full items-center gap-3 rounded-lg px-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label="Open command palette">
+                  <span className="flex h-10 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors group-hover:bg-white/60 group-hover:text-slate-950"><Search className="h-4 w-4" /></span>
+                  <span className="min-w-0 flex-1 truncate text-left text-slate-700">Search</span><kbd className="mr-1 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">⌘K</kbd>
+                </button>
                 <Link
                   to="/settings"
                   onClick={handleNavigation}
@@ -699,6 +773,10 @@ export default function Layout() {
               </>
             ) : (
               <>
+                <Tooltip>
+                  <TooltipTrigger asChild><button type="button" onClick={() => setCommandPaletteOpen(true)} className="group flex h-10 w-10 items-center justify-center rounded-lg text-slate-600 transition-[transform,color,background-color] hover:scale-105 hover:bg-white/70 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label="Open command palette"><Search className="h-4 w-4" /></button></TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={12}>Search · ⌘K</TooltipContent>
+                </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Link
@@ -737,7 +815,7 @@ export default function Layout() {
 
       <div className="w-[72px] shrink-0" aria-hidden="true" />
 
-      <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-slate-50">
+      <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
         {versionUpdate && (
           <div className="pointer-events-auto z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -768,7 +846,7 @@ export default function Layout() {
               </div>
             </div>
           )}
-          <div className={cn('h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
+          <div ref={workspaceScrollRef} className={cn('h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
             <Outlet />
           </div>
         </div>
@@ -790,6 +868,16 @@ export default function Layout() {
           </Suspense>
         </DialogContent>
       </Dialog>
+      <Suspense fallback={null}>
+        <WorkspaceCommandPalette
+          open={commandPaletteOpen}
+          onOpenChange={setCommandPaletteOpen}
+          groups={accessibleGroups}
+          onNavigate={(target) => { if (confirmLeaveWithUnsavedChanges()) navigate(target); }}
+          onCustomizeNavigation={startNavigationEditing}
+        />
+      </Suspense>
     </div>
+    </WorkspaceChromeProvider>
   );
 }

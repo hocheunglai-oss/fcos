@@ -13,6 +13,7 @@ import {
   Mail,
   Minus,
   Pencil,
+  Palette,
   Plus,
   RefreshCw,
   Server,
@@ -38,6 +39,7 @@ import { useAuth } from '@/lib/AuthContext';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
+import { applyAppearancePreferences, readAppearancePreferences } from '@/lib/appearancePreferences';
 
 const ConnectionChecklist = lazy(() => import('@/components/settings/ConnectionChecklist'));
 
@@ -49,11 +51,14 @@ const MAX_HEALTH_SAMPLES = 5;
 
 function settingsSnapshot() {
   const documents = readDocumentSettings();
+  const appearance = readAppearancePreferences();
   return {
     sidebarMode: localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true' ? 'fixed' : 'auto_hide',
     tableDensity: localStorage.getItem('table-density') === 'comfort' ? 'comfort' : 'compact',
     documentShowOnlyRelevant: documents.showOnlyRelevant,
     documentSourceGroups: documents.relevantSourceGroups,
+    appearanceMode: appearance.appearanceMode,
+    glassIntensity: appearance.glassIntensity,
     revision: 0,
     initialized: false,
   };
@@ -66,6 +71,8 @@ function comparableWorkspaceSettings(value = {}) {
     tableDensity: value.tableDensity === 'comfort' ? 'comfort' : 'compact',
     documentShowOnlyRelevant: value.documentShowOnlyRelevant !== false,
     documentSourceGroups: DOCUMENT_SOURCE_GROUPS.filter((group) => selectedGroups.has(group)),
+    appearanceMode: ['system', 'light', 'dark'].includes(value.appearanceMode) ? value.appearanceMode : 'system',
+    glassIntensity: ['clear', 'balanced', 'tinted'].includes(value.glassIntensity) ? value.glassIntensity : 'balanced',
   };
 }
 
@@ -576,6 +583,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
   const [sidebarMode, setSidebarMode] = useState(() => settingsSnapshot().sidebarMode);
   const [tableDensity, setTableDensity] = useState(() => settingsSnapshot().tableDensity);
+  const [appearanceMode, setAppearanceMode] = useState(() => settingsSnapshot().appearanceMode);
+  const [glassIntensity, setGlassIntensity] = useState(() => settingsSnapshot().glassIntensity);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   const [workspaceError, setWorkspaceError] = useState('');
   const [aiSettings, setAiSettings] = useState(null);
@@ -601,6 +610,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       : base;
     setSidebarMode(next.sidebarMode || base.sidebarMode);
     setTableDensity(next.tableDensity || base.tableDensity);
+    setAppearanceMode(next.appearanceMode || base.appearanceMode);
+    setGlassIntensity(next.glassIntensity || base.glassIntensity);
     setDocumentSettings({
       showOnlyRelevant: next.documentShowOnlyRelevant ?? base.documentShowOnlyRelevant,
       relevantSourceGroups: next.documentSourceGroups || base.documentSourceGroups,
@@ -623,11 +634,15 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
         tableDensity: preferences.tableDensity,
         documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
         documentSourceGroups: preferences.documentSourceGroups,
+        appearanceMode: preferences.appearanceMode,
+        glassIntensity: preferences.glassIntensity,
         revision: preferences.revision,
         initialized: preferences.initialized,
       };
       setSidebarMode(serverSettings.sidebarMode);
       setTableDensity(serverSettings.tableDensity);
+      setAppearanceMode(serverSettings.appearanceMode);
+      setGlassIntensity(serverSettings.glassIntensity);
       setDocumentSettings({
         showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
         relevantSourceGroups: serverSettings.documentSourceGroups,
@@ -642,6 +657,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       });
       localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(serverSettings.sidebarMode === 'fixed'));
       localStorage.setItem('table-density', serverSettings.tableDensity);
+      applyAppearancePreferences(serverSettings);
       window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: serverSettings }));
     };
     loadWorkspacePreferences();
@@ -654,6 +670,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       if (!preferences?.initialized) return;
       setSidebarMode(preferences.sidebarMode);
       setTableDensity(preferences.tableDensity);
+      setAppearanceMode(preferences.appearanceMode);
+      setGlassIntensity(preferences.glassIntensity);
       setDocumentSettings({
         showOnlyRelevant: preferences.documentShowOnlyRelevant,
         relevantSourceGroups: preferences.documentSourceGroups,
@@ -664,6 +682,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
         tableDensity: preferences.tableDensity,
         documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
         documentSourceGroups: preferences.documentSourceGroups,
+        appearanceMode: preferences.appearanceMode,
+        glassIntensity: preferences.glassIntensity,
         revision: preferences.revision,
         initialized: true,
       });
@@ -672,6 +692,10 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     window.addEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
     return () => window.removeEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
   }, []);
+
+  useEffect(() => {
+    applyAppearancePreferences({ appearanceMode, glassIntensity });
+  }, [appearanceMode, glassIntensity]);
 
   const loadAiSettings = useCallback(async () => {
     setAiSettingsLoading(true);
@@ -766,9 +790,11 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     tableDensity,
     documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
     documentSourceGroups: documentSettings.relevantSourceGroups,
+    appearanceMode,
+    glassIntensity,
     revision: workspaceRevision,
     initialized: true,
-  }), [documentSettings, sidebarMode, tableDensity, workspaceRevision]);
+  }), [appearanceMode, documentSettings, glassIntensity, sidebarMode, tableDensity, workspaceRevision]);
   const settingsDirty = Boolean(baseSettings && !sameWorkspaceSettings(settingsDraftValue, baseSettings));
   useDraftAutosave(SETTINGS_DRAFT_KEY, settingsDraftValue, {
     enabled: true,
@@ -785,6 +811,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
         tableDensity,
         documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
         documentSourceGroups: documentSettings.relevantSourceGroups,
+        appearanceMode,
+        glassIntensity,
         expectedRevision: workspaceRevision,
       });
       if (response.data?.error) throw new Error(response.data.error);
@@ -795,6 +823,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       saveDocumentSettings(documentSettings);
       localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarMode === 'fixed'));
       localStorage.setItem('table-density', tableDensity);
+      applyAppearancePreferences({ appearanceMode, glassIntensity });
       window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: savedValue }));
       clearDraft(SETTINGS_DRAFT_KEY);
       setDraftRestoredAt(null);
@@ -833,6 +862,8 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     if (baseSettings) {
       setSidebarMode(baseSettings.sidebarMode);
       setTableDensity(baseSettings.tableDensity);
+      setAppearanceMode(baseSettings.appearanceMode);
+      setGlassIntensity(baseSettings.glassIntensity);
       setDocumentSettings({
         showOnlyRelevant: baseSettings.documentShowOnlyRelevant,
         relevantSourceGroups: baseSettings.documentSourceGroups,
@@ -1137,9 +1168,33 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
             <SettingsPanel
               icon={Settings}
               title="Workspace"
-              description="Choose how FCOS navigation and data tables behave for your account."
+              description="Choose how FCOS looks and behaves for your account across browsers and devices."
             >
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appearance</Label>
+                  <Select value={appearanceMode} onValueChange={setAppearanceMode}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="system">Follow system</SelectItem>
+                      <SelectItem value="light">Light</SelectItem>
+                      <SelectItem value="dark">Dark</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">Follow system updates automatically when macOS changes appearance.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Glass intensity</Label>
+                  <Select value={glassIntensity} onValueChange={setGlassIntensity}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="clear">Clear</SelectItem>
+                      <SelectItem value="balanced">Balanced</SelectItem>
+                      <SelectItem value="tinted">Tinted</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">Controls navigation and transient surfaces only; financial content stays opaque.</p>
+                </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sidebar behavior</Label>
                   <Select value={sidebarMode} onValueChange={setSidebarMode}>
@@ -1170,6 +1225,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                   variant="outline"
                   onClick={() => window.dispatchEvent(new CustomEvent('fcos:navigation-customize'))}
                 >
+                  <Palette className="h-4 w-4" />
                   Customize sidebar order and visibility
                 </Button>
               </div>

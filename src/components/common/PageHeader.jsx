@@ -1,12 +1,20 @@
+import { useEffect, useId, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { getPageCopy } from '@/lib/pageCopy';
+import { useWorkspaceChromeRegistration } from '@/components/workspace/WorkspaceChrome';
 
 export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, status, actions, compact = false, className }) {
   const copy = getPageCopy({ title, eyebrow, description });
+  const chrome = useWorkspaceChromeRegistration();
+  const registrationId = useId();
+  const registration = useRef(null);
+  registration.current = { title: copy.title, eyebrow: copy.eyebrow, description: copy.description, meta, status, actions };
+
+  useEffect(() => chrome?.register(registrationId, () => registration.current), [chrome, registrationId]);
 
   return (
     <div className={cn(
-      'glass-page-header app-page-header mb-6 rounded-lg',
+      'glass-page-header app-page-header sticky top-0 z-30 mb-5 rounded-lg',
       compact
         ? 'grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-4 py-2.5 lg:grid-cols-[minmax(10rem,0.55fr)_minmax(18rem,1fr)_auto]'
         : status ? 'flex flex-col gap-4 px-5 py-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)_auto] lg:items-center' : 'flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-end lg:justify-between',
@@ -19,7 +27,7 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
             {copy.eyebrow && <span>{copy.eyebrow}</span>}
           </div>
         )}
-        <h1 className={cn('font-dm font-bold tracking-tight text-foreground', compact ? 'text-lg lg:text-xl' : 'text-2xl')}>{copy.title}</h1>
+        <h1 className={cn('font-dm font-semibold tracking-tight text-foreground', compact ? 'text-lg lg:text-xl' : 'text-2xl')}>{copy.title}</h1>
         {copy.description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{copy.description}</p>}
         {meta && <p className="mt-1 text-xs text-muted-foreground">{meta}</p>}
       </div>

@@ -762,7 +762,7 @@ async function requireActiveUser(req) {
 async function loadAuthBootstrapPreferences(client, userId) {
   const { data, error } = await client
     .from('user_navigation_preferences')
-    .select('user_id,section_orders,hidden_item_ids,sidebar_mode,table_density,document_show_only_relevant,document_source_groups,workspace_preferences_initialized,revision,updated_at')
+    .select('user_id,section_orders,hidden_item_ids,sidebar_mode,table_density,document_show_only_relevant,document_source_groups,appearance_mode,glass_intensity,workspace_preferences_initialized,revision,updated_at')
     .eq('user_id', userId)
     .maybeSingle();
   if (error) return null;
@@ -4569,6 +4569,8 @@ function serializeWorkspacePreferences(row = null) {
     tableDensity: row?.table_density === 'comfort' ? 'comfort' : 'compact',
     documentShowOnlyRelevant: row?.document_show_only_relevant ?? true,
     documentSourceGroups: normalizeWorkspaceDocumentSourceGroups(row?.document_source_groups),
+    appearanceMode: ['system', 'light', 'dark'].includes(row?.appearance_mode) ? row.appearance_mode : 'system',
+    glassIntensity: ['clear', 'balanced', 'tinted'].includes(row?.glass_intensity) ? row.glass_intensity : 'balanced',
     initialized: row?.workspace_preferences_initialized === true,
     revision: Number(row?.revision || 0),
     updatedAt: row?.updated_at || null,
@@ -4626,7 +4628,7 @@ async function workspacePreferencesGet(body, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   const { data, error } = await client
     .from('user_navigation_preferences')
-    .select('user_id,sidebar_mode,table_density,document_show_only_relevant,document_source_groups,workspace_preferences_initialized,revision,updated_at')
+    .select('user_id,sidebar_mode,table_density,document_show_only_relevant,document_source_groups,appearance_mode,glass_intensity,workspace_preferences_initialized,revision,updated_at')
     .eq('user_id', profile.id)
     .maybeSingle();
   if (error) throw error;
@@ -4639,17 +4641,23 @@ async function workspacePreferencesSave(body, req, accessContext = null) {
   const tableDensity = body.tableDensity === 'comfort' ? 'comfort' : body.tableDensity === 'compact' ? 'compact' : null;
   const documentShowOnlyRelevant = typeof body.documentShowOnlyRelevant === 'boolean' ? body.documentShowOnlyRelevant : null;
   const documentSourceGroups = normalizeWorkspaceDocumentSourceGroups(body.documentSourceGroups);
+  const appearanceMode = ['system', 'light', 'dark'].includes(body.appearanceMode) ? body.appearanceMode : null;
+  const glassIntensity = ['clear', 'balanced', 'tinted'].includes(body.glassIntensity) ? body.glassIntensity : null;
   if (!sidebarMode) throw appError('Choose a valid sidebar mode.', 400);
   if (!tableDensity) throw appError('Choose a valid table density.', 400);
   if (documentShowOnlyRelevant === null) throw appError('Choose a document filtering preference.', 400);
   if (documentShowOnlyRelevant && !documentSourceGroups.length) throw appError('Select at least one relevant document source.', 400);
+  if (!appearanceMode) throw appError('Choose a valid appearance mode.', 400);
+  if (!glassIntensity) throw appError('Choose a valid glass intensity.', 400);
   const expectedRevision = Number(body.expectedRevision ?? body.expected_revision ?? 0);
-  const { data, error } = await client.rpc('save_user_workspace_preferences', {
+  const { data, error } = await client.rpc('save_user_workspace_preferences_v2', {
     p_user_id: profile.id,
     p_sidebar_mode: sidebarMode,
     p_table_density: tableDensity,
     p_document_show_only_relevant: documentShowOnlyRelevant,
     p_document_source_groups: documentSourceGroups,
+    p_appearance_mode: appearanceMode,
+    p_glass_intensity: glassIntensity,
     p_expected_revision: expectedRevision,
     p_actor_user_id: profile.id,
   });

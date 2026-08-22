@@ -546,7 +546,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'Personal scope',
-        body: 'Sidebar behavior, table density, navigation order, hidden navigation items, and STEM document filtering belong to your FCOS account. They do not change another user’s workspace or grant access to a module.',
+        body: 'Appearance mode, glass intensity, sidebar behavior, table density, navigation order, hidden navigation items, and STEM document filtering belong to your FCOS account. They synchronize across devices without changing another user’s workspace or granting access to a module.',
       },
       {
         title: 'Cross-browser synchronization',
