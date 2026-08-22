@@ -65,6 +65,13 @@ export default function Markets() {
     return request;
   }, []);
 
+  const reloadAfterMarketMutation = useCallback(async () => {
+    await Promise.all([
+      reload({ silent: true, force: true }),
+      ensureSnapshot({ force: true }),
+    ]);
+  }, [ensureSnapshot, reload]);
+
   useEffect(() => { reload().catch(() => {}); }, [reload]);
 
   useEffect(() => {
@@ -98,7 +105,7 @@ export default function Markets() {
   }
 
   return (
-    <ActionsProvider reload={reload}>
+    <ActionsProvider reload={reloadAfterMarketMutation}>
       <div className="hedge-desk-root">
         {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}

@@ -95,3 +95,16 @@ test('initial Markets load is Pulse-only and user capabilities are appended afte
   assert.match(handler, /hedge_book_manage: capabilities\?\.hedge_book_manage === true/);
   assert.match(handler, /hedge_admin: capabilities\?\.hedge_admin === true/);
 });
+
+test('MOPS mutations refresh both the Pulse and the governed settlement snapshot', () => {
+  const page = read('src/pages/Markets.jsx');
+  const marketApi = read('src/hedge/api/marketData.js');
+  const pulse = read('src/components/market-pulse/MarketPulse.jsx');
+  assert.match(page, /const reloadAfterMarketMutation = useCallback/);
+  assert.match(page, /reload\(\{ silent: true, force: true \}\)/);
+  assert.match(page, /ensureSnapshot\(\{ force: true \}\)/);
+  assert.match(page, /<ActionsProvider reload=\{reloadAfterMarketMutation\}>/);
+  assert.match(marketApi, /fcos:market-pulse-changed/);
+  assert.match(pulse, /window\.addEventListener\('fcos:market-pulse-changed'/);
+  assert.match(pulse, /if \(open\) load\(\{ force: true \}\)/);
+});

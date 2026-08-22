@@ -158,6 +158,15 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
     if (open && !data && !loading && !error) load();
   }, [data, error, load, loading, open]);
 
+  useEffect(() => {
+    const handleMarketPulseChanged = () => {
+      if (open) load({ force: true });
+      else setData(null);
+    };
+    window.addEventListener('fcos:market-pulse-changed', handleMarketPulseChanged);
+    return () => window.removeEventListener('fcos:market-pulse-changed', handleMarketPulseChanged);
+  }, [load, open]);
+
   const openMarkets = () => {
     onOpenChange(false);
     navigate('/markets');

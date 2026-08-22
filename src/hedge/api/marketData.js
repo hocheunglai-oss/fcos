@@ -11,6 +11,9 @@ async function request(payload, options = { cache: false }) {
       : undefined,
   });
   if (response.data?.error) throw new Error(response.data.error);
+  if (mutates && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fcos:market-pulse-changed'));
+  }
   return response.data?.data;
 }
 
