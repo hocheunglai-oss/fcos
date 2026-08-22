@@ -89,8 +89,8 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], l
   const set = (patch) => onChange({ ...filters, ...patch });
   const setPreset = (datePreset) => { setShowCustom(datePreset === 'custom'); set({ datePreset }); };
   const submitAi = (event) => { event.preventDefault(); if (aiPrompt.trim().length >= 3) onAiSearch?.(aiPrompt.trim()); };
-  return <section className="sticky top-0 z-30 -mx-3 mb-5 border-y border-border bg-background/95 px-3 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8" aria-label="Dashboard filters">
-    <div className="mx-auto max-w-[1600px] rounded-xl border border-border bg-card p-3 shadow-sm">
+  return <section className="app-navigation-material workspace-filter-rail sticky top-0 z-30 -mx-3 mb-5 border-y border-border px-3 py-2.5 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8" aria-label="Dashboard filters">
+    <div className="workspace-filter-panel mx-auto max-w-[1600px] rounded-[var(--radius-panel)] border border-border bg-card p-3 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="mr-1 inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"><Filter className="h-3.5 w-3.5" />Period</span>
         {DASHBOARD_DATE_PRESETS.map((preset) => <button type="button" key={preset.value} onClick={() => setPreset(preset.value)} className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${filters.datePreset === preset.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}>{preset.label}</button>)}

@@ -30,7 +30,7 @@ export default function DashboardSavedViews({ filters, onApply }) {
     if (!activeId) return;
     persist(views.filter((view) => view.id !== activeId));
   };
-  return <section aria-label="Saved Dashboard views" className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+  return <section aria-label="Saved Dashboard views" className="workspace-inline-toolbar app-navigation-material mb-3 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-border px-3 py-2">
     <span className="text-xs font-semibold text-muted-foreground">Saved views</span>
     <select value={activeId} onChange={(event) => { const view = views.find((item) => item.id === event.target.value); if (view) onApply(view.filters); }} className="h-8 min-w-44 rounded-md border border-input bg-background px-2 text-xs" aria-label="Apply saved Dashboard view">
       <option value="">Current filters</option>{views.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}

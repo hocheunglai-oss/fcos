@@ -67,7 +67,7 @@ function Kpi({ label, value, detail, tone = 'default' }) {
     danger: 'border-red-200 bg-red-50/60',
   };
   return (
-    <div className={`min-h-24 rounded-md border p-3 ${tones[tone]}`}>
+    <div className={`account-insight-kpi min-h-24 rounded-[var(--radius-control)] border p-3 ${tones[tone]}`}>
       <div className="text-[11px] font-semibold uppercase text-muted-foreground">{label}</div>
       <div className="mt-2 text-xl font-bold text-foreground">{value}</div>
       {detail ? <div className="mt-1 text-xs text-muted-foreground">{detail}</div> : null}
@@ -77,7 +77,7 @@ function Kpi({ label, value, detail, tone = 'default' }) {
 
 function Section({ title, description, children, action }) {
   return (
-    <section className="border-b border-border pb-5 last:border-b-0">
+    <section className="account-insight-section rounded-[var(--radius-panel)] border border-border bg-card p-4 shadow-[var(--shadow-panel)] sm:p-5">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
@@ -115,7 +115,7 @@ function Distribution({ rows = [], valueFormatter = formatNumber }) {
 function MoneyRows({ rows = [], columns }) {
   if (!rows.length) return <Empty>Financial values are unavailable for this period.</Empty>;
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div className="material-table overflow-x-auto rounded-[var(--radius-control)] border border-border">
       <table className="w-full min-w-[640px] text-sm">
         <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
           <tr><th className="px-3 py-2">Currency</th>{columns.map((column) => <th key={column.key} className="px-3 py-2 text-right">{column.label}</th>)}</tr>
@@ -272,8 +272,8 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   return (
     <>
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <DialogContent className="inset-0 left-0 top-0 h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none p-0 sm:left-[50%] sm:top-[50%] sm:h-[92vh] sm:w-[96vw] sm:max-w-[1500px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-lg">
-        <DialogHeader className="border-b border-border bg-background px-5 py-4 pr-12 sm:px-6">
+      <DialogContent className="account-insight-window inset-0 left-0 top-0 h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 shadow-2xl sm:left-[50%] sm:top-[50%] sm:h-[92vh] sm:w-[96vw] sm:max-w-[1500px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[var(--radius-window)] sm:border">
+        <DialogHeader className="app-navigation-material account-insight-toolbar border-b border-border px-5 py-3.5 pr-12 sm:px-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -302,12 +302,12 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
           {dashboardScope && !accountWide ? <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"><span>Inherited filters:</span>{[dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly ? 'Disputed only' : null].filter(Boolean).map((label) => <span key={label} className="rounded-full border border-border bg-background px-2 py-0.5">{label}</span>)}{![dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly].some(Boolean) ? <span>period only</span> : null}</div> : null}
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/15">
+        <div className="account-insight-canvas min-h-0 flex-1 overflow-y-auto">
           {error ? <div className="m-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
           {loading && !accountInsight && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
           {accountInsight || activeTab === 'credit' ? (
             <Tabs value={activeTab} onValueChange={(nextTab) => { setActiveTab(nextTab); onViewChange?.({ role, tab: nextTab, periodMode, accountWide }); }} className="min-h-full">
-              <div className="sticky top-0 z-20 overflow-x-auto border-b border-border bg-background/95 px-5 py-2 backdrop-blur sm:px-6">
+              <div className="app-navigation-material sticky top-0 z-20 overflow-x-auto border-b border-border px-5 py-2 sm:px-6">
                 <TabsList className="h-10 w-max">
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="trading">Trading & Profit</TabsTrigger>

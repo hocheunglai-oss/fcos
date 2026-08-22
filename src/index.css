@@ -435,7 +435,7 @@
     .app-workspace-shell :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
   }
 
-  @media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
     .app-workspace-shell button:active, .app-workspace-shell a:active { transform: none; }
   }
@@ -465,5 +465,68 @@
   .email-router-content th {
     max-width: 100%;
     overflow-wrap: break-word;
+  }
+}
+
+/* Dashboard and Account Insight pilot */
+.workspace-dashboard {
+  container-type: inline-size;
+}
+
+.workspace-filter-rail {
+  box-shadow: 0 1px 0 hsl(var(--border) / 0.72), 0 12px 28px -26px hsl(220 28% 15% / 0.42);
+}
+
+.workspace-filter-panel,
+.workspace-kpi-card,
+.account-insight-section,
+.material-table {
+  background: hsl(var(--card));
+}
+
+.workspace-kpi-card {
+  box-shadow: var(--shadow-panel);
+}
+
+.workspace-kpi-card:hover {
+  border-color: hsl(var(--ring) / 0.32);
+}
+
+.account-insight-window {
+  background: hsl(var(--background));
+  isolation: isolate;
+}
+
+.account-insight-toolbar {
+  box-shadow: 0 1px 0 hsl(var(--border) / 0.7);
+}
+
+.account-insight-canvas {
+  background:
+    radial-gradient(circle at 100% 0%, hsl(211 100% 94% / 0.38), transparent 28rem),
+    hsl(var(--workspace-canvas));
+}
+
+.account-insight-kpi {
+  box-shadow: 0 1px 2px hsl(220 30% 18% / 0.05);
+}
+
+.material-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.material-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.material-table tbody tr:hover {
+  background: hsl(var(--muted) / 0.45);
+}
+
+@media (max-width: 639px) {
+  .account-insight-window {
+    border-radius: var(--radius-window) var(--radius-window) 0 0;
   }
 }
