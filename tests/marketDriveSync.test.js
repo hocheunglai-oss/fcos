@@ -132,6 +132,20 @@ test('hourly sync skips known checksums without downloading report bytes', async
   assert.equal(drive.calls.some((url) => url.includes('alt=media')), false);
 });
 
+test('hourly sync excludes pre-2025 stored library backlog from the operational queue', async () => {
+  const legacy = 'abcdef0123456789abcdef0123456789';
+  const client = clientMock({ storedReports: [{
+    id: 'legacy-import', source_md5: legacy, source_hash: 'a'.repeat(64),
+    source_document_type: 'bunkerwire', report_date: '2024-12-31', library_observation_count: 0,
+  }] });
+  const drive = driveFetch({ files: [{ id: 'legacyreport12345', name: 'BW_20241231.pdf', mimeType: 'application/pdf', size: '1000', md5Checksum: legacy, modifiedTime: '2024-12-31T09:01:00Z', documentType: 'bunkerwire' }] });
+  const result = await runMarketReportDriveSync(client, { accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-22T07:00:00Z') });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.importedCount, 0);
+  assert.equal(drive.calls.some((url) => url.includes('alt=media')), false);
+});
+
 test('hourly reconciliation retries recent paired derived work without reimporting or repeating AI', async () => {
   const pairedImports = [
     { report_date: '2026-08-20', source_document_type: 'bunkerwire' },

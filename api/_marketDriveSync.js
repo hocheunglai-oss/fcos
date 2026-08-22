@@ -453,6 +453,11 @@ export async function runMarketReportDriveSync(client, {
     const candidates = [];
     const queuedMd5 = new Set();
     for (const file of files) {
+      const storedReport = storedByMd5.get(safeMd5(file.md5));
+      if (storedReport && String(storedReport.report_date || '') < REVIEWED_ARCHIVE.startDate) {
+        summary.skippedCount += 1;
+        continue;
+      }
       if (file.md5 && (completeMd5.has(file.md5) || queuedMd5.has(file.md5))) {
         summary.skippedCount += 1;
         continue;
