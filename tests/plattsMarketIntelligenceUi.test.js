@@ -28,11 +28,22 @@ test('Markets opens on a four-view Platts-aligned daily decision brief', () => {
   assert.match(workspace, /key === 'singapore'\) \? \['singapore'\]/);
   assert.match(workspace, /initialFilters\.includeMops !== false/);
   assert.match(workspace, /Market tools/);
+  assert.match(workspace, /title="Market tools"[^\n]*width="xl"/);
+  assert.match(workspace, /className="market-tools-embedded-workspace"/);
   assert.match(workspace, /mode="admin"/);
   assert.doesNotMatch(workspace, /aria-label="Forward Curves"><CargoForwardSummary/);
   assert.doesNotMatch(workspace, /aria-label="Drivers and Alerts"><MarketDriversAlerts[^\n]*<TradingSignals/);
   assert.ok(workspace.indexOf("value: 'hsfo380'") < workspace.indexOf("value: 'vlsfo'"));
   assert.ok(workspace.indexOf("value: 'vlsfo'") < workspace.indexOf("value: 'lsmgo'"));
+});
+
+test('Market Tools keeps embedded settlement controls inside the drawer', () => {
+  const intelligenceStyles = read('src/hedge/views/market-intelligence/marketIntelligence.css');
+  const appStyles = read('src/hedge/styles.css');
+  assert.match(intelligenceStyles, /\.market-tools-section > div \{[^}]*min-width: 0;/);
+  assert.match(intelligenceStyles, /\.market-tools-embedded-workspace > \.app-page \{ min-width: 0; padding: 0; \}/);
+  assert.match(intelligenceStyles, /\.market-tools-embedded-workspace \.app-table-frame \{ min-width: 0; \}/);
+  assert.match(appStyles, /\.app-drawer--xl \{\s*width: min\(1120px, 96vw\);/);
 });
 
 test('forward curve UI requires exact outright fallback identity and shows controlled expiry', () => {

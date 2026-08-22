@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   decorateMopsMonthVerifications,
   mopsMonthDateBounds,
+  parseMopsText,
   prepareManualMopsVerification,
 } from '../api/_hedgeMops.js';
 import {
@@ -24,6 +25,31 @@ function completeMonth(month) {
     updated_date: `${priceDate}T12:00:00Z`,
   }));
 }
+
+test('manual daily bulletin capture extracts only the authoritative MOPS trio', () => {
+  const result = parseMopsText(`Aug 21
+
+MOPS
+180: 620.24 (35.10)
+380: 615.41 (37.32)
+0.5%: 745.08 (48.04)
+dbi (oct): 97.81
+oman (oct): 97.81
+kero: 154.04 (0.19)
+10ppm gas: 163.59 (4.48)
+10ppm reg: -9.55
+50ppm gas: 163.26 (4.15)
+500ppm: 161.60 (2.49)
+0.25%: 153.05 (-6.06)
+nap: 89.98
+mg 97: 118.71`, { now: new Date('2026-08-22T00:00:00Z') });
+  assert.deepEqual({ priceDate: result.price_date, s380: result.s380, s05: result.s05, sgo: result.sgo }, {
+    priceDate: '2026-08-21',
+    s380: 615.41,
+    s05: 745.08,
+    sgo: 163.59,
+  });
+});
 
 test('MOPS database ranges use the next month boundary instead of an invalid day 31', async () => {
   assert.deepEqual(mopsMonthDateBounds('2026-02'), { start: '2026-02-01', endExclusive: '2026-03-01' });

@@ -102,8 +102,13 @@
 .market-tools-stack { display: grid; gap: 10px; }
 .market-tools-section { overflow: hidden; border: 1px solid var(--app-border); border-radius: 10px; background: var(--app-surface); }
 .market-tools-section > summary { padding: 11px 12px; cursor: pointer; background: var(--app-surface-soft); font-size: 12px; font-weight: 850; }
-.market-tools-section > div { display: grid; gap: 12px; padding: 12px; }
+.market-tools-section > div { display: grid; min-width: 0; gap: 12px; padding: 12px; }
 .market-tools-section > div > p { margin: 0; color: var(--app-text-secondary); font-size: 11px; }
+.market-tools-embedded-workspace > .app-page { min-width: 0; padding: 0; }
+.market-tools-embedded-workspace .app-metric-grid,
+.market-tools-embedded-workspace .app-market-grid,
+.market-tools-embedded-workspace .app-panel,
+.market-tools-embedded-workspace .app-table-frame { min-width: 0; }
 
 .market-brief-topbar,
 .market-panel-actions,
