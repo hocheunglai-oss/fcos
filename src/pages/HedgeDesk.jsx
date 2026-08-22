@@ -65,13 +65,13 @@ export default function HedgeDesk() {
   }, [canAdmin, capabilities, data, navigate, quickCreateSignals, readOnly, settings, tab]);
 
   if ((data.loading || settings.loading) && !data.physicals.length && !data.swaps.length) {
-    return <div className="hedge-desk-root"><EmptyState title="Loading Hedge Desk" description="Preparing the native trading book and shared configuration." icon={RefreshCw} /></div>;
+    return <div className="hedge-desk-root workspace-trading"><EmptyState title="Loading Hedge Desk" description="Preparing the native trading book and shared configuration." icon={RefreshCw} /></div>;
   }
 
   return (
     <ActionsProvider reload={data.reload}>
-      <div className="hedge-desk-root">
-        <div className="hedge-desk-commandbar">
+      <div className="hedge-desk-root workspace-trading">
+        <div className="hedge-desk-commandbar app-navigation-material">
           <div>
             <strong>Hedge Desk</strong>
             <StatusBadge tone={readOnly ? 'neutral' : 'positive'}>{readOnly ? 'View only' : 'Live book'}</StatusBadge>
@@ -81,7 +81,7 @@ export default function HedgeDesk() {
             <Button icon={Bot} variant="primary" onClick={() => setAssistantOpen(true)}>Trading Assistant</Button>
           </div>
         </div>
-        <nav className="hedge-desk-tabs" aria-label="Hedge Desk views">
+        <nav className="hedge-desk-tabs app-navigation-caption-material" aria-label="Hedge Desk views">
           {visibleTabs.map((item) => (
             <button type="button" key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => changeTab(item.id)}>
               <item.icon size={16} aria-hidden="true" />

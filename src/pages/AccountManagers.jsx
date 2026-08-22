@@ -88,13 +88,13 @@ function SummaryMetric({ label, value }) {
 
 function ManagerCoverage({ managers, assignmentSource, inheritedFromGroupName }) {
   if (!managers.length) {
-    return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">Unassigned</Badge>;
+    return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">Unassigned</Badge>;
   }
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
         {managers.map((manager, index) => (
-          <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-red-200 bg-red-50 text-red-700'}>
+          <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200'}>
             <span className="mr-1 font-semibold tabular-nums">{index + 1}.</span>
             {manager.fullName}{manager.active ? '' : ' (inactive)'}
           </Badge>
@@ -109,16 +109,16 @@ function ManagerCoverage({ managers, assignmentSource, inheritedFromGroupName })
 
 function RoleBadges({ roles, isGroupAccount }) {
   if (isGroupAccount) {
-    return <Badge variant="outline" className="border-slate-300 bg-slate-100 text-slate-800">Group</Badge>;
+    return <Badge variant="outline" className="border-border bg-muted text-foreground">Group</Badge>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
       {(roles || []).map((role) => (
         <Badge key={role} variant="outline" className={role === 'broker'
-          ? 'border-violet-200 bg-violet-50 text-violet-800'
+          ? 'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950/50 dark:text-violet-200'
           : role === 'buyer_supplier'
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-            : 'border-sky-200 bg-sky-50 text-sky-800'}>
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
+            : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200'}>
           {ROLE_LABELS[role] || role}
         </Badge>
       ))}
@@ -420,16 +420,18 @@ export default function AccountManagers() {
 
   if (workspaceView === 'buyer-pic-references') {
     return (
-      <BuyerPicReferences
-        activeView={workspaceView}
-        onViewChange={setWorkspaceView}
-        methodology={ACCOUNT_MANAGERS_METHODOLOGY}
-      />
+      <div className="workspace-reference min-w-0">
+        <BuyerPicReferences
+          activeView={workspaceView}
+          onViewChange={setWorkspaceView}
+          methodology={ACCOUNT_MANAGERS_METHODOLOGY}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="min-w-0 pb-8">
+    <div className="workspace-reference min-w-0 pb-8">
       <PageHeader
         icon={UsersRound}
         title="Account Managers"

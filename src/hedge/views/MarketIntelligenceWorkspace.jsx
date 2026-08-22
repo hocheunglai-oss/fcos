@@ -542,9 +542,9 @@ export function MarketIntelligenceWorkspace({ data, pulse, marketDataLoaded = fa
     reload({ silent: true, force: true }).catch(() => {});
   };
   return (
-    <div className="app-page market-intelligence-workspace">
+    <div className="app-page market-intelligence-workspace workspace-trading-canvas">
       <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." actions={(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null} />
-      <div className="market-workspace-tabs" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
+      <div className="market-workspace-tabs app-navigation-caption-material" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
       {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} onRefreshPulse={refreshOverview} intraday={<MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} />} /></div> : null}
       {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered prices">{marketDataLoaded ? <DeliveredBunkers intelligence={intelligence} /> : <Panel><div className="market-empty-inline"><RefreshCw className={marketDataLoading ? 'animate-spin' : ''} size={20} /><div><strong>{marketDataLoading ? 'Loading delivered prices' : 'Delivered prices are ready to load'}</strong><span>The heavy history snapshot is requested only when this tab is opened.</span></div></div></Panel>}</div> : null}
       {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward curves"><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={false} /></div> : null}

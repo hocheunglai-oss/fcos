@@ -238,7 +238,7 @@ export default function SpecialTerms() {
     ...(deleteReason.trim().length < 3 ? [{ field: 'reason', message: 'Enter a deletion reason of at least three characters.' }] : []),
   ] : [];
   return (
-    <div className="space-y-5 p-4 md:p-6">
+    <div className="workspace-reference space-y-5 p-4 md:p-6">
       <PageHeader
         title="Special Terms"
         description="Find a term, make the complete update in one editor, and publish it through Salesforce governance."

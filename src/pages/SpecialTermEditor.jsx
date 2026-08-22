@@ -65,10 +65,10 @@ export default function SpecialTermEditor() {
     else setMessage(result?.initialApproval ? 'The initial Clause Library version was approved.' : 'The shared wording was published without changing this draft.');
   };
 
-  if (loading && !detail) return <div className="p-4 md:p-6"><StateBlock title="Opening Special Term" description="Loading authoritative wording, clause versions, and rules only for this term." icon={Loader2} /></div>;
+  if (loading && !detail) return <div className="workspace-reference p-4 md:p-6"><StateBlock title="Opening Special Term" description="Loading authoritative wording, clause versions, and rules only for this term." icon={Loader2} /></div>;
 
   return (
-    <div className="space-y-5 p-4 md:p-6">
+    <div className="workspace-reference space-y-5 p-4 md:p-6">
       <PageHeader
         eyebrow="Special Terms"
         title={detail?.term?.name || 'Special Term'}

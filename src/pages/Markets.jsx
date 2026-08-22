@@ -101,12 +101,12 @@ export default function Markets() {
   }), [effectiveSnapshot.settings]);
 
   if (loading && !pulse) {
-    return <div className="hedge-desk-root"><EmptyState title="Loading Markets" description="Preparing the daily brief, delivered prices and exact contract-month curves." icon={RefreshCw} /></div>;
+    return <div className="hedge-desk-root workspace-trading"><EmptyState title="Loading Markets" description="Preparing the daily brief, delivered prices and exact contract-month curves." icon={RefreshCw} /></div>;
   }
 
   return (
     <ActionsProvider reload={reloadAfterMarketMutation}>
-      <div className="hedge-desk-root">
+      <div className="hedge-desk-root workspace-trading">
         {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketIntelligenceWorkspace

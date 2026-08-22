@@ -345,3 +345,62 @@
   .market-library-analysis__header { align-items: flex-start; flex-direction: column; }
   .market-library-series-stats article > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Appearance-aware semantic materials. Direction and regime colours remain distinct. */
+.dark .market-disclosure--warning,
+.dark .market-intraday-strip {
+  border-color: rgb(180 110 24 / 58%);
+  background: rgb(69 41 10 / 46%);
+}
+
+.dark .market-intraday-rail__marks > span {
+  background: hsl(var(--card) / 0.72);
+}
+
+.dark .market-curve-state--backwardation {
+  background: rgb(76 29 149 / 48%);
+  color: #ddd6fe;
+}
+
+.dark .market-curve-state--contango {
+  background: rgb(120 53 15 / 48%);
+  color: #fde68a;
+}
+
+.dark .market-curve-state--flat,
+.dark .market-curve-state--mixed,
+.dark .market-curve-state--unavailable {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.dark .market-driver-column--emerging .market-driver-column__title,
+.dark .market-alert-event__icon--warning {
+  background: rgb(120 53 15 / 42%);
+  color: #fde68a;
+}
+
+.dark .market-driver-column--fading .market-driver-column__title,
+.dark .market-alert-event__icon--positive {
+  background: rgb(6 78 59 / 48%);
+  color: #a7f3d0;
+}
+
+.dark .market-alert-event__icon--negative {
+  background: rgb(127 29 29 / 48%);
+  color: #fecaca;
+}
+
+.dark .market-library-selected > button {
+  border-color: rgb(30 64 175 / 68%);
+  background: rgb(23 37 84 / 52%);
+  color: #dbeafe;
+}
+
+.dark .market-library-selected > button small {
+  color: #93c5fd;
+}
+
+.dark .market-library-analysis__summary {
+  background: rgb(30 58 138 / 24%);
+}
