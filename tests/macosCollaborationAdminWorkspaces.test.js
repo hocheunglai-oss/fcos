@@ -19,6 +19,9 @@ test('collaboration workspaces use shared native materials without changing thei
   assert.match(coaching, /growthCoachingBootstrap/);
   assert.match(projects, /collaborationList/);
   assert.match(improvements, /improvementsList/);
+  assert.match(improvements, /aria-label="Improvement tickets"/);
+  assert.match(improvements, /md:hidden/);
+  assert.match(improvements, /hidden overflow-x-auto md:block/);
 });
 
 test('Email Router keeps its split workflow inside opaque material and native toolbar layers', async () => {

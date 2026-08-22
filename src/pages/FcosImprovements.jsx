@@ -469,7 +469,38 @@ export default function FcosImprovements() {
           {loading ? (
             <StateBlock icon={Loader2} title="Loading improvement tickets" description="Retrieving the shared FCOS queue." />
           ) : filteredTickets.length ? (
-            <div className="overflow-x-auto">
+            <div className="grid gap-2 p-3 md:hidden" aria-label="Improvement tickets">
+              {filteredTickets.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="material-panel w-full rounded-[var(--radius-control)] border border-border p-3 text-left shadow-none transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => openTicket(item.id)}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="flex min-w-0 items-center gap-2">
+                      {item.type === 'bug' ? <Bug className="h-4 w-4 shrink-0 text-rose-600" /> : <Lightbulb className="h-4 w-4 shrink-0 text-amber-600" />}
+                      <span className="font-mono text-xs font-semibold">{item.key}</span>
+                    </span>
+                    <Badge variant="outline" className={cn('shrink-0', priorityClass(item.priority))}>{item.priority}</Badge>
+                  </span>
+                  <span className="mt-2 block text-sm font-semibold leading-5 text-foreground">{item.title}</span>
+                  <span className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className={statusClass(item.status)}>{item.status}</Badge>
+                    <span className="text-xs text-muted-foreground">{moduleLabel(item.moduleKey)}</span>
+                  </span>
+                  <span className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                    <span className="min-w-0"><span className="block font-medium text-foreground">Assignee</span><span className="block truncate">{item.assignee?.name || 'Unassigned'}</span></span>
+                    <span className="min-w-0 text-right"><span className="block font-medium text-foreground">Updated</span><span className="block truncate">{formatDateTime(item.updatedAt)}</span></span>
+                  </span>
+                  {item.pendingApprovalCount > 0 && <span className="mt-2 block text-xs font-medium text-amber-700 dark:text-amber-300">{item.pendingApprovalCount} pending approval</span>}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!loading && filteredTickets.length ? (
+            <div className="hidden overflow-x-auto md:block">
               <Table>
                 <TableHeader><TableRow><TableHead>Ticket</TableHead><TableHead>Title</TableHead><TableHead>Area</TableHead><TableHead>Status</TableHead><TableHead>Priority</TableHead><TableHead>Reporter</TableHead><TableHead>Assignee</TableHead><TableHead className="text-right">Updated</TableHead></TableRow></TableHeader>
                 <TableBody>
@@ -488,7 +519,7 @@ export default function FcosImprovements() {
                 </TableBody>
               </Table>
             </div>
-          ) : <StateBlock icon={Search} title="No tickets match this view" description="Change the filters or create a new ticket." />}
+          ) : !loading ? <StateBlock icon={Search} title="No tickets match this view" description="Change the filters or create a new ticket." /> : null}
         </TableShell>
       )}
 
