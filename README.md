@@ -2,7 +2,7 @@
 
 FCOS is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
 
-FCOS remains the live Supabase extension to Salesforce while FCOS Backbone is built. Its existing Salesforce writeback, Google Drive report archive, and scheduled/manual email functions remain intact and enabled by default because users rely on them today. Emergency server controls can pause each connector without removing or replacing its legacy implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
+FCOS is the live Supabase extension to Salesforce. Its existing Salesforce writeback, Google Drive report archive, and scheduled/manual email functions remain intact and enabled by default because users rely on them today. Emergency server controls can pause each connector without removing or replacing its legacy implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
 
 ## Local Development
 
@@ -81,19 +81,6 @@ Message bodies, MIME, full recipient lists, and attachment bytes remain in
 Microsoft 365; Supabase stores only operational metadata and durable action
 state. Redirect, Reply, and Forward create a Graph draft before submission and
 are not confirmed until the resulting item is reconciled in Sent Items.
-
-The optional FCOS Backbone shadow bridge is server-only and does not replace a live FCOS read. Configure the same high-entropy secret in both Vercel projects only when the bridge is ready for identity and projection UAT:
-
-```bash
-FCOS_BACKBONE_URL=https://fcbhk-erp.vercel.app
-FCOS_BACKBONE_BRIDGE_SECRET=<shared server secret of at least 32 characters>
-```
-
-Backbone supports a zero-interruption rotation window: first set its primary secret to a newly generated value and `FCOS_BRIDGE_SHARED_SECRET_PREVIOUS` to the still-live value, then deploy Backbone; update this FCOS secret to the new value and deploy FCOS; confirm FCOS System Health reports `credentialVersion: primary`; after the signed-request window and rollback margin, remove Backbone's previous-secret variable. Secrets never belong in source control or browser variables.
-
-When configured, System Health resolves the current FCOS user to an active Backbone HKG identity. The server can then run bounded `trade.find`, `trade.changes`, and `audit.list` comparisons. A mapped Backbone Finance or Administrator user can also retrieve the read-only `finance.handoffs` summary list through the Exception Review module boundary; it has no acknowledgement, invoice, payment, email, Drive, Salesforce, or bank mutation. FCOS continues using its current Salesforce and dedicated Supabase paths until an individual replacement is accepted and rehearsed.
-
-See [FCOS live continuity during the Backbone transition](docs/live-continuity-during-backbone-transition.md) for the preserved-function and replacement rules.
 
 ## Account Identity
 

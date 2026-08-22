@@ -78,6 +78,7 @@ test('page loaders use navigation policies while live workflows and mutations re
     'src/pages/CashflowForecast.jsx',
     'src/pages/UnofficialCompensation.jsx',
     'src/pages/BrokerRegister.jsx',
+    'src/pages/ReviewQueue.jsx',
   ];
   const collaborationPages = [
     'src/pages/BuyerInvoices.jsx',
@@ -90,7 +91,6 @@ test('page loaders use navigation policies while live workflows and mutations re
   ];
   for (const page of operationalPages) assert.match(read(page), /useNavigationAwareRequest\('operational'\)|useNavigationAwareRequest\("operational"\)/, page);
   for (const page of collaborationPages) assert.match(read(page), /useNavigationAwareRequest\('collaboration'\)|useNavigationAwareRequest\("collaboration"\)/, page);
-  assert.match(read('src/pages/ReviewQueue.jsx'), /cache: false, force: options\.force/);
   assert.match(read('src/pages/PaymentCollections.jsx'), /paymentCollectionsReconcile[\s\S]*\{ force \}/);
 });
 
