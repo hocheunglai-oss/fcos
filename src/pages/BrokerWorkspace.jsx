@@ -31,7 +31,7 @@ export default function BrokerWorkspace() {
 
   return (
     <div className="workspace-operations min-h-full">
-      <div className="app-navigation-material sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5 lg:px-8">
+      <div className="app-navigation-material workspace-primary-navigation sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5 lg:px-8">
         <div className="flex items-center gap-1">
           {canViewCommissions && <Button size="sm" variant={activeTab === 'commissions' ? 'default' : 'ghost'} className="gap-2" onClick={() => changeTab('commissions')}><BadgeDollarSign className="h-4 w-4" /> Commissions</Button>}
           {canViewArchive && <Button size="sm" variant={activeTab === 'archive' ? 'default' : 'ghost'} className="gap-2" onClick={() => changeTab('archive')}><Archive className="h-4 w-4" /> Report Archive</Button>}

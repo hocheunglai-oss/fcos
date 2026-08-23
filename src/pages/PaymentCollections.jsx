@@ -173,7 +173,7 @@ export default function PaymentCollections() {
 
   return (
     <div className="workspace-operations min-h-full">
-      <div className="app-navigation-material sticky top-0 z-30 border-b border-border px-4 py-2.5 lg:px-8">
+      <div className="app-navigation-material workspace-primary-navigation sticky top-0 z-30 border-b border-border px-4 py-2.5 lg:px-8">
         <WorkspaceViewBar
           className="border-0 bg-transparent p-0"
           views={availableTabs.map((tab) => ({
@@ -208,8 +208,8 @@ export default function PaymentCollections() {
         )}
       </div>
 
-      {activeTab === 'collections' && <BuyerInvoices defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
-      {activeTab === 'incoming' && <IncomingPayments reconciliationItems={reconciliation?.items || []} />}
+      {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
+      {activeTab === 'incoming' && <IncomingPayments embedded reconciliationItems={reconciliation?.items || []} />}
       {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} />}
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">

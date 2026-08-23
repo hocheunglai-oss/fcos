@@ -57,6 +57,7 @@ test('intraday, evidence, cell statistics, and chart selections stay available w
 
 test('Pulse floats without a full-width row and signed values share one renderer', () => {
   const layout = read('src/components/Layout.jsx');
+  const draggable = read('src/components/workspace/DraggableWorkspaceUtility.jsx');
   const shellCss = read('src/index.css');
   const pulse = read('src/components/market-pulse/MarketPulse.jsx');
   const shared = read('src/components/markets/MarketSignedValue.jsx');
@@ -64,14 +65,17 @@ test('Pulse floats without a full-width row and signed values share one renderer
   const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
   const intraday = read('src/hedge/views/market-intelligence/MarketIntradayStrip.jsx');
   const drivers = read('src/hedge/views/market-intelligence/MarketDriversAlerts.jsx');
-  assert.match(layout, /app-market-pulse-dock pointer-events-none absolute right-0 top-0/);
+  assert.match(layout, /<DraggableWorkspaceUtility/);
+  assert.match(draggable, /app-market-pulse-dock absolute z-40/);
   assert.doesNotMatch(layout, /app-market-pulse-dock[^\n]*\bh-(?:10|14)\b/);
   assert.match(layout, /relative min-h-0 flex-1/);
-  assert.match(layout, /z-30/);
-  assert.match(layout, /env\(safe-area-inset-top\)/);
-  assert.match(shellCss, /app-workspace-content--market-pulse \.app-page-header/);
-  assert.match(shellCss, /market-overview-context/);
-  assert.match(shellCss, /market-chart-controls--sticky/);
+  assert.match(draggable, /ResizeObserver/);
+  assert.match(draggable, /workspace-safe-area-top/);
+  assert.match(draggable, /MARKET_PULSE_POSITION_STORAGE_KEY/);
+  assert.match(draggable, /window\.setTimeout\(\(\) => \{[\s\S]*suppressClickRef\.current = false/);
+  assert.doesNotMatch(shellCss, /app-workspace-content--market-pulse/);
+  assert.match(shellCss, /app-workspace-scroll > :first-child/);
+  assert.match(shellCss, /max-width: 1600px/);
   assert.match(pulse, /max-h-\[calc\(100dvh-24px\)\]/);
   assert.match(shared, /market-signed-value--\$\{tone\}/);
   assert.match(shared, /TrendingUp/);

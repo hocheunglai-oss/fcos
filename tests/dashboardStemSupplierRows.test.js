@@ -37,7 +37,7 @@ test('Dashboard STEMs restores the wide-screen table control without reloading d
   assert.match(component, /wide \? 'Normal width' : 'Wide view'/);
   assert.match(component, /onWideChange\?\.\(!wide\)/);
   assert.match(page, /wide=\{stemTableWide\} onWideChange=\{setStemTableWide\}/);
-  assert.match(page, /stemTableWide && tab === 'stems' \? 'max-w-none' : 'max-w-\[1600px\]'/);
+  assert.match(page, /stemTableWide && tab === 'stems' \? 'workspace-page-wide max-w-none' : 'max-w-\[1600px\]'/);
 });
 
 test('STEM API loads charge names, builds paired rows, and uses the versioned cache', () => {

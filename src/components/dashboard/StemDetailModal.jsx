@@ -747,7 +747,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs text-muted-foreground mb-0.5">Stem Detail</p>
-                <DialogTitle className="text-xl font-bold font-dm">
+                <DialogTitle className="font-ui text-xl font-semibold">
                   {record?.Name || stemId}
                 </DialogTitle>
                 {record?._Vessel_Name && (

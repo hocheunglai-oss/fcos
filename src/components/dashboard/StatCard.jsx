@@ -21,7 +21,7 @@ export default function StatCard({ label, value, sub, icon: Icon, trend, color =
         )}
       </div>
       <div>
-        <p className="text-2xl font-bold text-foreground font-dm tracking-tight">{value}</p>
+        <p className="font-ui text-2xl font-semibold tracking-tight text-foreground">{value}</p>
         {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
       </div>
       {trend && (

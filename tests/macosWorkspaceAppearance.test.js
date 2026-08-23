@@ -27,10 +27,11 @@ test('workspace appearance preferences are revisioned and remain service-only', 
 });
 
 test('appearance is applied before first paint and reacts to system accessibility settings', async () => {
-  const [html, appearance, styles, layout, settings] = await Promise.all([
+  const [html, appearance, styles, fonts, layout, settings] = await Promise.all([
     read('../index.html'),
     read('../src/lib/appearancePreferences.js'),
     read('../src/index.css'),
+    read('../src/styles/fonts.css'),
     read('../src/components/Layout.jsx'),
     read('../src/pages/Settings.jsx'),
   ]);
@@ -43,6 +44,11 @@ test('appearance is applied before first paint and reacts to system accessibilit
   assert.match(styles, /prefers-contrast: more/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(styles, /fonts\.googleapis\.com/);
+  assert.match(styles, /--font-ui: 'IBM Plex Sans Variable'/);
+  assert.match(styles, /--font-data: 'IBM Plex Mono'/);
+  assert.match(fonts, /ibm-plex-sans-latin-wght-normal\.woff2/);
+  assert.match(fonts, /ibm-plex-sans-latin-ext-wght-normal\.woff2/);
+  assert.match(fonts, /font-weight: 400 600/);
   assert.match(layout, /WorkspaceCommandPalette/);
   assert.match(layout, /event\.key\.toLowerCase\(\) === 'k'/);
   assert.match(layout, /event\.key === ','/);

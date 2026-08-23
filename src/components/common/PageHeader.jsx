@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import { getPageCopy } from '@/lib/pageCopy';
 import { useWorkspaceChromeRegistration } from '@/components/workspace/WorkspaceChrome';
 
-export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, status, actions, compact = false, className }) {
+export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, status, actions, compact = false, sticky = true, className }) {
   const copy = getPageCopy({ title, eyebrow, description });
   const chrome = useWorkspaceChromeRegistration();
   const registrationId = useId();
@@ -12,27 +12,30 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
 
   useEffect(() => chrome?.register(registrationId, () => registration.current), [chrome, registrationId]);
 
-  return (
-    <div className={cn(
-      'glass-page-header app-page-header sticky top-0 z-30 mb-5 rounded-lg',
-      compact
-        ? 'grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-4 py-2.5 lg:grid-cols-[minmax(10rem,0.55fr)_minmax(18rem,1fr)_auto]'
-        : status ? 'flex flex-col gap-4 px-5 py-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)_auto] lg:items-center' : 'flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-end lg:justify-between',
+  const contextVisible = Boolean(copy.description || meta || status);
+  return <>
+    <header className={cn(
+      'glass-page-header app-page-header z-30 grid min-h-[var(--workspace-toolbar-height)] w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2 sm:px-4',
+      sticky && 'sticky top-0',
+      !contextVisible && 'mb-5',
+      compact && 'app-page-header--compact',
       className,
     )}>
-      <div className="min-w-0">
-        {(eyebrow || Icon) && (
-          <div className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
-            {Icon && <Icon className="h-4 w-4" />}
-            {copy.eyebrow && <span>{copy.eyebrow}</span>}
-          </div>
-        )}
-        <h1 className={cn('font-dm font-semibold tracking-tight text-foreground', compact ? 'text-lg lg:text-xl' : 'text-2xl')}>{copy.title}</h1>
-        {copy.description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{copy.description}</p>}
-        {meta && <p className="mt-1 text-xs text-muted-foreground">{meta}</p>}
+      <div className="flex min-w-0 items-center gap-2.5">
+        {Icon && <Icon className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" />}
+        <div className="min-w-0">
+          {copy.eyebrow && <div className="hidden truncate text-[11px] font-medium text-muted-foreground sm:block">{copy.eyebrow}</div>}
+          <h1 className="truncate font-ui text-xl font-semibold leading-[1.625rem] tracking-[-0.01em] text-foreground">{copy.title}</h1>
+        </div>
       </div>
-      {status && <div className="min-w-0">{status}</div>}
-      {actions && <div className={cn('flex items-center gap-2', compact ? 'col-span-2 flex-nowrap overflow-x-auto pb-0.5 lg:col-span-1 lg:overflow-visible lg:pb-0' : 'flex-wrap')}>{actions}</div>}
-    </div>
-  );
+      {actions && <div className="app-page-header__actions flex max-w-[58vw] items-center gap-2 overflow-x-auto pb-0.5 sm:max-w-[65vw] sm:pb-0">{actions}</div>}
+    </header>
+    {contextVisible && <div className="app-page-header-context mb-5 grid gap-2 border-x border-b border-border/70 bg-card/80 px-4 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+      <div className="min-w-0">
+        {copy.description && <p className="max-w-4xl leading-5 text-muted-foreground">{copy.description}</p>}
+        {meta && <div className="mt-1 text-xs leading-4 text-muted-foreground">{meta}</div>}
+      </div>
+      {status && <div className="min-w-0 text-xs text-muted-foreground">{status}</div>}
+    </div>}
+  </>;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, ArrowRight, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
+import { Activity, ArrowRight, Loader2, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { loadMarketPulseSnapshot } from '@/hedge/api/marketData';
 import { Button } from '@/components/ui/button';
@@ -60,7 +60,7 @@ function ProductRow({ product, currentMonth }) {
   </article>;
 }
 
-function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets }) {
+function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, onResetPosition }) {
   const reportLabel = data?.curveReportDate ? `Curve report ${formatDate(data.curveReportDate)}` : 'Curve report unavailable';
   return (
     <div className="market-pulse-surface flex min-h-0 flex-1 flex-col text-foreground">
@@ -123,7 +123,10 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets })
         ) : null}
       </div>
 
-      <div className="app-navigation-caption-material flex items-center justify-end border-t border-border px-4 py-3">
+      <div className="app-navigation-caption-material flex items-center justify-between gap-2 border-t border-border px-4 py-3">
+        <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={onResetPosition}>
+          <RotateCcw className="h-3.5 w-3.5" /> Reset position
+        </Button>
         <Button type="button" size="sm" className="gap-1.5" onClick={onOpenMarkets}>
           Open Markets <ArrowRight className="h-3.5 w-3.5" />
         </Button>
@@ -132,7 +135,7 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets })
   );
 }
 
-export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
+export default function MarketPulse({ open, onOpenChange, onResetPosition, triggerClassName }) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [data, setData] = useState(null);
@@ -172,11 +175,12 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
     navigate('/markets');
   };
   const body = (
-    <PulseBody data={data} error={error} loading={loading} updating={updating} onRefresh={() => load({ force: true })} onOpenMarkets={openMarkets} />
+    <PulseBody data={data} error={error} loading={loading} updating={updating} onRefresh={() => load({ force: true })} onOpenMarkets={openMarkets} onResetPosition={onResetPosition} />
   );
   const trigger = (
-    <Button type="button" variant="ghost" size="sm" className={cn('h-8 shrink-0 gap-1.5 px-2.5 text-foreground hover:bg-accent hover:text-accent-foreground', triggerClassName)} aria-label="Open Market Pulse" title="Market Pulse">
-      <Activity className="h-4 w-4" /><span className="hidden sm:inline">Pulse</span>
+    <Button type="button" variant="ghost" size="sm" className={cn('app-market-pulse-trigger h-9 shrink-0 gap-1.5 px-1.5 pr-2.5', triggerClassName)} aria-label="Open Market Pulse; drag to reposition" title="Market Pulse · drag to reposition">
+      <span className="app-market-pulse-trigger__icon flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-white shadow-sm" aria-hidden="true"><Activity className="h-3.5 w-3.5" strokeWidth={2.6} /></span>
+      <span className="hidden font-medium text-red-700 dark:text-red-300 sm:inline">Pulse</span>
     </Button>
   );
 
@@ -196,7 +200,7 @@ export default function MarketPulse({ open, onOpenChange, triggerClassName }) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="end" side="bottom" sideOffset={8} className="glass-floating flex max-h-[calc(100dvh-24px)] w-[min(640px,calc(100vw-24px))] flex-col overflow-hidden p-0">
+      <PopoverContent align="end" side="bottom" sideOffset={8} collisionPadding={12} className="glass-floating flex max-h-[calc(100dvh-24px)] w-[min(640px,calc(100vw-24px))] flex-col overflow-hidden p-0">
         {body}
       </PopoverContent>
     </Popover>

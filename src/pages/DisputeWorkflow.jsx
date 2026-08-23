@@ -278,7 +278,7 @@ function Metric({ label, value, tone = 'default' }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-1 font-dm text-2xl font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1 font-ui text-2xl font-semibold ${toneClass}`}>{value}</p>
     </div>
   );
 }

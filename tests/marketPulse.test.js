@@ -142,10 +142,11 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(client, /requestMarketIntelligence\('marketPulseSnapshot'/);
   assert.match(layout, /hasModuleAccess\('markets'\)/);
   assert.equal((layout.match(/<MarketPulse\b/g) || []).length, 1);
-  assert.match(layout, /app-market-pulse-dock/);
+  assert.match(layout, /DraggableWorkspaceUtility/);
   assert.match(layout, /app-workspace-main flex h-screen/);
   assert.match(layout, /pageOwnsScroll \? 'overflow-hidden' : 'overflow-auto'/);
-  assert.match(layout, /env\(safe-area-inset-top\)/);
+  assert.match(pulse, /drag to reposition/);
+  assert.match(pulse, /Reset position/);
   assert.match(pulse, /Open Markets/);
   assert.match(pulse, /No prior comparison/);
   assert.match(pulse, /align="end" side="bottom"/);

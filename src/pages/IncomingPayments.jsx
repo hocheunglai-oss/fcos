@@ -350,7 +350,7 @@ function CompactTableEmptyState({ icon: Icon, title, description }) {
   );
 }
 
-export default function IncomingPayments({ reconciliationItems = [] }) {
+export default function IncomingPayments({ reconciliationItems = [], embedded = false }) {
   const { request: requestPayments } = useNavigationAwareRequest('collaboration');
   const { toast } = useToast();
   const { isAdministrator, hasCapability } = useAuth();
@@ -1065,6 +1065,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         icon={Banknote}
         eyebrow="Salesforce payments"
         title="Incoming Payment"
+        sticky={!embedded}
         description="Manage receivable buyer payments, supplier refunds, currency-specific settlement thresholds, and buyer-group overpayment balances from Salesforce payment records."
         meta={lastMeta ? `Payment created date range: ${lastMeta}. ${thresholdCount} configured currency threshold${thresholdCount === 1 ? '' : 's'}; all others use <0.005.` : null}
         actions={(

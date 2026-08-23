@@ -5,8 +5,10 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        inter: ['var(--font-inter)'],
-        dm: ['var(--font-dm)'],
+        sans: ['var(--font-ui)'],
+        ui: ['var(--font-ui)'],
+        data: ['var(--font-data)'],
+        mono: ['var(--font-data)'],
       },
       borderRadius: {
         control: 'var(--radius-control)',

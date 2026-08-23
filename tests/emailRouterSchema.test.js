@@ -252,7 +252,7 @@ test('Email Router action status is page-level and not duplicated in the message
   assert.doesNotMatch(workspace, /if \(messageId !== selectedId\) setActionResult\(null\)/);
   assert.match(messageSheet, /actionResult\?\.messageId === message\?\.id/);
   assert.doesNotMatch(messageSheet, /actionResult && <div/);
-  assert.match(pageHeader, /status && <div className="min-w-0">\{status\}<\/div>/);
+  assert.match(pageHeader, /status && <div className="min-w-0 text-xs text-muted-foreground">\{status\}<\/div>/);
 });
 
 test('Email Router audit events allow whole-directory ordering changes', async () => {

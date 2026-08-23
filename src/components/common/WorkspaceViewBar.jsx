@@ -15,7 +15,7 @@ export default function WorkspaceViewBar({
     <div
       className={cn(
         'app-navigation-material flex items-center gap-3 overflow-x-auto rounded-[var(--radius-control)] border border-border px-3 py-2.5 sm:justify-between',
-        sticky && 'sticky top-0 z-30 rounded-none border-x-0 border-t-0',
+        sticky && 'sticky top-[var(--workspace-toolbar-height)] z-30 rounded-none border-x-0 border-t-0',
         className,
       )}
       role="region"

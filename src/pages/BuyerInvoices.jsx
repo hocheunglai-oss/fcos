@@ -539,7 +539,7 @@ function SummaryCard({ label, value, tone = 'default' }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-1 font-dm text-2xl font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1 font-ui text-2xl font-semibold ${toneClass}`}>{value}</p>
     </div>
   );
 }
@@ -2489,7 +2489,7 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
   );
 }
 
-export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [], dataRefreshToken = 0 }) {
+export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [], dataRefreshToken = 0, embedded = false }) {
   const { request: requestInvoices } = useNavigationAwareRequest('collaboration');
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => hongKongDateKey(), []);
@@ -2940,6 +2940,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
         icon={ReceiptText}
         eyebrow="Accounts receivable follow-up"
         title="Payment Collections"
+        sticky={!embedded}
         description="Prioritize buyer follow-up, promises, payment advice, and settlement using the live Salesforce receivable balance."
         meta={meta ? (
           <span className="flex flex-wrap items-center gap-2">

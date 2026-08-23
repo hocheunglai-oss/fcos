@@ -42,6 +42,7 @@ import { workspaceNavigation } from '@/lib/workspaceStandards';
 import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { applyAppearancePreferences, listenForSystemAppearance, readAppearancePreferences } from '@/lib/appearancePreferences';
 import { WorkspaceChromeProvider } from '@/components/workspace/WorkspaceChrome';
+import DraggableWorkspaceUtility from '@/components/workspace/DraggableWorkspaceUtility';
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
 const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
@@ -830,23 +831,17 @@ export default function Layout() {
             </div>
           </div>
         )}
-        <div className={cn('relative min-h-0 flex-1', hasMarketsAccess && 'app-workspace-content--market-pulse')}>
+        <div className="relative min-h-0 flex-1">
           {hasMarketsAccess && (
-            <div
-              className="app-market-pulse-dock pointer-events-none absolute right-0 top-0 z-30"
-              style={{
-                paddingTop: 'max(0.5rem, env(safe-area-inset-top))',
-                paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
-              }}
-            >
-              <div className="pointer-events-auto rounded-xl border border-white/80 bg-white/80 p-0.5 shadow-lg shadow-slate-900/10 backdrop-blur-xl supports-[backdrop-filter]:bg-white/70">
+            <DraggableWorkspaceUtility onDragStart={() => setMarketPulseOpen(false)}>
+              {({ resetPosition }) => (
                 <Suspense fallback={null}>
-                  <MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} />
+                  <MarketPulse open={marketPulseOpen} onOpenChange={setMarketPulseOpen} onResetPosition={resetPosition} />
                 </Suspense>
-              </div>
-            </div>
+              )}
+            </DraggableWorkspaceUtility>
           )}
-          <div ref={workspaceScrollRef} className={cn('h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
+          <div ref={workspaceScrollRef} className={cn('app-workspace-scroll h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
             <Outlet />
           </div>
         </div>

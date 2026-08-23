@@ -148,7 +148,7 @@
   overflow: hidden;
   background: var(--app-bg);
   color: var(--app-text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-ui);
   letter-spacing: 0;
 }
 
@@ -1394,7 +1394,7 @@
 }
 
 .hedge-desk-root .app-textarea--code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-data);
   font-size: 11px;
 }
 
@@ -2667,7 +2667,7 @@
   background: #edf5f3;
   color: var(--app-teal-dark);
   cursor: pointer;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-data);
   font-size: 9px;
 }
 

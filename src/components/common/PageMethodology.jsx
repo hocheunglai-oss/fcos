@@ -24,14 +24,16 @@ export default function PageMethodology({
       <Button
         type="button"
         variant="outline"
+        aria-label="Open methodology"
+        title="Methodology"
         className={cn(
-          'h-[38px] gap-[7px] rounded-[7px] px-3.5 text-xs font-[750] text-muted-foreground shadow-sm hover:text-foreground',
+          'h-[38px] gap-[7px] rounded-[7px] px-2.5 text-xs font-medium text-muted-foreground shadow-sm hover:text-foreground sm:px-3.5',
           className,
         )}
         onClick={() => setOpen(true)}
       >
         <BookOpen className="h-4 w-4" />
-        Methodology
+        <span className="hidden sm:inline">Methodology</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
