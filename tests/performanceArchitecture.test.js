@@ -5,10 +5,11 @@ import test from 'node:test';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('high-frequency notification and Email Router calls bypass the universal dispatcher', async () => {
-  const [client, notificationsRoute, emailRoute] = await Promise.all([
+  const [client, notificationsRoute, emailRoute, backgroundSync] = await Promise.all([
     read('../src/api/appClient.js'),
     read('../api/work-notifications.js'),
     read('../api/email-router-background-sync.js'),
+    read('../api/_emailRouterBackgroundSync.js'),
   ]);
   assert.match(client, /workNotificationsList: '\/api\/work-notifications'/);
   assert.match(client, /workNotificationsRead: '\/api\/work-notifications'/);
@@ -17,6 +18,10 @@ test('high-frequency notification and Email Router calls bypass the universal di
   assert.match(client, /x-fcos-function-name/);
   assert.doesNotMatch(notificationsRoute, /functions\/\[name\]/);
   assert.doesNotMatch(emailRoute, /functions\/\[name\]/);
+  assert.doesNotMatch(emailRoute, /_emailRouterHandlers/);
+  assert.doesNotMatch(backgroundSync, /pdf-parse/);
+  assert.match(backgroundSync, /folders: \['inbox'\]/);
+  assert.match(backgroundSync, /maxPages: 1/);
   assert.match(emailRoute, /moduleId: 'email_router'/);
 });
 

@@ -61,3 +61,61 @@ test('shared chrome exposes one compact toolbar registration interface', async (
   assert.match(chrome, /WorkspaceChromeProvider/);
   assert.match(chrome, /fcos:workspace-chrome-changed/);
 });
+
+test('native workspace tokens define concentric corners and shared elevations', async () => {
+  const [styles, tailwind] = await Promise.all([
+    read('../src/index.css'),
+    read('../tailwind.config.js'),
+  ]);
+
+  for (const token of ['control', 'panel', 'window']) {
+    assert.match(styles, new RegExp(`--radius-${token}:`));
+    assert.match(tailwind, new RegExp(`${token}: 'var\\(--radius-${token}\\)'`));
+  }
+  for (const token of ['panel', 'window']) {
+    assert.match(styles, new RegExp(`--shadow-${token}:`));
+    assert.match(tailwind, new RegExp(`${token}: 'var\\(--shadow-${token}\\)'`));
+  }
+});
+
+test('shared transient surfaces use native glass, corners, and safe overlays', async () => {
+  const [
+    alertDialog,
+    drawer,
+    popover,
+    hoverCard,
+    dropdown,
+    contextMenu,
+    menubar,
+    tooltip,
+    toast,
+    textarea,
+  ] = await Promise.all([
+    read('../src/components/ui/alert-dialog.jsx'),
+    read('../src/components/ui/drawer.jsx'),
+    read('../src/components/ui/popover.jsx'),
+    read('../src/components/ui/hover-card.jsx'),
+    read('../src/components/ui/dropdown-menu.jsx'),
+    read('../src/components/ui/context-menu.jsx'),
+    read('../src/components/ui/menubar.jsx'),
+    read('../src/components/ui/tooltip.jsx'),
+    read('../src/components/ui/toast.jsx'),
+    read('../src/components/ui/textarea.jsx'),
+  ]);
+
+  assert.doesNotMatch(alertDialog, /bg-black\/80/);
+  assert.doesNotMatch(drawer, /bg-black\/80/);
+  assert.match(alertDialog, /glass-floating[\s\S]*--radius-window[\s\S]*--shadow-window/);
+  assert.match(drawer, /glass-floating[\s\S]*--radius-window[\s\S]*safe-area-inset-bottom[\s\S]*--shadow-window/);
+
+  for (const source of [popover, hoverCard, dropdown, contextMenu, menubar]) {
+    assert.match(source, /glass-floating/);
+    assert.match(source, /--radius-panel/);
+    assert.match(source, /--shadow-window/);
+  }
+
+  assert.match(tooltip, /--radius-control/);
+  assert.match(tooltip, /--shadow-panel/);
+  assert.match(toast, /glass-floating[\s\S]*--radius-panel[\s\S]*--shadow-window/);
+  assert.match(textarea, /glass-control[\s\S]*--radius-control/);
+});

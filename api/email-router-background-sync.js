@@ -1,5 +1,5 @@
 import { authenticatedFunction } from './_authenticatedFunction.js';
-import { emailRouterBackgroundSyncHandler } from './_emailRouterHandlers.js';
+import { emailRouterBackgroundSyncHandler } from './_emailRouterBackgroundSync.js';
 
 export default authenticatedFunction({
   handlerName: 'emailRouterBackgroundSync',
