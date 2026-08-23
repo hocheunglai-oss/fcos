@@ -1,10 +1,10 @@
-export const APPEARANCE_STORAGE_KEY = 'fcos:workspace-appearance:v1';
+export const APPEARANCE_STORAGE_KEY = 'fcos:workspace-appearance:v2';
 
 export const APPEARANCE_MODES = ['system', 'light', 'dark'];
 export const GLASS_INTENSITIES = ['clear', 'balanced', 'tinted'];
 
 export const DEFAULT_APPEARANCE_PREFERENCES = Object.freeze({
-  appearanceMode: 'system',
+  appearanceMode: 'light',
   glassIntensity: 'balanced',
 });
 

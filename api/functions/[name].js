@@ -4569,7 +4569,7 @@ function serializeWorkspacePreferences(row = null) {
     tableDensity: row?.table_density === 'comfort' ? 'comfort' : 'compact',
     documentShowOnlyRelevant: row?.document_show_only_relevant ?? true,
     documentSourceGroups: normalizeWorkspaceDocumentSourceGroups(row?.document_source_groups),
-    appearanceMode: ['system', 'light', 'dark'].includes(row?.appearance_mode) ? row.appearance_mode : 'system',
+    appearanceMode: ['system', 'light', 'dark'].includes(row?.appearance_mode) ? row.appearance_mode : 'light',
     glassIntensity: ['clear', 'balanced', 'tinted'].includes(row?.glass_intensity) ? row.glass_intensity : 'balanced',
     initialized: row?.workspace_preferences_initialized === true,
     revision: Number(row?.revision || 0),

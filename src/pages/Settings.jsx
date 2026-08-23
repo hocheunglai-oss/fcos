@@ -71,7 +71,7 @@ function comparableWorkspaceSettings(value = {}) {
     tableDensity: value.tableDensity === 'comfort' ? 'comfort' : 'compact',
     documentShowOnlyRelevant: value.documentShowOnlyRelevant !== false,
     documentSourceGroups: DOCUMENT_SOURCE_GROUPS.filter((group) => selectedGroups.has(group)),
-    appearanceMode: ['system', 'light', 'dark'].includes(value.appearanceMode) ? value.appearanceMode : 'system',
+    appearanceMode: ['system', 'light', 'dark'].includes(value.appearanceMode) ? value.appearanceMode : 'light',
     glassIntensity: ['clear', 'balanced', 'tinted'].includes(value.glassIntensity) ? value.glassIntensity : 'balanced',
   };
 }
@@ -1181,7 +1181,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                       <SelectItem value="dark">Dark</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">Follow system updates automatically when macOS changes appearance.</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">Light is the company default. You can still follow the system or choose Dark for your account.</p>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Glass intensity</Label>

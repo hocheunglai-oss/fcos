@@ -546,7 +546,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'Personal scope',
-        body: 'Appearance mode, glass intensity, sidebar behavior, table density, navigation order, hidden navigation items, and STEM document filtering belong to your FCOS account. They synchronize across devices without changing another user’s workspace or granting access to a module.',
+        body: 'Light appearance is the company default. You may still choose Follow system or Dark for your account. Appearance mode, glass intensity, sidebar behavior, table density, navigation order, hidden navigation items, and STEM document filtering synchronize across devices without changing another user’s workspace or granting access to a module.',
       },
       {
         title: 'Cross-browser synchronization',
