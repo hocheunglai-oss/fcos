@@ -1,13 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { GripVertical } from 'lucide-react';
+import { Columns3, GripVertical, RotateCcw } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { normalizedHiddenColumnIds, orderedColumns } from '@/lib/tablePreferences';
 import { cn } from '@/lib/utils';
 
 const STORAGE_PREFIX = 'fcos:column_order';
+const VISIBILITY_STORAGE_PREFIX = 'fcos:column_visibility:v1';
 
 function storageKey(tableKey) {
   return `${STORAGE_PREFIX}:${tableKey}`;
+}
+
+function visibilityStorageKey(tableKey) {
+  return `${VISIBILITY_STORAGE_PREFIX}:${tableKey}`;
 }
 
 function readOrder(tableKey) {
@@ -27,13 +42,21 @@ function writeOrder(tableKey, order) {
   }
 }
 
-function orderedColumns(columns, savedOrder) {
-  const defaultIds = columns.map((column) => column.id);
-  const savedIds = Array.isArray(savedOrder) ? savedOrder.filter((id) => defaultIds.includes(id)) : [];
-  const missingIds = defaultIds.filter((id) => !savedIds.includes(id));
-  const orderedIds = [...savedIds, ...missingIds];
-  const byId = Object.fromEntries(columns.map((column) => [column.id, column]));
-  return orderedIds.map((id) => byId[id]).filter(Boolean);
+function readHiddenColumns(tableKey) {
+  try {
+    const raw = window.localStorage.getItem(visibilityStorageKey(tableKey));
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHiddenColumns(tableKey, hiddenIds) {
+  try {
+    window.localStorage.setItem(visibilityStorageKey(tableKey), JSON.stringify(hiddenIds));
+  } catch {
+    // Column visibility is a user preference. Ignore storage failures.
+  }
 }
 
 export default function ReorderableDataTable({
@@ -47,18 +70,28 @@ export default function ReorderableDataTable({
   emptyTitle = 'No records found',
   emptyDescription,
   isReorderEnabled = false,
+  isColumnVisibilityEnabled = true,
   rowClassName,
   headerClassName = 'sticky top-0 z-10 bg-card',
   bodyEmptyColSpan,
 }) {
   const [savedOrder, setSavedOrder] = useState(() => readOrder(tableKey));
+  const [hiddenColumns, setHiddenColumns] = useState(() => readHiddenColumns(tableKey));
   const [draggedColumn, setDraggedColumn] = useState(null);
 
   useEffect(() => {
     setSavedOrder(readOrder(tableKey));
+    setHiddenColumns(readHiddenColumns(tableKey));
   }, [tableKey]);
 
-  const visibleColumns = useMemo(() => orderedColumns(columns, savedOrder), [columns, savedOrder]);
+  const normalizedHiddenColumns = useMemo(
+    () => normalizedHiddenColumnIds(columns, hiddenColumns),
+    [columns, hiddenColumns],
+  );
+  const visibleColumns = useMemo(
+    () => orderedColumns(columns, savedOrder).filter((column) => !normalizedHiddenColumns.includes(column.id)),
+    [columns, normalizedHiddenColumns, savedOrder],
+  );
 
   const moveColumn = (fromId, toId) => {
     if (!fromId || !toId || fromId === toId) return;
@@ -82,16 +115,65 @@ export default function ReorderableDataTable({
     }
   };
 
+  const setColumnVisible = (columnId, visible) => {
+    const next = visible
+      ? normalizedHiddenColumns.filter((id) => id !== columnId)
+      : normalizedHiddenColumnIds(columns, [...normalizedHiddenColumns, columnId]);
+    setHiddenColumns(next);
+    writeHiddenColumns(tableKey, next);
+  };
+
+  const resetColumns = () => {
+    resetOrder();
+    setHiddenColumns([]);
+    try {
+      window.localStorage.removeItem(visibilityStorageKey(tableKey));
+    } catch {
+      // Ignore storage failures.
+    }
+  };
+
+  const configurableColumns = columns.filter((column) => column.hideable !== false);
+  const showControls = isReorderEnabled || (isColumnVisibilityEnabled && configurableColumns.length > 1);
+
   return (
-    <div>
-      {isReorderEnabled && (
-        <div className="flex justify-end border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <button type="button" className="hover:text-foreground" onClick={resetOrder}>
-            Reset column order
-          </button>
+    <div className="min-w-0">
+      {showControls && (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          {isColumnVisibilityEnabled && configurableColumns.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                  <Columns3 className="h-3.5 w-3.5" />
+                  Columns
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
+                <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {configurableColumns.map((column) => {
+                  const visible = !normalizedHiddenColumns.includes(column.id);
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={column.id}
+                      checked={visible}
+                      disabled={visible && visibleColumns.length === 1}
+                      onCheckedChange={(checked) => setColumnVisible(column.id, checked === true)}
+                    >
+                      {column.header}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={resetColumns}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset columns
+          </Button>
         </div>
       )}
-      <Table>
+      <Table scrollLabel={`${tableKey.replaceAll('-', ' ')} table`}>
         <TableHeader className={headerClassName}>
           <TableRow>
             {visibleColumns.map((column) => (

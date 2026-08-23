@@ -376,6 +376,12 @@
     border-spacing: 0;
   }
 
+  .app-workspace-main,
+  .app-workspace-main > *,
+  .app-workspace-main [data-radix-scroll-area-viewport] > div {
+    min-width: 0;
+  }
+
   .app-workspace-shell table th {
     background: hsl(var(--workspace-material-subtle));
     border-bottom: 1px solid hsl(var(--workspace-border) / 0.72);
@@ -522,12 +528,39 @@
   z-index: 1;
 }
 
+.material-table {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.material-table:focus-visible {
+  border-color: hsl(var(--ring) / 0.5);
+}
+
 .material-table tbody tr {
   transition: background-color 120ms ease;
 }
 
 .material-table tbody tr:hover {
   background: hsl(var(--muted) / 0.45);
+}
+
+@media (max-width: 639px) {
+  .app-workspace-sidebar {
+    width: 60px !important;
+  }
+
+  .app-workspace-sidebar .app-navigation-material,
+  .app-workspace-sidebar-spacer {
+    width: 60px !important;
+  }
+
+  .material-table table th,
+  .material-table table td {
+    max-width: min(18rem, calc(100vw - 6rem));
+  }
 }
 
 /* Operational and financial workspaces */

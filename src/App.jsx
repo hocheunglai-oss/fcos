@@ -34,7 +34,7 @@ const SpecialTermEditor = lazy(() => import('@/pages/SpecialTermEditor'));
 const EmailRouter = lazy(() => import('@/pages/EmailRouter'));
 
 function RouteLoader() {
-  return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" /></div>;
+  return <div className="fixed inset-0 flex items-center justify-center" role="status" aria-live="polite"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" aria-hidden="true" /><span className="sr-only">Loading workspace</span></div>;
 }
 
 function AuthErrorScreen({ authError }) {
@@ -67,8 +67,9 @@ const AuthenticatedApp = () => {
 
   if (isLoadingPublicSettings || (isLoadingAuth && !isAuthenticated)) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-primary rounded-full animate-spin"></div>
+      <div className="fixed inset-0 flex items-center justify-center" role="status" aria-live="polite">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" aria-hidden="true" />
+        <span className="sr-only">Loading FCOS</span>
       </div>
     );
   }
