@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.190',
+    releasedAt: '2026-08-23',
+    title: 'Simplify the Incoming Payments internal report',
+    changes: [
+      'Replaces the three-step Incoming Payments email wizard with one review-and-send surface matching the payment-reminder workflow.',
+      'Loads approved recipients and the live report preview together, then rebuilds current report data immediately before delivery.',
+      'Keeps approved recipients read-only during ordinary sends and allows authorized template managers to change them only through an explicit saved revision.',
+    ],
+  },
+  {
     version: '2.0.189',
     releasedAt: '2026-08-21',
     title: 'Add Platts-aligned market intelligence',

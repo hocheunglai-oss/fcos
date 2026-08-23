@@ -344,6 +344,10 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         title: 'Refresh',
         body: 'Refresh retrieves current incoming payments and live collection reconciliation. Duplicate payment events are prevented through stable Salesforce payment identity.',
       },
+      {
+        title: 'Internal report delivery',
+        body: 'Internal Report opens one review-and-send surface using the current payment-created date range and keyword filter. Approved recipients and the live preview load together. FCOS rebuilds the report immediately before delivery and blocks sending if the saved recipient or template revision changed after review.',
+      },
     ],
   },
   reconciliation: {

@@ -13569,6 +13569,15 @@ function buildIncomingPaymentEmail(report, settings) {
 async function incomingPaymentEmailReport(body = {}, req = null, accessContext = null) {
   const activeAccess = accessContext || (await requireActiveUser(req));
   const stored = await loadFinancialReportSettings(activeAccess.client, 'incoming_payment_reports', { required: !body.preview && !body.dryRun });
+  if (!body.preview && !body.dryRun) {
+    const expectedSettingsRevision = Number(body.expectedSettingsRevision ?? body.expected_settings_revision);
+    if (!Number.isInteger(expectedSettingsRevision) || expectedSettingsRevision < 1) {
+      throw appError('Refresh the Incoming Payment report review before sending.', 409, 'FINANCIAL_REPORT_REVISION_REQUIRED');
+    }
+    if (expectedSettingsRevision !== Number(stored.revision || 0)) {
+      throw appError('The approved Incoming Payment report recipients or template changed after review. Reopen the report before sending.', 409, 'FINANCIAL_REPORT_REVISION_CONFLICT');
+    }
+  }
   const settings = incomingPaymentEmailSettings(stored.settings);
   if (!body.preview && !body.dryRun && (!settings.subject.trim() || !settings.intro.trim())) {
     throw appError('Incoming Payment report subject and body are not configured. Sending is disabled.', 503, 'FINANCIAL_REPORT_TEMPLATE_NOT_CONFIGURED', undefined, true);
@@ -13606,6 +13615,7 @@ async function incomingPaymentEmailReport(body = {}, req = null, accessContext =
       sent: false,
       preview: true,
       settings,
+      settingsRevision: Number(stored.revision || 0),
       report: reportMeta,
       email: {
         subject: email.subject,

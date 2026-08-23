@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { AlertTriangle, Banknote, Check, Eye, Loader2, Mail, Pencil, RefreshCw, Save, Search, Send, Settings2, WalletCards, X } from 'lucide-react';
+import { AlertTriangle, Banknote, Eye, Loader2, Mail, Pencil, RefreshCw, Save, Search, Send, Settings2, WalletCards, X } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
@@ -37,7 +37,6 @@ const BUYER_CIA_TABLE_TOKEN = '{{buyerCiaInvoicesTable}}';
 const INTEREST_CALCULATION_TABLE_TOKEN = '{{interestCalculationTable}}';
 const STEM_LINK_TOKEN = '{{stemLink}}';
 const INTEREST_STEM_LINK_TOKEN_PATTERN = /\{\{\s*stemLink\s*\}\}/i;
-const INCOMING_EMAIL_STEPS = ['Review report', 'Review recipients', 'Email preview'];
 const QUILL_MODULES = {
   toolbar: [
     [{ header: [false, 3, 4] }],
@@ -365,7 +364,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
   const [savingSettings, setSavingSettings] = useState(false);
   const [selectedStemId, setSelectedStemId] = useState(readUrlStemId);
   const [emailOpen, setEmailOpen] = useState(false);
-  const [emailStep, setEmailStep] = useState(0);
   const [savedEmailSettings, setSavedEmailSettings] = useState(DEFAULT_EMAIL_SETTINGS);
   const [emailSettings, setEmailSettings] = useState(() => savedEmailSettings);
   const [emailSettingsRevision, setEmailSettingsRevision] = useState(0);
@@ -808,9 +806,11 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     const saved = { ...DEFAULT_EMAIL_SETTINGS, ...(res.data?.settings || emailSettings) };
     setEmailSettings(saved);
     setSavedEmailSettings(saved);
-    setEmailSettingsRevision(Number(res.data?.revision || emailSettingsRevision + 1));
+    const savedRevision = Number(res.data?.revision || emailSettingsRevision + 1);
+    setEmailSettingsRevision(savedRevision);
     setEmailTemplateEditing(false);
     toast({ title: 'Incoming Payment email template saved' });
+    await runEmailReport(true, savedRevision);
   };
 
   const cancelEmailTemplateChanges = () => {
@@ -833,22 +833,49 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
 
   const openEmailReport = async () => {
     setEmailTemplateEditing(false);
-    setEmailStep(0);
     setEmailOpen(true);
     setEmailPreview(null);
     setEmailError('');
-    setEmailMessage('Loading approved recipients and template...');
-    const res = await appClient.functions.invoke('incomingPaymentEmailSettingsGet', {}, { force: true });
-    if (res.data?.error) {
-      setEmailError(res.data.error);
+    setEmailMessage('Loading the approved recipients and current report...');
+    setEmailBusy(true);
+    setEmailAction('preview');
+    try {
+      const [settingsResult, previewResult] = await Promise.all([
+        appClient.functions.invoke('incomingPaymentEmailSettingsGet', {}, { force: true }),
+        appClient.functions.invoke('incomingPaymentEmailReport', {
+          dateFrom,
+          dateTo,
+          search,
+          preview: true,
+        }),
+      ]);
+      const settingsError = settingsResult.data?.error;
+      const previewError = previewResult.data?.error;
+      if (settingsError || previewError) {
+        setEmailError(settingsError || previewError);
+        setEmailMessage('');
+        return;
+      }
+      const settingsRevision = Number(settingsResult.data?.revision || 0);
+      const previewRevision = Number(previewResult.data?.settingsRevision || 0);
+      if (settingsRevision < 1 || previewRevision !== settingsRevision) {
+        setEmailError('The approved report settings changed while this review was loading. Close and reopen the report.');
+        setEmailMessage('');
+        return;
+      }
+      const saved = { ...DEFAULT_EMAIL_SETTINGS, ...(settingsResult.data?.settings || {}) };
+      setSavedEmailSettings(saved);
+      setEmailSettings(saved);
+      setEmailSettingsRevision(settingsRevision);
+      setEmailPreview(previewResult.data?.email || null);
+      setEmailMessage(`Ready to send: ${previewResult.data?.report?.receivableRows ?? 0} receivable payments and ${previewResult.data?.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
+    } catch (loadError) {
+      setEmailError(loadError?.message || 'The Incoming Payment report review could not be loaded.');
       setEmailMessage('');
-      return;
+    } finally {
+      setEmailBusy(false);
+      setEmailAction('');
     }
-    const saved = { ...DEFAULT_EMAIL_SETTINGS, ...(res.data?.settings || {}) };
-    setSavedEmailSettings(saved);
-    setEmailSettings(saved);
-    setEmailSettingsRevision(Number(res.data?.revision || 0));
-    setEmailMessage('');
   };
 
   const updateInterestEmailSetting = (field, value) => {
@@ -978,7 +1005,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
     setEmailOpen(false);
   };
 
-  const runEmailReport = async (preview = true) => {
+  const runEmailReport = async (preview = true, reviewedSettingsRevision = emailSettingsRevision) => {
     if (!preview && !String(emailSettings.to || '').trim()) {
       const message = 'Enter at least one To recipient before sending.';
       setEmailError(message);
@@ -995,6 +1022,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
         dateTo,
         search,
         preview,
+        expectedSettingsRevision: reviewedSettingsRevision,
       });
       if (res.data?.error) {
         setEmailError(res.data.error);
@@ -1004,12 +1032,18 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
           variant: 'destructive',
         });
       } else if (preview) {
+        if (Number(res.data?.settingsRevision || 0) !== Number(reviewedSettingsRevision || 0)) {
+          const message = 'The approved recipients or template changed after this report was opened. Close and reopen it before sending.';
+          setEmailPreview(null);
+          setEmailError(message);
+          return;
+        }
         setEmailPreview(res.data.email || null);
         setEmailMessage(`Preview ready: ${res.data.report?.receivableRows ?? 0} receivable payments and ${res.data.report?.buyerCiaRows ?? 0} Buyer CIA invoices.`);
       } else {
         setEmailPreview(res.data.email || null);
-        setEmailMessage(`Sent Incoming Payment report to ${res.data.to?.join(', ') || emailSettings.to} through the assigned Microsoft Graph mailbox.`);
         toast({ title: 'Incoming Payment report sent', description: `Sent to ${res.data.to?.join(', ') || emailSettings.to}.` });
+        setEmailOpen(false);
       }
     } catch (error) {
       const message = error?.message || 'Unexpected error while sending Incoming Payment report.';
@@ -1024,24 +1058,6 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
       setEmailAction('');
     }
   };
-
-  const goEmailStep = (step) => {
-    const next = Math.max(0, Math.min(step, INCOMING_EMAIL_STEPS.length - 1));
-    if (next > 1 && !String(emailSettings.to || '').trim()) {
-      const message = 'Enter at least one To recipient before continuing.';
-      setEmailError(message);
-      setEmailStep(1);
-      return;
-    }
-    setEmailError('');
-    setEmailStep(next);
-    if (next === INCOMING_EMAIL_STEPS.length - 1) {
-      runEmailReport(true);
-    }
-  };
-
-  const goNextEmailStep = () => goEmailStep(emailStep + 1);
-  const goBackEmailStep = () => goEmailStep(emailStep - 1);
 
   return (
     <div className="min-h-screen bg-background px-4 py-5 md:px-6">
@@ -1060,7 +1076,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
             </Button>
             <Button variant="outline" onClick={openEmailReport}>
               <Mail className="mr-2 h-4 w-4" />
-              Email Report
+              Internal Report
             </Button>
             <Button variant="outline" onClick={openInterestTemplate}>
               <Pencil className="mr-2 h-4 w-4" />
@@ -1219,7 +1235,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
             <div className="flex flex-wrap items-start justify-between gap-4 pr-8">
               <div className="min-w-0">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming Payment</p>
-                <DialogTitle className="mt-1 text-xl font-semibold text-slate-950">Incoming Payment Report Email</DialogTitle>
+                <DialogTitle className="mt-1 text-xl font-semibold text-slate-950">Incoming Payments Internal Report</DialogTitle>
                 <DialogDescription className="mt-1 text-sm text-slate-500">
                   Uses the current payment-created date range and keyword filter.
                 </DialogDescription>
@@ -1257,37 +1273,25 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-                {INCOMING_EMAIL_STEPS.map((step, index) => {
-                  const isActive = emailStep === index;
-                  const isComplete = index < emailStep;
-                  const disabled = emailBusy || (index > 1 && !String(emailSettings.to || '').trim());
-                  return (
-                    <button
-                      key={step}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => goEmailStep(index)}
-                      className={cn(
-                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors',
-                        isActive
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : isComplete
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-                        disabled && !isActive && 'cursor-not-allowed opacity-50 hover:bg-white',
-                      )}
-                    >
-                      <span className={cn(
-                        'flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
-                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600',
-                      )}>
-                        {isComplete ? <Check className="h-3 w-3" /> : index + 1}
-                      </span>
-                      {step}
-                    </button>
-                  );
-                })}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-950">Review and send</h3>
+                  <p className="text-xs text-slate-500">One review surface. FCOS rebuilds the report from live data immediately before delivery.</p>
+                </div>
+                <div
+                  className={cn(
+                    'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium',
+                    emailBusy && emailAction === 'preview'
+                      ? 'border-blue-200 bg-blue-50 text-blue-700'
+                      : emailPreview
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-600',
+                  )}
+                  role="status"
+                >
+                  {emailBusy && emailAction === 'preview' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                  {emailBusy && emailAction === 'preview' ? 'Preparing live review' : emailPreview ? 'Live review ready' : 'Review unavailable'}
+                </div>
               </div>
 
               {emailError && (
@@ -1296,8 +1300,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                 </div>
               )}
 
-              {emailStep === 0 && (
-                <div className="space-y-3">
+              <div className="space-y-3">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Review report</h3>
                     <p className="text-xs text-slate-500">The email will use the same filters currently applied on this page.</p>
@@ -1333,11 +1336,9 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+              </div>
 
-              {emailStep === 1 && (
-                <div className="space-y-3">
+              <div className="space-y-3">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Review recipients</h3>
                     <p className="text-xs text-slate-500">Only the addresses shown here will be used for this send.</p>
@@ -1345,22 +1346,20 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                   <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-2">
                     <div className="space-y-1.5 md:col-span-2">
                       <Label className="text-xs text-slate-500">To</Label>
-                      <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} placeholder="email@example.com" className={cn(!String(emailSettings.to || '').trim() && 'border-red-300 focus-visible:ring-red-400')} />
+                      <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} disabled={!emailTemplateEditing} placeholder="email@example.com" className={cn(!String(emailSettings.to || '').trim() && 'border-red-300 focus-visible:ring-red-400')} />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs text-slate-500">CC</Label>
-                      <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} />
+                      <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} disabled={!emailTemplateEditing} />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs text-slate-500">BCC</Label>
-                      <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} />
+                      <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} disabled={!emailTemplateEditing} />
                     </div>
                   </div>
-                </div>
-              )}
+              </div>
 
-              {emailStep === 2 && (
-                <div className="space-y-3">
+              <div className="space-y-3">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Email preview</h3>
                     <p className="text-xs text-slate-500">Edit the saved template when needed, then preview and send.</p>
@@ -1436,9 +1435,9 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                             <div><span className="font-semibold text-slate-900">Subject:</span> {emailPreview?.subject || emailSettings.subject || '-'}</div>
                           </div>
                         </div>
-                        <Button variant="outline" size="sm" onClick={() => runEmailReport(true)} disabled={emailBusy}>
+                        <Button variant="outline" size="sm" onClick={() => runEmailReport(true)} disabled={emailBusy || emailTemplateEditing}>
                           {emailAction === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
-                          {emailAction === 'preview' ? 'Previewing' : 'Preview'}
+                          {emailAction === 'preview' ? 'Refreshing' : 'Refresh Preview'}
                         </Button>
                       </div>
                       <div className="max-h-[58vh] overflow-auto p-4">
@@ -1461,8 +1460,7 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                       {emailMessage}
                     </div>
                   )}
-                </div>
-              )}
+              </div>
             </div>
           </div>
 
@@ -1476,12 +1474,11 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                 )}
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                {emailStep === INCOMING_EMAIL_STEPS.length - 1 && (
-                  !emailTemplateEditing ? (
+                {!emailTemplateEditing ? (
                     canManageFinancialReportSettings && (
                     <Button type="button" variant="outline" onClick={startEmailTemplateEdit} disabled={emailBusy}>
                       <Pencil className="mr-2 h-4 w-4" />
-                      Edit Template
+                      Edit Recipients & Template
                     </Button>
                     )
                   ) : (
@@ -1495,23 +1492,12 @@ export default function IncomingPayments({ reconciliationItems = [] }) {
                         Save Template
                       </Button>
                     </>
-                  )
-                )}
+                  )}
                 <Button type="button" variant="outline" onClick={closeEmailReport} disabled={emailBusy}>Close</Button>
-                {emailStep > 0 && (
-                  <Button type="button" variant="outline" onClick={goBackEmailStep} disabled={emailBusy}>Back</Button>
-                )}
-                {emailStep < INCOMING_EMAIL_STEPS.length - 1 && (
-                  <Button type="button" onClick={goNextEmailStep} disabled={emailBusy}>
-                    Next
-                  </Button>
-                )}
-                {emailStep === INCOMING_EMAIL_STEPS.length - 1 && (
-                  <Button type="button" onClick={() => runEmailReport(false)} disabled={emailBusy}>
+                <Button type="button" onClick={() => runEmailReport(false)} disabled={emailBusy || emailTemplateEditing || !emailPreview || emailSettingsRevision < 1 || !String(emailSettings.to || '').trim()}>
                     {emailAction === 'send' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                    {emailAction === 'send' ? 'Sending' : 'Send Email'}
-                  </Button>
-                )}
+                    {emailAction === 'send' ? 'Sending' : 'Send Internal Report'}
+                </Button>
               </div>
             </div>
           </DialogFooter>
