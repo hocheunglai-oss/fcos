@@ -14,7 +14,7 @@ test('Markets and Hedge Desk use native trading chrome without changing market h
 
   assert.match(markets, /hedge-desk-root workspace-trading/);
   assert.match(markets, /loadMarketPulseSnapshot/);
-  assert.match(hedgeDesk, /hedge-desk-commandbar app-navigation-material/);
+  assert.match(hedgeDesk, /hedge-desk-commandbar app-navigation-material workspace-primary-navigation/);
   assert.match(hedgeDesk, /hedge-desk-tabs app-navigation-caption-material/);
   assert.match(intelligence, /workspace-trading-canvas/);
   assert.match(intelligence, /market-workspace-tabs app-navigation-caption-material/);

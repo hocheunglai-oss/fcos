@@ -95,9 +95,10 @@ test('FCOS exposes fixed personal, trading, cross-functional, finance and tools 
 });
 
 test('Payment Collections connects queue, incoming payments and reconciliation with structured advice evidence', async () => {
-  const [workspace, buyerPage, server] = await Promise.all([
+  const [workspace, buyerPage, incomingPage, server] = await Promise.all([
     readFile(new URL('../src/pages/PaymentCollections.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/pages/BuyerInvoices.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/pages/IncomingPayments.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
   ]);
   assert.match(workspace, /Collection Queue/);
@@ -127,6 +128,10 @@ test('Payment Collections connects queue, incoming payments and reconciliation w
   assert.match(workspace, /Detected payments/);
   assert.match(workspace, /Allow reminder/);
   assert.match(server, /changed after they were opened[\s\S]*409/);
+  assert.match(incomingPage, /try \{[\s\S]*await requestPayments[\s\S]*catch \(loadError\)[\s\S]*finally \{[\s\S]*setLoading\(false\)/);
+  assert.match(incomingPage, /if \(!data\) void load\(\)/);
+  assert.match(incomingPage, /htmlFor="incoming-payment-created-from"/);
+  assert.match(incomingPage, /id="incoming-payment-created-from"/);
 });
 
 test('STEM details open only from explicit STEM-column links', async () => {

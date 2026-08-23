@@ -77,6 +77,9 @@ test('Pulse floats without a full-width row and signed values share one renderer
   assert.match(shellCss, /app-workspace-scroll > :first-child/);
   assert.match(shellCss, /max-width: 1600px/);
   assert.match(pulse, /max-h-\[calc\(100dvh-24px\)\]/);
+  assert.match(pulse, /app-market-pulse-trigger h-9 w-9 shrink-0 p-0/);
+  assert.doesNotMatch(pulse, />Pulse<\/span>/);
+  assert.doesNotMatch(shellCss, /margin-inline-end:\s*5rem/);
   assert.match(shared, /market-signed-value--\$\{tone\}/);
   assert.match(shared, /TrendingUp/);
   assert.match(shared, /TrendingDown/);
@@ -94,6 +97,7 @@ test('initial Markets load is Pulse-only and user capabilities are appended afte
   assert.match(page, /await loadMarketPulseSnapshot/);
   assert.match(page, /const ensureSnapshot = useCallback/);
   assert.match(page, /if \(!force && snapshotRequestRef\.current\) return snapshotRequestRef\.current/);
+  assert.match(page, /workspace-floating-utility-safe/);
   assert.match(workspace, /if \(value === 'delivered'\) ensureMarketData\(\)/);
   assert.match(handler, /Capabilities are attached after the shared 60-second market-data cache resolves/);
   assert.match(handler, /hedge_book_manage: capabilities\?\.hedge_book_manage === true/);

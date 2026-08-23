@@ -386,12 +386,16 @@
     max-width: none;
   }
 
-  html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header__actions {
-    margin-inline-end: 5rem;
+  html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header {
+    padding-inline-end: 3.25rem;
   }
 
   html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-primary-navigation {
-    padding-inline-end: 5.5rem;
+    padding-inline-end: 3.25rem;
+  }
+
+  html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-floating-utility-safe {
+    padding-inline-end: 3.25rem;
   }
 
   @media (max-width: 639px) {
@@ -409,8 +413,8 @@
       padding-inline-end: 3.25rem;
     }
 
-    html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header__actions {
-      margin-inline-end: 0;
+    html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header {
+      padding-inline-end: 0.9rem;
     }
 
     html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-primary-navigation {

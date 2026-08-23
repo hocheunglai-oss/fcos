@@ -352,17 +352,17 @@ export default function CashflowForecast() {
       <TableShell title="Forecast Filters" bodyClassName="p-4" className="mb-4">
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_150px_1.5fr_1.5fr_1.5fr_auto] lg:items-end">
           <div>
-            <Label className="text-xs text-muted-foreground">From</Label>
-            <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <Label htmlFor="cashflow-date-from" className="text-xs text-muted-foreground">From</Label>
+            <Input id="cashflow-date-from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">To</Label>
-            <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            <Label htmlFor="cashflow-date-to" className="text-xs text-muted-foreground">To</Label>
+            <Input id="cashflow-date-to" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Bucket</Label>
+            <Label htmlFor="cashflow-bucket" className="text-xs text-muted-foreground">Bucket</Label>
             <Select value={bucket} onValueChange={setBucket}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="cashflow-bucket"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="daily">Daily</SelectItem>
                 <SelectItem value="weekly">Weekly</SelectItem>
@@ -371,22 +371,22 @@ export default function CashflowForecast() {
             </Select>
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Keyword</Label>
+            <Label htmlFor="cashflow-keyword" className="text-xs text-muted-foreground">Keyword</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="pl-9" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="STEM, buyer, supplier..." />
+              <Input id="cashflow-keyword" className="pl-9" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="STEM, buyer, supplier..." />
             </div>
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Buyer Group</Label>
-            <Input list="cashflow-buyer-groups" value={buyerGroup} onChange={(event) => setBuyerGroup(event.target.value)} placeholder="All buyer groups" />
+            <Label htmlFor="cashflow-buyer-group" className="text-xs text-muted-foreground">Buyer Group</Label>
+            <Input id="cashflow-buyer-group" list="cashflow-buyer-groups" value={buyerGroup} onChange={(event) => setBuyerGroup(event.target.value)} placeholder="All buyer groups" />
             <datalist id="cashflow-buyer-groups">
               {buyerGroupOptions.map((option) => <option key={option} value={option} />)}
             </datalist>
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Supplier</Label>
-            <Input list="cashflow-suppliers" value={supplier} onChange={(event) => setSupplier(event.target.value)} placeholder="All suppliers" />
+            <Label htmlFor="cashflow-supplier" className="text-xs text-muted-foreground">Supplier</Label>
+            <Input id="cashflow-supplier" list="cashflow-suppliers" value={supplier} onChange={(event) => setSupplier(event.target.value)} placeholder="All suppliers" />
             <datalist id="cashflow-suppliers">
               {supplierOptions.map((option) => <option key={option} value={option} />)}
             </datalist>
@@ -574,9 +574,9 @@ export default function CashflowForecast() {
               Manual Blocked Dates
             </div>
             <div className="grid gap-2 sm:grid-cols-[150px_110px_1fr_auto]">
-              <Input disabled={!canManageSettings} type="date" value={overrideDraft.date} onChange={(event) => setOverrideDraft((current) => ({ ...current, date: event.target.value }))} />
-              <Input disabled={!canManageSettings} value={overrideDraft.countryCode} onChange={(event) => setOverrideDraft((current) => ({ ...current, countryCode: event.target.value.toUpperCase() }))} placeholder="MANUAL" />
-              <Input disabled={!canManageSettings} value={overrideDraft.name} onChange={(event) => setOverrideDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Reason" />
+              <Input aria-label="Manual blocked date" disabled={!canManageSettings} type="date" value={overrideDraft.date} onChange={(event) => setOverrideDraft((current) => ({ ...current, date: event.target.value }))} />
+              <Input aria-label="Manual blocked date country code" disabled={!canManageSettings} value={overrideDraft.countryCode} onChange={(event) => setOverrideDraft((current) => ({ ...current, countryCode: event.target.value.toUpperCase() }))} placeholder="MANUAL" />
+              <Input aria-label="Manual blocked date reason" disabled={!canManageSettings} value={overrideDraft.name} onChange={(event) => setOverrideDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Reason" />
               <Button variant="outline" onClick={addOverride} disabled={saving || !canManageSettings}>
                 <Check className="mr-2 h-4 w-4" />
                 Add

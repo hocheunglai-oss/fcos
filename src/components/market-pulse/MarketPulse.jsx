@@ -178,9 +178,8 @@ export default function MarketPulse({ open, onOpenChange, onResetPosition, trigg
     <PulseBody data={data} error={error} loading={loading} updating={updating} onRefresh={() => load({ force: true })} onOpenMarkets={openMarkets} onResetPosition={onResetPosition} />
   );
   const trigger = (
-    <Button type="button" variant="ghost" size="sm" className={cn('app-market-pulse-trigger h-9 shrink-0 gap-1.5 px-1.5 pr-2.5', triggerClassName)} aria-label="Open Market Pulse; drag to reposition" title="Market Pulse · drag to reposition">
+    <Button type="button" variant="ghost" size="icon" className={cn('app-market-pulse-trigger h-9 w-9 shrink-0 p-0', triggerClassName)} aria-label="Open Market Pulse; drag to reposition" title="Market Pulse · drag to reposition">
       <span className="app-market-pulse-trigger__icon flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-white shadow-sm" aria-hidden="true"><Activity className="h-3.5 w-3.5" strokeWidth={2.6} /></span>
-      <span className="hidden font-medium text-red-700 dark:text-red-300 sm:inline">Pulse</span>
     </Button>
   );
 

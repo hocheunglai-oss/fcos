@@ -408,31 +408,37 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
   const load = async (options = {}) => {
     setLoading(true);
     setError('');
-    await requestPayments({
-      name: 'incomingPaymentsList',
-      payload: { dateFrom, dateTo, limit: 5000 },
-      force: options.force,
-      apply: (res) => {
-        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-        if (res.data?.error) setError(res.data.error);
-        else {
-          setError('');
-          updatePageState({
-            data: res.data,
-            thresholdDrafts: (res.data?.settings?.thresholds || []).map((item) => ({
-              currencyIsoCode: item.currencyIsoCode,
-              threshold: String(item.threshold),
-              revision: Number(item.revision || 0),
-            })),
-          });
-        }
-      },
-    });
-    setLoading(false);
+    try {
+      await requestPayments({
+        name: 'incomingPaymentsList',
+        payload: { dateFrom, dateTo, limit: 5000 },
+        force: options.force,
+        apply: (res) => {
+          setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+          if (res.data?.error) setError(res.data.error);
+          else {
+            setError('');
+            updatePageState({
+              data: res.data,
+              thresholdDrafts: (res.data?.settings?.thresholds || []).map((item) => ({
+                currencyIsoCode: item.currencyIsoCode,
+                threshold: String(item.threshold),
+                revision: Number(item.revision || 0),
+              })),
+            });
+          }
+        },
+      });
+    } catch (loadError) {
+      setResponseMeta((current) => ({ ...current, cacheStatus: 'UNAVAILABLE' }));
+      setError(loadError?.message || 'Refresh failed.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    if (!data) load();
+    if (!data) void load();
   }, []);
 
   const reconciliationByStem = useMemo(() => new Map(
@@ -1135,18 +1141,18 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
       >
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto] md:items-end">
           <div>
-            <Label className="text-xs text-muted-foreground">Created From</Label>
-            <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <Label htmlFor="incoming-payment-created-from" className="text-xs text-muted-foreground">Created From</Label>
+            <Input id="incoming-payment-created-from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Created To</Label>
-            <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            <Label htmlFor="incoming-payment-created-to" className="text-xs text-muted-foreground">Created To</Label>
+            <Input id="incoming-payment-created-to" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Keyword</Label>
+            <Label htmlFor="incoming-payment-keyword" className="text-xs text-muted-foreground">Keyword</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search STEM, buyer, group, or supplier" />
+              <Input id="incoming-payment-keyword" className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search STEM, buyer, group, or supplier" />
             </div>
           </div>
           <Button variant="outline" onClick={() => load({ force: true })} disabled={loading}>

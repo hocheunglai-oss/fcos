@@ -31,13 +31,13 @@ export default function BrokerWorkspace() {
 
   return (
     <div className="workspace-operations min-h-full">
-      <div className="app-navigation-material workspace-primary-navigation sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5 lg:px-8">
-        <div className="flex items-center gap-1">
-          {canViewCommissions && <Button size="sm" variant={activeTab === 'commissions' ? 'default' : 'ghost'} className="gap-2" onClick={() => changeTab('commissions')}><BadgeDollarSign className="h-4 w-4" /> Commissions</Button>}
-          {canViewArchive && <Button size="sm" variant={activeTab === 'archive' ? 'default' : 'ghost'} className="gap-2" onClick={() => changeTab('archive')}><Archive className="h-4 w-4" /> Report Archive</Button>}
-          {canManageConfiguration && <Button size="sm" variant={activeTab === 'configuration' ? 'default' : 'ghost'} className="gap-2" onClick={() => changeTab('configuration')}><Settings2 className="h-4 w-4" /> Configuration</Button>}
+      <div className="app-navigation-material workspace-primary-navigation sticky top-0 z-30 flex min-w-0 items-center gap-2 overflow-hidden border-b border-border px-4 py-2.5 lg:px-8">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Broker Commission views">
+          {canViewCommissions && <Button role="tab" aria-selected={activeTab === 'commissions'} size="sm" variant={activeTab === 'commissions' ? 'default' : 'ghost'} className="shrink-0 gap-2" onClick={() => changeTab('commissions')}><BadgeDollarSign className="h-4 w-4" /> Commissions</Button>}
+          {canViewArchive && <Button role="tab" aria-selected={activeTab === 'archive'} size="sm" variant={activeTab === 'archive' ? 'default' : 'ghost'} className="shrink-0 gap-2" onClick={() => changeTab('archive')}><Archive className="h-4 w-4" /> Report Archive</Button>}
+          {canManageConfiguration && <Button role="tab" aria-selected={activeTab === 'configuration'} size="sm" variant={activeTab === 'configuration' ? 'default' : 'ghost'} className="shrink-0 gap-2" onClick={() => changeTab('configuration')}><Settings2 className="h-4 w-4" /> Configuration</Button>}
         </div>
-        <PageMethodology {...activeMethodology} size="sm" />
+        <div className="shrink-0"><PageMethodology {...activeMethodology} size="sm" /></div>
       </div>
       {activeTab === 'commissions' ? <BrokerRegister /> : activeTab === 'configuration' ? <BrokerCommissionConfiguration /> : <ReportArchive defaultReportType="broker_commission" />}
     </div>

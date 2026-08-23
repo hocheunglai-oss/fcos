@@ -138,7 +138,7 @@ export default function SettingsWorkspace() {
           <span className="text-sm font-semibold">Settings</span>
         </div>
 
-        <div className="lg:hidden">
+        <div className="workspace-floating-utility-safe lg:hidden">
           <Select value={active} onValueChange={changeSection}>
             <SelectTrigger aria-label="Settings section"><SelectValue /></SelectTrigger>
             <SelectContent>

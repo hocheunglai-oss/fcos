@@ -15,9 +15,13 @@ test('operational and financial workspaces share the native queue surface withou
   files.forEach((source) => assert.match(source, /workspace-operations/));
   assert.match(files[0], /buyerInvoicePostingReminderOverrideSave/);
   assert.match(files[1], /cashflowForecast/);
+  assert.match(files[1], /htmlFor="cashflow-date-from"/);
+  assert.match(files[1], /aria-label="Manual blocked date"/);
   assert.match(files[2], /dispute/);
   assert.match(files[3], /unofficialCompensation/);
   assert.match(files[4], /BrokerRegister/);
+  assert.match(files[4], /role="tablist" aria-label="Broker Commission views"/);
+  assert.match(files[4], /min-w-0 flex-1 items-center gap-1 overflow-x-auto/);
 });
 
 test('shared controls use system-shaped materials while financial content remains opaque', async () => {

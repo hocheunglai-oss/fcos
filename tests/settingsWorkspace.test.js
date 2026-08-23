@@ -21,6 +21,7 @@ test('Settings is universal while administrative sections remain role-aware', as
   assert.match(workspace, /SettingsPage section="my"/);
   assert.match(workspace, /FcosUpdatesSection/);
   assert.match(workspace, /SelectTrigger aria-label="Settings section"/);
+  assert.match(workspace, /workspace-floating-utility-safe lg:hidden/);
   assert.match(auth, /const hasCapability = useCallback/);
   assert.doesNotMatch(settings, /Save All Settings/);
   assert.match(settings, /sameWorkspaceSettings\(settingsDraftValue, baseSettings\)/);

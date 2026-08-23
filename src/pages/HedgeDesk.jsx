@@ -71,7 +71,7 @@ export default function HedgeDesk() {
   return (
     <ActionsProvider reload={data.reload}>
       <div className="hedge-desk-root workspace-trading">
-        <div className="hedge-desk-commandbar app-navigation-material">
+        <div className="hedge-desk-commandbar app-navigation-material workspace-primary-navigation">
           <div>
             <strong>Hedge Desk</strong>
             <StatusBadge tone={readOnly ? 'neutral' : 'positive'}>{readOnly ? 'View only' : 'Live book'}</StatusBadge>

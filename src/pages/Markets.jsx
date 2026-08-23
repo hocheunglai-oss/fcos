@@ -107,7 +107,7 @@ export default function Markets() {
   return (
     <ActionsProvider reload={reloadAfterMarketMutation}>
       <div className="hedge-desk-root workspace-trading">
-        {error && <InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} />}
+        {error && <div className="workspace-floating-utility-safe"><InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} /></div>}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketIntelligenceWorkspace
           data={{ mops: effectiveSnapshot.mops || [], mopsMonthVerifications: effectiveSnapshot.mopsMonthVerifications || [], marketIntelligence: effectiveSnapshot.marketIntelligence || {} }}
