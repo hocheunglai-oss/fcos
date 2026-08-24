@@ -2,6 +2,25 @@ const SF_ID_RE = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
 
 export const MASTER_CONTRACT_PRODUCT_ORDER = ['hsfo', 'mgo'];
 
+function externalKeyPart(value, fallback) {
+  const normalized = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+export function masterContractLineKey(contractKey, deliveryKey, productKey) {
+  const contract = externalKeyPart(contractKey, 'CONTRACT');
+  const delivery = externalKeyPart(deliveryKey, 'DELIVERY');
+  const product = externalKeyPart(productKey, 'PRODUCT');
+  const qualifiedDelivery = delivery.startsWith(`${contract}-`)
+    ? delivery
+    : `${contract}-${delivery}`;
+  return `${qualifiedDelivery}-${product}`.slice(0, 160);
+}
+
 export const MASTER_CONTRACT_BENCHMARKS = Object.freeze({
   hsfo: Object.freeze({ code: 'PPXDK00', label: 'S380 MOPS', unit: 'USD/MT', conversionFactor: 1 }),
   mgo: Object.freeze({ code: 'POABC00', label: 'SGO MOPS', unit: 'USD/bbl', conversionFactor: 7.45 }),

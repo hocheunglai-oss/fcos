@@ -51,6 +51,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MASTER_CONTRACTS_METHODOLOGY } from "@/lib/pageMethodologies";
+import { masterContractLineKey } from "@/lib/masterContracts";
 
 const SALESFORCE_ORIGIN = "https://fratellicosulich.lightning.force.com";
 const DEFAULT_SNAPSHOT = Object.freeze({
@@ -287,7 +288,11 @@ function ContractEditor({
                 ? {
                     products: (row.products || []).map((product) => ({
                       ...product,
-                      contractLineKey: `${contractKey || "CONTRACT"}-${patch.deliveryKey}-${product.productKey}`,
+                      contractLineKey: masterContractLineKey(
+                        contractKey,
+                        patch.deliveryKey,
+                        product.productKey,
+                      ),
                     })),
                   }
                 : {}),
@@ -351,7 +356,11 @@ function ContractEditor({
           variableChargeSupplierIds: [],
           products: current.products.map((product) => ({
             productKey: product.productKey,
-            contractLineKey: `${contractKey || "CONTRACT"}-D${String(current.deliveries.length + 1).padStart(2, "0")}-${product.productKey}`,
+            contractLineKey: masterContractLineKey(
+              contractKey,
+              `${contractKey || "CONTRACT"}-D${String(current.deliveries.length + 1).padStart(2, "0")}`,
+              product.productKey,
+            ),
             quantityMin: 0,
             quantityMax: 0,
           })),

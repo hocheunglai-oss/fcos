@@ -5,6 +5,7 @@ import {
   calculateMasterContractDonPrice,
   masterContractDonWindow,
   masterContractInvoicePriceReady,
+  masterContractLineKey,
   masterContractLiveVariances,
   masterContractPreflight,
   masterContractQuantitySummary,
@@ -75,6 +76,25 @@ test('master contract quantity reconciliation preserves fixed and range allocati
   assert.equal(masterContractQuantitySummary(reduced).hsfo.unallocatedMin, 0);
   assert.equal(masterContractQuantitySummary(reduced).hsfo.unallocatedMax, 400);
   assert.equal(masterContractQuantitySummary(approvedFixture(), { hsfo: { deliveredQty: 4000 } }).hsfo.overDelivered, 80);
+});
+
+test('contract line keys are uppercase, qualified once, and database-safe', () => {
+  assert.equal(
+    masterContractLineKey('FCUS-SINOPEC-CN-2026-Q4', 'D01', 'hsfo_35'),
+    'FCUS-SINOPEC-CN-2026-Q4-D01-HSFO_35',
+  );
+  assert.equal(
+    masterContractLineKey(
+      'FCUS-SINOPEC-CN-2026-Q4',
+      'FCUS-SINOPEC-CN-2026-Q4-D02',
+      'mgo_10ppm',
+    ),
+    'FCUS-SINOPEC-CN-2026-Q4-D02-MGO_10PPM',
+  );
+  assert.match(
+    masterContractLineKey('contract 1', 'delivery 1', 'product 1'),
+    /^[A-Z0-9][A-Z0-9_-]{5,159}$/,
+  );
 });
 
 test('DON window and benchmark formula use nomination date evidence and final-only rounding', () => {
@@ -205,6 +225,7 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(page, /Create selected in Salesforce/);
   assert.match(page, /Save the draft first, then create or link the exact Salesforce vessel after duplicate checking/);
   assert.match(page, /Object\.prototype\.hasOwnProperty\.call\(patch, "deliveryKey"\)/);
+  assert.match(page, /masterContractLineKey/);
   assert.match(page, /type === "date"[\s\S]*onChange\(event\.currentTarget\.value\)/);
   assert.match(handlers, /masterContractReconcileCron/);
   assert.match(policy, /masterContractBatchCreate: mutationPolicy/);
