@@ -165,6 +165,19 @@ function normalizeObservation(row, sourceType, marketDate, itemOrder = 1) {
   return { itemOrder, productKey, productLabel: PRODUCT_LABELS[productKey], quoteState, contractMonth, unit, price, reportedChange, decimalPrecision: precision };
 }
 
+function normalizeExtractedUnit(row) {
+  const productKey = String(row?.productKey || '').trim().toLowerCase();
+  const expectedUnit = PRODUCT_UNITS[productKey];
+  if (!expectedUnit) return { row, correction: null };
+  const extractedUnit = String(row?.unit || '').trim().toUpperCase();
+  return {
+    row: { ...row, unit: expectedUnit },
+    correction: extractedUnit && extractedUnit !== expectedUnit
+      ? `${PRODUCT_LABELS[productKey]} unit was normalized from ${extractedUnit} to ${expectedUnit}. Review the row before confirmation.`
+      : null,
+  };
+}
+
 function uniqueRows(rows) {
   const seen = new Set();
   for (const row of rows) {
@@ -299,7 +312,11 @@ export async function previewMarketIntradaySnapshot(profile, body = {}, dependen
     if (!dateCandidate.value) warnings.push('Market date was not detected. Enter it before confirmation.');
     if (dateCandidate.inferredYear) warnings.push(`The year ${hktParts(receivedAt).year} was inferred from the receipt time. Review it before confirmation.`);
     const ignored180 = (extracted.observations || []).filter((row) => /\b180\s*(?:cst)?\b/i.test(String(row.sourceLabel || '')));
-    const extractedRows = (extracted.observations || []).filter((row) => !/\b180\s*(?:cst)?\b/i.test(String(row.sourceLabel || '')));
+    const normalizedExtractedRows = (extracted.observations || [])
+      .filter((row) => !/\b180\s*(?:cst)?\b/i.test(String(row.sourceLabel || '')))
+      .map(normalizeExtractedUnit);
+    const extractedRows = normalizedExtractedRows.map(({ row }) => row);
+    warnings.push(...new Set(normalizedExtractedRows.map(({ correction }) => correction).filter(Boolean)));
     const observations = dateCandidate.value ? uniqueRows(extractedRows.map((row, index) => normalizeObservation({ ...row, contractMonth: row.contractMonthText, price: row.priceText, reportedChange: row.reportedChangeText, decimalPrecision: decimalPrecision(row.priceText) }, sourceType, dateCandidate.value, index + 1))) : extractedRows;
     preview = { sourceType, marketDate: dateCandidate.value, observations, ignoredRows: [...(extracted.ignoredRows || []), ...ignored180.map(() => ({ label: '180 CST', reason: '180 CST is outside the configured FCOS intraday market set.' }))], warnings, requiresReview: true };
     sourceHash = hash(buffer);
@@ -502,4 +519,4 @@ export async function loadLatestIntradayPulse(client) {
   };
 }
 
-export const marketIntradayInternals = Object.freeze({ normalizeObservation, parseMarketIntradayText, marketDateFromText, contractMonthFromText, signPreview, verifyPreview, exactMovements, structureForSnapshot, PRODUCT_UNITS });
+export const marketIntradayInternals = Object.freeze({ normalizeObservation, normalizeExtractedUnit, parseMarketIntradayText, marketDateFromText, contractMonthFromText, signPreview, verifyPreview, exactMovements, structureForSnapshot, PRODUCT_UNITS });

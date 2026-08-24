@@ -73,6 +73,37 @@ test('morning vision preview is store:false, reviewed, source-hashed and exclude
   assert.ok(result.previewToken.includes('.'));
 });
 
+test('morning vision preview canonicalizes product-deterministic ICE Gasoil units before strict review validation', async () => {
+  const extracted = {
+    marketDateText: '24-Aug',
+    observations: [
+      { sourceLabel: 'Oct BRT Fut', productKey: 'brent', quoteState: 'last_close', contractMonthText: 'Oct-26', priceText: '94.39', reportedChangeText: '0.61', unit: 'USD/BBL' },
+      { sourceLabel: 'Oct GO Fut', productKey: 'ice_gasoil', quoteState: 'last_close', contractMonthText: 'Oct-26', priceText: '1271.75', reportedChangeText: '13.75', unit: 'USD/BBL' },
+      { sourceLabel: '380cst Sep-26', productKey: 'hsfo380', quoteState: 'current_indication', contractMonthText: 'Sep-26', priceText: '573.50', reportedChangeText: '-1.59', unit: 'USD/MT' },
+      { sourceLabel: '0.5% Sep-26', productKey: 'vlsfo', quoteState: 'current_indication', contractMonthText: 'Sep-26', priceText: '698.75', reportedChangeText: '+4.52', unit: 'USD/MT' },
+      { sourceLabel: '10ppm Sep-26', productKey: 'lsmgo', quoteState: 'current_indication', contractMonthText: 'Sep-26', priceText: '160.03', reportedChangeText: '+1.35', unit: 'USD/BBL' },
+      { sourceLabel: 'Oct GO Fut', productKey: 'ice_gasoil', quoteState: 'current_indication', contractMonthText: 'Oct-26', priceText: '1253.75', reportedChangeText: '-18', unit: 'USD/BBL' },
+    ],
+    ignoredRows: [],
+    warnings: [],
+  };
+  const result = await previewMarketIntradaySnapshot({ id: 'actor', email: 'markets@example.test' }, {
+    sourceType: 'morning_indication',
+    receivedAt: '2026-08-24T11:04:55+08:00',
+    mimeType: 'image/jpeg',
+    imageBase64: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64'),
+  }, {
+    apiKey: 'test-key', env: TEST_ENV,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ output_text: JSON.stringify(extracted) }) }),
+  });
+
+  assert.equal(result.marketDate, '2026-08-24');
+  assert.deepEqual(result.observations.filter((row) => row.productKey === 'ice_gasoil').map((row) => row.unit), ['USD/MT', 'USD/MT']);
+  assert.equal(result.warnings.filter((warning) => warning.includes('ICE Gasoil unit was normalized')).length, 1);
+  assert.equal(result.observations.find((row) => row.productKey === 'ice_gasoil' && row.quoteState === 'last_close')?.price, 1271.75);
+  assert.equal(result.observations.find((row) => row.productKey === 'ice_gasoil' && row.quoteState === 'current_indication')?.reportedChange, -18);
+});
+
 test('same-date movement and structure remain exact-snapshot and exact-contract', () => {
   const morning = [{ product_key: 'hsfo380', quote_state: 'current_indication', contract_month: '2026-09-01', unit: 'USD/MT', price: 578.5 }];
   const moc = [
