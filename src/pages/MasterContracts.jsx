@@ -274,7 +274,20 @@ function ContractEditor({
     setSnapshot((current) => ({
       ...current,
       deliveries: current.deliveries.map((row, rowIndex) =>
-        rowIndex === index ? { ...row, ...patch } : row,
+        rowIndex === index
+          ? {
+              ...row,
+              ...patch,
+              ...(Object.prototype.hasOwnProperty.call(patch, "deliveryKey")
+                ? {
+                    products: (row.products || []).map((product) => ({
+                      ...product,
+                      contractLineKey: `${contractKey || "CONTRACT"}-${patch.deliveryKey}-${product.productKey}`,
+                    })),
+                  }
+                : {}),
+            }
+          : row,
       ),
     }));
   const updateAllocation = (deliveryIndex, allocationIndex, patch) =>
@@ -698,48 +711,54 @@ function ContractEditor({
                       `${row.name}${row.imo ? ` · ${row.imo}` : ""}`
                     }
                   />
-                  {existing && !delivery.vesselId ? (
+                  {!delivery.vesselId ? (
                     <div className="grid gap-2 rounded-lg border border-dashed p-2 md:col-span-2 md:grid-cols-[1fr_160px_auto]">
                       <Field
-                        label="New vessel name"
+                        label="Vessel name"
                         value={delivery.vesselName}
                         onChange={(value) =>
                           updateDelivery(index, { vesselName: value })
                         }
                       />
                       <Field
-                        label="IMO"
+                        label="IMO (optional in draft)"
                         value={delivery.vesselImo}
                         onChange={(value) =>
                           updateDelivery(index, { vesselImo: value })
                         }
                       />
-                      <div className="flex items-end">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={
-                            busy ||
-                            !delivery.vesselName?.trim() ||
-                            !delivery.vesselImo?.trim()
-                          }
-                          onClick={async () => {
-                            const created = await onCreateVessel({
-                              name: delivery.vesselName,
-                              imo: delivery.vesselImo,
-                            });
-                            if (created)
-                              updateDelivery(index, {
-                                vesselId: created.id,
-                                vesselName: created.name,
-                                vesselImo: created.imo,
+                      {existing ? (
+                        <div className="flex items-end">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              busy ||
+                              !delivery.vesselName?.trim() ||
+                              !delivery.vesselImo?.trim()
+                            }
+                            onClick={async () => {
+                              const created = await onCreateVessel({
+                                name: delivery.vesselName,
+                                imo: delivery.vesselImo,
                               });
-                          }}
-                        >
-                          Create after duplicate check
-                        </Button>
-                      </div>
+                              if (created)
+                                updateDelivery(index, {
+                                  vesselId: created.id,
+                                  vesselName: created.name,
+                                  vesselImo: created.imo,
+                                });
+                            }}
+                          >
+                            Create after duplicate check
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="self-end pb-2 text-xs text-muted-foreground">
+                          Save the draft first, then create or link the exact Salesforce vessel after duplicate checking.
+                        </p>
+                      )}
                     </div>
                   ) : null}
                   <EntitySelect
