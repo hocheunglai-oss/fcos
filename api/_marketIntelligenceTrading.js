@@ -305,10 +305,11 @@ function observationProjection(row, series, report) {
 }
 
 async function loadCurveRows(client, { startDate, endDate }) {
-  const [seriesResult, imports, observations, fallbacksResult, shadowResult, shadowControlResult] = await Promise.all([
+  const [seriesResult, imports, observations, availabilityRows, fallbacksResult, shadowResult, shadowControlResult] = await Promise.all([
     client.from('market_intelligence_series').select('id,market_family,port_key,port_label,product_key,product_label,source_symbol,unit,tenor,assessment_session,basis_metadata').eq('active', true),
     allRows(() => client.from('market_report_imports').select('id,source_hash,source_document_type,report_date').gte('report_date', startDate).lte('report_date', endDate).order('report_date', { ascending: true })),
     allRows(() => client.from('market_price_observations').select('id,series_id,import_id,price_date,price,day_change,quality_status,source_hash,source_page,contract_month,printed_contract_month,tenor,observation_unit,assessment_session,basis_metadata').gte('price_date', startDate).lte('price_date', endDate).order('price_date', { ascending: true })),
+    allRows(() => client.from('market_report_series_availability').select('import_id,series_id,report_date,availability_status,source_page,contract_month,printed_contract_month,tenor,observation_unit,assessment_session,basis_metadata').gte('report_date', startDate).lte('report_date', endDate).order('report_date', { ascending: true })),
     client.from('market_forward_fallback_marks').select('id,product_key,contract_month,unit,outright_value,as_of_date,status,expires_on,revision').eq('status', 'active').gt('expires_on', endDate).order('as_of_date', { ascending: false }),
     client.from('market_curve_shadow_runs').select('publication_date,product_key,contract_month,unit,comparison_count,mean_signed_variance,mean_absolute_variance,maximum_absolute_variance,reviewed_at').gte('publication_date', startDate).lte('publication_date', endDate).order('publication_date', { ascending: true }),
     client.from('market_curve_shadow_control').select('minimum_publication_days,cutover_approved,reviewed_at,revision').eq('id', 'company').maybeSingle(),
@@ -320,6 +321,22 @@ async function loadCurveRows(client, { startDate, endDate }) {
   return {
     observations: observations.map((row) => observationProjection(row, seriesById.get(row.series_id), importsById.get(row.import_id)))
       .filter((row) => row.publicationEligible && row.qualityStatus === 'verified'),
+    availability: availabilityRows.map((row) => {
+      const series = seriesById.get(row.series_id);
+      return {
+        reportDate: row.report_date,
+        productKey: seriesProduct(series, row),
+        tenor: String(row.tenor || series?.tenor || '').toUpperCase(),
+        status: row.availability_status,
+        sourceSymbol: series?.source_symbol || null,
+        sourcePage: row.source_page,
+        contractMonth: row.contract_month,
+        unit: row.observation_unit || series?.unit || null,
+        assessmentSession: row.assessment_session || series?.assessment_session || null,
+        marketFamily: seriesMarketFamily(series, row),
+        source: importsById.get(row.import_id)?.source_document_type || null,
+      };
+    }).filter((row) => row.productKey && row.marketFamily === 'forward'),
     fallbacks: fallbacksResult.data || [],
     shadowRows: shadowResult.data || [],
     shadowControl: shadowControlResult.data || { minimum_publication_days: 10, cutover_approved: false, revision: 0 },
@@ -529,7 +546,7 @@ function companyShadowProjection(observations, fallbacks, shadowRows, control, a
   return shadowProjection((shadowRows || []).filter((row) => requiredKeys.has(`${row.product_key}:${row.contract_month}:${row.unit}`)), control);
 }
 
-function curveCompleteness(snapshot, products, asOfDate) {
+function curveCompleteness(snapshot, products, asOfDate, availability = []) {
   const sessionFreshness = Object.fromEntries(products.map((product) => {
     const expectedPublicationDate = latestReviewedPublicationDate(asOfDate, PRODUCT_SESSIONS[product]);
     const latestObservationDate = snapshot.filter((row) => row.productKey === product && row.qualityStatus === 'verified').map((row) => row.reportDate).sort().at(-1) || null;
@@ -540,10 +557,26 @@ function curveCompleteness(snapshot, products, asOfDate) {
       state: !expectedPublicationDate ? 'calendar_unavailable' : latestObservationDate === expectedPublicationDate ? (expectedPublicationDate === asOfDate ? 'same_day' : 'current_prior_session') : 'stale',
     }];
   }));
-  const missing = products.flatMap((product) => REQUIRED_CURVE_TENORS[product]
+  const unavailable = products.flatMap((product) => REQUIRED_CURVE_TENORS[product]
     .filter((tenor) => !snapshot.some((row) => row.productKey === product && row.tenor === tenor && row.reportDate === sessionFreshness[product].expectedPublicationDate))
-    .map((tenor) => ({ product, tenor, expectedPublicationDate: sessionFreshness[product].expectedPublicationDate })));
-  return { complete: missing.length === 0, missing, sessionFreshness };
+    .map((tenor) => {
+      const expectedPublicationDate = sessionFreshness[product].expectedPublicationDate;
+      const evidence = availability.find((row) => row.productKey === product
+        && row.tenor === tenor
+        && row.reportDate === expectedPublicationDate);
+      return {
+        product,
+        tenor,
+        expectedPublicationDate,
+        status: evidence?.status === 'published_na' ? 'published_na' : 'not_detected',
+        sourceSymbol: evidence?.sourceSymbol || null,
+        sourcePage: evidence?.sourcePage || null,
+        source: evidence?.source || null,
+      };
+    }));
+  const publishedNa = unavailable.filter((row) => row.status === 'published_na');
+  const missing = unavailable.filter((row) => row.status !== 'published_na');
+  return { complete: missing.length === 0, missing, publishedNa, sessionFreshness };
 }
 
 export async function loadMarketIntelligenceCurve(client, request = {}) {
@@ -563,7 +596,7 @@ export async function loadMarketIntelligenceCurve(client, request = {}) {
   const physicalDates = [...new Set(rows.observations.filter((row) => products.includes(row.productKey)).map((row) => row.reportDate))];
   const premiumMoveHistory = physicalDates.flatMap((date) => physicalMetrics(rows.observations, date, products).premiumMoves);
   const fallbackRevisions = Object.fromEntries((rows.fallbacks || []).map((row) => [`${row.product_key}:${String(row.contract_month).slice(0, 7)}`, Number(row.revision || 0)]));
-  const completeness = curveCompleteness(snapshot, products, asOfDate);
+  const completeness = curveCompleteness(snapshot, products, asOfDate, rows.availability);
   const shadow = companyShadowProjection(rows.observations, rows.fallbacks, rows.shadowRows, rows.shadowControl, asOfDate);
   const projectedSettlements = projectedSettlementRows({
     asOfDate,
@@ -591,6 +624,7 @@ export async function loadMarketIntelligenceCurve(client, request = {}) {
     premiumMoves: physical.premiumMoves,
     premiumMoveHistory,
     warnings: completeness.missing.map(({ product, tenor, expectedPublicationDate }) => `${product.toUpperCase()} ${tenor} is missing from the expected ${expectedPublicationDate || 'reviewed-calendar'} report snapshot.`),
+    availabilityNotes: completeness.publishedNa.map(({ product, tenor, source, sourcePage }) => `${product.toUpperCase()} ${tenor} was published N/A${source === 'european_marketscan' ? ' in European Marketscan' : ''}${sourcePage ? ` page ${sourcePage}` : ''}.`),
     sessionFreshness: completeness.sessionFreshness,
     fallbackRevision: null,
     fallbackRevisions,
@@ -1261,18 +1295,26 @@ export async function publishMarketDataQualityAlert(client, { reportDate = null,
   return { created };
 }
 
+function priorEligibleReportDate(localDate, assessmentSession) {
+  const priorDate = dateBefore(localDate, 1);
+  return latestReviewedPublicationDate(priorDate, assessmentSession);
+}
+
 export async function scanExpectedMarketSessions(client, { now = new Date() } = {}) {
   const timestamp = now instanceof Date ? now : new Date(now);
   if (Number.isNaN(timestamp.getTime())) throw intelligenceError('The market-session scan time is invalid.');
-  const reportDate = timestamp.toISOString().slice(0, 10);
-  const utcHour = timestamp.getUTCHours();
+  const localTimestamp = new Date(timestamp.getTime() + 8 * 60 * 60 * 1000);
+  const localDate = localTimestamp.toISOString().slice(0, 10);
+  const localHour = localTimestamp.getUTCHours();
   const dueSessions = [
-    { session: 'asia_moc', cutoffHourUtc: 12, requiredReportTypes: ['bunkerwire', 'european_marketscan'] },
-    { session: 'london_moc', cutoffHourUtc: 20, requiredReportTypes: ['european_marketscan'] },
-  ].filter((row) => utcHour >= row.cutoffHourUtc && marketPublicationEligible(reportDate, row.session) === true);
+    { session: 'asia_moc', requiredReportTypes: ['bunkerwire', 'european_marketscan'] },
+    { session: 'london_moc', requiredReportTypes: ['european_marketscan'] },
+  ].map((row) => ({ ...row, reportDate: priorEligibleReportDate(localDate, row.session) }))
+    .filter((row) => localHour >= 16 && row.reportDate);
   let published = 0;
   const results = [];
   for (const due of dueSessions) {
+    const reportDate = due.reportDate;
     const [reportsResult, observationsResult] = await Promise.all([
       client.from('market_report_imports')
         .select('id,source_document_type,source_hash')
@@ -1302,7 +1344,7 @@ export async function scanExpectedMarketSessions(client, { now = new Date() } = 
         evidence: { assessmentSession: due.session, missingReportTypes: missingTypes },
       });
       if (alert.created) published += 1;
-      results.push({ assessmentSession: due.session, status: 'missing_report', missingReportTypes: missingTypes });
+      results.push({ assessmentSession: due.session, reportDate, status: 'missing_report', missingReportTypes: missingTypes });
       continue;
     }
     if (!(observationsResult.data || []).length) {
@@ -1316,12 +1358,42 @@ export async function scanExpectedMarketSessions(client, { now = new Date() } = 
         evidence: { assessmentSession: due.session },
       });
       if (alert.created) published += 1;
-      results.push({ assessmentSession: due.session, status: 'stale' });
+      results.push({ assessmentSession: due.session, reportDate, status: 'stale' });
       continue;
     }
-    results.push({ assessmentSession: due.session, status: 'complete' });
+    results.push({ assessmentSession: due.session, reportDate, status: 'complete' });
   }
-  return { reportDate, evaluated: dueSessions.length, published, sessions: results };
+  const reportDates = [...new Set(dueSessions.map((row) => row.reportDate))];
+  return { reportDate: reportDates.length === 1 ? reportDates[0] : null, reportDates, evaluated: dueSessions.length, published, sessions: results };
+}
+
+async function handleRecoveredMarketAlerts(client, reportDate, currentWarnings = []) {
+  const recoverableTypes = ['market_drive_import_failed', 'missing_report_pair', 'missing_asia_moc_report', 'missing_london_moc_report', 'data_quality'];
+  const [eventsResult, usersResult] = await Promise.all([
+    client.from('market_intelligence_alert_events')
+      .select('id,alert_type,message')
+      .eq('report_date', reportDate)
+      .in('alert_type', recoverableTypes),
+    client.from('user_profiles').select('id').eq('active', true),
+  ]);
+  const error = eventsResult.error || usersResult.error;
+  if (error) throw intelligenceError(`Recovered market alerts could not be reconciled: ${error.message}`, 502, 'MARKET_ALERT_RECOVERY_FAILED');
+  const activeWarnings = new Set((currentWarnings || []).map((warning) => String(warning)));
+  const recovered = (eventsResult.data || []).filter((event) => event.alert_type !== 'data_quality' || !activeWarnings.has(String(event.message)));
+  let handled = 0;
+  for (const event of recovered) {
+    for (const user of usersResult.data || []) {
+      const result = await client.rpc('set_market_intelligence_alert_notification_state', {
+        p_alert_event_id: event.id,
+        p_user_id: user.id,
+        p_state: 'handled',
+        p_snoozed_until: null,
+      });
+      if (result.error) throw intelligenceError(`Recovered market alert state could not be saved: ${result.error.message}`, 502, 'MARKET_ALERT_RECOVERY_FAILED');
+      handled += 1;
+    }
+  }
+  return { eventCount: recovered.length, stateCount: handled };
 }
 
 async function publishNumericAlerts(client, reportDate, rules, ruleVersion, curve, aiItems = []) {
@@ -1564,7 +1636,8 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     const save = await client.rpc('save_market_intelligence_brief', { p_report_date: date, p_source_hash: sourceHash, p_as_of_at: new Date().toISOString(), p_completeness: completeness, p_deterministic_metrics: deterministicMetrics, p_ai_status: ai.status, p_model_id: ai.modelId, p_source_refs: sourceRefs, p_items: [...deterministicItems, ...ai.items] });
     if (save.error) throw intelligenceError(`Market brief could not be stored: ${save.error.message}`, 502, 'MARKET_BRIEF_SAVE_FAILED');
   }
-  return { status: 'completed', reportDate: date, briefItemCount: deterministicItems.length + ai.items.length, aiStatus: ai.status, alertsPublished: alerts.published, shadowRecorded, reconciled: Boolean(reusedBrief), revised: Boolean(forceDeterministicRevision && reusedBrief), curveCoverage };
+  const recoveredAlerts = await handleRecoveredMarketAlerts(client, date, curve.warnings);
+  return { status: 'completed', reportDate: date, briefItemCount: deterministicItems.length + ai.items.length, aiStatus: ai.status, alertsPublished: alerts.published, alertsRecovered: recoveredAlerts.eventCount, shadowRecorded, reconciled: Boolean(reusedBrief), revised: Boolean(forceDeterministicRevision && reusedBrief), curveCoverage };
 }
 
 export const marketIntelligenceTradingInternals = Object.freeze({
@@ -1592,5 +1665,7 @@ export const marketIntelligenceTradingInternals = Object.freeze({
   isLegacyCurveMissingWarning,
   uniqueBriefWarnings,
   publishNumericAlerts,
+  priorEligibleReportDate,
+  handleRecoveredMarketAlerts,
   hash,
 });
