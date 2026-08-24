@@ -135,10 +135,12 @@ test('preflight fails closed and invoice readiness blocks every unapplied contra
   const incomplete = approvedFixture();
   incomplete.parties.supplier.confirmed = false;
   incomplete.deliveries[0].portId = '';
+  incomplete.terms.don.minDays = null;
+  incomplete.terms.don.maxDays = '';
   incomplete.terms.variableCharges.mode = '';
   const blocked = masterContractPreflight(incomplete, { featureEnabled: false });
   assert.equal(blocked.ready, false);
-  for (const code of ['FEATURE_DISABLED', 'SUPPLIER_CONFIRMATION_REQUIRED', 'VARIABLE_CHARGES_MODE_REQUIRED', 'PORT_REQUIRED']) {
+  for (const code of ['FEATURE_DISABLED', 'SUPPLIER_CONFIRMATION_REQUIRED', 'DON_WINDOW_REQUIRED', 'VARIABLE_CHARGES_MODE_REQUIRED', 'PORT_REQUIRED']) {
     assert.ok(blocked.blockers.some((row) => row.code === code), code);
   }
   assert.deepEqual(masterContractInvoicePriceReady([
