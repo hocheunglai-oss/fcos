@@ -28,6 +28,10 @@ jobs:
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
 
   authenticated-browser:
+    # The former permanent FCOS CI viewer was deliberately deleted. Keep the
+    # authenticated suite available, but run it only when a governed renewable
+    # test identity has been explicitly provisioned and enabled.
+    if: ${{ vars.FCOS_AUTH_E2E_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     env:
       FCOS_E2E_BASE_URL: https://fcos.fcuno.com
