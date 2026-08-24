@@ -66,7 +66,7 @@ import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
 import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
-import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
+import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, restorePortalUserAfterFailedDeletion, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
 import {
   collaborationArchive as collaborationArchiveService,
   collaborationAttachmentComplete as collaborationAttachmentCompleteService,
@@ -2832,15 +2832,50 @@ async function adminUserDelete(body, req) {
     deleting: true,
   });
 
-  await preparePortalUserDeletion({
-    client,
-    profile: target,
-    actor: profile,
-    requestId: activePortalRequestId(),
-  });
+  try {
+    await preparePortalUserDeletion({
+      client,
+      profile: target,
+      actor: profile,
+      requestId: activePortalRequestId(),
+    });
 
-  const { error: deleteError } = await client.auth.admin.deleteUser(userId);
-  if (deleteError) throw deleteError;
+    const { error: deleteError } = await client.auth.admin.deleteUser(userId);
+    if (deleteError) throw deleteError;
+  } catch (error) {
+    let restoration = { required: target.active === true, restored: false };
+    try {
+      restoration = await restorePortalUserAfterFailedDeletion({ client, profile: target });
+    } catch (restoreError) {
+      console.error('[admin-user-delete] FCOS profile restoration failed.', {
+        code: restoreError?.code || 'USER_DELETE_RESTORE_FAILED',
+        targetUserId: target.id,
+      });
+    }
+    await writeAdminAudit(client, profile, 'user_delete_failed', target.id, target.email, {
+      error_code: error?.code || 'USER_DELETE_FAILED',
+      profile_restoration_required: restoration.required,
+      profile_restored: restoration.restored,
+    });
+    console.error('[admin-user-delete] User deletion failed.', {
+      code: error?.code || 'USER_DELETE_FAILED',
+      targetUserId: target.id,
+      profileRestored: restoration.restored,
+    });
+    if (restoration.required && !restoration.restored) {
+      throw appError(
+        'User deletion failed and FCOS could not restore the account automatically.',
+        503,
+        'USER_DELETE_RESTORE_FAILED',
+      );
+    }
+    throw appError(
+      'User deletion could not be completed. FCOS restored the account; review connected application access before retrying.',
+      409,
+      'USER_DELETE_FAILED',
+      { profileRestored: restoration.restored },
+    );
+  }
 
   await writeAdminAudit(client, profile, 'user_deleted', target.id, target.email, {
     user_type: target.user_type,

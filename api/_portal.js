@@ -1046,6 +1046,32 @@ export async function preparePortalUserDeletion({
   }
 }
 
+export async function restorePortalUserAfterFailedDeletion({
+  client,
+  profile,
+}) {
+  if (!profile?.id || profile.active !== true) {
+    return { required: false, restored: false };
+  }
+
+  const { data: restoredProfile, error } = await client
+    .from('user_profiles')
+    .update({
+      active: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', profile.id)
+    .eq('active', false)
+    .select('id,active')
+    .maybeSingle();
+  if (error) throw error;
+
+  return {
+    required: true,
+    restored: restoredProfile?.active === true,
+  };
+}
+
 export async function checkPortalApplicationsHealth({
   client,
   requestId = null,
