@@ -127,8 +127,8 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   if (!SF_ID_RE.test(parties?.buyer?.accountId || '')) blockers.push({ code: 'BUYER_REQUIRED', message: 'Resolve the exact active Buyer Account.' });
   if (!SF_ID_RE.test(parties?.supplier?.accountId || '') || parties?.supplier?.confirmed !== true) blockers.push({ code: 'SUPPLIER_CONFIRMATION_REQUIRED', message: 'Confirm the exact active Supplier Account.' });
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(snapshot.ownerUserId || '')) blockers.push({ code: 'OWNER_REQUIRED', message: 'Assign the exact active contract owner.' });
-  const donMin = Number(terms?.don?.minDays);
-  const donMax = Number(terms?.don?.maxDays);
+  const donMin = numberOrNull(terms?.don?.minDays);
+  const donMax = numberOrNull(terms?.don?.maxDays);
   if (!Number.isInteger(donMin) || !Number.isInteger(donMax) || donMin < 0 || donMax > 365 || donMin > donMax) blockers.push({ code: 'DON_WINDOW_REQUIRED', message: 'Enter a valid DON X–Y day window between 0 and 365 days.' });
   if (!['contract', 'per_delivery'].includes(terms?.variableCharges?.mode)) blockers.push({ code: 'VARIABLE_CHARGES_MODE_REQUIRED', message: 'Choose the Variable Charges selection mode.' });
   if (terms?.variableCharges?.mode === 'contract' && (!Array.isArray(terms?.variableCharges?.supplierIds) || terms.variableCharges.supplierIds.some((id) => !SF_ID_RE.test(id)))) blockers.push({ code: 'VARIABLE_CHARGES_REQUIRED', message: 'Complete the contract-wide Variable Charges supplier selection with exact Account identities.' });
