@@ -13,16 +13,18 @@ public class StemTriggerHandler {
         for(STEM__c stem : stemList) {
             STEM__c oldStem = oldStemMap.get(stem.Id);
             if(stem.RecordTypeId == originatedRecordTypeId){
-                if(stem.Vessel__c != oldStem.Vessel__c || stem.Port__c != oldStem.Port__c || stem.Account__c != oldStem.Account__c){
+                if((stem.Vessel__c != oldStem.Vessel__c || stem.Port__c != oldStem.Port__c || stem.Account__c != oldStem.Account__c)
+                    && stem.Enquiry__c != null){
                     enquiryIds.add(stem.Enquiry__c);
                 }
-                if(stem.Vessel__c != oldStem.Vessel__c){
+                if(stem.Vessel__c != oldStem.Vessel__c && stem.Enquiry__c != null){
                     oppIdToVessel.put(stem.Enquiry__c, stem.Vessel__c);
                 }
-                if(stem.Port__c != oldStem.Port__c){
+                if(stem.Port__c != oldStem.Port__c && stem.Enquiry__c != null){
                     oppIdToPort.put(stem.Enquiry__c, stem.Port__c);
                 }
-                if(stem.Account__c != oldStem.Account__c){
+                // Master Contract STEMs intentionally have no Quote/Offer lineage.
+                if(stem.Account__c != oldStem.Account__c && stem.Quote__c != null){
                     quoteIdToAccount.put(stem.Quote__c, stem.Account__c);
                 }
 
@@ -68,7 +70,8 @@ public class StemTriggerHandler {
                     sli.Vessel__c = parentStem.Vessel__c;
                     sli.Port__c = parentStem.Port__c;
                     lineItemsToUpdate.add(sli);
-                    if(!oppIdToPort.isEmpty()){
+                    if(!oppIdToPort.isEmpty() && sli.Offer_Line_Item__r != null
+                        && sli.Offer_Line_Item__r.Opportunity_Line_Item__c != null){
                         opportunityLineItemIds.add(sli.Offer_Line_Item__r.Opportunity_Line_Item__c);
                     }
                 }
@@ -78,7 +81,8 @@ public class StemTriggerHandler {
                     sec.Vessel__c = parentStem.Vessel__c;
                     sec.Port__c = parentStem.Port__c;
                     extraCostsToUpdate.add(sec);
-                    if(!oppIdToPort.isEmpty()){
+                    if(!oppIdToPort.isEmpty() && sec.Offer_Line_Item__r != null
+                        && sec.Offer_Line_Item__r.Opportunity_Line_Item__c != null){
                         opportunityLineItemIds.add(sec.Offer_Line_Item__r.Opportunity_Line_Item__c);
                     }
                 }
@@ -95,7 +99,7 @@ public class StemTriggerHandler {
                     ContextManager.avoidSTEMExtraCostFiring = false;
                     StemExtraCostTriggerHandler.applyEnquirySpecialTerms(extraCostsToUpdate);
                 }
-                if(!oppIdToPort.isEmpty()){
+                if(!oppIdToPort.isEmpty() && !opportunityLineItemIds.isEmpty()){
                     List<OpportunityLineItem> enquiryLineItems = [SELECT Id, Port__c, OpportunityId FROM OpportunityLineItem WHERE Id IN :opportunityLineItemIds];
                     for(OpportunityLineItem enqLineItem : enquiryLineItems) {
                         enqLineItem.Port__c = oppIdToPort.get(enqLineItem.OpportunityId);

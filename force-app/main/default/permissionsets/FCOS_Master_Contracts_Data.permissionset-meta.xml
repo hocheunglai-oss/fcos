@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Delivery_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM__c.Master_Contract_Delivery_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM__c.Master_Contract_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM__c.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.Master_Contract_Line_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Benchmark_Code__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Benchmark_Value__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Buy_Unrounded__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Evidence_Hash__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Price_Status__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Pricing_Date__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Sell_Unrounded__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Master_Contract_Charge_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>FCOS Master Contracts Data</label>
+</PermissionSet>

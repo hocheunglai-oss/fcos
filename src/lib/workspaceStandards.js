@@ -63,6 +63,15 @@ export const WORKSPACE_STANDARDS = Object.freeze({
     freshness: 'Live assignments with short Salesforce reference cache',
     consequentialActionsRefresh: true,
   },
+  master_contracts: {
+    title: 'Master Contracts',
+    route: '/master-contracts',
+    section: 'Trading',
+    authority: 'FCOS approved terms with live Salesforce operational reconciliation',
+    views: ['all', 'exceptions', 'activity'],
+    freshness: 'Live on open with hourly Salesforce reconciliation',
+    consequentialActionsRefresh: true,
+  },
   markets: {
     title: 'Markets',
     route: '/markets',

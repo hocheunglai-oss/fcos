@@ -32,6 +32,7 @@ const Markets = lazy(() => import('@/pages/Markets'));
 const SpecialTerms = lazy(() => import('@/pages/SpecialTerms'));
 const SpecialTermEditor = lazy(() => import('@/pages/SpecialTermEditor'));
 const EmailRouter = lazy(() => import('@/pages/EmailRouter'));
+const MasterContracts = lazy(() => import('@/pages/MasterContracts'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center" role="status" aria-live="polite"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" aria-hidden="true" /><span className="sr-only">Loading workspace</span></div>;
@@ -112,6 +113,7 @@ const AuthenticatedApp = () => {
             <Route path="/brokers" element={<ModuleGateAny moduleIds={['brokers', 'report_archive']}><BrokerWorkspace /></ModuleGateAny>} />
             <Route path="/report-archive" element={<RedirectWithTab path="/brokers" tab="archive" />} />
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
+            <Route path="/master-contracts" element={<ModuleGate moduleId="master_contracts"><MasterContracts /></ModuleGate>} />
             <Route path="/markets" element={<ModuleGate moduleId="markets"><Markets /></ModuleGate>} />
             <Route path="/special-terms" element={<ModuleGate moduleId="special_terms"><SpecialTerms /></ModuleGate>} />
             <Route path="/special-terms/:termId" element={<ModuleGate moduleId="special_terms"><SpecialTermEditor /></ModuleGate>} />

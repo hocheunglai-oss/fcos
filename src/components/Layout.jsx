@@ -6,6 +6,7 @@ import {
   Eye,
   EyeOff,
   FileCheck2,
+  FileSignature,
   GripVertical,
   History,
   HandCoins,
@@ -76,6 +77,7 @@ const navGroups = [
     label: 'Trading',
     items: [
       workspaceNavigation('dashboard', { moduleId: 'dashboard', icon: LayoutDashboard }),
+      workspaceNavigation('master_contracts', { moduleId: 'master_contracts', icon: FileSignature }),
       workspaceNavigation('buyers_administrator', { moduleId: 'buyers_administrator', icon: UsersRound }),
       workspaceNavigation('markets', { moduleId: 'markets', icon: CandlestickChart }),
       workspaceNavigation('special_terms', { moduleId: 'special_terms', icon: ScrollText }),

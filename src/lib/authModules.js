@@ -24,6 +24,7 @@ export const APP_MODULES = [
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
   { id: 'report_archive', label: 'Reports Archive', path: '/brokers?tab=archive', sortOrder: 75 },
   { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
+  { id: 'master_contracts', label: 'Master Contracts', path: '/master-contracts', sortOrder: 84 },
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },

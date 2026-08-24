@@ -25,6 +25,25 @@ export const ACCOUNT_MANAGERS_METHODOLOGY = {
   ],
 };
 
+export const MASTER_CONTRACTS_METHODOLOGY = {
+  title: 'Master Contracts methodology',
+  description: 'How FCOS preserves approved Master Contract baselines while Salesforce operates each generated delivery.',
+  sections: [
+    {
+      title: 'Authority and approvals',
+      body: 'Contract terms, allocations, immutable revisions, supplier evidence and owner approvals are authoritative in FCOS. A sensitive amendment requires supplier evidence followed by assigned-owner approval; General Managers and Administrators may override only with a recorded reason. Salesforce remains authoritative for generated Enquiries, STEMs, BDN quantities, invoices, payments and operational actuals.',
+    },
+    {
+      title: 'Creation and synchronization',
+      body: 'Each selected delivery creates one Closed Won Enquiry and one Originated STEM in one all-or-none Salesforce transaction. External delivery, line and charge keys make retries idempotent. Live Salesforce differences are shown as variances and never silently rewrite the approved baseline. Creation stays blocked until exact parties, products, vessels, ports, payment terms, DON rules, owner and Variable Charges configuration are complete.',
+    },
+    {
+      title: 'DON pricing and invoices',
+      body: 'Prices use the reviewed Date of Nomination publication and the saved contract formula, calculated at full precision and rounded only for Salesforce unit-price fields. Missing publications and unresolved or changed evidence fail closed. Buyer Invoice, Proforma, Credit Note and Supplier Invoice creation remains blocked until every applicable DON price is applied.',
+    },
+  ],
+};
+
 export const CASHFLOW_FORECAST_METHODOLOGY = {
   title: 'Cashflow Forecast',
   description: 'How Salesforce receivables and payables become expected daily cash movement.',

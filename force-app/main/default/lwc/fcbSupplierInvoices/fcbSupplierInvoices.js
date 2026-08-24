@@ -9,6 +9,7 @@ import { fireEvent } from 'c/pubsub';
 import { refreshApex } from "@salesforce/apex";
 import { updateRecord , createRecord} from "lightning/uiRecordApi";
 import getSupplierVariableChargeReadiness from "@salesforce/apex/VariableChargeInvoiceReadinessService.getSupplierReadiness";
+import getSupplierMasterContractReadiness from "@salesforce/apex/MasterContractInvoiceReadinessService.getSupplierReadiness";
 
 
 const COLS = [
@@ -86,17 +87,30 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       return null;
     }
     try {
-      this.supplierVariableChargeReadiness = await getSupplierVariableChargeReadiness({
-        stemId: this.recordId,
-        supplierId: this.supplierValue,
-      });
+      const params = { stemId: this.recordId, supplierId: this.supplierValue };
+      const [masterContract, variableCharges] = await Promise.all([
+        getSupplierMasterContractReadiness(params),
+        getSupplierVariableChargeReadiness(params),
+      ]);
+      if (masterContract && masterContract.ready !== true) {
+        this.supplierVariableChargeReadiness = {
+          ...masterContract,
+          linkLabel: 'Open Master Contracts in FCOS',
+        };
+      } else {
+        this.supplierVariableChargeReadiness = {
+          ...variableCharges,
+          linkLabel: 'Open Variable Charges in FCOS',
+        };
+      }
       return this.supplierVariableChargeReadiness;
     } catch (error) {
       this.supplierVariableChargeReadiness = {
         ready: false,
         requiresVariableChargeReview: true,
-        reason: 'Variable Charges readiness could not be verified. Refresh before creating the Supplier Invoice.',
-        fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${this.recordId}`,
+        reason: 'Supplier Invoice readiness could not be verified. Refresh before creating the Supplier Invoice.',
+        fcosUrl: `https://fcos.fcuno.com/master-contracts`,
+        linkLabel: 'Open FCOS',
       };
       return this.supplierVariableChargeReadiness;
     }
@@ -157,7 +171,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       const readiness = await this.loadSupplierVariableChargeReadiness();
       if (readiness && readiness.ready !== true) {
         this.dispatchEvent(new ShowToastEvent({
-          title: 'Variable Charges verification required',
+          title: 'Supplier Invoice verification required',
           message: readiness.reason,
           variant: 'error',
         }));

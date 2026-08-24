@@ -18,6 +18,8 @@ const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
 const EXPECTED_ORDER = ['devee', 'qat', 'production'];
 const VARIABLE_CHARGE_DATA_PERMISSION = 'FCOS_Variable_Charges_Integration';
 const VARIABLE_CHARGE_API_PERMISSION = 'FCOS_Variable_Charges_API';
+const MASTER_CONTRACT_API_PERMISSION = 'FCOS_Master_Contracts_API';
+const MASTER_CONTRACT_DATA_PERMISSION = 'FCOS_Master_Contracts_Data';
 
 if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');
 if (SCHEMA_CUTOVER && (!SCHEMA_BOOTSTRAP || SCHEMA_BOOTSTRAP.startsWith('-'))) {
@@ -183,6 +185,8 @@ if (CHECK_ONLY) {
   deployments.push(deveeDeployment);
   assignPermission(devee, VARIABLE_CHARGE_DATA_PERMISSION);
   assignPermission(devee, VARIABLE_CHARGE_API_PERMISSION);
+  assignPermission(devee, MASTER_CONTRACT_API_PERMISSION);
+  assignPermission(devee, MASTER_CONTRACT_DATA_PERMISSION);
   const inventory = sourceInventory();
   writeDeveeSourceState({
     sourceTreeHash: inventory.sourceTreeHash,
@@ -206,11 +210,14 @@ if (CHECK_ONLY) {
     if (SCHEMA_CUTOVER) {
       deployments.push(deploySchemaBootstrap(environment));
       assignPermission(environment, VARIABLE_CHARGE_DATA_PERMISSION);
+      assignPermission(environment, MASTER_CONTRACT_DATA_PERMISSION);
     }
     const validation = validate(environment);
     validations.push(validation);
     deployments.push(deploy(validation));
     assignPermission(environment, VARIABLE_CHARGE_API_PERMISSION);
+    assignPermission(environment, MASTER_CONTRACT_API_PERMISSION);
+    assignPermission(environment, MASTER_CONTRACT_DATA_PERMISSION);
   }
 }
 

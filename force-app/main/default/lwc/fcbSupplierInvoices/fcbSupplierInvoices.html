@@ -28,7 +28,7 @@
               <template if:false={supplierVariableChargeReadiness.ready}>
                 <div class="slds-notify slds-notify_alert slds-alert_warning slds-m-top_x-small" role="alert">
                   <span>{supplierVariableChargeReadiness.reason}</span>
-                  <a class="slds-m-left_small" href={supplierVariableChargeReadiness.fcosUrl} target="_blank" rel="noopener">Open Variable Charges in FCOS</a>
+                  <a class="slds-m-left_small" href={supplierVariableChargeReadiness.fcosUrl} target="_blank" rel="noopener">{supplierVariableChargeReadiness.linkLabel}</a>
                 </div>
               </template>
             </template>

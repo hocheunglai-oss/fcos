@@ -2,6 +2,7 @@ trigger SupplierInvoiceTrigger on Supplier_Invoice__c (before insert, before upd
     if (ContextManager.skipTriggers) return;
     if(!ContextManager.avoidSupplierInvoiceFiring){
         if((Trigger.isUpdate || Trigger.isInsert) && Trigger.isBefore){
+            MasterContractInvoiceReadinessService.assertSupplierInvoiceTransitionsAllowed(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
             VariableChargeInvoiceReadinessService.assertSupplierInvoiceTransitionsAllowed(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
             if(Trigger.isInsert){
                 SupplierInvoiceTriggerHandler.setRefcodeIndex(Trigger.new);

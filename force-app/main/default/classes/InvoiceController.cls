@@ -4,6 +4,11 @@ public class InvoiceController {
         return VariableChargeInvoiceReadinessService.getBuyerReadiness(stemId);
     }
 
+    @AuraEnabled(cacheable=false)
+    public static MasterContractInvoiceReadinessService.Readiness getMasterContractInvoiceReadiness(String stemId) {
+        return MasterContractInvoiceReadinessService.getBuyerReadiness(stemId);
+    }
+
     // Compatibility wrapper for the previous production LWC during the controlled cutover.
     @AuraEnabled(cacheable=false)
     public static VariableChargeInvoiceReadinessService.Readiness getShipAgentInvoiceReadiness(String stemId) {
@@ -50,6 +55,7 @@ public class InvoiceController {
 
     @AuraEnabled
     public static Invoice__c createInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate){
+        MasterContractInvoiceReadinessService.assertBuyerAllowed(Id.valueOf(stemId));
         if (createProforma != true && isCreditNote != true) {
             VariableChargeInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(Id.valueOf(stemId));
             if (invoiceDueDate == null) {
@@ -209,6 +215,7 @@ public class InvoiceController {
 
     @AuraEnabled
     public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma){
+        MasterContractInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         ContentVersion contentVersion = new ContentVersion();
         contentVersion.PathOnClient = '/' + invoiceVersionName + '.pdf';

@@ -208,6 +208,23 @@ import {
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
+import {
+  applyMasterContractPrice as applyMasterContractPriceService,
+  completeMasterContractEvidence as completeMasterContractEvidenceService,
+  createMasterContractBatch as createMasterContractBatchService,
+  createMasterContractVessel as createMasterContractVesselService,
+  decideMasterContract as decideMasterContractService,
+  getMasterContract as getMasterContractService,
+  getMasterContractEvidenceUrl as getMasterContractEvidenceUrlService,
+  listMasterContracts as listMasterContractsService,
+  masterContractOptions as masterContractOptionsService,
+  preflightMasterContract as preflightMasterContractService,
+  prepareMasterContractEvidence as prepareMasterContractEvidenceService,
+  reconcileMasterContracts as reconcileMasterContractsService,
+  resolveMasterContractPrice as resolveMasterContractPriceService,
+  saveMasterContract as saveMasterContractService,
+  saveMasterContractFeature as saveMasterContractFeatureService,
+} from '../_masterContracts.js';
 import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, reconcileMarketIntradayDate, saveMarketIntradaySnapshot } from '../_marketIntraday.js';
 import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
@@ -336,6 +353,7 @@ const ADMIN_APP_MODULES = [
     path: '/account-managers',
     sortOrder: 85,
   },
+  { id: 'master_contracts', label: 'Master Contracts', path: '/master-contracts', sortOrder: 84 },
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
@@ -478,6 +496,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: true,
     buyers_administrator: false,
+    master_contracts: true,
     hedge_desk: true,
     markets: true,
     special_terms: true,
@@ -496,6 +515,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: true,
     buyers_administrator: false,
+    master_contracts: false,
     hedge_desk: true,
     markets: true,
     special_terms: true,
@@ -514,6 +534,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: false,
     report_archive: false,
     buyers_administrator: false,
+    master_contracts: false,
     hedge_desk: false,
     markets: true,
     special_terms: true,
@@ -532,6 +553,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: true,
     report_archive: false,
     buyers_administrator: false,
+    master_contracts: false,
     hedge_desk: false,
     markets: true,
     special_terms: true,
@@ -550,6 +572,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     brokers: false,
     report_archive: false,
     buyers_administrator: false,
+    master_contracts: false,
     hedge_desk: false,
     markets: true,
     special_terms: true,
@@ -1353,7 +1376,7 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'emailRouterMaintenanceCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron']);
 
 const HANDLER_MODULE_ACCESS = {
   authContext: [],
@@ -1454,6 +1477,22 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
   marketReportDriveSyncCron: [],
+  masterContractsList: ['master_contracts'],
+  masterContractDetail: ['master_contracts'],
+  masterContractSave: ['master_contracts'],
+  masterContractDecision: ['master_contracts'],
+  masterContractEvidencePrepare: ['master_contracts'],
+  masterContractEvidenceComplete: ['master_contracts'],
+  masterContractEvidenceUrl: ['master_contracts'],
+  masterContractOptions: ['master_contracts'],
+  masterContractVesselCreate: ['master_contracts'],
+  masterContractPreflight: ['master_contracts'],
+  masterContractBatchCreate: ['master_contracts'],
+  masterContractPriceResolve: ['master_contracts'],
+  masterContractPriceApply: ['master_contracts'],
+  masterContractFeatureSave: ['master_contracts'],
+  masterContractReconcile: ['master_contracts'],
+  masterContractReconcileCron: [],
   specialTermsWorkspace: ['special_terms'],
   specialTermsSummaryList: ['special_terms'],
   specialTermsPdfExport: ['special_terms'],
@@ -18652,6 +18691,74 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   return result;
 }
 
+async function masterContractsList(body = {}, req = null, accessContext = null) {
+  return listMasterContractsService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractDetail(body = {}, req = null, accessContext = null) {
+  return getMasterContractService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractSave(body = {}, req = null, accessContext = null) {
+  return saveMasterContractService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractDecision(body = {}, req = null, accessContext = null) {
+  return decideMasterContractService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractEvidencePrepare(body = {}, req = null, accessContext = null) {
+  return prepareMasterContractEvidenceService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractEvidenceComplete(body = {}, req = null, accessContext = null) {
+  return completeMasterContractEvidenceService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractEvidenceUrl(body = {}, req = null, accessContext = null) {
+  return getMasterContractEvidenceUrlService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractOptions(body = {}, req = null, accessContext = null) {
+  return masterContractOptionsService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractVesselCreate(body = {}, req = null, accessContext = null) {
+  return createMasterContractVesselService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractPreflight(body = {}, req = null, accessContext = null) {
+  return preflightMasterContractService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractBatchCreate(body = {}, req = null, accessContext = null) {
+  return createMasterContractBatchService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractPriceResolve(body = {}, req = null, accessContext = null) {
+  return resolveMasterContractPriceService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractPriceApply(body = {}, req = null, accessContext = null) {
+  return applyMasterContractPriceService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractFeatureSave(body = {}, req = null, accessContext = null) {
+  return saveMasterContractFeatureService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractReconcile(body = {}, req = null, accessContext = null) {
+  return reconcileMasterContractsService(body, accessContext || (await requireActiveUser(req)));
+}
+
+async function masterContractReconcileCron(body = {}, req = null) {
+  requireCronAuthorization(req);
+  return reconcileMasterContractsService(body, {
+    client: supabaseAdminClient(),
+    profile: { id: null, email: null, user_type: 'system' },
+  });
+}
+
 async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const [workspace, canApproveClauses] = await Promise.all([
@@ -19187,6 +19294,22 @@ const handlers = {
   hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,
   marketReportDriveSyncCron,
+  masterContractsList,
+  masterContractDetail,
+  masterContractSave,
+  masterContractDecision,
+  masterContractEvidencePrepare,
+  masterContractEvidenceComplete,
+  masterContractEvidenceUrl,
+  masterContractOptions,
+  masterContractVesselCreate,
+  masterContractPreflight,
+  masterContractBatchCreate,
+  masterContractPriceResolve,
+  masterContractPriceApply,
+  masterContractFeatureSave,
+  masterContractReconcile,
+  masterContractReconcileCron,
   specialTermsWorkspace,
   specialTermsSummaryList,
   specialTermsOptions,

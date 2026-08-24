@@ -36,6 +36,10 @@
       "schedule": "0 * * * *"
     },
     {
+      "path": "/api/functions/masterContractReconcileCron",
+      "schedule": "15 * * * *"
+    },
+    {
       "path": "/api/functions/emailRouterMaintenanceCron",
       "schedule": "*/5 * * * *"
     }
