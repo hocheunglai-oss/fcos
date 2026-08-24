@@ -144,11 +144,16 @@ function Field({
       <Input
         type={type}
         value={value ?? ""}
-        min={min}
-        step={step}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      min={min}
+      step={step}
+      placeholder={placeholder}
+      onInput={
+        type === "date"
+          ? (event) => onChange(event.currentTarget.value)
+          : undefined
+      }
+      onChange={(event) => onChange(event.target.value)}
+    />
     </div>
   );
 }

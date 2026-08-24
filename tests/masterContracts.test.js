@@ -205,6 +205,7 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(page, /Create selected in Salesforce/);
   assert.match(page, /Save the draft first, then create or link the exact Salesforce vessel after duplicate checking/);
   assert.match(page, /Object\.prototype\.hasOwnProperty\.call\(patch, "deliveryKey"\)/);
+  assert.match(page, /type === "date"[\s\S]*onChange\(event\.currentTarget\.value\)/);
   assert.match(handlers, /masterContractReconcileCron/);
   assert.match(policy, /masterContractBatchCreate: mutationPolicy/);
   assert.match(manifest, /MasterContractGenerationService/);
