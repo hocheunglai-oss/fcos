@@ -43,6 +43,24 @@ function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = nul
         if (table === 'market_report_imports' && columns === 'report_date,source_document_type') return {
           gte: () => ({ order: () => ({ limit: async () => ({ data: pairedImports, error: null }) }) }),
         };
+        if (table === 'market_report_imports' && columns === 'id,source_document_type,source_hash') {
+          const query = {
+            eq: () => query,
+            in: () => query,
+            then: (resolve, reject) => Promise.resolve({ data: [
+              { id: 'expected-bw', source_document_type: 'bunkerwire', source_hash: 'a'.repeat(64) },
+              { id: 'expected-eum', source_document_type: 'european_marketscan', source_hash: 'b'.repeat(64) },
+            ], error: null }).then(resolve, reject),
+          };
+          return query;
+        }
+        if (table === 'market_price_observations' && columns === 'id,series_id,import_id,price_date') {
+          const query = {
+            eq: () => query,
+            limit: async () => ({ data: [{ id: 'expected-session-observation' }], error: null }),
+          };
+          return query;
+        }
         if (table === 'market_report_imports' && columns.includes('drive_file_id')) return {
           eq: () => ({ in: () => ({ not: async () => ({ data: [], error: null }) }) }),
         };
