@@ -92,7 +92,7 @@ test('high-risk edit workflows use a shared validation summary', async () => {
   }
 });
 
-test('strict release gate includes migrations, Graph-only checks, build, and renewable browser authentication', async () => {
+test('strict release gate includes migrations, Graph-only checks, build, and governed browser authentication', async () => {
   const [packageJson, releaseGate, browserSmoke, browserSetup, workflow] = await Promise.all([
     file('package.json'),
     file('scripts/verify-release.mjs'),
@@ -110,6 +110,7 @@ test('strict release gate includes migrations, Graph-only checks, build, and ren
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
   assert.match(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
+  assert.match(workflow, /if: \$\{\{ vars\.FCOS_AUTH_E2E_ENABLED == 'true' \}\}/);
   assert.doesNotMatch(workflow, /STORAGE_STATE_BASE64/);
 });
 

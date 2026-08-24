@@ -18691,65 +18691,22 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   return result;
 }
 
-async function masterContractsList(body = {}, req = null, accessContext = null) {
-  return listMasterContractsService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractDetail(body = {}, req = null, accessContext = null) {
-  return getMasterContractService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractSave(body = {}, req = null, accessContext = null) {
-  return saveMasterContractService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractDecision(body = {}, req = null, accessContext = null) {
-  return decideMasterContractService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractEvidencePrepare(body = {}, req = null, accessContext = null) {
-  return prepareMasterContractEvidenceService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractEvidenceComplete(body = {}, req = null, accessContext = null) {
-  return completeMasterContractEvidenceService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractEvidenceUrl(body = {}, req = null, accessContext = null) {
-  return getMasterContractEvidenceUrlService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractOptions(body = {}, req = null, accessContext = null) {
-  return masterContractOptionsService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractVesselCreate(body = {}, req = null, accessContext = null) {
-  return createMasterContractVesselService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractPreflight(body = {}, req = null, accessContext = null) {
-  return preflightMasterContractService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractBatchCreate(body = {}, req = null, accessContext = null) {
-  return createMasterContractBatchService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractPriceResolve(body = {}, req = null, accessContext = null) {
-  return resolveMasterContractPriceService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractPriceApply(body = {}, req = null, accessContext = null) {
-  return applyMasterContractPriceService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractFeatureSave(body = {}, req = null, accessContext = null) {
-  return saveMasterContractFeatureService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function masterContractReconcile(body = {}, req = null, accessContext = null) {
-  return reconcileMasterContractsService(body, accessContext || (await requireActiveUser(req)));
-}
+const withMasterContractUser = (service) => async (body = {}, req = null, accessContext = null) => service(body, accessContext || (await requireActiveUser(req)));
+const masterContractsList = withMasterContractUser(listMasterContractsService);
+const masterContractDetail = withMasterContractUser(getMasterContractService);
+const masterContractSave = withMasterContractUser(saveMasterContractService);
+const masterContractDecision = withMasterContractUser(decideMasterContractService);
+const masterContractEvidencePrepare = withMasterContractUser(prepareMasterContractEvidenceService);
+const masterContractEvidenceComplete = withMasterContractUser(completeMasterContractEvidenceService);
+const masterContractEvidenceUrl = withMasterContractUser(getMasterContractEvidenceUrlService);
+const masterContractOptions = withMasterContractUser(masterContractOptionsService);
+const masterContractVesselCreate = withMasterContractUser(createMasterContractVesselService);
+const masterContractPreflight = withMasterContractUser(preflightMasterContractService);
+const masterContractBatchCreate = withMasterContractUser(createMasterContractBatchService);
+const masterContractPriceResolve = withMasterContractUser(resolveMasterContractPriceService);
+const masterContractPriceApply = withMasterContractUser(applyMasterContractPriceService);
+const masterContractFeatureSave = withMasterContractUser(saveMasterContractFeatureService);
+const masterContractReconcile = withMasterContractUser(reconcileMasterContractsService);
 
 async function masterContractReconcileCron(body = {}, req = null) {
   requireCronAuthorization(req);
