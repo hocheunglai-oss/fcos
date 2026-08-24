@@ -123,7 +123,15 @@ test('DON window and benchmark formula use nomination date evidence and final-on
 });
 
 test('preflight fails closed and invoice readiness blocks every unapplied contract line', () => {
-  assert.deepEqual(masterContractPreflight(approvedFixture()), { ready: true, blockers: [] });
+  const approved = approvedFixture();
+  assert.deepEqual(masterContractPreflight(approved), { ready: true, blockers: [] });
+  approved.deliveries[0].id = '00000000-0000-4000-8000-000000000010';
+  assert.deepEqual(
+    masterContractPreflight(approved, {
+      selectedDeliveryIds: [approved.deliveries[0].deliveryKey],
+    }),
+    { ready: true, blockers: [] },
+  );
   const incomplete = approvedFixture();
   incomplete.parties.supplier.confirmed = false;
   incomplete.deliveries[0].portId = '';

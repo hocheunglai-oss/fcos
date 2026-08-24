@@ -113,7 +113,16 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   const terms = snapshot.terms || {};
   const selected = selectedDeliveryIds ? new Set(selectedDeliveryIds) : null;
   const allDeliveries = snapshot.deliveries || [];
-  const deliveries = allDeliveries.filter((delivery) => !selected || selected.has(delivery.id || delivery.deliveryId || delivery.deliveryKey));
+  const deliveryIdentities = (delivery) => [
+    delivery.id,
+    delivery.deliveryId,
+    delivery.deliveryKey,
+  ].filter(Boolean);
+  const deliveries = allDeliveries.filter(
+    (delivery) =>
+      !selected ||
+      deliveryIdentities(delivery).some((identity) => selected.has(identity)),
+  );
   if (!featureEnabled) blockers.push({ code: 'FEATURE_DISABLED', message: 'Master Contracts is not enabled for Salesforce creation.' });
   if (!SF_ID_RE.test(parties?.buyer?.accountId || '')) blockers.push({ code: 'BUYER_REQUIRED', message: 'Resolve the exact active Buyer Account.' });
   if (!SF_ID_RE.test(parties?.supplier?.accountId || '') || parties?.supplier?.confirmed !== true) blockers.push({ code: 'SUPPLIER_CONFIRMATION_REQUIRED', message: 'Confirm the exact active Supplier Account.' });
@@ -125,7 +134,9 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   if (terms?.variableCharges?.mode === 'contract' && (!Array.isArray(terms?.variableCharges?.supplierIds) || terms.variableCharges.supplierIds.some((id) => !SF_ID_RE.test(id)))) blockers.push({ code: 'VARIABLE_CHARGES_REQUIRED', message: 'Complete the contract-wide Variable Charges supplier selection with exact Account identities.' });
   if (!deliveries.length) blockers.push({ code: 'DELIVERY_REQUIRED', message: 'Select at least one uncreated delivery.' });
   if (selected) {
-    const known = new Set(allDeliveries.map((delivery) => delivery.id || delivery.deliveryId || delivery.deliveryKey));
+    const known = new Set(
+      allDeliveries.flatMap((delivery) => deliveryIdentities(delivery)),
+    );
     for (const requested of selected) if (!known.has(requested)) blockers.push({ code: 'DELIVERY_UNKNOWN', deliveryKey: requested, message: `${requested}: the selected delivery is not part of this contract revision.` });
   }
   const productKeys = new Set();
