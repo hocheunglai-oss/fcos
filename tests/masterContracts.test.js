@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
+  calculateMasterContractSplitPrice,
   calculateMasterContractDonPrice,
+  masterContractBenchmark,
   masterContractDonWindow,
   masterContractInvoicePriceReady,
   masterContractLineKey,
   masterContractLiveVariances,
   masterContractPreflight,
+  masterContractPricingPosition,
   masterContractQuantitySummary,
 } from '../src/lib/masterContracts.js';
 
@@ -122,6 +125,31 @@ test('DON window and benchmark formula use nomination date evidence and final-on
   assert.equal(mgo.sellRounded, 696.6);
 });
 
+test('three named MOPS benchmarks and split pricing dates expose long, short, and matched positions', () => {
+  assert.equal(masterContractBenchmark({ benchmarkKey: 's380' }).name, 'S380 MOPS');
+  assert.equal(masterContractBenchmark({ benchmarkCode: 'AMFSA00' }).name, 'S0.5 MOPS');
+  assert.equal(masterContractBenchmark({ productKey: 'mgo' }).name, 'SGO MOPS');
+  assert.deepEqual(masterContractPricingPosition('2026-08-19', '2026-08-21'), {
+    side: 'long', label: 'Long price exposure', days: 2, signedDays: 2,
+  });
+  assert.equal(masterContractPricingPosition('2026-08-21', '2026-08-19').side, 'short');
+  assert.equal(masterContractPricingPosition('2026-08-21', '2026-08-21').side, 'matched');
+  assert.deepEqual(calculateMasterContractSplitPrice({
+    benchmarkKey: 's380', supplierBenchmarkValue: 615.41, buyerBenchmarkValue: 620.25,
+    buyPremium: 55, sellPremium: 55,
+  }), {
+    supplierBenchmarkValue: 615.41,
+    buyerBenchmarkValue: 620.25,
+    conversionFactor: 1,
+    supplierConvertedBenchmark: 615.41,
+    buyerConvertedBenchmark: 620.25,
+    buyUnrounded: 670.41,
+    sellUnrounded: 675.25,
+    buyRounded: 670.41,
+    sellRounded: 675.25,
+  });
+});
+
 test('preflight fails closed and invoice readiness blocks every unapplied contract line', () => {
   const approved = approvedFixture();
   assert.deepEqual(masterContractPreflight(approved), { ready: true, blockers: [] });
@@ -183,6 +211,7 @@ test('live reconciliation detects exact approved-versus-Salesforce changes witho
 
 test('migration is private, revisioned, idempotent, and feature-disabled by default', async () => {
   const sql = await read('supabase/migrations/20260824134500_master_term_contracts.sql');
+  const splitSql = await read('supabase/migrations/20260825033751_master_contract_split_pricing_evidence.sql');
   const tables = [
     'master_contract_settings', 'master_contracts', 'master_contract_product_terms',
     'master_contract_deliveries', 'master_contract_delivery_products', 'master_contract_charge_rules',
@@ -204,6 +233,14 @@ test('migration is private, revisioned, idempotent, and feature-disabled by defa
   assert.match(sql, /grant execute on function public\.save_master_contract_price_resolution\(uuid, bigint, uuid, date, text, text, numeric, numeric, numeric, numeric, numeric, numeric, text, uuid, text, text, uuid, text, text, text\) to service_role/i);
   assert.match(sql, /grant execute on function public\.reconcile_master_contract_live_state\(uuid, jsonb, jsonb, uuid, text\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.save_master_contract_price_resolution\([^)]*text, text, text, uuid/i);
+  assert.match(splitSql, /supplier_benchmark_date date/i);
+  assert.match(splitSql, /buyer_benchmark_date date/i);
+  assert.match(splitSql, /position_side in \('long', 'short', 'matched'\)/i);
+  assert.match(splitSql, /create or replace function public\.save_master_contract_price_resolution_v2/i);
+  assert.match(splitSql, /security invoker/i);
+  assert.match(splitSql, /revoke all on function public\.save_master_contract_price_resolution_v2[\s\S]*from public, anon, authenticated/i);
+  assert.match(splitSql, /grant execute on function public\.save_master_contract_price_resolution_v2[\s\S]*to service_role/i);
+  assert.doesNotMatch(splitSql, /security definer/i);
 });
 
 test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gate boundaries', async () => {
@@ -220,7 +257,9 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(api, /MASTER_CONTRACT_PREFLIGHT_BLOCKED/);
   assert.match(api, /enqueue_master_contract_sync/);
   assert.match(api, /finalize_master_contract_salesforce_batch/);
-  assert.match(api, /No complete official MOPS publication exists/);
+  assert.match(api, /complete official MOPS publication is required for both pricing dates/);
+  assert.match(api, /RecordType\.Name IN/);
+  assert.match(api, /save_master_contract_price_resolution_v2/);
   assert.match(apex, /Savepoint checkpoint = Database\.setSavepoint\(\)/);
   assert.match(apex, /Database\.rollback\(checkpoint\)/);
   assert.match(apex, /StageName = 'Closed Won'/);
@@ -236,6 +275,13 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(page, /Save the draft first, then create or link the exact Salesforce vessel after duplicate checking/);
   assert.match(page, /Object\.prototype\.hasOwnProperty\.call\(patch, "deliveryKey"\)/);
   assert.match(page, /masterContractLineKey/);
+  assert.match(page, /Total Quantity Min/);
+  assert.match(page, /Total Quantity Max/);
+  assert.match(page, /Supplier pricing date/);
+  assert.match(page, /Buyer pricing date/);
+  assert.match(page, /SearchableEntitySelect/);
+  assert.doesNotMatch(page, /label="Product key"/);
+  assert.doesNotMatch(page, /label="Benchmark code"/);
   assert.match(page, /type === "date"[\s\S]*onChange\(event\.currentTarget\.value\)/);
   assert.match(handlers, /masterContractReconcileCron/);
   assert.match(policy, /masterContractBatchCreate: mutationPolicy/);

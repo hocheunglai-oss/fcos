@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>DON_Supplier_Pricing_Date__c</fullName>
+    <description>Reviewed official publication date used to calculate the supplier-side Master Contract price.</description>
+    <label>Supplier Pricing Date</label>
+    <type>Date</type>
+</CustomField>

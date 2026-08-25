@@ -25,11 +25,16 @@
         <members>STEM__c.Master_Contract_Source__c</members>
         <members>STEM_Line_Item__c.DON_Benchmark_Code__c</members>
         <members>STEM_Line_Item__c.DON_Benchmark_Value__c</members>
+        <members>STEM_Line_Item__c.DON_Buyer_Benchmark_Value__c</members>
+        <members>STEM_Line_Item__c.DON_Buyer_Pricing_Date__c</members>
         <members>STEM_Line_Item__c.DON_Buy_Unrounded__c</members>
         <members>STEM_Line_Item__c.DON_Evidence_Hash__c</members>
         <members>STEM_Line_Item__c.DON_Price_Status__c</members>
         <members>STEM_Line_Item__c.DON_Pricing_Date__c</members>
+        <members>STEM_Line_Item__c.DON_Pricing_Position__c</members>
         <members>STEM_Line_Item__c.DON_Sell_Unrounded__c</members>
+        <members>STEM_Line_Item__c.DON_Supplier_Benchmark_Value__c</members>
+        <members>STEM_Line_Item__c.DON_Supplier_Pricing_Date__c</members>
         <members>STEM_Line_Item__c.Master_Contract_Line_Key__c</members>
         <members>STEM_Line_Item__c.Master_Contract_Source__c</members>
         <members>STEM_Extra_Cost__c.Master_Contract_Charge_Key__c</members>

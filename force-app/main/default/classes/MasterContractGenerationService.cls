@@ -65,6 +65,11 @@ public without sharing class MasterContractGenerationService {
         public Date benchmarkDate;
         public String benchmarkCode;
         public Decimal benchmarkValue;
+        public Date supplierPricingDate;
+        public Date buyerPricingDate;
+        public Decimal supplierBenchmarkValue;
+        public Decimal buyerBenchmarkValue;
+        public String pricingPosition;
         public Decimal buyUnrounded;
         public Decimal sellUnrounded;
         public String evidenceHash;
@@ -229,13 +234,14 @@ public without sharing class MasterContractGenerationService {
         List<User> owners = [SELECT Id, Email FROM User WHERE IsActive = true AND Email = :request.ownerEmail LIMIT 2];
         require(owners.size() == 1, 'The assigned contract owner does not uniquely match an active Salesforce User by email.');
         Map<Id, Account> accounts = new Map<Id, Account>([
-            SELECT Id, Name, Inactive_Suspended__c, Buyer_Payment_Term__c, Supplier_Payment_Term__c, Is_Agent__c
+            SELECT Id, Name, Inactive_Suspended__c, Buyer_Payment_Term__c, Supplier_Payment_Term__c,
+                Is_Agent__c, RecordType.Name
             FROM Account WHERE Id IN :accountIds
         ]);
         require(accounts.size() == accountIds.size(), 'One or more exact Account identities are unavailable.');
         for (Id accountId : accountIds) require(accounts.get(accountId).Inactive_Suspended__c != true, 'Inactive Accounts cannot be used in a Master Contract.');
-        require(!String.isBlank(accounts.get(request.buyerAccountId).Buyer_Payment_Term__c), 'The exact Buyer Account is not configured as a Buyer.');
-        require(!String.isBlank(accounts.get(request.supplierAccountId).Supplier_Payment_Term__c), 'The exact Supplier Account is not configured as a Supplier.');
+        require(new Set<String>{ 'Buyer', 'Buyer & Supplier' }.contains(accounts.get(request.buyerAccountId).RecordType.Name), 'The exact Account must have the Buyer or Buyer & Supplier Record Type.');
+        require(new Set<String>{ 'Supplier', 'Buyer & Supplier' }.contains(accounts.get(request.supplierAccountId).RecordType.Name), 'The exact Account must have the Supplier or Buyer & Supplier Record Type.');
         Map<Id, Product2> products = new Map<Id, Product2>([SELECT Id, Name, IsActive FROM Product2 WHERE Id IN :productIds]);
         require(products.size() == productIds.size(), 'One or more exact Products are unavailable.');
         for (Product2 product : products.values()) require(product.IsActive, 'Inactive Products cannot be used in a Master Contract.');
@@ -464,7 +470,13 @@ public without sharing class MasterContractGenerationService {
     public static Map<String, Object> applyPrice(PriceRequest request) {
         require(request != null && request.lineItemId != null && !String.isBlank(request.contractLineKey), 'An exact Master Contract product line is required.');
         require(!String.isBlank(request.requestHash) && Pattern.matches('[a-f0-9]{64}', request.requestHash), 'A valid source fingerprint is required.');
-        require(request.buyPrice != null && request.sellPrice != null && request.benchmarkDate != null, 'Reviewed DON prices and publication date are required.');
+        Date supplierDate = request.supplierPricingDate == null ? request.benchmarkDate : request.supplierPricingDate;
+        Date buyerDate = request.buyerPricingDate == null ? request.benchmarkDate : request.buyerPricingDate;
+        Decimal supplierBenchmark = request.supplierBenchmarkValue == null ? request.benchmarkValue : request.supplierBenchmarkValue;
+        Decimal buyerBenchmark = request.buyerBenchmarkValue == null ? request.benchmarkValue : request.buyerBenchmarkValue;
+        String position = String.isBlank(request.pricingPosition) ? 'Matched' : request.pricingPosition;
+        require(request.buyPrice != null && request.sellPrice != null && supplierDate != null && buyerDate != null && supplierBenchmark != null && buyerBenchmark != null, 'Reviewed buyer and supplier pricing evidence is required.');
+        require(new Set<String>{ 'Long', 'Short', 'Matched' }.contains(position), 'Pricing position must be Long, Short, or Matched.');
         require(!String.isBlank(request.evidenceHash) && Pattern.matches('[a-f0-9]{64}', request.evidenceHash), 'Reviewed DON evidence is required.');
         STEM_Line_Item__c row = [
             SELECT Id, Master_Contract_Line_Key__c, Master_Contract_Source__c, DON_Price_Status__c,
@@ -478,9 +490,14 @@ public without sharing class MasterContractGenerationService {
         }
         row.Unit_Buy_At__c = request.buyPrice.setScale(2);
         row.Unit_Sell_At__c = request.sellPrice.setScale(2);
-        row.DON_Pricing_Date__c = request.benchmarkDate;
+        row.DON_Pricing_Date__c = supplierDate;
         row.DON_Benchmark_Code__c = request.benchmarkCode;
-        row.DON_Benchmark_Value__c = request.benchmarkValue;
+        row.DON_Benchmark_Value__c = supplierBenchmark;
+        row.DON_Supplier_Pricing_Date__c = supplierDate;
+        row.DON_Buyer_Pricing_Date__c = buyerDate;
+        row.DON_Supplier_Benchmark_Value__c = supplierBenchmark;
+        row.DON_Buyer_Benchmark_Value__c = buyerBenchmark;
+        row.DON_Pricing_Position__c = position;
         row.DON_Buy_Unrounded__c = request.buyUnrounded;
         row.DON_Sell_Unrounded__c = request.sellUnrounded;
         row.DON_Evidence_Hash__c = request.evidenceHash;
@@ -499,7 +516,10 @@ public without sharing class MasterContractGenerationService {
                 Delivery_Date__c, Payment_Term__c, LastModifiedDate,
                 (SELECT Id, Master_Contract_Line_Key__c, Product__c, Product__r.Name, Original_Supplier__c,
                     Quantity__c, Quantity_Max__c, Quantity_Delivered_Per_BDN__c, Unit_Buy_At__c,
-                    Unit_Sell_At__c, Payment_Term__c, DON_Price_Status__c, DON_Pricing_Date__c, LastModifiedDate
+                    Unit_Sell_At__c, Payment_Term__c, DON_Price_Status__c, DON_Pricing_Date__c,
+                    DON_Supplier_Pricing_Date__c, DON_Buyer_Pricing_Date__c,
+                    DON_Supplier_Benchmark_Value__c, DON_Buyer_Benchmark_Value__c,
+                    DON_Pricing_Position__c, LastModifiedDate
                  FROM STEM_Line_Items__r WHERE Master_Contract_Source__c = true),
                 (SELECT Id, Master_Contract_Charge_Key__c, Product2Id__c, Product2Id__r.Name, Supplier__c,
                     Lumpsum_Cost__c, Lumpsum_Price__c, Cancelled__c, LastModifiedDate

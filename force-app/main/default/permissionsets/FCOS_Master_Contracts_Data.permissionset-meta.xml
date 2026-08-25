@@ -10,11 +10,16 @@
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Benchmark_Code__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Benchmark_Value__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Buyer_Benchmark_Value__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Buyer_Pricing_Date__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Buy_Unrounded__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Evidence_Hash__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Price_Status__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Pricing_Date__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Pricing_Position__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Sell_Unrounded__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Supplier_Benchmark_Value__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Line_Item__c.DON_Supplier_Pricing_Date__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Master_Contract_Charge_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>
     <hasActivationRequired>false</hasActivationRequired>

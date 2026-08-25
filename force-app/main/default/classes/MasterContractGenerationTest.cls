@@ -192,6 +192,11 @@ private class MasterContractGenerationTest {
         price.benchmarkDate = Date.today();
         price.benchmarkCode = 'PPXDK00';
         price.benchmarkValue = 615.41;
+        price.supplierPricingDate = Date.today().addDays(-2);
+        price.buyerPricingDate = Date.today();
+        price.supplierBenchmarkValue = 612.00;
+        price.buyerBenchmarkValue = 615.41;
+        price.pricingPosition = 'Long';
         price.buyUnrounded = 670.4100001;
         price.sellUnrounded = 670.4100001;
         price.evidenceHash = EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256', Blob.valueOf('evidence-C01')));
@@ -212,6 +217,17 @@ private class MasterContractGenerationTest {
         System.assertEquals(false, applied.get('duplicate'));
         System.assertEquals(200, response.statusCode);
         System.assert(response.responseBody.toString().contains('duplicate'));
+        STEM_Line_Item__c appliedLine = [
+            SELECT DON_Supplier_Pricing_Date__c, DON_Buyer_Pricing_Date__c,
+                DON_Supplier_Benchmark_Value__c, DON_Buyer_Benchmark_Value__c,
+                DON_Pricing_Position__c
+            FROM STEM_Line_Item__c WHERE Id = :line.Id
+        ];
+        System.assertEquals(Date.today().addDays(-2), appliedLine.DON_Supplier_Pricing_Date__c);
+        System.assertEquals(Date.today(), appliedLine.DON_Buyer_Pricing_Date__c);
+        System.assertEquals(Decimal.valueOf('612.00'), appliedLine.DON_Supplier_Benchmark_Value__c);
+        System.assertEquals(Decimal.valueOf('615.41'), appliedLine.DON_Buyer_Benchmark_Value__c);
+        System.assertEquals('Long', appliedLine.DON_Pricing_Position__c);
         System.assertEquals(true, MasterContractInvoiceReadinessService.getBuyerReadiness(String.valueOf(line.STEM__c)).ready);
     }
 

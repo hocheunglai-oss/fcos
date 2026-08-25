@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { calculateMasterContractDonPrice, masterContractDonWindow, masterContractLiveVariances, masterContractPreflight, masterContractQuantitySummary } from '../src/lib/masterContracts.js';
+import { calculateMasterContractSplitPrice, masterContractBenchmark, masterContractDonWindow, masterContractLiveVariances, masterContractPreflight, masterContractPricingPosition, masterContractQuantitySummary } from '../src/lib/masterContracts.js';
 import { sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 
 const EVIDENCE_BUCKET = 'master-contract-evidence';
@@ -367,24 +367,41 @@ export async function getMasterContractEvidenceUrl(body, context) {
 
 export async function masterContractOptions(body, context) {
   const query = text(body?.query, 100);
+  const scope = ['all', 'accounts', 'products', 'ports', 'vessels', 'owners'].includes(body?.scope) ? body.scope : 'all';
+  const role = ['buyer', 'supplier'].includes(body?.role) ? body.role : '';
   const like = query ? `%${soql(query)}%` : '%';
+  const requested = (name) => scope === 'all' || scope === name;
+  const accountTypes = role === 'buyer'
+    ? "('Buyer','Buyer & Supplier')"
+    : role === 'supplier'
+      ? "('Supplier','Buyer & Supplier')"
+      : "('Buyer','Supplier','Buyer & Supplier')";
+  const definitions = [];
+  if (requested('accounts')) definitions.push({ key: 'accounts', soql: `SELECT Id,Name,Company_Code__c,Buyer_Payment_Term__c,Supplier_Payment_Term__c,Is_Agent__c,RecordType.Name FROM Account WHERE Inactive_Suspended__c = false AND RecordType.Name IN ${accountTypes} AND (Name LIKE '${like}' OR Company_Code__c LIKE '${like}') ORDER BY Name LIMIT 100` });
+  if (requested('products')) definitions.push({ key: 'products', soql: `SELECT Id,Name,ProductCode,Family FROM Product2 WHERE IsActive = true AND (Name LIKE '${like}' OR ProductCode LIKE '${like}') ORDER BY Name LIMIT 100` });
+  if (requested('ports')) definitions.push({ key: 'ports', soql: `SELECT Id,Name,Country__c,Offshore__c FROM Port__c WHERE (Name LIKE '${like}' OR Country__c LIKE '${like}') ORDER BY Name LIMIT 100` });
+  if (requested('vessels')) definitions.push({ key: 'vessels', soql: `SELECT Id,Name,IMO__c FROM Vessel__c WHERE Inactive__c = false AND (Name LIKE '${like}' OR IMO__c LIKE '${like}') ORDER BY Name LIMIT 100` });
   const [salesforce, owners] = await Promise.all([
-    sfCompositeQueries([
-      { soql: `SELECT Id,Name,Company_Code__c,Buyer_Payment_Term__c,Supplier_Payment_Term__c,Is_Agent__c FROM Account WHERE Inactive_Suspended__c = false AND (Name LIKE '${like}' OR Company_Code__c LIKE '${like}') ORDER BY Name LIMIT 80`, clean: true, softFail: false, limit: 80 },
-      { soql: `SELECT Id,Name,ProductCode,Family FROM Product2 WHERE IsActive = true AND Name LIKE '${like}' ORDER BY Name LIMIT 80`, clean: true, softFail: false, limit: 80 },
-      { soql: `SELECT Id,Name,Country__c,Offshore__c FROM Port__c WHERE Name LIKE '${like}' ORDER BY Name LIMIT 80`, clean: true, softFail: false, limit: 80 },
-      { soql: `SELECT Id,Name,IMO__c FROM Vessel__c WHERE Inactive__c = false AND (Name LIKE '${like}' OR IMO__c LIKE '${like}') ORDER BY Name LIMIT 80`, clean: true, softFail: false, limit: 80 },
-    ]),
-    context.client.from('user_profiles').select('id,email,full_name,user_type').eq('active', true).in('user_type', ['manager', 'administrator', 'general_manager']).order('full_name'),
+    definitions.length
+      ? sfCompositeQueries(definitions.map((definition) => ({ soql: definition.soql, clean: true, softFail: false, limit: 100 })))
+      : Promise.resolve([]),
+    requested('owners')
+      ? context.client.from('user_profiles').select('id,email,full_name,user_type').eq('active', true).in('user_type', ['manager', 'administrator', 'general_manager']).order('full_name')
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (owners.error) throw owners.error;
-  const [accounts, products, ports, vessels] = salesforce.map((result) => result.records || []);
+  const records = Object.fromEntries(definitions.map((definition, index) => [definition.key, salesforce[index]?.records || []]));
+  const accounts = records.accounts || [];
+  const products = records.products || [];
+  const ports = records.ports || [];
+  const vessels = records.vessels || [];
+  const accountRole = (recordType) => recordType === 'Buyer & Supplier' ? 'buyer_supplier' : recordType === 'Buyer' ? 'buyer' : 'supplier';
   return {
-    accounts: accounts.map((row) => ({ id: row.Id, name: row.Name, clKey: row.Company_Code__c || null, buyerPaymentTerm: row.Buyer_Payment_Term__c || null, supplierPaymentTerm: row.Supplier_Payment_Term__c || null, isAgent: row.Is_Agent__c === true, role: row.Buyer_Payment_Term__c && row.Supplier_Payment_Term__c ? 'buyer_supplier' : row.Buyer_Payment_Term__c ? 'buyer' : row.Supplier_Payment_Term__c ? 'supplier' : 'unclassified' })),
+    accounts: accounts.map((row) => ({ id: row.Id, name: row.Name, clKey: row.Company_Code__c || null, buyerPaymentTerm: row.Buyer_Payment_Term__c || null, supplierPaymentTerm: row.Supplier_Payment_Term__c || null, isAgent: row.Is_Agent__c === true, role: accountRole(row.RecordType?.Name), roleLabel: row.RecordType?.Name || 'Account' })),
     products: products.map((row) => ({ id: row.Id, name: row.Name, code: row.ProductCode || null, family: row.Family || null })),
     ports: ports.map((row) => ({ id: row.Id, name: row.Name, country: row.Country__c || null, offshore: row.Offshore__c === true })),
     vessels: vessels.map((row) => ({ id: row.Id, name: row.Name, imo: row.IMO__c || null })),
-    owners: (owners.data || []).map((row) => ({ id: row.id, name: row.full_name || row.email, email: row.email, userType: row.user_type })),
+    owners: (owners.data || []).filter((row) => !query || `${row.full_name || ''} ${row.email || ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map((row) => ({ id: row.id, name: row.full_name || row.email, email: row.email, userType: row.user_type })),
   };
 }
 
@@ -515,33 +532,58 @@ async function deliveryProductContext(client, contractId, deliveryProductId) {
   const delivery = relations.deliveries.find((row) => row.id === product?.delivery_id);
   const term = relations.products.find((row) => row.id === product?.product_term_id);
   if (!product || !delivery || !term) throw error('The delivery product is unavailable.', 404, 'MASTER_CONTRACT_PRODUCT_NOT_FOUND');
-  return { contract, product, delivery, term, relations };
+  const deliverySnapshot = (contract.current_snapshot?.deliveries || []).find((item) => item.deliveryKey === delivery.delivery_key) || {};
+  const termSnapshot = (contract.current_snapshot?.products || []).find((item) => item.productKey === term.product_key) || {};
+  return { contract, product, delivery, deliverySnapshot, term, termSnapshot, relations };
 }
 
 export async function resolveMasterContractPrice(body, context) {
   const contractId = validUuid(body?.contractId, 'Master Contract');
   const deliveryProductId = validUuid(body?.deliveryProductId, 'delivery product');
   const row = await deliveryProductContext(context.client, contractId, deliveryProductId);
-  assertOwner(context.profile, row.contract, 'resolve DON pricing for this Master Contract');
+  assertOwner(context.profile, row.contract, 'resolve buyer and supplier pricing for this Master Contract');
   const donWindow = masterContractDonWindow(row.delivery.preliminary_eta, row.contract.don_min_days, row.contract.don_max_days);
-  const requestedDate = text(body?.benchmarkDate || row.delivery.don_date, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) throw error('Record a valid Date of Nomination before resolving prices.');
-  const alternate = donWindow && (requestedDate < donWindow.earliest || requestedDate > donWindow.latest);
+  const supplierPricingDate = text(body?.supplierPricingDate || row.deliverySnapshot.supplierPricingDate || row.deliverySnapshot.donDate || row.delivery.don_date, 10);
+  const buyerPricingDate = text(body?.buyerPricingDate || row.deliverySnapshot.buyerPricingDate || row.deliverySnapshot.donDate || row.delivery.don_date, 10);
+  if (![supplierPricingDate, buyerPricingDate].every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))) throw error('Record valid supplier and buyer pricing dates before resolving prices.');
+  const alternate = Boolean(donWindow && [supplierPricingDate, buyerPricingDate].some((value) => value < donWindow.earliest || value > donWindow.latest));
   if (alternate && text(body?.alternatePublicationReason, 2_000).length < 8) throw error('A reason is required when the agreed publication date is outside the DON window.');
-  const { data: publication, error: marketError } = await context.client.from('hedge_market_prices').select('id,price_date,s380,sgo,is_estimate,source,revision').eq('price_date', requestedDate).eq('is_estimate', false).maybeSingle();
+  const requestedDates = [...new Set([supplierPricingDate, buyerPricingDate])];
+  const { data: publications, error: marketError } = await context.client.from('hedge_market_prices').select('id,price_date,s380,s05,sgo,is_estimate,source,revision').in('price_date', requestedDates).eq('is_estimate', false);
   if (marketError) throw marketError;
-  if (!publication) throw error('No complete official MOPS publication exists for the selected DON date.', 409, 'MASTER_CONTRACT_MOPS_UNAVAILABLE');
-  const productKey = row.term.product_key;
-  const benchmarkValue = productKey === 'hsfo' ? publication.s380 : productKey === 'mgo' ? publication.sgo : null;
-  const calculation = calculateMasterContractDonPrice({ productKey, benchmarkValue, conversionFactor: row.term.conversion_factor, buyPremium: row.term.buy_premium, sellPremium: row.term.sell_premium });
-  if (!calculation) throw error('The DON pricing formula cannot be calculated from the official publication.', 409, 'MASTER_CONTRACT_PRICE_INCOMPLETE');
+  const publicationByDate = new Map((publications || []).map((publication) => [publication.price_date, publication]));
+  const supplierPublication = publicationByDate.get(supplierPricingDate);
+  const buyerPublication = publicationByDate.get(buyerPricingDate);
+  if (!supplierPublication || !buyerPublication) throw error('A complete official MOPS publication is required for both pricing dates.', 409, 'MASTER_CONTRACT_MOPS_UNAVAILABLE');
+  const benchmark = masterContractBenchmark({ ...row.termSnapshot, productKey: row.term.product_key, benchmarkCode: row.term.benchmark_code });
+  if (!benchmark) throw error('Select S380 MOPS, S0.5 MOPS, or SGO MOPS before resolving prices.', 409, 'MASTER_CONTRACT_BENCHMARK_UNAVAILABLE');
+  const supplierBenchmarkValue = supplierPublication[benchmark.marketField];
+  const buyerBenchmarkValue = buyerPublication[benchmark.marketField];
+  const calculation = calculateMasterContractSplitPrice({
+    productKey: row.term.product_key,
+    benchmarkKey: benchmark.key,
+    supplierBenchmarkValue,
+    buyerBenchmarkValue,
+    conversionFactor: row.term.conversion_factor,
+    buyPremium: row.term.buy_premium,
+    sellPremium: row.term.sell_premium,
+  });
+  if (!calculation) throw error(`${benchmark.name} pricing cannot be calculated from both official publications.`, 409, 'MASTER_CONTRACT_PRICE_INCOMPLETE');
+  const position = masterContractPricingPosition(supplierPricingDate, buyerPricingDate);
   const evidence = {
-    publicationId: publication.id,
-    benchmarkDate: requestedDate,
+    supplierPublicationId: supplierPublication.id,
+    buyerPublicationId: buyerPublication.id,
+    supplierPricingDate,
+    buyerPricingDate,
+    benchmarkName: benchmark.name,
     benchmarkCode: row.term.benchmark_code,
     benchmarkUnit: row.term.benchmark_unit,
-    benchmarkValue: calculation.benchmarkValue,
+    supplierBenchmarkValue: calculation.supplierBenchmarkValue,
+    buyerBenchmarkValue: calculation.buyerBenchmarkValue,
     conversionFactor: calculation.conversionFactor,
+    positionSide: position.side,
+    positionLabel: position.label,
+    positionDays: position.days,
     buyPremium: Number(row.term.buy_premium),
     sellPremium: Number(row.term.sell_premium),
     buyUnrounded: calculation.buyUnrounded,
@@ -551,21 +593,26 @@ export async function resolveMasterContractPrice(body, context) {
   };
   if (body?.confirm !== true) return { status: 'preview', donWindow, alternate, evidence, evidenceHash: sha256(evidence) };
   const request = { contractId, deliveryProductId, expectedRevision: Number(body?.expectedRevision), evidence, alternatePublicationReason: text(body?.alternatePublicationReason, 2_000) };
-  const { data, error: rpcError } = await context.client.rpc('save_master_contract_price_resolution', {
+  const { data, error: rpcError } = await context.client.rpc('save_master_contract_price_resolution_v2', {
     p_contract_id: contractId,
     p_expected_revision: request.expectedRevision,
     p_delivery_product_id: deliveryProductId,
-    p_benchmark_date: requestedDate,
+    p_supplier_benchmark_date: supplierPricingDate,
+    p_buyer_benchmark_date: buyerPricingDate,
     p_benchmark_code: row.term.benchmark_code,
     p_benchmark_unit: row.term.benchmark_unit,
-    p_benchmark_value: calculation.benchmarkValue,
+    p_supplier_benchmark_value: calculation.supplierBenchmarkValue,
+    p_buyer_benchmark_value: calculation.buyerBenchmarkValue,
     p_conversion_factor: calculation.conversionFactor,
     p_buy_unrounded: calculation.buyUnrounded,
     p_sell_unrounded: calculation.sellUnrounded,
     p_buy_rounded: calculation.buyRounded,
     p_sell_rounded: calculation.sellRounded,
     p_evidence_hash: sha256(evidence),
-    p_official_observation_id: publication.id,
+    p_supplier_official_observation_id: supplierPublication.id,
+    p_buyer_official_observation_id: buyerPublication.id,
+    p_position_side: position.side,
+    p_position_days: position.days,
     p_alternate_publication_reason: request.alternatePublicationReason,
     p_status: 'reviewed',
     p_actor_user_id: context.profile.id,
@@ -581,11 +628,11 @@ export async function applyMasterContractPrice(body, context) {
   const contractId = validUuid(body?.contractId, 'Master Contract');
   const deliveryProductId = validUuid(body?.deliveryProductId, 'delivery product');
   const row = await deliveryProductContext(context.client, contractId, deliveryProductId);
-  assertOwner(context.profile, row.contract, 'apply DON pricing for this Master Contract');
+  assertOwner(context.profile, row.contract, 'apply buyer and supplier pricing for this Master Contract');
   const reviewed = row.relations.prices.find((price) => price.delivery_product_id === deliveryProductId && price.status === 'reviewed');
-  if (!reviewed) throw error('Review the exact DON price before applying it.', 409, 'MASTER_CONTRACT_PRICE_NOT_REVIEWED');
+  if (!reviewed) throw error('Review the exact buyer and supplier pricing evidence before applying it.', 409, 'MASTER_CONTRACT_PRICE_NOT_REVIEWED');
   const lineLink = row.relations.links.find((link) => link.entity_type === 'line_item' && link.external_key === row.product.contract_line_key);
-  if (!lineLink) throw error('Create the Salesforce delivery before applying its DON price.', 409, 'MASTER_CONTRACT_LINE_NOT_CREATED');
+  if (!lineLink) throw error('Create the Salesforce delivery before applying its reviewed pricing.', 409, 'MASTER_CONTRACT_LINE_NOT_CREATED');
   const payload = {
     lineItemId: lineLink.salesforce_id,
     contractLineKey: row.product.contract_line_key,
@@ -594,6 +641,11 @@ export async function applyMasterContractPrice(body, context) {
     benchmarkDate: reviewed.benchmark_date,
     benchmarkCode: reviewed.benchmark_code,
     benchmarkValue: Number(reviewed.benchmark_value),
+    supplierPricingDate: reviewed.supplier_benchmark_date || reviewed.benchmark_date,
+    buyerPricingDate: reviewed.buyer_benchmark_date || reviewed.benchmark_date,
+    supplierBenchmarkValue: Number(reviewed.supplier_benchmark_value ?? reviewed.benchmark_value),
+    buyerBenchmarkValue: Number(reviewed.buyer_benchmark_value ?? reviewed.benchmark_value),
+    pricingPosition: ({ long: 'Long', short: 'Short', matched: 'Matched' })[reviewed.position_side] || 'Matched',
     buyUnrounded: Number(reviewed.buy_unrounded),
     sellUnrounded: Number(reviewed.sell_unrounded),
     evidenceHash: reviewed.evidence_hash,
@@ -614,7 +666,7 @@ export async function applyMasterContractPrice(body, context) {
   if (queued?.status === 'succeeded') return { replay: true, jobId: queued.jobId, applied: true };
   try {
     const salesforce = await sfRequest('/apexrest/fcos/master-contracts/v1/prices', { method: 'POST', body: { idempotencyKey, requestHash, ...payload } });
-    if (salesforce?.applied !== true) throw error('Salesforce did not confirm the DON price update.', 502, 'MASTER_CONTRACT_PRICE_SALESFORCE_INCOMPLETE');
+    if (salesforce?.applied !== true) throw error('Salesforce did not confirm the buyer and supplier price update.', 502, 'MASTER_CONTRACT_PRICE_SALESFORCE_INCOMPLETE');
   } catch (writeError) {
     const uncertain = !writeError?.status || Number(writeError.status) >= 500;
     await context.client.rpc('complete_master_contract_sync', {
@@ -630,27 +682,36 @@ export async function applyMasterContractPrice(body, context) {
     throw writeError;
   }
   const evidence = {
-    benchmarkDate: reviewed.benchmark_date, benchmarkCode: reviewed.benchmark_code,
-    benchmarkUnit: reviewed.benchmark_unit, benchmarkValue: Number(reviewed.benchmark_value),
+    supplierPricingDate: reviewed.supplier_benchmark_date || reviewed.benchmark_date,
+    buyerPricingDate: reviewed.buyer_benchmark_date || reviewed.benchmark_date,
+    benchmarkCode: reviewed.benchmark_code, benchmarkUnit: reviewed.benchmark_unit,
+    supplierBenchmarkValue: Number(reviewed.supplier_benchmark_value ?? reviewed.benchmark_value),
+    buyerBenchmarkValue: Number(reviewed.buyer_benchmark_value ?? reviewed.benchmark_value),
+    positionSide: reviewed.position_side || 'matched', positionDays: Number(reviewed.position_days || 0),
     conversionFactor: Number(reviewed.conversion_factor), buyUnrounded: Number(reviewed.buy_unrounded),
     sellUnrounded: Number(reviewed.sell_unrounded), buyRounded: Number(reviewed.buy_rounded), sellRounded: Number(reviewed.sell_rounded),
   };
   const request = { contractId, deliveryProductId, expectedRevision: Number(body?.expectedRevision), evidence, appliedLineId: lineLink.salesforce_id };
-  const { data, error: rpcError } = await context.client.rpc('save_master_contract_price_resolution', {
+  const { data, error: rpcError } = await context.client.rpc('save_master_contract_price_resolution_v2', {
     p_contract_id: contractId,
     p_expected_revision: request.expectedRevision,
     p_delivery_product_id: deliveryProductId,
-    p_benchmark_date: reviewed.benchmark_date,
+    p_supplier_benchmark_date: reviewed.supplier_benchmark_date || reviewed.benchmark_date,
+    p_buyer_benchmark_date: reviewed.buyer_benchmark_date || reviewed.benchmark_date,
     p_benchmark_code: reviewed.benchmark_code,
     p_benchmark_unit: reviewed.benchmark_unit,
-    p_benchmark_value: reviewed.benchmark_value,
+    p_supplier_benchmark_value: reviewed.supplier_benchmark_value ?? reviewed.benchmark_value,
+    p_buyer_benchmark_value: reviewed.buyer_benchmark_value ?? reviewed.benchmark_value,
     p_conversion_factor: reviewed.conversion_factor,
     p_buy_unrounded: reviewed.buy_unrounded,
     p_sell_unrounded: reviewed.sell_unrounded,
     p_buy_rounded: reviewed.buy_rounded,
     p_sell_rounded: reviewed.sell_rounded,
     p_evidence_hash: reviewed.evidence_hash,
-    p_official_observation_id: reviewed.official_observation_id,
+    p_supplier_official_observation_id: reviewed.supplier_official_observation_id || reviewed.official_observation_id,
+    p_buyer_official_observation_id: reviewed.buyer_official_observation_id || reviewed.official_observation_id,
+    p_position_side: reviewed.position_side || 'matched',
+    p_position_days: Number(reviewed.position_days || 0),
     p_alternate_publication_reason: reviewed.alternate_publication_reason,
     p_status: 'applied',
     p_actor_user_id: context.profile.id,

@@ -22,9 +22,26 @@ export function masterContractLineKey(contractKey, deliveryKey, productKey) {
 }
 
 export const MASTER_CONTRACT_BENCHMARKS = Object.freeze({
-  hsfo: Object.freeze({ code: 'PPXDK00', label: 'S380 MOPS', unit: 'USD/MT', conversionFactor: 1 }),
-  mgo: Object.freeze({ code: 'POABC00', label: 'SGO MOPS', unit: 'USD/bbl', conversionFactor: 7.45 }),
+  s380: Object.freeze({ key: 's380', code: 'PPXDK00', name: 'S380 MOPS', unit: 'USD/MT', conversionFactor: 1, marketField: 's380' }),
+  s05: Object.freeze({ key: 's05', code: 'AMFSA00', name: 'S0.5 MOPS', unit: 'USD/MT', conversionFactor: 1, marketField: 's05' }),
+  sgo: Object.freeze({ key: 'sgo', code: 'POABC00', name: 'SGO MOPS', unit: 'USD/bbl', conversionFactor: 7.45, marketField: 'sgo' }),
 });
+
+const MASTER_CONTRACT_BENCHMARK_BY_CODE = new Map(
+  Object.values(MASTER_CONTRACT_BENCHMARKS).map((benchmark) => [benchmark.code, benchmark]),
+);
+
+export function masterContractBenchmark(value = {}) {
+  const input = typeof value === 'string' ? { benchmarkKey: value } : value;
+  const explicit = MASTER_CONTRACT_BENCHMARKS[input.benchmarkKey]
+    || MASTER_CONTRACT_BENCHMARK_BY_CODE.get(String(input.benchmarkCode || '').trim().toUpperCase());
+  if (explicit) return explicit;
+  const legacyProductKey = String(input.productKey || '').trim().toLowerCase();
+  if (['hsfo', 'hsfo_35', 's380'].includes(legacyProductKey)) return MASTER_CONTRACT_BENCHMARKS.s380;
+  if (['vlsfo', 'vlsfo_05', 's05'].includes(legacyProductKey)) return MASTER_CONTRACT_BENCHMARKS.s05;
+  if (['mgo', 'mgo_10ppm', 'lsmgo', 'sgo'].includes(legacyProductKey)) return MASTER_CONTRACT_BENCHMARKS.sgo;
+  return null;
+}
 
 function numberOrNull(value) {
   if (value === '' || value == null) return null;
@@ -87,23 +104,72 @@ export function masterContractDonWindow(preliminaryEta, minimumDays, maximumDays
   return { earliest: earliest.toISOString().slice(0, 10), latest: latest.toISOString().slice(0, 10) };
 }
 
-export function calculateMasterContractDonPrice({ productKey, benchmarkValue, conversionFactor, buyPremium, sellPremium }) {
-  const benchmark = Number(benchmarkValue);
-  const conversion = Number(conversionFactor ?? MASTER_CONTRACT_BENCHMARKS[productKey]?.conversionFactor ?? 1);
+export function masterContractPricingPosition(supplierPricingDate, buyerPricingDate) {
+  const supplier = new Date(`${supplierPricingDate || ''}T00:00:00Z`);
+  const buyer = new Date(`${buyerPricingDate || ''}T00:00:00Z`);
+  if (Number.isNaN(supplier.getTime()) || Number.isNaN(buyer.getTime())) {
+    return { side: 'unavailable', label: 'Position unavailable', days: null, signedDays: null };
+  }
+  const signedDays = Math.round((buyer.getTime() - supplier.getTime()) / 86_400_000);
+  if (signedDays === 0) return { side: 'matched', label: 'Matched pricing date', days: 0, signedDays: 0 };
+  if (signedDays > 0) return { side: 'long', label: 'Long price exposure', days: signedDays, signedDays };
+  return { side: 'short', label: 'Short price exposure', days: Math.abs(signedDays), signedDays };
+}
+
+export function calculateMasterContractSplitPrice({
+  productKey,
+  benchmarkKey,
+  benchmarkCode,
+  supplierBenchmarkValue,
+  buyerBenchmarkValue,
+  conversionFactor,
+  buyPremium,
+  sellPremium,
+}) {
+  const supplierBenchmark = Number(supplierBenchmarkValue);
+  const buyerBenchmark = Number(buyerBenchmarkValue);
+  const benchmark = masterContractBenchmark({ productKey, benchmarkKey, benchmarkCode });
+  const conversion = Number(conversionFactor ?? benchmark?.conversionFactor ?? 1);
   const buy = Number(buyPremium);
   const sell = Number(sellPremium);
-  if (![benchmark, conversion, buy, sell].every(Number.isFinite) || conversion <= 0) return null;
-  const convertedBenchmark = benchmark * conversion;
-  const buyUnrounded = convertedBenchmark + buy;
-  const sellUnrounded = convertedBenchmark + sell;
+  if (![supplierBenchmark, buyerBenchmark, conversion, buy, sell].every(Number.isFinite) || conversion <= 0) return null;
+  const supplierConvertedBenchmark = supplierBenchmark * conversion;
+  const buyerConvertedBenchmark = buyerBenchmark * conversion;
+  const buyUnrounded = supplierConvertedBenchmark + buy;
+  const sellUnrounded = buyerConvertedBenchmark + sell;
   return {
-    benchmarkValue: benchmark,
+    supplierBenchmarkValue: supplierBenchmark,
+    buyerBenchmarkValue: buyerBenchmark,
     conversionFactor: conversion,
-    convertedBenchmark,
+    supplierConvertedBenchmark,
+    buyerConvertedBenchmark,
     buyUnrounded,
     sellUnrounded,
     buyRounded: Math.round((buyUnrounded + Number.EPSILON) * 100) / 100,
     sellRounded: Math.round((sellUnrounded + Number.EPSILON) * 100) / 100,
+  };
+}
+
+export function calculateMasterContractDonPrice({ productKey, benchmarkKey, benchmarkCode, benchmarkValue, conversionFactor, buyPremium, sellPremium }) {
+  const calculation = calculateMasterContractSplitPrice({
+    productKey,
+    benchmarkKey,
+    benchmarkCode,
+    supplierBenchmarkValue: benchmarkValue,
+    buyerBenchmarkValue: benchmarkValue,
+    conversionFactor,
+    buyPremium,
+    sellPremium,
+  });
+  if (!calculation) return null;
+  return {
+    benchmarkValue: calculation.supplierBenchmarkValue,
+    conversionFactor: calculation.conversionFactor,
+    convertedBenchmark: calculation.supplierConvertedBenchmark,
+    buyUnrounded: calculation.buyUnrounded,
+    sellUnrounded: calculation.sellUnrounded,
+    buyRounded: calculation.buyRounded,
+    sellRounded: calculation.sellRounded,
   };
 }
 
@@ -141,12 +207,14 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   }
   const productKeys = new Set();
   if (!(snapshot.products || []).length) blockers.push({ code: 'PRODUCT_REQUIRED', message: 'Add at least one contracted product.' });
-  for (const product of snapshot.products || []) {
+  for (const [productIndex, product] of (snapshot.products || []).entries()) {
+    const productLabel = product.productName || `Product ${productIndex + 1}`;
     if (!/^[a-z0-9_]{2,40}$/.test(product.productKey || '') || productKeys.has(product.productKey)) blockers.push({ code: 'PRODUCT_KEY_INVALID', productKey: product.productKey, message: 'Every contracted product needs a unique stable product key.' });
     productKeys.add(product.productKey);
-    if (!SF_ID_RE.test(product.salesforceProductId || '')) blockers.push({ code: 'PRODUCT_REQUIRED', productKey: product.productKey, message: `Resolve the exact Salesforce Product for ${product.productName || product.productKey}.` });
+    if (!SF_ID_RE.test(product.salesforceProductId || '')) blockers.push({ code: 'PRODUCT_REQUIRED', productKey: product.productKey, message: `Resolve the exact Salesforce Product for ${productLabel}.` });
+    if (!masterContractBenchmark(product)) blockers.push({ code: 'BENCHMARK_REQUIRED', productKey: product.productKey, message: `Choose S380 MOPS, S0.5 MOPS, or SGO MOPS for ${productLabel}.` });
     const range = quantityRange({ quantityMin: product.contractedMinQty, quantityMax: product.contractedMaxQty });
-    if (range.minimum == null || range.maximum == null || range.minimum < 0 || range.maximum < range.minimum) blockers.push({ code: 'CONTRACTED_QUANTITY_INVALID', productKey: product.productKey, message: `Correct the contracted quantity range for ${product.productName || product.productKey}.` });
+    if (range.minimum == null || range.maximum == null || range.minimum < 0 || range.maximum < range.minimum) blockers.push({ code: 'CONTRACTED_QUANTITY_INVALID', productKey: product.productKey, message: `Correct the contracted quantity range for ${productLabel}.` });
   }
   for (const charge of snapshot.chargeRules || []) {
     const label = charge.chargeName || charge.chargeKey || 'Charge';

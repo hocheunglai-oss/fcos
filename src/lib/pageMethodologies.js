@@ -38,8 +38,8 @@ export const MASTER_CONTRACTS_METHODOLOGY = {
       body: 'Each selected delivery creates one Closed Won Enquiry and one Originated STEM in one all-or-none Salesforce transaction. External delivery, line and charge keys make retries idempotent. Live Salesforce differences are shown as variances and never silently rewrite the approved baseline. Creation stays blocked until exact parties, products, vessels, ports, payment terms, DON rules, owner and Variable Charges configuration are complete.',
     },
     {
-      title: 'DON pricing and invoices',
-      body: 'Prices use the reviewed Date of Nomination publication and the saved contract formula, calculated at full precision and rounded only for Salesforce unit-price fields. Missing publications and unresolved or changed evidence fail closed. Buyer Invoice, Proforma, Credit Note and Supplier Invoice creation remains blocked until every applicable DON price is applied.',
+      title: 'Pricing dates, market position and invoices',
+      body: 'Each product uses one of three named benchmarks: S380 MOPS, S0.5 MOPS or SGO MOPS. Supplier cost and buyer sale may use different reviewed publication dates, making the intervening benchmark exposure visibly Long, Short or Matched. Exact Salesforce parties and operational references are keyword searchable; Account eligibility follows the active Buyer, Supplier or Buyer & Supplier Record Type rather than the presence of payment-term fields. Calculations retain full precision and round only Salesforce unit-price fields. Missing publications and unresolved or changed evidence fail closed, and invoice creation remains blocked until every applicable price is applied.',
     },
   ],
 };

@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronsUpDown,
   ChevronRight,
   ExternalLink,
   FileSignature,
   Loader2,
   Plus,
   RefreshCw,
+  Search,
   Save,
   ShieldCheck,
   Trash2,
@@ -24,6 +26,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -33,6 +43,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -51,7 +66,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MASTER_CONTRACTS_METHODOLOGY } from "@/lib/pageMethodologies";
-import { masterContractLineKey } from "@/lib/masterContracts";
+import {
+  MASTER_CONTRACT_BENCHMARKS,
+  masterContractBenchmark,
+  masterContractLineKey,
+  masterContractPricingPosition,
+} from "@/lib/masterContracts";
 
 const SALESFORCE_ORIGIN = "https://fratellicosulich.lightning.force.com";
 const DEFAULT_SNAPSHOT = Object.freeze({
@@ -68,6 +88,9 @@ const DEFAULT_SNAPSHOT = Object.freeze({
   deliveries: [],
   chargeRules: [],
 });
+const MOPS_BENCHMARK_OPTIONS = Object.values(MASTER_CONTRACT_BENCHMARKS).map(
+  (benchmark) => ({ id: benchmark.key, name: benchmark.name }),
+);
 const formatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -80,8 +103,25 @@ function operationId(prefix) {
   return `${prefix}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 }
 
+function internalProductKey() {
+  const suffix =
+    globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 16) ||
+    `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return `product_${suffix}`.slice(0, 40).toLowerCase();
+}
+
+function deliveryPricingDate(delivery, side) {
+  return delivery?.[`${side}PricingDate`] || delivery?.donDate || "";
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function mergeOptionRows(current = [], incoming = []) {
+  const rows = new Map(current.map((row) => [row.id, row]));
+  for (const row of incoming || []) rows.set(row.id, row);
+  return [...rows.values()];
 }
 
 function displayDate(value) {
@@ -159,7 +199,7 @@ function Field({
   );
 }
 
-function EntitySelect({
+function StaticSelect({
   label,
   value,
   options,
@@ -185,15 +225,168 @@ function EntitySelect({
   );
 }
 
-function SupplierChecklist({ label, value = [], accounts, onChange }) {
+function SearchableEntitySelect({
+  label,
+  value,
+  options,
+  onChange,
+  onSearch,
+  searchScope,
+  searchRole,
+  placeholder = `Select ${label.toLowerCase()}`,
+  searchPlaceholder = `Search ${label.toLowerCase()} by keyword`,
+  emptyLabel = "No matching result.",
+  renderLabel = (row) => row.name,
+  selectedFallback = "",
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const selected = options.find((row) => row.id === value);
+  const needle = query.trim().toLocaleLowerCase();
+  const visibleOptions = options.filter(
+    (row) =>
+      !needle ||
+      row.id === value ||
+      [row.name, row.clKey, row.code, row.imo, row.country, row.email, row.family, row.roleLabel]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(needle),
+  );
+
+  useEffect(() => {
+    if (!open || !onSearch) return undefined;
+    let active = true;
+    const timeout = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        await onSearch({
+          query: query.trim(),
+          scope: searchScope,
+          role: searchRole,
+        });
+      } finally {
+        if (active) setSearching(false);
+      }
+    }, query ? 220 : 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [onSearch, open, query, searchRole, searchScope]);
+
+  const selectedText = selected
+    ? renderLabel(selected)
+    : selectedFallback || placeholder;
+
+  return (
+    <div className="grid min-w-0 gap-1.5">
+      <Label>{label}</Label>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setQuery("");
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between px-3 font-normal"
+          >
+            <span
+              className={`truncate ${!selected && !selectedFallback ? "text-muted-foreground" : ""}`}
+            >
+              {selectedText}
+            </span>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          className="w-[min(420px,calc(100vw-32px))] p-0"
+        >
+          <Command shouldFilter={false}>
+            <CommandInput
+              value={query}
+              onValueChange={setQuery}
+              placeholder={searchPlaceholder}
+            />
+            <CommandList>
+              <CommandEmpty>
+                {searching ? "Searching…" : emptyLabel}
+              </CommandEmpty>
+              <CommandGroup>
+                {visibleOptions.map((row) => (
+                  <CommandItem
+                    key={row.id}
+                    value={row.id}
+                    onSelect={() => {
+                      onChange(row.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                  >
+                    <Check
+                      className={`h-4 w-4 ${row.id === value ? "opacity-100" : "opacity-0"}`}
+                    />
+                    <span className="min-w-0 truncate">{renderLabel(row)}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function SupplierChecklist({
+  label,
+  value = [],
+  accounts,
+  onChange,
+  onSearch,
+}) {
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!onSearch) return undefined;
+    const timeout = window.setTimeout(
+      () => onSearch({ query: query.trim(), scope: "accounts", role: "supplier" }),
+      query ? 220 : 0,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [onSearch, query]);
   const suppliers = accounts.filter((row) => row.role.includes("supplier"));
+  const visibleSuppliers = suppliers.filter((row) => {
+    const needle = query.trim().toLocaleLowerCase();
+    return (
+      !needle ||
+      `${row.name} ${row.clKey || ""}`.toLocaleLowerCase().includes(needle) ||
+      value.includes(row.id)
+    );
+  });
   const selected = new Set(value);
   return (
     <div className="grid gap-2">
       <Label>{label}</Label>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="pl-9"
+          placeholder="Search Supplier Account or CL Key"
+        />
+      </div>
       <div className="grid max-h-36 gap-1 overflow-y-auto rounded-lg border bg-background p-2 md:grid-cols-2">
-        {suppliers.length ? (
-          suppliers.map((supplier) => (
+        {visibleSuppliers.length ? (
+          visibleSuppliers.map((supplier) => (
             <label
               key={supplier.id}
               className="flex items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
@@ -246,14 +439,12 @@ function ContractEditor({
   const [contractKey, setContractKey] = useState("");
   const [title, setTitle] = useState("");
   const [snapshot, setSnapshot] = useState(clone(DEFAULT_SNAPSHOT));
-  const [referenceQuery, setReferenceQuery] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setContractKey(existing?.contractKey || "");
     setTitle(existing?.title || "");
     setSnapshot(clone(existing?.snapshot || DEFAULT_SNAPSHOT));
-    setReferenceQuery("");
   }, [existing, open]);
 
   const chooseAccount = (side, accountId) => {
@@ -265,6 +456,10 @@ function ContractEditor({
         accountId: account.id,
         name: account.name,
         clKey: account.clKey || "",
+        paymentTerm:
+          side === "buyer"
+            ? account.buyerPaymentTerm || ""
+            : account.supplierPaymentTerm || "",
         ...(side === "supplier" ? { confirmed: false } : {}),
       }),
     );
@@ -320,9 +515,11 @@ function ContractEditor({
       products: [
         ...current.products,
         {
-          productKey: `product_${current.products.length + 1}`,
+          productKey: internalProductKey(),
           productName: "",
           salesforceProductId: "",
+          benchmarkKey: "",
+          benchmarkName: "",
           benchmarkCode: "",
           benchmarkUnit: "USD/MT",
           conversionFactor: 1,
@@ -353,6 +550,8 @@ function ContractEditor({
           buyerPaymentTerm: current.parties.buyer.paymentTerm || "",
           supplierPaymentTerm: current.parties.supplier.paymentTerm || "",
           donDate: "",
+          supplierPricingDate: "",
+          buyerPricingDate: "",
           variableChargeSupplierIds: [],
           products: current.products.map((product) => ({
             productKey: product.productKey,
@@ -401,24 +600,6 @@ function ContractEditor({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-6 py-2">
-          <section className="flex flex-col gap-2 rounded-xl border bg-muted/30 p-3 sm:flex-row sm:items-end">
-            <Field
-              label="Search Salesforce references"
-              value={referenceQuery}
-              placeholder="Account, CL Key, Product, Port, Vessel or IMO"
-              onChange={setReferenceQuery}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOptionsQuery(referenceQuery)}
-            >
-              Search references
-            </Button>
-            <span className="pb-2 text-xs text-muted-foreground">
-              Exact Salesforce IDs are retained when results change.
-            </span>
-          </section>
           <section className="grid gap-3 rounded-xl border p-4">
             <h3 className="font-semibold">Identity and parties</h3>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -432,34 +613,44 @@ function ContractEditor({
                 }
               />
               <Field label="Title" value={title} onChange={setTitle} />
-              <EntitySelect
+              <SearchableEntitySelect
                 label="Contract owner"
                 value={snapshot.ownerUserId}
                 options={options.owners}
+                onSearch={onOptionsQuery}
+                searchScope="owners"
                 onChange={(value) =>
                   setSnapshot((current) => ({ ...current, ownerUserId: value }))
                 }
               />
-              <EntitySelect
+              <SearchableEntitySelect
                 label="Buyer"
                 value={snapshot.parties.buyer.accountId}
                 options={options.accounts.filter((row) =>
                   row.role.includes("buyer"),
                 )}
+                onSearch={onOptionsQuery}
+                searchScope="accounts"
+                searchRole="buyer"
                 onChange={(value) => chooseAccount("buyer", value)}
+                selectedFallback={`${snapshot.parties.buyer.name || ""}${snapshot.parties.buyer.clKey ? ` · ${snapshot.parties.buyer.clKey}` : ""}`}
                 renderLabel={(row) =>
-                  `${row.name}${row.clKey ? ` · ${row.clKey}` : ""}`
+                  `${row.name}${row.clKey ? ` · ${row.clKey}` : ""} · ${row.roleLabel}`
                 }
               />
-              <EntitySelect
+              <SearchableEntitySelect
                 label="Supplier"
                 value={snapshot.parties.supplier.accountId}
                 options={options.accounts.filter((row) =>
                   row.role.includes("supplier"),
                 )}
+                onSearch={onOptionsQuery}
+                searchScope="accounts"
+                searchRole="supplier"
                 onChange={(value) => chooseAccount("supplier", value)}
+                selectedFallback={`${snapshot.parties.supplier.name || ""}${snapshot.parties.supplier.clKey ? ` · ${snapshot.parties.supplier.clKey}` : ""}`}
                 renderLabel={(row) =>
-                  `${row.name}${row.clKey ? ` · ${row.clKey}` : ""}`
+                  `${row.name}${row.clKey ? ` · ${row.clKey}` : ""} · ${row.roleLabel}`
                 }
               />
               <Field
@@ -513,7 +704,7 @@ function ContractEditor({
                   )
                 }
               />
-              <EntitySelect
+              <StaticSelect
                 label="Variable Charges mode"
                 value={snapshot.terms.variableCharges.mode}
                 options={[
@@ -536,6 +727,7 @@ function ContractEditor({
                 label="Suppliers requiring manual Variable Charges review for every delivery"
                 value={snapshot.terms.variableCharges.supplierIds}
                 accounts={options.accounts}
+                onSearch={onOptionsQuery}
                 onChange={(value) =>
                   setSnapshot((current) =>
                     setPath(
@@ -571,19 +763,15 @@ function ContractEditor({
             {snapshot.products.map((product, index) => (
               <div
                 key={`${product.productKey}-${index}`}
-                className="grid gap-2 rounded-lg bg-muted/40 p-3 md:grid-cols-4 xl:grid-cols-6"
+                className="grid gap-2 rounded-lg bg-muted/40 p-3 md:grid-cols-3 xl:grid-cols-5"
               >
-                <Field
-                  label="Product key"
-                  value={product.productKey}
-                  onChange={(value) =>
-                    updateProduct(index, { productKey: value })
-                  }
-                />
-                <EntitySelect
+                <SearchableEntitySelect
                   label="Salesforce Product"
                   value={product.salesforceProductId}
                   options={options.products}
+                  onSearch={onOptionsQuery}
+                  searchScope="products"
+                  selectedFallback={product.productName || `Product ${index + 1}`}
                   onChange={(value) => {
                     const row = options.products.find(
                       (item) => item.id === value,
@@ -597,33 +785,27 @@ function ContractEditor({
                     `${row.name}${row.code ? ` (${row.code})` : ""}`
                   }
                 />
-                <Field
-                  label="Benchmark code"
-                  value={product.benchmarkCode}
-                  onChange={(value) =>
-                    updateProduct(index, { benchmarkCode: value })
-                  }
+                <StaticSelect
+                  label="MOPS benchmark"
+                  value={masterContractBenchmark(product)?.key || ""}
+                  options={MOPS_BENCHMARK_OPTIONS}
+                  onChange={(value) => {
+                    const benchmark = MASTER_CONTRACT_BENCHMARKS[value];
+                    updateProduct(index, {
+                      benchmarkKey: benchmark.key,
+                      benchmarkName: benchmark.name,
+                      benchmarkCode: benchmark.code,
+                      benchmarkUnit: benchmark.unit,
+                      conversionFactor: benchmark.conversionFactor,
+                    });
+                  }}
                 />
-                <EntitySelect
-                  label="Benchmark unit"
-                  value={product.benchmarkUnit}
-                  options={[
-                    { id: "USD/MT", name: "USD/MT" },
-                    { id: "USD/bbl", name: "USD/bbl" },
-                  ]}
-                  onChange={(value) =>
-                    updateProduct(index, { benchmarkUnit: value })
-                  }
-                />
-                <Field
-                  label="Conversion"
-                  type="number"
-                  step="0.000001"
-                  value={product.conversionFactor}
-                  onChange={(value) =>
-                    updateProduct(index, { conversionFactor: value })
-                  }
-                />
+                <div className="grid content-center gap-1 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
+                  <span>Native unit: {masterContractBenchmark(product)?.unit || "Select benchmark"}</span>
+                  {masterContractBenchmark(product)?.key === "sgo" ? (
+                    <span>Converted at 7.45 bbl/MT for the pricing formula.</span>
+                  ) : null}
+                </div>
                 <Field
                   label="Buy premium"
                   type="number"
@@ -643,7 +825,7 @@ function ContractEditor({
                   }
                 />
                 <Field
-                  label="Contract total min"
+                  label="Total Quantity Min"
                   type="number"
                   step="0.001"
                   value={product.contractedMinQty}
@@ -652,7 +834,7 @@ function ContractEditor({
                   }
                 />
                 <Field
-                  label="Contract total max"
+                  label="Total Quantity Max"
                   type="number"
                   step="0.001"
                   value={product.contractedMaxQty}
@@ -707,10 +889,13 @@ function ContractEditor({
                       updateDelivery(index, { deliveryKey: value })
                     }
                   />
-                  <EntitySelect
+                  <SearchableEntitySelect
                     label="Vessel"
                     value={delivery.vesselId}
                     options={options.vessels}
+                    onSearch={onOptionsQuery}
+                    searchScope="vessels"
+                    selectedFallback={`${delivery.vesselName || ""}${delivery.vesselImo ? ` · ${delivery.vesselImo}` : ""}`}
                     onChange={(value) => {
                       const row = options.vessels.find(
                         (item) => item.id === value,
@@ -775,10 +960,13 @@ function ContractEditor({
                       )}
                     </div>
                   ) : null}
-                  <EntitySelect
+                  <SearchableEntitySelect
                     label="Port"
                     value={delivery.portId}
                     options={options.ports}
+                    onSearch={onOptionsQuery}
+                    searchScope="ports"
+                    selectedFallback={delivery.portName || ""}
                     onChange={(value) => {
                       const row = options.ports.find(
                         (item) => item.id === value,
@@ -797,7 +985,7 @@ function ContractEditor({
                       updateDelivery(index, { preliminaryEta: value })
                     }
                   />
-                  <EntitySelect
+                  <StaticSelect
                     label="Supply location"
                     value={delivery.supplyLocation}
                     options={["TBD", "Berth", "Anchorage"].map((id) => ({
@@ -809,15 +997,26 @@ function ContractEditor({
                     }
                   />
                   <Field
-                    label="DON date"
+                    label="Supplier pricing date"
                     type="date"
-                    value={delivery.donDate}
+                    value={deliveryPricingDate(delivery, "supplier")}
                     onChange={(value) =>
-                      updateDelivery(index, { donDate: value })
+                      updateDelivery(index, {
+                        supplierPricingDate: value,
+                        donDate: value,
+                      })
                     }
                   />
                   <Field
-                    label="Alternate DON publication reason"
+                    label="Buyer pricing date"
+                    type="date"
+                    value={deliveryPricingDate(delivery, "buyer")}
+                    onChange={(value) =>
+                      updateDelivery(index, { buyerPricingDate: value })
+                    }
+                  />
+                  <Field
+                    label="Pricing-date exception reason"
                     value={delivery.donAlternateReason}
                     placeholder="Required only when the agreed date is outside the DON window"
                     onChange={(value) =>
@@ -838,6 +1037,24 @@ function ContractEditor({
                       updateDelivery(index, { supplierPaymentTerm: value })
                     }
                   />
+                  {(() => {
+                    const position = masterContractPricingPosition(
+                      deliveryPricingDate(delivery, "supplier"),
+                      deliveryPricingDate(delivery, "buyer"),
+                    );
+                    return (
+                      <div className="grid content-center gap-1 rounded-lg border bg-background px-3 py-2 text-xs">
+                        <span className="font-medium">{position.label}</span>
+                        <span className="text-muted-foreground">
+                          {position.days == null
+                            ? "Select both pricing dates."
+                            : position.days === 0
+                              ? "Buyer and supplier use the same publication date."
+                              : `${position.days} calendar day${position.days === 1 ? "" : "s"} of benchmark exposure.`}
+                        </span>
+                      </div>
+                    );
+                  })()}
                   <div className="flex items-end">
                     <Button
                       type="button"
@@ -862,6 +1079,7 @@ function ContractEditor({
                     label="Suppliers requiring manual Variable Charges review for this delivery"
                     value={delivery.variableChargeSupplierIds}
                     accounts={options.accounts}
+                    onSearch={onOptionsQuery}
                     onChange={(value) =>
                       updateDelivery(index, {
                         variableChargeSupplierIds: value,
@@ -880,7 +1098,7 @@ function ContractEditor({
                           <div className="text-sm font-medium">
                             {snapshot.products.find(
                               (row) => row.productKey === allocation.productKey,
-                            )?.productName || allocation.productKey}
+                            )?.productName || `Product ${allocationIndex + 1}`}
                           </div>
                           <div className="font-data text-xs text-muted-foreground">
                             {allocation.contractLineKey}
@@ -959,12 +1177,19 @@ function ContractEditor({
                     }))
                   }
                 />
-                <EntitySelect
+                <SearchableEntitySelect
                   label="Supplier"
                   value={rule.supplierAccountId}
                   options={options.accounts.filter((row) =>
                     row.role.includes("supplier"),
                   )}
+                  onSearch={onOptionsQuery}
+                  searchScope="accounts"
+                  searchRole="supplier"
+                  selectedFallback={rule.supplierName || ""}
+                  renderLabel={(row) =>
+                    `${row.name}${row.clKey ? ` · ${row.clKey}` : ""} · ${row.roleLabel}`
+                  }
                   onChange={(value) => {
                     const account = options.accounts.find(
                       (row) => row.id === value,
@@ -983,22 +1208,33 @@ function ContractEditor({
                     }));
                   }}
                 />
-                <EntitySelect
+                <SearchableEntitySelect
                   label="Product"
                   value={rule.salesforceProductId}
                   options={options.products}
-                  onChange={(value) =>
+                  onSearch={onOptionsQuery}
+                  searchScope="products"
+                  selectedFallback={rule.productName || ""}
+                  renderLabel={(row) =>
+                    `${row.name}${row.code ? ` (${row.code})` : ""}`
+                  }
+                  onChange={(value) => {
+                    const product = options.products.find((row) => row.id === value);
                     setSnapshot((current) => ({
                       ...current,
                       chargeRules: current.chargeRules.map((row, rowIndex) =>
                         rowIndex === index
-                          ? { ...row, salesforceProductId: value }
+                          ? {
+                              ...row,
+                              salesforceProductId: value,
+                              productName: product?.name || row.productName || "",
+                            }
                           : row,
                       ),
-                    }))
-                  }
+                    }));
+                  }}
                 />
-                <EntitySelect
+                <StaticSelect
                   label="Applies"
                   value={rule.appliesWhen}
                   options={[
@@ -1123,7 +1359,7 @@ function DetailOverview({ detail }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            Contracted quantity and allocation
+            Total quantity and allocation
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -1142,7 +1378,7 @@ function DetailOverview({ detail }) {
               {(detail.quantitySummary || []).map((row) => (
                 <TableRow key={row.productKey}>
                   <TableCell className="font-medium">
-                    {row.productName || row.productKey}
+                    {row.productName || "Unnamed product"}
                   </TableCell>
                   <TableCell>
                     {range(row.contractedMinQty, row.contractedMaxQty)}
@@ -1263,12 +1499,19 @@ function DeliveryTable({
                     <TableCell>
                       <div>{displayDate(delivery.preliminaryEta)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {delivery.supplyLocation || "TBD"} · DON{" "}
-                        {displayDate(delivery.donDate)}
+                        {delivery.supplyLocation || "TBD"} · Supplier{" "}
+                        {displayDate(deliveryPricingDate(delivery, "supplier"))} · Buyer{" "}
+                        {displayDate(deliveryPricingDate(delivery, "buyer"))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {masterContractPricingPosition(
+                          deliveryPricingDate(delivery, "supplier"),
+                          deliveryPricingDate(delivery, "buyer"),
+                        ).label}
                       </div>
                     </TableCell>
                     <TableCell className="min-w-56">
-                      {(delivery.products || []).map((product) => (
+                      {(delivery.products || []).map((product, productIndex) => (
                         <div
                           key={product.contractLineKey}
                           className="flex justify-between gap-3"
@@ -1276,7 +1519,7 @@ function DeliveryTable({
                           <span>
                             {detail.contract.snapshot.products.find(
                               (row) => row.productKey === product.productKey,
-                            )?.productName || product.productKey}
+                            )?.productName || `Product ${productIndex + 1}`}
                           </span>
                           <span className="tabular-nums">
                             {range(product.quantityMin, product.quantityMax)}
@@ -1477,19 +1720,27 @@ export default function MasterContracts() {
     }
   }, [invoke]);
 
-  const queryOptions = async (query) => {
-    try {
-      setOptions(
-        await invoke(
+  const queryOptions = useCallback(
+    async ({ query = "", scope = "all", role = "" } = {}) => {
+      try {
+        const result = await invoke(
           "masterContractOptions",
-          { query },
+          { query, scope, role },
           { cache: true, cacheTtlMs: 60_000 },
-        ),
-      );
-    } catch (nextError) {
-      setError(nextError.message);
-    }
-  };
+        );
+        setOptions((current) => ({
+          accounts: mergeOptionRows(current.accounts, result.accounts),
+          products: mergeOptionRows(current.products, result.products),
+          ports: mergeOptionRows(current.ports, result.ports),
+          vessels: mergeOptionRows(current.vessels, result.vessels),
+          owners: mergeOptionRows(current.owners, result.owners),
+        }));
+      } catch (nextError) {
+        setError(nextError.message);
+      }
+    },
+    [invoke],
+  );
 
   const createVessel = async ({ name, imo }) => {
     if (!detail?.contract?.id) return null;
@@ -1689,26 +1940,28 @@ export default function MasterContracts() {
         contractId: detail.contract.id,
         deliveryProductId: product.id,
         expectedRevision: detail.contract.currentRevision,
-        benchmarkDate: delivery.donDate,
+        supplierPricingDate: deliveryPricingDate(delivery, "supplier"),
+        buyerPricingDate: deliveryPricingDate(delivery, "buyer"),
         alternatePublicationReason: delivery.donAlternateReason || "",
         confirm: false,
       });
       const evidence = preview.evidence;
       const accepted = window.confirm(
-        `${evidence.benchmarkCode} ${evidence.benchmarkValue} on ${evidence.benchmarkDate}\nBuy ${evidence.buyUnrounded} → ${evidence.buyRounded}\nSell ${evidence.sellUnrounded} → ${evidence.sellRounded}\n\nConfirm this reviewed DON price?`,
+        `${evidence.benchmarkName}\nSupplier ${evidence.supplierBenchmarkValue} on ${evidence.supplierPricingDate}\nBuyer ${evidence.buyerBenchmarkValue} on ${evidence.buyerPricingDate}\n${evidence.positionLabel}\nBuy ${evidence.buyUnrounded} → ${evidence.buyRounded}\nSell ${evidence.sellUnrounded} → ${evidence.sellRounded}\n\nConfirm this reviewed pricing evidence?`,
       );
       if (accepted) {
         await invoke("masterContractPriceResolve", {
           contractId: detail.contract.id,
           deliveryProductId: product.id,
           expectedRevision: detail.contract.currentRevision,
-          benchmarkDate: delivery.donDate,
+          supplierPricingDate: deliveryPricingDate(delivery, "supplier"),
+          buyerPricingDate: deliveryPricingDate(delivery, "buyer"),
           alternatePublicationReason: delivery.donAlternateReason || "",
           confirm: true,
           idempotencyKey: operationId("master-contract-price-review"),
         });
         setMessage(
-          "DON price evidence reviewed. Apply it to the exact Salesforce line when ready.",
+          "Buyer and supplier pricing evidence reviewed. Apply it to the exact Salesforce line when ready.",
         );
         await loadDetail({ force: true });
       }
@@ -1728,7 +1981,7 @@ export default function MasterContracts() {
         expectedRevision: detail.contract.currentRevision,
         idempotencyKey: operationId("master-contract-price-apply"),
       });
-      setMessage("Reviewed DON price applied to Salesforce.");
+      setMessage("Reviewed buyer and supplier pricing applied to Salesforce.");
       await loadDetail({ force: true });
     } catch (nextError) {
       setError(nextError.message);
@@ -2019,16 +2272,16 @@ export default function MasterContracts() {
                               className="rounded-lg border p-3"
                             >
                               <div className="font-medium">
-                                {product.productName || product.productKey}
+                                {product.productName || "Unnamed product"}
                               </div>
                               <div className="mt-1 font-data text-sm">
-                                {product.benchmarkCode} ({product.benchmarkUnit}
+                                {masterContractBenchmark(product)?.name || "Benchmark not selected"} ({product.benchmarkUnit}
                                 ) × {product.conversionFactor || 1} + buy{" "}
                                 {Number(product.buyPremium).toFixed(2)} / sell{" "}
                                 {Number(product.sellPremium).toFixed(2)}
                               </div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                Contracted{" "}
+                                Total quantity{" "}
                                 {range(
                                   product.contractedMinQty,
                                   product.contractedMaxQty,
