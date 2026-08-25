@@ -755,9 +755,9 @@ async function statementRows({ accountIds = null, accountId = null, scope, curso
   const accountIdSet = new Set(scopedAccountIds.map(idKey));
   if (scope === 'all') {
     if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c IN (${scopedAccountIds.map((scopedAccountId) => `'${soql(scopedAccountId)}'`).join(',')}) LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
+    const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c IN (${scopedAccountIds.map((scopedAccountId) => `'${soql(scopedAccountId)}'`).join(',')}) AND ${creditExposureDeliveryWhere()} LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
     if (result.records.length > MAX_GROUP_OPEN_STEMS) throw serviceError('The Account Statement exceeds the supported delivery-sorted history scope. Narrow the statement filter.', 503, 'ACCOUNT_CREDIT_STATEMENT_LIMIT');
-    const sorted = mergeStems(result.records);
+    const sorted = mergeStems(result.records).filter((stem) => isCreditExposureStemEligible(stem));
     const offset = cursor?.offset || 0;
     const rows = sorted.slice(offset, offset + limit);
     return {
@@ -767,12 +767,12 @@ async function statementRows({ accountIds = null, accountId = null, scope, curso
     };
   }
   if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-  const selectedOpen = openStems.filter((stem) => accountIdSet.has(idKey(stem.Account__c)));
+  const selectedOpen = openStems.filter((stem) => accountIdSet.has(idKey(stem.Account__c)) && isCreditExposureStemEligible(stem));
   let rows = selectedOpen;
   if (scope === 'open_recent') {
     const recentStemIds = unique(recentPayments.map((payment) => payment.STEM__c).filter((id) => SALESFORCE_ID.test(text(id))));
-    const recentStems = recentStemIds.length ? await queryStemsForAccountIds(scopedAccountIds, stemFields, `Id IN (${recentStemIds.map((id) => `'${soql(id)}'`).join(',')})`, 50_000) : [];
-    rows = mergeStems([...selectedOpen, ...recentStems]);
+    const recentStems = recentStemIds.length ? await queryStemsForAccountIds(scopedAccountIds, stemFields, `Id IN (${recentStemIds.map((id) => `'${soql(id)}'`).join(',')}) AND ${creditExposureDeliveryWhere()}`, 50_000) : [];
+    rows = mergeStems([...selectedOpen, ...recentStems]).filter((stem) => isCreditExposureStemEligible(stem));
   } else rows = mergeStems(selectedOpen);
   const offset = cursor?.offset || 0;
   const page = rows.slice(offset, offset + limit);
@@ -1072,7 +1072,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '12',
+    version: '13',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: {

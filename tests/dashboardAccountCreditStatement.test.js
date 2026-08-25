@@ -555,6 +555,18 @@ test('Statement Evidence delivery sorting uses actual date, expected fallback, n
   ]);
 });
 
+test('Statement Evidence cutoff remains absolute for every history scope', async () => {
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: '2025-12-31' }), false);
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: '2026-01-01' }), true);
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: null, Expected_Delivery_Date__c: '2025-12-31' }), false);
+  assert.equal(isCreditExposureStemEligible({ Delivery_Date__c: null, Expected_Delivery_Date__c: '2026-01-01' }), true);
+  const source = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
+  assert.match(source, /scope === 'all'[\s\S]*Account__c IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
+  assert.match(source, /Id IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
+  assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
+  assert.match(source, /version: '13'/);
+});
+
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
   const selected = { Id: accountId, Name: 'Buyer A', CL_Category__c: 'Individual', CL_Individual__c: 100 };
   const openStems = [{ Id: 'a01000000000021AAA', CreatedDate: '2026-01-10T00:00:00Z', Account__c: accountId, QLIK_Receivable_Balance__c: 50 }];
