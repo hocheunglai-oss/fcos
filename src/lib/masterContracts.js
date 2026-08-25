@@ -238,10 +238,12 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
     if (!Array.isArray(variableSuppliers) || variableSuppliers.some((id) => !SF_ID_RE.test(id))) blockers.push({ code: 'VARIABLE_CHARGES_REQUIRED', deliveryKey: delivery.deliveryKey, message: `${label}: complete the Variable Charges selection with exact Supplier Accounts.` });
     if (!(delivery.products || []).length) blockers.push({ code: 'DELIVERY_PRODUCT_REQUIRED', deliveryKey: delivery.deliveryKey, message: `${label}: add at least one contracted product allocation.` });
     for (const product of delivery.products || []) {
-      if (!(snapshot.products || []).some((term) => term.productKey === product.productKey)) blockers.push({ code: 'DELIVERY_PRODUCT_UNKNOWN', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: ${product.productKey || 'the delivery product'} is not an active contract product.` });
-      if (!/^[A-Z0-9][A-Z0-9_-]{5,159}$/.test(product.contractLineKey || '')) blockers.push({ code: 'CONTRACT_LINE_KEY_REQUIRED', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: assign a stable unique line key for ${product.productKey || 'the delivery product'}.` });
+      const term = (snapshot.products || []).find((candidate) => candidate.productKey === product.productKey);
+      const productLabel = term?.productName || 'the delivery product';
+      if (!term) blockers.push({ code: 'DELIVERY_PRODUCT_UNKNOWN', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: the selected delivery product is not an active contract product.` });
+      if (!/^[A-Z0-9][A-Z0-9_-]{5,159}$/.test(product.contractLineKey || '')) blockers.push({ code: 'CONTRACT_LINE_KEY_REQUIRED', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: assign a stable unique line key for ${productLabel}.` });
       const range = quantityRange(product);
-      if (range.minimum == null || range.maximum == null || range.minimum < 0 || range.maximum < range.minimum) blockers.push({ code: 'QUANTITY_INVALID', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: correct the ${product.productKey} quantity range.` });
+      if (range.minimum == null || range.maximum == null || range.minimum < 0 || range.maximum < range.minimum) blockers.push({ code: 'QUANTITY_INVALID', deliveryKey: delivery.deliveryKey, productKey: product.productKey, message: `${label}: correct the ${productLabel} quantity range.` });
     }
   }
   return { ready: blockers.length === 0, blockers };

@@ -260,6 +260,8 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(api, /complete official MOPS publication is required for both pricing dates/);
   assert.match(api, /RecordType\.Name IN/);
   assert.match(api, /save_master_contract_price_resolution_v2/);
+  assert.match(api, /productName:[^\n]+\|\| 'Unnamed product'/);
+  assert.doesNotMatch(api, /productName:[^\n]+\|\| productKey/);
   assert.match(apex, /Savepoint checkpoint = Database\.setSavepoint\(\)/);
   assert.match(apex, /Database\.rollback\(checkpoint\)/);
   assert.match(apex, /StageName = 'Closed Won'/);

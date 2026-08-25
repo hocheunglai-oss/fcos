@@ -220,7 +220,7 @@ export async function getMasterContract(body, context) {
     contract: { ...contractSummary(contract, context.profile), snapshot },
     quantitySummary: Object.entries(quantityByProduct).map(([productKey, values]) => ({
       productKey,
-      productName: snapshot.products.find((product) => product.productKey === productKey)?.productName || productKey,
+      productName: snapshot.products.find((product) => product.productKey === productKey)?.productName || 'Unnamed product',
       contractedMinQty: values.contractedMin,
       contractedMaxQty: values.contractedMax,
       allocatedMinQty: values.allocatedMin,
