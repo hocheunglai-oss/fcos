@@ -46,11 +46,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
     @AuraEnabled(cacheable=false)
     public static Readiness getBuyerReadiness(String stemId) {
         Id parsedStemId = safeId(stemId);
-        if (parsedStemId == null) return blocked('A valid STEM is required to verify Variable Charges.', null, null, true);
+        if (parsedStemId == null) return blocked('Select a valid STEM before checking invoice readiness.', null, null, true);
         try {
             return evaluateBuyer(parsedStemId);
         } catch (Exception ex) {
-            return blocked('Variable Charges readiness could not be verified. Refresh and try again.', parsedStemId, null, true);
+            return blocked('Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.', parsedStemId, null, true);
         }
     }
 
@@ -63,7 +63,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         try {
             return evaluateSupplier(parsedStemId, parsedSupplierId);
         } catch (Exception ex) {
-            return blocked('Supplier Variable Charges readiness could not be verified. Refresh and try again.', parsedStemId, parsedSupplierId, true);
+            return blocked('Supplier Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.', parsedStemId, parsedSupplierId, true);
         }
     }
 
@@ -77,14 +77,31 @@ public without sharing class VariableChargeInvoiceReadinessService {
             return blockedForActionability(actionability, stemId, supplierId, true);
         }
         if (context.stage == null || context.stage.Supplier_Status__c != 'Verified') {
-            return blocked('The assigned Supplier Trader must verify this supplier in Variable Charges before its Supplier Invoice can be created.', stemId, supplierId, true);
+            return blocked('Confirm ' + context.supplier.Name + ' costs in FCOS before creating this Supplier Invoice.', stemId, supplierId, true);
         }
         String currentFingerprint = supplierFingerprint(stemId, supplierId);
         if (String.isBlank(context.stage.Reviewed_Source_Fingerprint__c)
             || context.stage.Reviewed_Source_Fingerprint__c != currentFingerprint) {
-            return blocked('Supplier charge data changed after verification. Reverify this supplier in Variable Charges.', stemId, supplierId, true);
+            return blocked(context.supplier.Name + ' costs changed. Confirm them again in FCOS before creating this Supplier Invoice.', stemId, supplierId, true);
         }
         return withActionability(new Readiness(true, true, null, stemId, supplierId), actionability);
+    }
+
+    public static Readiness evaluateTaskActionability(Id stemId) {
+        List<STEM__c> stems = [
+            SELECT Id, CreatedDate, Delivery_Date__c,
+                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
+                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c,
+                (SELECT Id FROM STEM_Line_Items__r WHERE Cancelled__c = false LIMIT 1)
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
+        if (stems.isEmpty()) return blocked('The STEM could not be found.', stemId, null, true);
+        STEM__c stem = stems[0];
+        if (stem.CreatedDate.date() < STEM_CREATED_FROM) return new Readiness(true, false, null, stemId, null);
+        Actionability actionability = calculateActionability(stem, !stem.STEM_Line_Items__r.isEmpty());
+        return actionability.ready == true
+            ? withActionability(new Readiness(true, true, null, stemId, null), actionability)
+            : blockedForActionability(actionability, stemId, null, true);
     }
 
     public static Readiness evaluateBuyer(Id stemId) {
@@ -135,7 +152,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (supplierReadiness.ready != true) return supplierReadiness;
         }
         if (stem.Variable_Charges_Confirmed__c != true) {
-            return blocked('The Buyer Trader must review buyer pricing and confirm the complete Variable Charges case.', stemId, null, true);
+            return blocked('Approve buyer charges in FCOS before creating the final Buyer Invoice.', stemId, null, true);
         }
         return withActionability(new Readiness(true, true, null, stemId, null), actionability);
     }
@@ -376,7 +393,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.stem.CreatedDate.date() < STEM_CREATED_FROM) {
             context.exactSupplier = true; context.required = false; return context;
         }
-        List<Account> accounts = [SELECT Id, Is_Agent__c, Inactive_Suspended__c FROM Account WHERE Id = :supplierId LIMIT 1];
+        List<Account> accounts = [SELECT Id, Name, Is_Agent__c, Inactive_Suspended__c FROM Account WHERE Id = :supplierId LIMIT 1];
         if (!accounts.isEmpty()) context.supplier = accounts[0];
         context.exactSupplier = exactSupplierIds(stemId).contains(supplierId) && context.supplier != null && context.supplier.Inactive_Suspended__c != true;
         String externalKey = pairKey(stemId, supplierId);
@@ -430,12 +447,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     private static String actionabilityReason(Actionability actionability) {
         if (actionability == null || actionability.deliveryRequired == true) {
-            return 'Product-bearing Variable Charges may be verified only after the Salesforce Delivery Date.';
+            return 'Add the Salesforce Delivery Date. The final-charge task becomes available the following day.';
         }
         return actionability.actionableOn == null
-            ? 'Extra-cost-only Variable Charges readiness could not be calculated from the schedule or Enquiry Created Date.'
-            : 'Extra-cost-only Variable Charges become actionable on ' + String.valueOf(actionability.actionableOn)
-                + ', one calendar day after the latest schedule basis.';
+            ? 'Add an ETA, ETB, ETCD or ETD schedule date so the final-charge task can be scheduled.'
+            : 'The final-charge task is available from ' + String.valueOf(actionability.actionableOn) + '.';
     }
 
     private static Readiness withActionability(Readiness readiness, Actionability actionability) {

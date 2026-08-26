@@ -29,7 +29,11 @@ test('Reconfirm workspace groups supplier work by STEM and avoids the flat datat
   assert.match(template, /Reconfirm suppliers and final charges/);
   assert.match(template, /STEM reconfirmation messages/);
   assert.match(template, /CIA supplier reconfirmation/);
-  assert.match(template, /Final supplier charges verification/);
+  assert.match(template, /Who must confirm final supplier charges\?/);
+  assert.match(controller, /Review required before supplier invoice/);
+  assert.match(template, /Save review requirements/);
+  assert.match(controller, /Automatically required/);
+  assert.match(controller, /Needs assignment/);
   assert.match(template, /for:each=\{supplierCiaGroups\}/);
   assert.match(template, /for:each=\{variableChargeGroups\}/);
   assert.doesNotMatch(template, /lightning-datatable/);

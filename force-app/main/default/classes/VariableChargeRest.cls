@@ -53,11 +53,11 @@ global without sharing class VariableChargeRest {
     private static ResponseBody verifySupplier(Id stemId, RequestBody body) {
         if (String.isBlank(body.supplierId) || String.isBlank(body.verifierEmail)) throw requestError('An exact supplier and verifier email are required.');
         Id supplierId = Id.valueOf(body.supplierId);
-        STEM__c stem = [SELECT Id, LastModifiedDate, Delivery_Date__c FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
+        STEM__c stem = [SELECT Id, LastModifiedDate FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
         assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
         if (!VariableChargeInvoiceReadinessService.exactSupplierIds(stemId).contains(supplierId)) throw requestError('The selected Account is not an exact active supplier on this STEM.');
         if (!VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId).contains(supplierId)) throw requestError('This supplier is not currently required in Variable Charges.');
-        if (stem.Delivery_Date__c == null || stem.Delivery_Date__c >= Date.today()) throw requestError('Final supplier charges may be verified only after the STEM Delivery Date.');
+        assertTaskActionable(stemId);
         if (String.isBlank(body.gmOverrideReason)) assertSupplierTrader(stemId, supplierId, body.verifierEmail);
         else if (body.gmOverrideReason.trim().length() < 5) throw requestError('A GM/Admin override reason of at least 5 characters is required.');
 
@@ -94,9 +94,9 @@ global without sharing class VariableChargeRest {
     }
 
     private static ResponseBody confirmBuyer(Id stemId, RequestBody body) {
-        STEM__c stem = [SELECT Id, LastModifiedDate, Delivery_Date__c, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
+        STEM__c stem = [SELECT Id, LastModifiedDate, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
         assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
-        if (stem.Delivery_Date__c == null || stem.Delivery_Date__c >= Date.today()) throw requestError('Variable Charges may be confirmed only after the STEM Delivery Date.');
+        assertTaskActionable(stemId);
         for (Id supplierId : VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId)) {
             VariableChargeInvoiceReadinessService.Readiness readiness = VariableChargeInvoiceReadinessService.evaluateSupplier(stemId, supplierId);
             if (readiness.ready != true) throw requestError(readiness.reason);
@@ -137,6 +137,12 @@ global without sharing class VariableChargeRest {
             }
         }
         if (resolved.size() != 1 || !resolved.contains(normalizeEmail(verifierEmail))) throw requestError('Only the resolved Supplier Trader may verify this supplier.');
+    }
+
+    private static void assertTaskActionable(Id stemId) {
+        VariableChargeInvoiceReadinessService.Readiness readiness =
+            VariableChargeInvoiceReadinessService.evaluateTaskActionability(stemId);
+        if (readiness.ready != true) throw requestError(readiness.reason);
     }
 
     private static ResponseBody baseResponse(Id stemId, Id supplierId) {

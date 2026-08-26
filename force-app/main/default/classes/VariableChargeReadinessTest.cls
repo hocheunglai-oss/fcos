@@ -121,11 +121,38 @@ private class VariableChargeReadinessTest {
         System.assertEquals(Date.newInstance(2026, 8, 3), result.actionableOn);
     }
 
+    @IsTest
+    static void taskActionabilityUsesTheSameProductAndScheduleRules() {
+        STEM__c stem = [SELECT Id FROM STEM__c LIMIT 1];
+        List<STEM_Line_Item__c> lines = [SELECT Id, Cancelled__c FROM STEM_Line_Item__c WHERE STEM__c = :stem.Id];
+        ContextManager.skipTriggers = true;
+        try {
+            for (STEM_Line_Item__c line : lines) line.Cancelled__c = true;
+            update lines;
+            update new STEM__c(
+                Id = stem.Id,
+                Delivery_Date__c = null,
+                ETA_End_Date__c = Date.today().addDays(-1)
+            );
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        VariableChargeInvoiceReadinessService.Readiness readiness =
+            VariableChargeInvoiceReadinessService.evaluateTaskActionability(stem.Id);
+        System.assertEquals(true, readiness.ready);
+        System.assertEquals(false, readiness.deliveryRequired);
+        System.assertEquals('latest_schedule_date', readiness.actionBasis);
+        System.assertEquals(Date.today().addDays(-1), readiness.actionBasisDate);
+        System.assertEquals(Date.today(), readiness.actionableOn);
+    }
+
     private static void assertRequiredFlow(Map<String, Id> ids) {
         VariableChargeInvoiceReadinessService.Readiness supplier = VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier'));
         System.assertEquals(false, supplier.ready);
         System.assertEquals(true, supplier.requiresVariableChargeReview);
-        System.assert(supplier.reason.contains('Supplier Trader'));
+        System.assert(supplier.reason.contains('Confirm'));
+        System.assert(supplier.reason.contains('costs in FCOS'));
 
         verifyStage(ids);
         System.assertEquals(true, VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier')).ready);

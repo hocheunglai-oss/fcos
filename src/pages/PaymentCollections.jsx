@@ -105,6 +105,20 @@ export default function PaymentCollections() {
   const changeTab = (tab) => {
     const next = new URLSearchParams(searchParams);
     next.set('tab', tab);
+    if (tab !== 'variable-charges') next.delete('stemId');
+    setSearchParams(next, { replace: true });
+  };
+
+  const openVariableChargeTask = (stemId) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'variable-charges');
+    next.set('stemId', stemId);
+    setSearchParams(next);
+  };
+
+  const closeVariableChargeTask = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('stemId');
     setSearchParams(next, { replace: true });
   };
 
@@ -210,7 +224,7 @@ export default function PaymentCollections() {
 
       {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
       {activeTab === 'incoming' && <IncomingPayments embedded reconciliationItems={reconciliation?.items || []} />}
-      {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} />}
+      {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} onTaskOpen={openVariableChargeTask} onTaskClose={closeVariableChargeTask} />}
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">
           <div className="flex flex-wrap items-start justify-between gap-3">

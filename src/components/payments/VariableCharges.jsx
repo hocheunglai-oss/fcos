@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
+  Circle,
+  CircleDot,
   ChevronRight,
   ClipboardCheck,
   FileText,
@@ -33,11 +36,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 const VIEWS = [
-  { id: 'needs_action', label: 'Needs Action', tone: 'border-amber-300 bg-amber-50 text-amber-900' },
-  { id: 'awaiting_delivery', label: 'Awaiting Delivery / Schedule', tone: 'border-sky-300 bg-sky-50 text-sky-900' },
+  { id: 'my_tasks', label: 'My Tasks', tone: 'border-blue-300 bg-blue-50 text-blue-900' },
+  { id: 'waiting', label: 'Waiting', tone: 'border-amber-300 bg-amber-50 text-amber-900' },
   { id: 'ready_for_invoice', label: 'Ready for Invoice', tone: 'border-emerald-300 bg-emerald-50 text-emerald-900' },
-  { id: 'post_invoice_changes', label: 'Post-Invoice Changes', tone: 'border-rose-300 bg-rose-50 text-rose-900' },
   { id: 'completed', label: 'Completed', tone: 'border-slate-300 bg-slate-50 text-slate-800' },
+  { id: 'all_cases', label: 'All Cases', tone: 'border-slate-300 bg-slate-50 text-slate-800' },
 ];
 
 const BUYER_CHARGE_DECISIONS = [
@@ -83,6 +86,7 @@ function formatDate(value) {
 }
 
 function formatMoney(value, currency) {
+  if (value == null || value === '') return '—';
   const amount = Number(value);
   if (!Number.isFinite(amount)) return '—';
   return `${currency || ''} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
@@ -109,12 +113,6 @@ function actionBasisLabel(caseRow) {
   return 'Action basis';
 }
 
-function Actionability({ caseRow, compact = false }) {
-  const basisDate = valueOf(caseRow, ['actionBasisDate', 'action_basis_date', 'deliveryDate', 'delivery_date']);
-  const actionableOn = valueOf(caseRow, ['actionableOn', 'actionable_on']);
-  return <div className={compact ? '' : 'min-w-[150px]'}><div className="font-medium">{actionBasisLabel(caseRow)} · {formatDate(basisDate)}</div><div className="mt-0.5 text-xs text-muted-foreground">Actionable {formatDate(actionableOn)}</div></div>;
-}
-
 function StemIdentity({ caseRow, onOpenStem }) {
   const stemId = caseStemId(caseRow);
   const reference = caseStemReference(caseRow);
@@ -123,7 +121,12 @@ function StemIdentity({ caseRow, onOpenStem }) {
 
 function caseStatus(caseRow) {
   const status = text(valueOf(caseRow, ['status', 'caseStatus', 'case_status']));
-  return VIEWS.find((view) => view.id === status)?.label || status || 'Needs Action';
+  if (status === 'post_invoice_changes') return 'Invoice already issued—action required';
+  if (status === 'awaiting_delivery') return 'Waiting';
+  if (status === 'needs_action') return 'In review';
+  if (status === 'ready_for_invoice') return 'Ready for Invoice';
+  if (status === 'completed') return 'Completed';
+  return VIEWS.find((view) => view.id === status)?.label || status || 'In review';
 }
 
 function normalizeReviewRows(lineItems = [], extraCosts = []) {
@@ -136,6 +139,7 @@ function normalizeReviewRows(lineItems = [], extraCosts = []) {
 function initialReview(row) {
   const item = row.item || {};
   return {
+    outcome: '',
     reviewed: item.reviewed === true,
     buyerChargeDecision: text(valueOf(item, ['buyerChargeDecision', 'buyer_charge_decision'])),
     referenceOrNote: text(valueOf(item, ['referenceOrNote', 'reference_or_note', 'reviewNote', 'review_note'])),
@@ -187,9 +191,21 @@ function changeKey(item) {
   return JSON.stringify(item);
 }
 
-export default function VariableCharges({ onOpenStem = null, initialStemId = '' }) {
+function scrollContainerFor(element) {
+  let current = element?.parentElement;
+  while (current) {
+    const overflowY = globalThis.getComputedStyle?.(current)?.overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return current;
+    current = current.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+export default function VariableCharges({ onOpenStem = null, initialStemId = '', onTaskOpen = null, onTaskClose = null }) {
   const openedInitialStemId = useRef('');
-  const [view, setView] = useState('needs_action');
+  const returnFocusRef = useRef(null);
+  const returnScrollRef = useRef({ element: null, top: 0 });
+  const [view, setView] = useState('my_tasks');
   const [cases, setCases] = useState([]);
   const [counts, setCounts] = useState({});
   const [capabilities, setCapabilities] = useState({});
@@ -213,6 +229,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
   const [gmActionReason, setGmActionReason] = useState('');
   const [activeSupplierId, setActiveSupplierId] = useState('');
   const [supplierSavingId, setSupplierSavingId] = useState('');
+  const [supplierReviewNotes, setSupplierReviewNotes] = useState({});
+  const [buyerReviewNote, setBuyerReviewNote] = useState('');
+  const [showAllBuyerRows, setShowAllBuyerRows] = useState(false);
 
   const loadCases = useCallback(async ({ force = false } = {}) => {
     if (force) setRefreshing(true);
@@ -268,6 +287,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
     setGmDraft({ assigneeProfileId: text(valueOf(nextDetail.case, ['assigneeProfileId', 'assignee_profile_id'])), reason: '' });
     setPostResolution({ resolution: 'no_adjustment', reference: '', note: '' });
     setGmActionReason('');
+    setSupplierReviewNotes({});
+    setBuyerReviewNote('');
+    setShowAllBuyerRows(false);
     const requirements = Array.isArray(nextDetail.case?.supplierRequirements) ? nextDetail.case.supplierRequirements : [];
     setActiveSupplierId(text(requirements.find((row) => row.canVerify)?.supplierId || requirements[0]?.supplierId));
     setDetailLoading(false);
@@ -275,17 +297,36 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
 
   useEffect(() => {
     const stemId = text(initialStemId);
-    if (!stemId || openedInitialStemId.current === stemId) return;
+    if (!stemId) {
+      if (openedInitialStemId.current && selectedStemId && !saving && !supplierSavingId && !gmSaving && !postSaving) {
+        openedInitialStemId.current = '';
+        setSelectedStemId('');
+        setDetail(null);
+        setDetailError('');
+        setSaveError('');
+        requestAnimationFrame(() => {
+          const snapshot = returnScrollRef.current;
+          if (snapshot.element) snapshot.element.scrollTop = snapshot.top;
+          returnFocusRef.current?.focus?.({ preventScroll: true });
+        });
+      }
+      return;
+    }
+    if (openedInitialStemId.current === stemId) return;
     openedInitialStemId.current = stemId;
     setSelectedStemId(stemId);
     loadDetail(stemId);
-  }, [initialStemId, loadDetail]);
+  }, [gmSaving, initialStemId, loadDetail, postSaving, saving, selectedStemId, supplierSavingId]);
 
-  const openDetail = (caseRow) => {
+  const openDetail = (caseRow, event) => {
     const stemId = caseStemId(caseRow);
     if (!stemId) return;
+    returnFocusRef.current = event?.currentTarget || document.activeElement;
+    const scrollElement = scrollContainerFor(returnFocusRef.current);
+    returnScrollRef.current = { element: scrollElement, top: scrollElement?.scrollTop || 0 };
     setSelectedStemId(stemId);
     loadDetail(stemId);
+    onTaskOpen?.(stemId);
   };
 
   const closeDetail = () => {
@@ -295,6 +336,13 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
     setDetailError('');
     setSaveError('');
     setGmOpen(false);
+    openedInitialStemId.current = '';
+    onTaskClose?.();
+    requestAnimationFrame(() => {
+      const snapshot = returnScrollRef.current;
+      if (snapshot.element) snapshot.element.scrollTop = snapshot.top;
+      returnFocusRef.current?.focus?.({ preventScroll: true });
+    });
   };
 
   const effectiveCapabilities = { ...capabilities, ...(detail?.capabilities || {}) };
@@ -307,7 +355,6 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
   const supplierRequirements = Array.isArray(activeCase.supplierRequirements) ? activeCase.supplierRequirements : [];
   const activeSupplierStage = supplierRequirements.find((row) => text(row.supplierId) === activeSupplierId) || null;
   const canSupplierEdit = activeSupplierStage?.canVerify === true || (canGmOverride && text(gmActionReason).length >= 5);
-  const canEdit = canEditNormally || canSupplierEdit || canGmOverride;
   const allSuppliersVerified = supplierRequirements.length > 0 && supplierRequirements.every((row) => row.status === 'Verified');
   const canBuyerConfirm = allSuppliersVerified && (effectiveCapabilities.canBuyerConfirm === true || canEditNormally || (canGmOverride && text(gmActionReason).length >= 5));
   const canResolvePostInvoice = effectiveCapabilities.canResolvePostInvoice === true
@@ -321,7 +368,6 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
     : Array.isArray(effectiveCapabilities.assigneeOptions)
     ? effectiveCapabilities.assigneeOptions
     : Array.isArray(activeCase.assigneeOptions) ? activeCase.assigneeOptions : [];
-  const supplierName = text(valueOf(activeCase, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'])) || 'Exact variable-charge supplier';
   const supplierPaymentTerm = text(valueOf(activeCase, ['supplierPaymentTerm', 'supplier_payment_term', 'paymentTerm', 'payment_term'])) || 'Inherited from supplier';
   const supplierAccounts = Array.isArray(activeCase.supplierAccounts) ? activeCase.supplierAccounts : [];
 
@@ -348,9 +394,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
     const problems = [];
     for (const row of reviewRows) {
       const review = reviews[row.key] || {};
-      if (review.reviewed !== true) problems.push(`${itemLabel(row)} has not been marked reviewed.`);
       if (!['include', 'exclude'].includes(review.buyerChargeDecision)) problems.push(`${itemLabel(row)} needs a buyer-charge decision.`);
-      if (!text(review.referenceOrNote) && !(review.evidenceDocumentIds || []).length) problems.push(`${itemLabel(row)} needs a reference/note or Salesforce File evidence.`);
     }
     for (const draft of addDrafts) {
       if (!text(draft.productId)) problems.push('Each new STEM Charge needs an active Product.');
@@ -360,22 +404,22 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       if (!text(draft.buyerPrice) || !(Number(draft.buyerPrice) >= 0)) problems.push('Each new STEM Charge needs a valid buyer price.');
       if (draft.pricingType === 'per_unit' && !(Number(draft.quantity) > 0)) problems.push('Each per-unit STEM Charge needs a positive quantity.');
       if (draft.pricingType === 'per_unit' && !text(draft.unitOfMeasure)) problems.push('Each per-unit STEM Charge needs a unit of measure.');
-      if (draft.reviewed !== true) problems.push('Each new STEM Charge must be marked reviewed.');
-      if (!['include', 'exclude'].includes(draft.buyerChargeDecision)) problems.push('Each new STEM Charge needs a buyer-charge decision.');
-      if (!text(draft.referenceOrNote) && !(draft.evidenceDocumentIds || []).length) problems.push('Each new STEM Charge needs a reference/note or Salesforce File evidence.');
     }
+    if (!text(buyerReviewNote)) problems.push('Add one case note before approving the buyer charges.');
     if (canGmOverride && !canEditNormally && text(gmActionReason).length < 5) problems.push('A General Manager override reason of at least 5 characters is required.');
     return problems;
-  }, [addDrafts, canEditNormally, canGmOverride, gmActionReason, reviewRows, reviews]);
+  }, [addDrafts, buyerReviewNote, canEditNormally, canGmOverride, gmActionReason, reviewRows, reviews]);
 
   const verifySupplierStage = async (requirement) => {
     const supplierId = text(requirement?.supplierId);
     if (!supplierId || supplierSavingId) return;
     const stageRows = reviewRows.filter((row) => rowSupplierId(row) === supplierId);
+    const supplierReviewNote = text(supplierReviewNotes[supplierId]);
+    if (!supplierReviewNote) { setSaveError('Add one supplier reference or note before confirming the costs.'); return; }
     for (const row of stageRows) {
       const review = reviews[row.key] || {};
-      if (review.reviewed !== true) { setSaveError(`${itemLabel(row)} has not been marked reviewed.`); return; }
-      if (!text(review.referenceOrNote)) { setSaveError(`${itemLabel(row)} needs a reference or review note. Salesforce Files are optional.`); return; }
+      if (!['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`Mark ${itemLabel(row)} as Correct or Needs change.`); return; }
+      if (row.readOnly && review.outcome !== 'correct') { setSaveError(`${itemLabel(row)} is a read-only product line. Correct it in Salesforce, then refresh this task.`); return; }
     }
     const extraCostUpdates = [];
     const cancellations = [];
@@ -414,9 +458,10 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       expectedStemLastModifiedAt: valueOf(activeCase, ['salesforceStemLastModifiedAt', 'salesforce_stem_last_modified_at'], null),
       expectedStageLastModifiedAt: requirement.lastModifiedAt || null,
       operationId: operationId('variable_charge_supplier_verify'),
-      reviews: stageRows.map((row) => ({
-        sourceType: row.sourceType, sourceId: row.sourceId, reviewed: true,
-        referenceOrNote: text(reviews[row.key]?.referenceOrNote) || null,
+      supplierReviewNote,
+      rowOutcomes: stageRows.map((row) => ({
+        sourceId: row.sourceId,
+        outcome: reviews[row.key]?.outcome,
         evidenceDocumentIds: reviews[row.key]?.evidenceDocumentIds || [],
       })),
       extraCostUpdates, extraCostAdds, cancellations,
@@ -451,7 +496,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       },
     } : row));
     setAddDrafts((current) => current.filter((draft) => text(draft.supplierAccountId) !== supplierId));
-    if (extraCostUpdates.length || extraCostAdds.length || cancellations.length) await loadDetail(selectedStemId, { force: true });
+    await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
     setSupplierSavingId('');
   };
 
@@ -476,12 +521,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
         });
       }
     });
-    const serializedReviews = reviewRows.map((row) => ({
-      sourceType: row.sourceType,
+    const rowChargeDecisions = reviewRows.map((row) => ({
       sourceId: row.sourceId,
-      reviewed: true,
-      buyerChargeDecision: reviews[row.key].buyerChargeDecision,
-      referenceOrNote: text(reviews[row.key].referenceOrNote) || null,
+      decision: reviews[row.key].buyerChargeDecision,
       evidenceDocumentIds: reviews[row.key].evidenceDocumentIds || [],
     }));
     setSaving(true);
@@ -492,7 +534,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       expectedFingerprint: valueOf(activeCase, ['fingerprint', 'currentFingerprint', 'current_fingerprint'], null),
       expectedStemLastModifiedAt: valueOf(activeCase, ['salesforceStemLastModifiedAt', 'salesforce_stem_last_modified_at'], null),
       operationId: operationId('variable_charge_confirm'),
-      reviews: serializedReviews,
+      buyerReviewNote: text(buyerReviewNote),
+      rowChargeDecisions,
       extraCostUpdates,
       extraCostAdds: [],
       cancellations: [],
@@ -504,7 +547,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       return;
     }
     setSaving(false);
-    await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases({ force: true })]);
+    await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
   };
 
   const saveGmOverride = async () => {
@@ -560,13 +603,119 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
     await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases({ force: true })]);
   };
 
+  const workflow = activeCase.workflow || {};
+  const currentStep = text(activeCase.currentStep || workflow.currentStep);
+  const financials = activeCase.financialSummary || {};
+  const activeSupplierRows = reviewRows.filter((row) => rowSupplierId(row) === activeSupplierId);
+  const unresolvedBuyerRows = reviewRows.filter((row) => !['include', 'exclude'].includes(reviews[row.key]?.buyerChargeDecision));
+  const visibleBuyerRows = showAllBuyerRows ? reviewRows : unresolvedBuyerRows;
+
+  const variableChargeTask = selectedStemId ? (
+    <div className="space-y-5 p-4 lg:p-8">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Button type="button" variant="ghost" size="sm" className="-ml-2 mb-2 gap-2" onClick={closeDetail} disabled={saving || Boolean(supplierSavingId) || gmSaving || postSaving}>
+            <ArrowLeft className="h-4 w-4" /> Back to Variable Charges
+          </Button>
+          <h1 className="truncate text-xl font-semibold text-foreground">{caseStemName(activeCase)}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{valueOf(activeCase, ['nextAction', 'workflow.nextAction'], 'Review final charges')}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {detail && <Badge variant="outline" className={viewTone(valueOf(activeCase, ['status']))}>{caseStatus(activeCase)}</Badge>}
+          <Button type="button" variant="outline" size="sm" onClick={() => loadDetail(selectedStemId, { force: true })} disabled={detailLoading || saving || Boolean(supplierSavingId)}>
+            <RefreshCw className={cn('mr-2 h-4 w-4', detailLoading && 'animate-spin')} /> Refresh
+          </Button>
+        </div>
+      </div>
+
+      {detailLoading ? <StateBlock icon={Loader2} title="Loading this task" description="Checking the latest Salesforce charges and approvals." /> : detailError ? (
+        <StateBlock icon={AlertTriangle} title="Unable to load this task" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
+      ) : detail ? (
+        <div className="space-y-5">
+          <GuidedProgress currentStep={currentStep} progress={workflow.progress} />
+          <SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} />
+          {saveError && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{saveError}</div>}
+
+          {valueOf(activeCase, ['status']) === 'post_invoice_changes' && (
+            <PostInvoiceResolution value={postResolution} disabled={!canResolvePostInvoice} saving={postSaving} onChange={(patch) => setPostResolution((current) => ({ ...current, ...patch }))} onSave={savePostInvoiceResolution} />
+          )}
+
+          <SupplierProgress requirements={supplierRequirements} activeSupplierId={activeSupplierId} onSelect={setActiveSupplierId} canGmOverride={canGmOverride} />
+
+          {activeSupplierStage && activeSupplierStage.status !== 'Verified' && currentStep !== 'invoice_attention' && (
+            <section className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold">Confirm {activeSupplierStage.supplierName || 'supplier'} costs</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Mark each charge as correct. Open only the rows that need a correction.</p>
+                </div>
+                <Badge variant="outline">Supplier Trader · {activeSupplierStage.assignedSupplierTrader?.name || 'Needs assignment'}</Badge>
+              </div>
+              {!canSupplierEdit && <ReadOnlyNotice caseRow={activeCase} responsiblePerson={activeSupplierStage.assignedSupplierTrader?.name} />}
+              <div className="space-y-3">
+                {activeSupplierRows.map((row) => {
+                  const review = reviews[row.key] || initialReview(row);
+                  const extraId = row.sourceType === 'extra_cost' ? row.sourceId : '';
+                  const draft = extraId ? extraDrafts[extraId] || initialExtraDraft(row.item) : null;
+                  return <SupplierChargeDecision key={row.key} row={row} review={review} draft={draft} disabled={!canSupplierEdit || Boolean(supplierSavingId)} onOutcome={(outcome) => {
+                    updateReview(row.key, { outcome });
+                    if (extraId && outcome === 'correct') updateExtraDraft(extraId, initialExtraDraft(row.item));
+                    if (extraId && outcome === 'cancelled') updateExtraDraft(extraId, { cancelled: true });
+                    if (extraId && outcome === 'changed') updateExtraDraft(extraId, { cancelled: false });
+                  }} onDraftChange={(patch) => updateExtraDraft(extraId, patch)} />;
+                })}
+              </div>
+              {canSupplierEdit && <div className="space-y-3"><Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add supplier charge</Button>{addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId).map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={[]} defaultPaymentTerm={supplierPaymentTerm} supplierStage disabled={!canSupplierEdit} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
+              <div className="space-y-2">
+                <Label htmlFor={`supplier-review-note-${activeSupplierId}`}>Supplier reference or note</Label>
+                <Textarea id={`supplier-review-note-${activeSupplierId}`} value={supplierReviewNotes[activeSupplierId] || ''} onChange={(event) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: event.target.value.slice(0, 1000) }))} placeholder="Invoice reference, supplier confirmation, or short review note" disabled={!canSupplierEdit || Boolean(supplierSavingId)} />
+                <p className="text-xs text-muted-foreground">One note covers all charges for this supplier. Salesforce Files remain optional.</p>
+              </div>
+              {salesforceFiles.length ? <OptionalEvidence files={salesforceFiles} selectedIds={activeSupplierRows[0] ? reviews[activeSupplierRows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canSupplierEdit || Boolean(supplierSavingId)} onToggle={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))} /> : null}
+              <div className="flex justify-end border-t border-border pt-4">
+                <Button type="button" onClick={() => verifySupplierStage(activeSupplierStage)} disabled={!canSupplierEdit || Boolean(supplierSavingId)}>
+                  {supplierSavingId === activeSupplierId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />} Confirm {activeSupplierStage.supplierName || 'supplier'} costs
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {allSuppliersVerified && currentStep === 'buyer_charges' && (
+            <section className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
+              <div><h2 className="text-base font-semibold">Approve buyer charges</h2><p className="mt-1 text-sm text-muted-foreground">Check the totals, decide which charges go to the buyer, and add one case note.</p></div>
+              <FinancialSummary summary={financials} />
+              {!canBuyerConfirm && <ReadOnlyNotice caseRow={activeCase} responsiblePerson={activeCase.assignedBuyerTrader?.name} />}
+              <div className="space-y-3">
+                {visibleBuyerRows.map((row) => <BuyerChargeDecision key={row.key} row={row} review={reviews[row.key] || initialReview(row)} draft={row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null} disabled={!canBuyerConfirm || saving} onDecision={(buyerChargeDecision) => updateReview(row.key, { buyerChargeDecision })} onDraftChange={(patch) => updateExtraDraft(row.sourceId, patch)} />)}
+                {!visibleBuyerRows.length && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">Every charge has a buyer decision.</div>}
+                {reviewRows.length !== unresolvedBuyerRows.length && <Button type="button" variant="ghost" size="sm" onClick={() => setShowAllBuyerRows((value) => !value)}>{showAllBuyerRows ? 'Hide decided rows' : `Show ${reviewRows.length - unresolvedBuyerRows.length} decided rows`}</Button>}
+              </div>
+              <div className="space-y-2"><Label htmlFor="buyer-review-note">Case note</Label><Textarea id="buyer-review-note" value={buyerReviewNote} onChange={(event) => setBuyerReviewNote(event.target.value.slice(0, 1000))} placeholder="Short reason for the buyer-charge decisions" disabled={!canBuyerConfirm || saving} /></div>
+              <div className="flex justify-end border-t border-border pt-4"><Button type="button" onClick={saveConfirmation} disabled={!canBuyerConfirm || saving || Boolean(supplierSavingId)}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />} Approve buyer charges</Button></div>
+            </section>
+          )}
+
+          {valueOf(activeCase, ['status']) === 'ready_for_invoice' && <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /><div><div className="font-semibold">Ready for invoices</div><div className="mt-1 text-sm">Supplier costs and buyer charges are approved.</div></div></div>}
+
+          <AuditDetails caseRow={activeCase} files={salesforceFiles} canGmOverride={canGmOverride} canEditNormally={canEditNormally} gmActionReason={gmActionReason} onGmActionReason={setGmActionReason} onOpenGm={() => setGmOpen(true)} />
+        </div>
+      ) : null}
+
+      <Dialog open={gmOpen} onOpenChange={setGmOpen}>
+        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>General Manager override</DialogTitle><DialogDescription>Temporarily reassign this task. A reason is mandatory and recorded in the audit trail.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="variable-charge-gm-assignee">Temporary assignee</Label><Select value={gmDraft.assigneeProfileId} onValueChange={(assigneeProfileId) => setGmDraft((current) => ({ ...current, assigneeProfileId }))} disabled={gmSaving}><SelectTrigger id="variable-charge-gm-assignee"><SelectValue placeholder="Select active FCOS user" /></SelectTrigger><SelectContent>{assigneeOptions.map((option) => <SelectItem key={valueOf(option, ['id', 'profileId', 'profile_id'])} value={String(valueOf(option, ['id', 'profileId', 'profile_id']))}>{valueOf(option, ['fullName', 'full_name', 'name', 'email'])}</SelectItem>)}</SelectContent></Select></div>{!assigneeOptions.length && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Active reassignment options are unavailable. Refresh the task before attempting an override.</p>}<div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Override reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="Why is temporary reassignment required?" disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || !assigneeOptions.length}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Apply override</Button></DialogFooter></DialogContent>
+      </Dialog>
+    </div>
+  ) : null;
+
+  if (variableChargeTask) return variableChargeTask;
+
   return (
     <div className="space-y-5 p-4 lg:p-8">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"><ClipboardCheck className="h-3.5 w-3.5" /> Payment Collections</div>
           <h1 className="mt-1 text-xl font-semibold text-foreground">Variable Charges</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Review each variable-charge cost after delivery, or after the schedule basis for an extra-cost-only STEM, before the final buyer invoice. Salesforce remains the financial record; FCOS preserves the review and invoice gate.</p>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">See what needs your attention, what is waiting, and what is ready for invoice creation.</p>
         </div>
         <Button type="button" variant="outline" className="gap-2 self-start" onClick={() => loadCases({ force: true })} disabled={refreshing || loading}>
           <RefreshCw className={cn('h-4 w-4', (refreshing || loading) && 'animate-spin')} /> Refresh Salesforce
@@ -592,79 +741,19 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '' 
       ) : !error && (
         <>
           <div className="space-y-3 md:hidden">
-            {cases.map((caseRow) => <CaseCard key={caseStemId(caseRow)} caseRow={caseRow} onOpen={() => openDetail(caseRow)} onOpenStem={onOpenStem} />)}
+            {cases.map((caseRow) => <CaseCard key={caseStemId(caseRow)} caseRow={caseRow} onOpen={(event) => openDetail(caseRow, event)} onOpenStem={onOpenStem} />)}
           </div>
-          <TableShell title="Variable-charge charge cases" meta={`${cases.length.toLocaleString()} cases`} bodyClassName="hidden p-0 md:block">
+          <TableShell title="Variable Charges tasks" meta={`${cases.length.toLocaleString()} cases`} bodyClassName="hidden p-0 md:block">
             <div className="overflow-auto">
               <table className="w-full min-w-[1040px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">STEM</th><th className="px-4 py-3">Variable Charges supplier</th><th className="px-4 py-3">Readiness basis</th><th className="px-4 py-3">Buyer Trader</th><th className="px-4 py-3">Due</th><th className="px-4 py-3">Status</th><th className="px-4 py-3"><span className="sr-only">Open</span></th></tr></thead>
-                <tbody className="divide-y divide-border">{cases.map((caseRow) => <CaseRow key={caseStemId(caseRow)} caseRow={caseRow} onOpen={() => openDetail(caseRow)} onOpenStem={onOpenStem} />)}</tbody>
+                <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">STEM</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3">Progress</th><th className="px-4 py-3">Responsible</th><th className="px-4 py-3">Due / available</th><th className="px-4 py-3">Next action</th><th className="px-4 py-3"><span className="sr-only">Open</span></th></tr></thead>
+                <tbody className="divide-y divide-border">{cases.map((caseRow) => <CaseRow key={caseStemId(caseRow)} caseRow={caseRow} onOpen={(event) => openDetail(caseRow, event)} onOpenStem={onOpenStem} />)}</tbody>
               </table>
             </div>
           </TableShell>
         </>
       )}
 
-      <Dialog open={Boolean(selectedStemId)} onOpenChange={(open) => !open && closeDetail()}>
-        <DialogContent className="flex max-h-[94vh] max-w-6xl flex-col overflow-hidden p-0 sm:max-w-6xl">
-          <DialogHeader className="border-b border-border px-5 py-4 sm:px-6">
-            <div className="flex flex-wrap items-start justify-between gap-3 pr-6">
-              <div>
-                <DialogTitle>Variable Charge Review</DialogTitle>
-                <DialogDescription>{caseStemName(activeCase)} · {supplierName}</DialogDescription>
-              </div>
-              {detail && <Badge variant="outline" className={viewTone(valueOf(activeCase, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(activeCase)}</Badge>}
-            </div>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
-            {detailLoading ? <StateBlock icon={Loader2} title="Loading live charge detail" description="Reading Salesforce rows and evidence." /> : detailError ? (
-              <StateBlock icon={AlertTriangle} title="Unable to load charge detail" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
-            ) : detail && (
-              <div className="space-y-6">
-                <CaseSummary caseRow={activeCase} onOpenStem={onOpenStem} />
-                <SupplierStagePanel requirements={supplierRequirements} activeSupplierId={activeSupplierId} busySupplierId={supplierSavingId} canGmOverride={canGmOverride} onSelect={setActiveSupplierId} onVerify={verifySupplierStage} />
-                {!canEdit && <ReadOnlyNotice caseRow={activeCase} />}
-                {saveError && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{saveError}</div>}
-
-                <section className="space-y-3">
-                  <div><h2 className="text-sm font-semibold">Row-by-row charge review</h2><p className="mt-1 text-xs text-muted-foreground">Supplier Traders verify supplier evidence first. After every required supplier is verified, the Buyer Trader records the buyer-charge decision. Existing line items remain read-only.</p></div>
-                  <div className="space-y-3">{reviewRows.map((row) => {
-                    const belongsToActiveSupplier = rowSupplierId(row) === activeSupplierId;
-                    const supplierStageMode = !canEditNormally && belongsToActiveSupplier;
-                    return <ReviewRow key={row.key} row={row} review={reviews[row.key] || initialReview(row)} files={salesforceFiles} supplierStage={supplierStageMode} disabled={supplierStageMode ? !canSupplierEdit : !canEditNormally} onReviewChange={(patch) => updateReview(row.key, patch)} onEvidenceToggle={(id) => toggleEvidence(row.key, id)} />;
-                  })}</div>
-                </section>
-
-                <section className="space-y-3">
-                  <div><h2 className="text-sm font-semibold">Variable-charge extra costs</h2><p className="mt-1 text-xs text-muted-foreground">Only existing variable-charge extra costs may be changed. Cancelling marks Salesforce <code>Cancelled__c</code>; rows are never deleted.</p></div>
-                  <div className="space-y-3">{(detail.extraCosts || []).map((item, index) => {
-                    const id = rowId(item, 'extra', index);
-                    const belongsToActiveSupplier = text(valueOf(item, ['supplierId', 'supplier_id', 'Supplier__c'])) === activeSupplierId;
-                    return <ExistingExtraCostEditor key={id} item={item} draft={extraDrafts[id] || initialExtraDraft(item)} disabled={canEditNormally ? false : !(canSupplierEdit && belongsToActiveSupplier)} supplierStage={!canEditNormally} buyerStage={canEditNormally} onChange={(patch) => updateExtraDraft(id, patch)} />;
-                  })}</div>
-                  {canSupplierEdit && <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add STEM Charge</Button>}
-                  {!!addDrafts.length && <div className="space-y-3">{addDrafts.map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={salesforceFiles} defaultPaymentTerm={supplierPaymentTerm} supplierStage disabled={!(canSupplierEdit && text(draft.supplierAccountId) === activeSupplierId)} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
-                </section>
-
-                {canGmOverride && !canEditNormally && (
-                  <section className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-4">
-                    <Label htmlFor="variable-charge-gm-action-reason">General Manager action reason</Label>
-                    <Textarea id="variable-charge-gm-action-reason" value={gmActionReason} onChange={(event) => setGmActionReason(event.target.value.slice(0, 1000))} placeholder="Why are you overriding the assigned Buyer Trader for this action?" />
-                    <p className="text-xs text-amber-900">At least five characters are required and the reason is written to the redacted audit event.</p>
-                  </section>
-                )}
-
-                {view === 'post_invoice_changes' || valueOf(activeCase, ['status', 'view', 'queueView', 'queue_view']) === 'post_invoice_changes' ? <PostInvoiceResolution value={postResolution} disabled={!canResolvePostInvoice} saving={postSaving} onChange={(patch) => setPostResolution((current) => ({ ...current, ...patch }))} onSave={savePostInvoiceResolution} /> : null}
-              </div>
-            )}
-          </div>
-          {detail && <DialogFooter className="border-t border-border px-5 py-4 sm:px-6"><Button type="button" variant="outline" onClick={closeDetail}>Close</Button>{canGmOverride && <Button type="button" variant="outline" className="gap-2" onClick={() => setGmOpen(true)}><ShieldCheck className="h-4 w-4" /> GM override</Button>}<Button type="button" onClick={saveConfirmation} disabled={!canBuyerConfirm || saving || detailLoading || Boolean(supplierSavingId)} className="gap-2">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Buyer confirm</Button></DialogFooter>}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={gmOpen} onOpenChange={setGmOpen}>
-        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>General Manager override</DialogTitle><DialogDescription>Temporarily reassign this case. A reason is mandatory and the action is recorded in the audit trail.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="variable-charge-gm-assignee">Temporary assignee</Label><Select value={gmDraft.assigneeProfileId} onValueChange={(assigneeProfileId) => setGmDraft((current) => ({ ...current, assigneeProfileId }))} disabled={gmSaving}><SelectTrigger id="variable-charge-gm-assignee"><SelectValue placeholder="Select active FCOS user" /></SelectTrigger><SelectContent>{assigneeOptions.map((option) => <SelectItem key={valueOf(option, ['id', 'profileId', 'profile_id'])} value={String(valueOf(option, ['id', 'profileId', 'profile_id']))}>{valueOf(option, ['fullName', 'full_name', 'name', 'email'])}</SelectItem>)}</SelectContent></Select></div>{!assigneeOptions.length && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Active reassignment options are unavailable. Refresh the case before attempting an override.</p>}<div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Override reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="Why is temporary reassignment required?" disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || !assigneeOptions.length}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Apply override</Button></DialogFooter></DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -674,38 +763,87 @@ function itemLabel(row) {
 }
 
 function viewTone(value) {
+  if (value === 'post_invoice_changes') return 'border-rose-300 bg-rose-50 text-rose-900';
+  if (value === 'needs_action') return 'border-blue-300 bg-blue-50 text-blue-900';
+  if (value === 'awaiting_delivery') return 'border-amber-300 bg-amber-50 text-amber-900';
   return VIEWS.find((item) => item.id === value)?.tone || 'border-slate-300 bg-slate-50 text-slate-800';
 }
 
 function CaseRow({ caseRow, onOpen, onOpenStem }) {
-  return <tr className="bg-card align-middle"><td className="px-4 py-3"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</td><td className="px-4 py-3"><Actionability caseRow={caseRow} /></td><td className="px-4 py-3">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</td><td className="px-4 py-3">{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false ? <span className="text-muted-foreground">Not assigned</span> : formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</td><td className="px-4 py-3"><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>Review <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
+  const status = valueOf(caseRow, ['status']);
+  return <tr className={cn('bg-card align-middle', status === 'post_invoice_changes' && 'bg-rose-50/60')}><td className="px-4 py-3"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], '—')}</td><td className="px-4 py-3"><Badge variant="outline" className={viewTone(status)}>{currentStepLabel(valueOf(caseRow, ['currentStep', 'workflow.currentStep']))}</Badge></td><td className="px-4 py-3">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</td><td className="px-4 py-3">{queueDate(caseRow)}</td><td className={cn('px-4 py-3 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start' : 'Open'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
 }
 
 function CaseCard({ caseRow, onOpen, onOpenStem }) {
-  return <article className="rounded-xl border border-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], 'Variable Charges supplier')}</p></div><Badge variant="outline" className={viewTone(valueOf(caseRow, ['status', 'view', 'queueView', 'queue_view']))}>{caseStatus(caseRow)}</Badge></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div className="col-span-2"><dt className="text-muted-foreground">Readiness basis</dt><dd className="mt-0.5"><Actionability caseRow={caseRow} compact /></dd></div><div><dt className="text-muted-foreground">Due</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false ? 'Not assigned' : formatDate(valueOf(caseRow, ['dueDate', 'due_date']))}</dd></div><div><dt className="text-muted-foreground">Buyer Trader</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>Review case <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
+  const status = valueOf(caseRow, ['status']);
+  return <article className={cn('rounded-xl border border-border bg-card p-4 shadow-sm', status === 'post_invoice_changes' && 'border-rose-300 bg-rose-50/60')}><div className="flex items-start justify-between gap-3"><div><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], 'Variable Charges supplier')}</p></div><Badge variant="outline" className={viewTone(status)}>{currentStepLabel(valueOf(caseRow, ['currentStep', 'workflow.currentStep']))}</Badge></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Responsible</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</dd></div><div><dt className="text-muted-foreground">Due / available</dt><dd className="mt-0.5 font-medium">{queueDate(caseRow)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Next action</dt><dd className={cn('mt-0.5 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start task' : 'Open task'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
 }
 
-function CaseSummary({ caseRow, onOpenStem }) {
-  return <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="STEM"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></SummaryField><SummaryField label="Variable Charges supplier">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name', 'supplierName', 'supplier_name'], '—')}</SummaryField><SummaryField label="Buyer Trader">{valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'Unassigned')}</SummaryField><SummaryField label="Readiness"><Actionability caseRow={caseRow} compact />{valueOf(caseRow, ['deliveryRequired', 'delivery_required']) === false && <div className="mt-1 text-xs text-muted-foreground">No Variable Charges due date</div>}</SummaryField></div>;
+function currentStepLabel(value) {
+  if (value === 'supplier_costs') return 'Supplier costs';
+  if (value === 'buyer_charges') return 'Buyer charges';
+  if (value === 'ready_for_invoices') return 'Ready for invoices';
+  if (value === 'invoice_attention') return 'Invoice action required';
+  return 'Waiting';
+}
+
+function queueDate(caseRow) {
+  const due = valueOf(caseRow, ['dueDate', 'due_date']);
+  if (due) return formatDate(due);
+  return formatDate(valueOf(caseRow, ['actionableOn', 'actionable_on']));
+}
+
+function GuidedProgress({ currentStep, progress = {} }) {
+  const steps = [
+    { id: 'supplier_costs', label: 'Supplier costs', state: progress.supplierCosts },
+    { id: 'buyer_charges', label: 'Buyer charges', state: progress.buyerCharges },
+    { id: 'ready_for_invoices', label: 'Ready for invoices', state: progress.readyForInvoices },
+  ];
+  return <ol className="grid gap-2 rounded-xl border border-border bg-card p-3 sm:grid-cols-3">{steps.map((step, index) => { const complete = step.state === 'complete'; const active = step.id === currentStep || step.state === 'current'; return <li key={step.id} className={cn('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', active && 'bg-blue-50 text-blue-950')}><span className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold', complete ? 'border-emerald-600 bg-emerald-600 text-white' : active ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 text-slate-500')}>{complete ? <CheckCircle2 className="h-4 w-4" /> : index + 1}</span><span className={cn(active || complete ? 'font-semibold' : 'text-muted-foreground')}>{step.label}</span></li>; })}</ol>;
+}
+
+function SimpleCaseSummary({ caseRow, onOpenStem }) {
+  return <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="STEM"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></SummaryField><SummaryField label="Supplier">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], '—')}</SummaryField><SummaryField label="Buyer Trader">{valueOf(caseRow, ['assignedBuyerTrader.name', 'buyerTraderName'], 'Needs assignment')}</SummaryField><SummaryField label="Due / available">{queueDate(caseRow)}</SummaryField></div>;
 }
 
 function SummaryField({ label, children }) { return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-medium">{children}</div></div>; }
 
-function SupplierStagePanel({ requirements, activeSupplierId, busySupplierId, canGmOverride, onSelect, onVerify }) {
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">Supplier verification</h2><p className="mt-1 text-xs text-muted-foreground">Each assigned Supplier Trader verifies only their exact supplier. The Buyer Trader stage unlocks after every required supplier is verified.</p></div><Badge variant="outline">{requirements.filter((row) => row.status === 'Verified').length} / {requirements.length} verified</Badge></div><div className="grid gap-2">{requirements.map((row) => { const active = text(row.supplierId) === activeSupplierId; const busy = text(row.supplierId) === busySupplierId; const canVerify = row.canVerify === true || canGmOverride; return <div key={row.supplierId} className={cn('flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between', active && 'border-primary bg-primary/[0.03]')}><button type="button" className="min-w-0 text-left" onClick={() => onSelect(text(row.supplierId))}><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{row.supplierName || 'Unavailable supplier'}</span><Badge variant="outline" className={row.status === 'Verified' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : row.status === 'Invalidated' ? 'border-rose-300 bg-rose-50 text-rose-800' : ''}>{row.status || 'Pending'}</Badge><Badge variant="outline">{row.requirementSource || 'Required'}</Badge></div><div className="mt-1 text-xs text-muted-foreground">Supplier Trader: {row.assignedSupplierTrader?.name || 'Unresolved'}{row.assignmentMessage ? ` · ${row.assignmentMessage}` : ''}</div></button><Button type="button" size="sm" variant={active ? 'default' : 'outline'} disabled={!canVerify || busy || Boolean(busySupplierId && !busy)} onClick={() => { onSelect(text(row.supplierId)); onVerify(row); }}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}{row.status === 'Verified' ? 'Reverify supplier' : 'Verify supplier'}</Button></div>; })}</div></section>;
+function SupplierProgress({ requirements, activeSupplierId, onSelect, canGmOverride }) {
+  if (!requirements.length) return null;
+  return <section className="rounded-xl border border-border bg-card p-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Supplier costs</h2><span className="text-xs text-muted-foreground">{requirements.filter((row) => row.status === 'Verified').length} of {requirements.length} confirmed</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{requirements.map((row) => { const active = text(row.supplierId) === activeSupplierId; const status = row.status === 'Verified' ? 'Confirmed' : row.status === 'Invalidated' ? 'Needs review again' : row.assignmentStatus === 'resolved' ? 'To confirm' : 'Needs assignment'; const selectable = row.canVerify === true || canGmOverride; return <button key={row.supplierId} type="button" disabled={!selectable} onClick={() => onSelect(text(row.supplierId))} className={cn('rounded-lg border p-3 text-left transition-colors', active && selectable ? 'border-blue-400 bg-blue-50' : 'border-border', !selectable && 'cursor-default')}><div className="flex items-start justify-between gap-2"><span className="font-medium">{row.supplierName || 'Supplier unavailable'}</span>{row.status === 'Verified' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : active ? <CircleDot className="h-4 w-4 shrink-0 text-blue-600" /> : <Circle className="h-4 w-4 shrink-0 text-slate-400" />}</div><div className="mt-1 text-xs text-muted-foreground">{status} · {row.assignedSupplierTrader?.name || 'No Supplier Trader'}</div></button>; })}</div></section>;
 }
 
-function ReadOnlyNotice({ caseRow }) { return <div className="flex gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>Read-only. This case is assigned to {valueOf(caseRow, ['assigneeName', 'assignee_name', 'buyerTraderName', 'buyer_trader_name'], 'another Buyer Trader')}. Finance and Administrators can view; only the assigned Buyer Trader can confirm, except for a documented General Manager override.</span></div>; }
+function ReadOnlyNotice({ caseRow, responsiblePerson }) { return <div className="flex gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>View only. This step belongs to {responsiblePerson || valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'another user')}.</span></div>; }
 
-function ReviewRow({ row, review, files, supplierStage = false, disabled, onReviewChange, onEvidenceToggle }) {
-  const item = row.item || {};
-  const id = row.sourceId;
-  return <div className="rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className="font-medium">{itemLabel(row)}</span><Badge variant="outline">{row.readOnly ? 'Line item · read-only' : 'Variable-charge extra cost'}</Badge>{(item.cancelled === true || item.Cancelled__c === true) && <Badge variant="outline" className="border-slate-300 bg-slate-50">Cancelled</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">{text(valueOf(item, ['productName', 'product_name', 'Product__r.Name', 'Product2Id__r.Name'])) || 'No product'} · {formatMoney(valueOf(item, ['lineTotalBuy', 'line_total_buy', 'Line_Total_Buy__c', 'totalCost', 'Total_Cost__c', 'unitCost', 'Unit_Cost__c']), valueOf(item, ['currency', 'CurrencyIsoCode']))}</p></div><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={review.reviewed === true} disabled={disabled} onCheckedChange={(checked) => onReviewChange({ reviewed: checked === true })} /> Reviewed</label></div><div className={cn('mt-4 grid gap-3', !supplierStage && 'md:grid-cols-2')}>{!supplierStage && <div className="space-y-2"><Label>Buyer-charge decision</Label><Select value={review.buyerChargeDecision || undefined} onValueChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} disabled={disabled}><SelectTrigger><SelectValue placeholder="Select decision" /></SelectTrigger><SelectContent>{BUYER_CHARGE_DECISIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`variable-charge-reference-${id}`}>Reference or review note</Label><Input id={`variable-charge-reference-${id}`} value={review.referenceOrNote || ''} onChange={(event) => onReviewChange({ referenceOrNote: event.target.value })} placeholder="Reference, explanation, or note" disabled={disabled} /></div></div><div className="mt-3"><div className="text-xs font-medium text-muted-foreground">Salesforce File evidence {files.length ? '(optional when note provided)' : '(none available)'}</div>{files.length ? <div className="mt-2 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex max-w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={(review.evidenceDocumentIds || []).includes(fileId)} disabled={disabled} onCheckedChange={() => onEvidenceToggle(fileId)} /><FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{valueOf(file, ['title', 'fileName', 'name', 'Name'], 'Salesforce File')}</span></label>; })}</div> : null}</div></div>;
+function SupplierChargeDecision({ row, review, draft, disabled, onOutcome, onDraftChange }) {
+  const cost = valueOf(row.item, ['lineCost', 'line_cost', 'totalCost', 'Total_Cost__c', 'fixedCost', 'unitCost']);
+  const needsChange = review.outcome === 'changed' || review.outcome === 'cancelled';
+  return <article className={cn('rounded-lg border p-4', review.outcome === 'correct' ? 'border-emerald-200 bg-emerald-50/40' : needsChange ? 'border-amber-300 bg-amber-50/40' : 'border-border')}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Current supplier cost · {formatMoney(cost, valueOf(row.item, ['currency']))}</div></div><div className="flex rounded-lg border border-border bg-background p-1"><Button type="button" size="sm" variant={review.outcome === 'correct' ? 'default' : 'ghost'} className={cn(review.outcome === 'correct' && 'bg-emerald-600 hover:bg-emerald-700')} disabled={disabled} onClick={() => onOutcome('correct')}><CheckCircle2 className="mr-1.5 h-4 w-4" />Correct</Button><Button type="button" size="sm" variant={needsChange ? 'default' : 'ghost'} className={cn(needsChange && 'bg-amber-600 hover:bg-amber-700')} disabled={disabled} onClick={() => onOutcome('changed')}>Needs change</Button></div></div>{needsChange && (row.readOnly ? <div className="mt-3 rounded-md border border-amber-200 bg-white p-3 text-sm text-amber-900">This product line is read-only here. Correct it in Salesforce, then refresh this task.</div> : <ExistingExtraCostEditor item={row.item} draft={draft} disabled={disabled} supplierStage onChange={(patch) => { onDraftChange(patch); if (patch.cancelled === true) onOutcome('cancelled'); else if (review.outcome === 'cancelled') onOutcome('changed'); }} />)}</article>;
+}
+
+function BuyerChargeDecision({ row, review, draft, disabled, onDecision, onDraftChange }) {
+  const supplierCost = valueOf(row.item, ['lineCost', 'line_cost', 'totalCost', 'Total_Cost__c', 'fixedCost', 'unitCost']);
+  const buyerCharge = valueOf(row.item, ['linePrice', 'line_price', 'totalPrice', 'Total_Price__c', 'fixedPrice', 'unitPrice']);
+  return <article className="rounded-lg border border-border p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Supplier {formatMoney(supplierCost)} · Buyer {formatMoney(buyerCharge)}</div></div><div className="flex rounded-lg border border-border bg-background p-1">{BUYER_CHARGE_DECISIONS.map((option) => <Button key={option.value} type="button" size="sm" variant={review.buyerChargeDecision === option.value ? 'default' : 'ghost'} disabled={disabled} onClick={() => onDecision(option.value)}>{option.value === 'include' ? 'Include' : 'Exclude'}</Button>)}</div></div>{row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include' && draft ? <div className="mt-3 max-w-sm space-y-2"><Label htmlFor={`buyer-price-${row.sourceId}`}>{draft.pricingType === 'fixed' ? 'Buyer charge' : 'Buyer price / unit'}</Label><Input id={`buyer-price-${row.sourceId}`} inputMode="decimal" value={draft.buyerPrice ?? ''} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} disabled={disabled} /></div> : null}</article>;
+}
+
+function FinancialSummary({ summary }) {
+  return <div className="grid gap-3 sm:grid-cols-3"><SummaryAmount label="Supplier-cost total" value={summary.supplierCostTotal} complete={summary.costsComplete} /><SummaryAmount label="Buyer-charge total" value={summary.buyerChargeTotal} complete={summary.chargesComplete} /><SummaryAmount label="Margin" value={summary.margin} complete={summary.costsComplete && summary.chargesComplete} /></div>;
+}
+
+function SummaryAmount({ label, value, complete }) { return <div className="rounded-lg border border-border bg-muted/20 p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-lg font-semibold tabular-nums">{complete ? formatMoney(value) : 'Unavailable'}</div><div className="mt-1 text-[11px] text-muted-foreground">STEM currency</div></div>; }
+
+function OptionalEvidence({ files, selectedIds, disabled, onToggle }) {
+  return <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-medium">Optional Salesforce Files ({files.length})</summary><div className="mt-3 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex max-w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={selectedIds.includes(fileId)} disabled={disabled} onCheckedChange={() => onToggle(fileId)} /><FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{valueOf(file, ['title', 'fileName', 'name', 'Name'], 'Salesforce File')}</span></label>; })}</div></details>;
+}
+
+function AuditDetails({ caseRow, files, canGmOverride, canEditNormally, gmActionReason, onGmActionReason, onOpenGm }) {
+  return <details className="rounded-xl border border-border bg-card"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold">Audit details</summary><div className="space-y-4 border-t border-border p-4 text-sm"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="Available from">{formatDate(valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Based on">{actionBasisLabel(caseRow)}</SummaryField><SummaryField label="Revision">{valueOf(caseRow, ['revision'], 0)}</SummaryField><SummaryField label="Linked files">{files.length}</SummaryField></div>{valueOf(caseRow, ['assignmentMessage']) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">{valueOf(caseRow, ['assignmentMessage'])}</p>}{canGmOverride && <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="font-medium text-amber-950">General Manager controls</div>{!canEditNormally && <div className="space-y-2"><Label htmlFor="variable-charge-gm-action-reason">Action reason</Label><Textarea id="variable-charge-gm-action-reason" value={gmActionReason} onChange={(event) => onGmActionReason(event.target.value.slice(0, 1000))} placeholder="Why are you acting for the assigned trader?" /></div>}<Button type="button" size="sm" variant="outline" onClick={onOpenGm}><ShieldCheck className="mr-2 h-4 w-4" />Temporary reassignment</Button></div>}</div></details>;
 }
 
 function ExistingExtraCostEditor({ item, draft, supplierStage = false, buyerStage = false, disabled, onChange }) {
   const id = rowId(item, 'extra', 0);
-  return <div className="rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">{valueOf(item, ['name', 'Name', 'description', 'Description__c'], 'Variable-charge extra cost')}</div><div className="mt-1 text-xs text-muted-foreground">Existing Salesforce row · {valueOf(item, ['supplierName', 'supplier_name', 'Supplier__r.Name'], 'Exact variable-charge supplier')}</div></div><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={draft.cancelled === true} disabled={disabled || buyerStage || draft.cancelled === true} onCheckedChange={(checked) => onChange({ cancelled: checked === true })} /> Cancel row</label></div>{draft.cancelled ? <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">This will set <code>Cancelled__c</code> to true. The existing Salesforce row remains in history.</div> : <><div className="mt-4 space-y-2"><Label htmlFor={`existing-${id}-description`}>Description</Label><Input id={`existing-${id}-description`} value={draft.description || ''} onChange={(event) => onChange({ description: event.target.value })} disabled={disabled || buyerStage} /></div><ExtraCostFields id={`existing-${id}`} value={draft} disabled={disabled} supplierStage={supplierStage} buyerStage={buyerStage} onChange={onChange} /></>}</div>;
+  return <div className="mt-3 rounded-lg border border-amber-200 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div className="font-medium">Correction</div><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={draft.cancelled === true} disabled={disabled || buyerStage} onCheckedChange={(checked) => onChange({ cancelled: checked === true })} />Cancel this charge</label></div>{draft.cancelled ? <div className="mt-3 rounded-md bg-amber-50 p-2 text-xs text-amber-900">The charge will remain in Salesforce history but will no longer be active.</div> : <><div className="mt-4 space-y-2"><Label htmlFor={`existing-${id}-description`}>Description</Label><Input id={`existing-${id}-description`} value={draft.description || ''} onChange={(event) => onChange({ description: event.target.value })} disabled={disabled || buyerStage} /></div><ExtraCostFields id={`existing-${id}`} value={draft} disabled={disabled} supplierStage={supplierStage} buyerStage={buyerStage} onChange={onChange} /></>}</div>;
 }
 
 function NewExtraCostEditor({ draft, products, supplierAccounts, files, defaultPaymentTerm, supplierStage = false, disabled, onChange, onRemove }) {
@@ -714,7 +852,7 @@ function NewExtraCostEditor({ draft, products, supplierAccounts, files, defaultP
     if (ids.has(fileId)) ids.delete(fileId); else ids.add(fileId);
     onChange({ evidenceDocumentIds: [...ids] });
   };
-  return <div className="rounded-lg border border-dashed border-primary/40 bg-primary/[0.02] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">New STEM Charge</div><div className="mt-1 text-xs text-muted-foreground">The supplier must be the exact required Account; its payment term is inherited server-side.</div></div><Button type="button" variant="ghost" size="sm" onClick={onRemove} disabled={disabled}><X className="mr-1 h-4 w-4" /> Remove</Button></div><div className="mt-4 grid gap-3 md:grid-cols-3"><div className="space-y-2"><Label>Variable Charges supplier</Label><Select value={draft.supplierAccountId || undefined} onValueChange={(supplierAccountId) => onChange({ supplierAccountId })} disabled={disabled || supplierStage}><SelectTrigger><SelectValue placeholder="Select exact Account" /></SelectTrigger><SelectContent>{supplierAccounts.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name || account.id}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Active Product</Label><Select value={draft.productId || undefined} onValueChange={(productId) => onChange({ productId })} disabled={disabled}><SelectTrigger><SelectValue placeholder="Select active product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id', 'productId'])} value={String(valueOf(product, ['id', 'Id', 'productId']))}>{valueOf(product, ['name', 'Name', 'label'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-extra-description-${draft.localId}`}>Description</Label><Input id={`new-extra-description-${draft.localId}`} value={draft.description} onChange={(event) => onChange({ description: event.target.value })} disabled={disabled} /></div></div><ExtraCostFields id={`new-${draft.localId}`} value={{ ...draft, paymentTerm: draft.paymentTerm || defaultPaymentTerm }} disabled={disabled} supplierStage={supplierStage} onChange={onChange} paymentTermReadOnly /><div className={cn('mt-4 grid gap-3', !supplierStage && 'md:grid-cols-3')}><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={draft.reviewed === true} disabled={disabled} onCheckedChange={(checked) => onChange({ reviewed: checked === true })} /> Reviewed</label>{!supplierStage && <div className="space-y-2"><Label>Buyer-charge decision</Label><Select value={draft.buyerChargeDecision || undefined} onValueChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} disabled={disabled}><SelectTrigger><SelectValue placeholder="Select decision" /></SelectTrigger><SelectContent>{BUYER_CHARGE_DECISIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`new-extra-reference-${draft.localId}`}>Reference or review note</Label><Input id={`new-extra-reference-${draft.localId}`} value={draft.referenceOrNote || ''} onChange={(event) => onChange({ referenceOrNote: event.target.value })} disabled={disabled} /></div></div>{files.length ? <div className="mt-3 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={(draft.evidenceDocumentIds || []).includes(fileId)} disabled={disabled} onCheckedChange={() => toggleFile(fileId)} /><FileText className="h-3.5 w-3.5" />{valueOf(file, ['title', 'name'], 'Salesforce File')}</label>; })}</div> : null}</div>;
+  return <div className="rounded-lg border border-dashed border-primary/40 bg-primary/[0.02] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">New supplier charge</div><div className="mt-1 text-xs text-muted-foreground">The payment term is inherited automatically.</div></div><Button type="button" variant="ghost" size="sm" onClick={onRemove} disabled={disabled}><X className="mr-1 h-4 w-4" /> Remove</Button></div><div className="mt-4 grid gap-3 md:grid-cols-3"><div className="space-y-2"><Label>Supplier</Label><Select value={draft.supplierAccountId || undefined} onValueChange={(supplierAccountId) => onChange({ supplierAccountId })} disabled={disabled || supplierStage}><SelectTrigger><SelectValue placeholder="Select supplier" /></SelectTrigger><SelectContent>{supplierAccounts.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name || account.id}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} onValueChange={(productId) => onChange({ productId })} disabled={disabled}><SelectTrigger><SelectValue placeholder="Select product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id', 'productId'])} value={String(valueOf(product, ['id', 'Id', 'productId']))}>{valueOf(product, ['name', 'Name', 'label'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-extra-description-${draft.localId}`}>Description</Label><Input id={`new-extra-description-${draft.localId}`} value={draft.description} onChange={(event) => onChange({ description: event.target.value })} disabled={disabled} /></div></div><ExtraCostFields id={`new-${draft.localId}`} value={{ ...draft, paymentTerm: draft.paymentTerm || defaultPaymentTerm }} disabled={disabled} supplierStage={supplierStage} onChange={onChange} paymentTermReadOnly />{!supplierStage && <div className="mt-4 grid gap-3 md:grid-cols-3"><label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={draft.reviewed === true} disabled={disabled} onCheckedChange={(checked) => onChange({ reviewed: checked === true })} /> Reviewed</label><div className="space-y-2"><Label>Buyer-charge decision</Label><Select value={draft.buyerChargeDecision || undefined} onValueChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} disabled={disabled}><SelectTrigger><SelectValue placeholder="Select decision" /></SelectTrigger><SelectContent>{BUYER_CHARGE_DECISIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-extra-reference-${draft.localId}`}>Reference or review note</Label><Input id={`new-extra-reference-${draft.localId}`} value={draft.referenceOrNote || ''} onChange={(event) => onChange({ referenceOrNote: event.target.value })} disabled={disabled} /></div></div>}{files.length ? <div className="mt-3 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={(draft.evidenceDocumentIds || []).includes(fileId)} disabled={disabled} onCheckedChange={() => toggleFile(fileId)} /><FileText className="h-3.5 w-3.5" />{valueOf(file, ['title', 'name'], 'Salesforce File')}</label>; })}</div> : null}</div>;
 }
 
 function ExtraCostFields({ id, value, disabled, supplierStage = false, buyerStage = false, onChange, paymentTermReadOnly = false }) {

@@ -46,6 +46,7 @@
         <members>VariableChargeInvoiceReadinessService</members>
         <members>VariableChargeReadinessTest</members>
         <members>VariableChargeRest</members>
+        <members>VariableChargeRestTest</members>
         <members>VariableChargeSupplierHandler</members>
         <name>ApexClass</name>
     </types>

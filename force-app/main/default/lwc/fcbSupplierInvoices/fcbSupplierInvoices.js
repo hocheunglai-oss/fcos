@@ -100,7 +100,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       } else {
         this.supplierVariableChargeReadiness = {
           ...variableCharges,
-          linkLabel: 'Open Variable Charges in FCOS',
+          linkLabel: 'Open FCOS task',
         };
       }
       return this.supplierVariableChargeReadiness;
@@ -108,7 +108,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       this.supplierVariableChargeReadiness = {
         ready: false,
         requiresVariableChargeReview: true,
-        reason: 'Supplier Invoice readiness could not be verified. Refresh before creating the Supplier Invoice.',
+        reason: 'Supplier Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.',
         fcosUrl: `https://fcos.fcuno.com/master-contracts`,
         linkLabel: 'Open FCOS',
       };

@@ -401,7 +401,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     sections: [
       {
         title: 'Live case detection',
-        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually in Final Supplier Charges Verification. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
+        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually under “Who must confirm final supplier charges?”. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
       },
       {
         title: 'Delivery and two-stage ownership',
@@ -409,7 +409,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Review and controlled changes',
-        body: 'Each Supplier Trader reviews their exact supplier rows and records a reference or note; Salesforce Files are optional. Existing line items are read-only. Supplier Traders control cost, pricing basis, quantity/UOM, description and supplier-side extra costs. The Buyer Trader then records buyer pricing and buyer-charge decisions. Cancellation always sets Cancelled without deleting history.',
+        body: 'Each Supplier Trader marks every exact-supplier charge as Correct or Needs change and records one supplier reference or note; Salesforce Files are optional. Existing product lines remain read-only. The Buyer Trader reviews totals, records buyer-charge decisions and adds one case note. Cancellation always keeps the Salesforce history rather than deleting the row.',
       },
       {
         title: 'Permissions and overrides',
@@ -417,7 +417,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Invoice gate and later changes',
-        body: 'A required supplier invoice is blocked only until that exact Supplier Trader stage is Verified. Final buyer invoice creation, generation and sending remain blocked until every supplier stage and the Buyer Trader stage pass live Salesforce readiness. Proformas and credit notes bypass the buyer gate. Relevant later changes invalidate affected stages; changes after invoicing create an urgent Post-Invoice Change.',
+        body: 'A required Supplier Invoice is blocked only until that exact supplier’s costs are confirmed. Final Buyer Invoice creation, generation and sending remain blocked until every supplier stage and the Buyer Trader approval pass live Salesforce readiness. Proformas and credit notes bypass the buyer gate. Relevant later changes require review again; changes after invoicing appear as “Invoice already issued—action required”.',
       },
     ],
   },

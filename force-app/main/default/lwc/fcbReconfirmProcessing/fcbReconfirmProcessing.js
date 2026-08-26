@@ -123,18 +123,20 @@ export default class FcbReconfirmProcessing extends LightningElement {
       if (extraCostCount) itemParts.push(`${extraCostCount} extra cost${extraCostCount === 1 ? '' : 's'}`);
       const supplierStatus = row.supplierStatus || 'Pending';
       const statusToken = supplierStatus.toLowerCase().replace(/[^a-z]+/g, '-');
+      const needsAssignment = effectiveRequired && row.assignmentStatus !== 'Resolved';
       return {
         ...row,
         dirty: false,
         effectiveRequired,
-        supplierStatus,
+        supplierStatus: supplierStatus === 'Verified'
+          ? 'Confirmed'
+          : supplierStatus === 'Invalidated' ? 'Needs review again' : 'Not confirmed',
         itemSummary: itemParts.join(' · ') || 'No active charge rows',
-        requirementLabel: `Require verification for ${row.supplierName || 'supplier'}`,
+        requirementLabel: 'Review required before supplier invoice',
         requirementHelp: row.isAgent === true
-          ? 'Required by Account · Is Agent'
-          : effectiveRequired
-            ? 'Manually required for this STEM'
-            : 'Supplier Invoice is not gated by Variable Charges',
+          ? 'Automatically required'
+          : '',
+        reviewState: needsAssignment ? 'Needs assignment' : effectiveRequired ? 'Required' : 'Optional',
         assignmentClass: row.assignmentStatus === 'Resolved'
           ? 'assignment-resolved'
           : 'assignment-error',
@@ -169,9 +171,10 @@ export default class FcbReconfirmProcessing extends LightningElement {
           manualReviewRequired: checked,
           effectiveRequired: row.isAgent === true || checked,
           dirty: true,
-          requirementHelp: checked
-            ? 'Manually required for this STEM'
-            : 'Supplier Invoice is not gated by Variable Charges',
+          requirementHelp: '',
+          reviewState: checked
+            ? row.assignmentStatus === 'Resolved' ? 'Required' : 'Needs assignment'
+            : 'Optional',
           sourceClass: checked ? 'source-pill source-pill_manual' : 'source-pill',
           requirementSource: checked ? 'Manual selection' : 'Not required',
           variableRowClass: `variable-row variable-row_dirty${checked ? ' variable-row_required' : ''}`,
@@ -195,7 +198,7 @@ export default class FcbReconfirmProcessing extends LightningElement {
         this.variableChargeRows = this.normalizeVariableChargeRows(rows);
         this.dispatchEvent(new ShowToastEvent({
           title: 'Variable Charges updated',
-          message: 'Final supplier charge requirements were saved atomically.',
+          message: 'Supplier review requirements were saved.',
           variant: 'success',
         }));
       })

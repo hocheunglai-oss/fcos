@@ -117,7 +117,7 @@ export default class FcbInvoiceForm extends LightningElement {
                 this.variableChargeReadiness = {
                     ready: false,
                     requiresVariableChargeReview: true,
-                    reason: 'Variable Charges readiness could not be verified. Refresh and try again.',
+                    reason: 'Final Buyer Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.',
                     fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${this.stemId}`
                 };
             });
@@ -133,7 +133,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     get variableChargeReadinessReason() {
-        return this.variableChargeReadiness?.reason || 'Verifying Variable Charges readiness.';
+        return this.variableChargeReadiness?.reason || 'Checking whether the final Buyer Invoice is ready.';
     }
 
     get variableChargeFcosUrl() {

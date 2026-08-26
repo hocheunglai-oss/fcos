@@ -20,6 +20,8 @@ const VARIABLE_CHARGE_SCHEDULE_FIELDS = [
   'ETCD_Start_Date__c', 'ETCD_End_Date__c',
   'ETD_Start_Date__c', 'ETD_End_Date__c',
 ];
+const SIMPLE_QUEUE_NAMES = new Set(['my_tasks', 'waiting', 'ready_for_invoice', 'completed', 'all_cases']);
+const SUPPLIER_REVIEW_OUTCOMES = new Set(['correct', 'changed', 'cancelled']);
 
 function httpError(message, status = 400, code = 'VARIABLE_CHARGE_ERROR', details) {
   const error = new Error(message);
@@ -556,6 +558,101 @@ function serializeLiveRow(row, kind) {
   };
 }
 
+function finiteAmount(value) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function financialSummary(live) {
+  const rows = [
+    ...live.lineItems.map((row) => ({
+      supplierId: row.Original_Supplier__c,
+      cost: finiteAmount(row.Total_Cost__c),
+      charge: finiteAmount(row.Total_Price__c),
+    })),
+    ...live.extraCosts.map((row) => ({
+      supplierId: row.Supplier__c,
+      cost: finiteAmount(row.Line_Total_Buy__c),
+      charge: finiteAmount(row.Line_Total__c),
+    })),
+  ];
+  const summarize = (selected) => {
+    const costsComplete = selected.every((row) => row.cost != null);
+    const chargesComplete = selected.every((row) => row.charge != null);
+    const supplierCostTotal = costsComplete ? selected.reduce((sum, row) => sum + row.cost, 0) : null;
+    const buyerChargeTotal = chargesComplete ? selected.reduce((sum, row) => sum + row.charge, 0) : null;
+    return {
+      supplierCostTotal,
+      buyerChargeTotal,
+      margin: supplierCostTotal != null && buyerChargeTotal != null ? buyerChargeTotal - supplierCostTotal : null,
+      costsComplete,
+      chargesComplete,
+      rowCount: selected.length,
+    };
+  };
+  return {
+    ...summarize(rows),
+    currencyBasis: 'stem_currency',
+    bySupplier: live.accounts.map((account) => ({
+      supplierId: account.Id,
+      supplierName: account.Name,
+      ...summarize(rows.filter((row) => row.supplierId === account.Id)),
+    })),
+  };
+}
+
+function plainLanguageWorkflow(caseRow) {
+  const requirements = caseRow.supplierRequirements || [];
+  const pendingSuppliers = requirements.filter((row) => row.status !== 'Verified');
+  const currentSupplier = pendingSuppliers.find((row) => row.canVerify) || pendingSuppliers[0] || null;
+  const status = caseRow.status;
+  const postInvoice = status === 'post_invoice_changes';
+  const awaiting = status === 'awaiting_delivery';
+  const supplierStep = pendingSuppliers.length > 0;
+  const buyerStep = !supplierStep && status === 'needs_action' && !postInvoice;
+  const isMyTask = postInvoice
+    ? caseRow.capabilities?.canResolvePostInvoice === true
+    : awaiting ? false
+      : supplierStep ? pendingSuppliers.some((row) => row.canVerify)
+        : buyerStep && caseRow.capabilities?.canBuyerConfirm === true;
+  let simplifiedQueue = 'waiting';
+  if (isMyTask) simplifiedQueue = 'my_tasks';
+  else if (status === 'ready_for_invoice') simplifiedQueue = 'ready_for_invoice';
+  else if (status === 'completed') simplifiedQueue = 'completed';
+  const currentStep = postInvoice ? 'invoice_attention'
+    : supplierStep ? 'supplier_costs'
+      : buyerStep ? 'buyer_charges' : 'ready_for_invoices';
+  const responsiblePerson = supplierStep
+    ? currentSupplier?.assignedSupplierTrader?.name || 'Needs assignment'
+    : buyerStep || postInvoice
+      ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
+      : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
+  let nextAction = 'Waiting';
+  if (postInvoice) nextAction = 'Invoice already issued—action required';
+  else if (awaiting) nextAction = caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information';
+  else if (supplierStep) {
+    nextAction = currentSupplier?.assignmentStatus !== 'resolved'
+      ? `Assign a Supplier Trader for ${currentSupplier?.supplierName || 'this supplier'}`
+      : isMyTask ? `Confirm ${currentSupplier?.supplierName || 'supplier'} costs`
+        : `Waiting for ${responsiblePerson}`;
+  } else if (buyerStep) nextAction = isMyTask ? 'Approve buyer charges' : `Waiting for ${responsiblePerson}`;
+  else if (status === 'ready_for_invoice') nextAction = 'Ready for invoice creation';
+  else if (status === 'completed') nextAction = 'Completed';
+  return {
+    simplifiedQueue,
+    currentStep,
+    isMyTask,
+    responsiblePerson,
+    nextAction,
+    progress: {
+      supplierCosts: supplierStep ? 'current' : 'complete',
+      buyerCharges: supplierStep ? 'waiting' : buyerStep ? 'current' : 'complete',
+      readyForInvoices: status === 'ready_for_invoice' || status === 'completed' ? 'complete' : 'waiting',
+    },
+  };
+}
+
 function serializeCase(live, stored, profile, gm, dueDate) {
   const status = deriveStatus(live, stored);
   const actionability = variableChargeActionability(live);
@@ -582,7 +679,7 @@ function serializeCase(live, stored, profile, gm, dueDate) {
   }, profile, gm);
   baseCapabilities.canSupplierVerify = supplierRequirements.some((row) => row.canVerify);
   baseCapabilities.canBuyerConfirm = baseCapabilities.canConfirm && verifiedSupplierCount === supplierRequirements.length;
-  return {
+  const serialized = {
     id: stored?.id || null, stemId: live.stem.Id,
     stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
     stemReference: live.stem.KeyStem__c || null,
@@ -617,6 +714,17 @@ function serializeCase(live, stored, profile, gm, dueDate) {
     postInvoiceReferencePresent: Boolean(stored?.post_invoice_reference),
     urgent: status === 'post_invoice_changes' || Boolean(dueDate && dueDate < hongKongToday()),
     capabilities: baseCapabilities,
+    financialSummary: financialSummary(live),
+  };
+  const workflow = plainLanguageWorkflow(serialized);
+  return {
+    ...serialized,
+    workflow,
+    simplifiedQueue: workflow.simplifiedQueue,
+    currentStep: workflow.currentStep,
+    isMyTask: workflow.isMyTask,
+    responsiblePerson: workflow.responsiblePerson,
+    nextAction: workflow.nextAction,
   };
 }
 
@@ -641,8 +749,14 @@ async function serializeCases(client, liveCases, profile) {
 }
 
 function viewCounts(cases) {
-  const counts = { needs_action: 0, awaiting_delivery: 0, ready_for_invoice: 0, post_invoice_changes: 0, completed: 0 };
-  for (const row of cases) if (Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
+  const counts = {
+    my_tasks: 0, waiting: 0, ready_for_invoice: 0, completed: 0, all_cases: cases.length,
+    needs_action: 0, awaiting_delivery: 0, post_invoice_changes: 0,
+  };
+  for (const row of cases) {
+    if (Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
+    if (row.simplifiedQueue !== row.status && Object.prototype.hasOwnProperty.call(counts, row.simplifiedQueue)) counts[row.simplifiedQueue] += 1;
+  }
   return counts;
 }
 
@@ -650,8 +764,13 @@ export async function listVariableCharges(body, context) {
   const live = await loadLiveCases({ client: context.client, stemAccessCondition: context.stemAccessCondition || null });
   const serialized = await serializeCases(context.client, live, context.profile);
   const requestedView = text(body?.view, 60).toLowerCase().replaceAll('-', '_');
+  const filtered = !requestedView || requestedView === 'all' || requestedView === 'all_cases'
+    ? serialized.cases
+    : SIMPLE_QUEUE_NAMES.has(requestedView)
+      ? serialized.cases.filter((row) => row.simplifiedQueue === requestedView)
+      : serialized.cases.filter((row) => row.status === requestedView);
   return {
-    cases: requestedView && requestedView !== 'all' ? serialized.cases.filter((row) => row.status === requestedView) : serialized.cases,
+    cases: filtered,
     counts: viewCounts(serialized.cases),
     capabilities: { canGmOverride: serialized.gm.isGeneralManager, generalManagerConfigured: serialized.gm.configured },
     retrievedAt: new Date().toISOString(),
@@ -794,6 +913,77 @@ function reviewEvidence(review) {
   return { reference, evidenceDocumentIds };
 }
 
+function normalizeSupplierReviewPayload(body, supplierRows) {
+  if (!Array.isArray(body?.rowOutcomes)) return body;
+  const supplierReviewNote = text(body?.supplierReviewNote, 1000);
+  if (!supplierReviewNote) {
+    throw httpError('Add one supplier reference or note before confirming the costs.', 400, 'SUPPLIER_REVIEW_NOTE_REQUIRED');
+  }
+  const outcomes = new Map(body.rowOutcomes.map((row) => [
+    text(row?.sourceId || row?.id, 64),
+    {
+      outcome: text(row?.outcome, 32).toLowerCase(),
+      evidenceDocumentIds: Array.isArray(row?.evidenceDocumentIds) ? row.evidenceDocumentIds : [],
+    },
+  ]));
+  const updateIds = new Set((body?.extraCostUpdates || []).map((row) => text(row?.extraCostId || row?.id, 18)));
+  const cancellationIds = new Set((body?.cancellations || []).map((row) => text(typeof row === 'string' ? row : row?.extraCostId || row?.id, 18)));
+  const reviews = supplierRows.map((row) => {
+    const selected = outcomes.get(row.Id);
+    if (!selected || !SUPPLIER_REVIEW_OUTCOMES.has(selected.outcome)) {
+      throw httpError('Mark every supplier charge as Correct or Needs change before confirming.', 400, 'ROW_REVIEW_REQUIRED');
+    }
+    if (selected.outcome === 'changed' && !updateIds.has(row.Id)) {
+      throw httpError('Save the corrected cost fields for every charge marked Needs change.', 400, 'ROW_CHANGE_REQUIRED');
+    }
+    if (selected.outcome === 'cancelled' && !cancellationIds.has(row.Id)) {
+      throw httpError('A cancelled outcome must include the matching Salesforce charge cancellation.', 400, 'ROW_CANCELLATION_REQUIRED');
+    }
+    if (selected.outcome === 'correct' && (updateIds.has(row.Id) || cancellationIds.has(row.Id))) {
+      throw httpError('A changed or cancelled charge cannot also be marked Correct.', 400, 'ROW_OUTCOME_CONFLICT');
+    }
+    return {
+      sourceId: row.Id,
+      sourceType: row.Original_Supplier__c ? 'line_item' : 'extra_cost',
+      reviewed: true,
+      referenceOrNote: supplierReviewNote,
+      evidenceDocumentIds: selected.evidenceDocumentIds,
+    };
+  });
+  return { ...body, reviews };
+}
+
+function normalizeBuyerReviewPayload(body, live) {
+  if (!Array.isArray(body?.rowChargeDecisions)) return body;
+  const buyerReviewNote = text(body?.buyerReviewNote, 1000);
+  if (!buyerReviewNote) {
+    throw httpError('Add one case note before approving the buyer charges.', 400, 'BUYER_REVIEW_NOTE_REQUIRED');
+  }
+  const decisions = new Map(body.rowChargeDecisions.map((row) => [
+    text(row?.sourceId || row?.id, 64),
+    {
+      decision: text(row?.decision || row?.buyerChargeDecision, 32).toLowerCase(),
+      evidenceDocumentIds: Array.isArray(row?.evidenceDocumentIds) ? row.evidenceDocumentIds : [],
+    },
+  ]));
+  const rows = [...live.lineItems, ...live.extraCosts];
+  const reviews = rows.map((row) => {
+    const selected = decisions.get(row.Id);
+    if (!selected || !['include', 'exclude'].includes(selected.decision)) {
+      throw httpError('Choose Include or Exclude for every buyer charge before approval.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    }
+    return {
+      sourceId: row.Id,
+      sourceType: row.Original_Supplier__c ? 'line_item' : 'extra_cost',
+      reviewed: true,
+      buyerChargeDecision: selected.decision,
+      referenceOrNote: buyerReviewNote,
+      evidenceDocumentIds: selected.evidenceDocumentIds,
+    };
+  });
+  return { ...body, reviews };
+}
+
 async function validateReviews(body, live, files) {
   const reviews = Array.isArray(body?.reviews) ? body.reviews : [];
   const existingIds = [...live.lineItems, ...live.extraCosts].map((row) => row.Id);
@@ -849,7 +1039,7 @@ async function salesforceChargeWrites(body, live) {
   const additions = Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : [];
   const cancellations = Array.isArray(body?.cancellations) ? body.cancellations : [];
   if (additions.length || cancellations.length) {
-    throw httpError('Supplier-side additions and cancellations must be completed by the assigned Supplier Trader before Buyer confirmation.', 409, 'SUPPLIER_STAGE_WRITE_REQUIRED');
+    throw httpError('The assigned Supplier Trader must complete supplier additions and cancellations before buyer charges can be approved.', 409, 'SUPPLIER_STAGE_WRITE_REQUIRED');
   }
   const requests = [];
   const apiVersion = getApiVersion();
@@ -1103,6 +1293,7 @@ export async function verifyVariableChargeSupplier(body, context) {
     throw httpError('This supplier stage changed after it was opened.', 409, 'SUPPLIER_STAGE_CONFLICT');
   }
   const supplierRows = [...live.lineItems, ...live.extraCosts].filter((row) => (row.Original_Supplier__c || row.Supplier__c) === supplierId);
+  body = normalizeSupplierReviewPayload(body, supplierRows);
   const reviews = Array.isArray(body?.reviews) ? body.reviews : [];
   const reviewById = new Map(reviews.map((row) => [text(row?.sourceId || row?.id, 64), row]));
   for (const row of supplierRows) {
@@ -1173,7 +1364,7 @@ export async function confirmVariableChargeBuyer(body, context) {
   if ((live.supplierRequirements || []).some((row) => row.status !== 'Verified')) {
     throw httpError('Every required Supplier Trader must verify their supplier before Buyer Trader confirmation.', 409, 'SUPPLIER_STAGES_INCOMPLETE');
   }
-  return saveAndConfirmVariableCharges(body, context);
+  return saveAndConfirmVariableCharges(normalizeBuyerReviewPayload(body, live), context);
 }
 
 export async function overrideVariableChargeAssignment(body, context) {
@@ -1344,14 +1535,18 @@ function isShipAgentAccount(account) {
 export const variableChargeInternals = {
   deriveStatus,
   effectiveAssignee,
+  financialSummary,
   finalInvoice,
   isShipAgentAccount,
   isVariableChargeAccount,
   liveFingerprint,
   normalizedEmail,
   normalizedName,
+  normalizeBuyerReviewPayload,
+  normalizeSupplierReviewPayload,
   nextHongKongBusinessDay,
   variableChargeActionability,
+  plainLanguageWorkflow,
   sha256,
   SHIP_AGENT_STEM_CREATED_FROM: VARIABLE_CHARGE_STEM_CREATED_FROM,
   VARIABLE_CHARGE_STEM_CREATED_FROM,

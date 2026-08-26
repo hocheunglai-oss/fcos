@@ -159,6 +159,111 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
   }), original);
 });
 
+test('plain-language queues identify the current user task without changing internal statuses', () => {
+  const supplierTask = variableChargeInternals.plainLanguageWorkflow({
+    status: 'needs_action',
+    confirmed: false,
+    supplierRequirements: [{
+      status: 'Pending',
+      canVerify: true,
+      assignmentStatus: 'resolved',
+      supplierName: 'SUPPLIER A',
+      assignedSupplierTrader: { name: 'Supplier Trader' },
+    }],
+    capabilities: {},
+  });
+  assert.equal(supplierTask.simplifiedQueue, 'my_tasks');
+  assert.equal(supplierTask.currentStep, 'supplier_costs');
+  assert.equal(supplierTask.nextAction, 'Confirm SUPPLIER A costs');
+
+  const buyerTask = variableChargeInternals.plainLanguageWorkflow({
+    status: 'needs_action',
+    supplierRequirements: [{ status: 'Verified', canVerify: false }],
+    assignedBuyerTrader: { name: 'Buyer Trader' },
+    capabilities: { canBuyerConfirm: true },
+  });
+  assert.equal(buyerTask.simplifiedQueue, 'my_tasks');
+  assert.equal(buyerTask.currentStep, 'buyer_charges');
+  assert.equal(buyerTask.nextAction, 'Approve buyer charges');
+
+  const urgent = variableChargeInternals.plainLanguageWorkflow({
+    status: 'post_invoice_changes',
+    supplierRequirements: [],
+    assignedBuyerTrader: { name: 'Resolver' },
+    capabilities: { canResolvePostInvoice: true },
+  });
+  assert.equal(urgent.simplifiedQueue, 'my_tasks');
+  assert.equal(urgent.currentStep, 'invoice_attention');
+  assert.equal(urgent.nextAction, 'Invoice already issued—action required');
+});
+
+test('simplified supplier review uses one note while preserving exact row outcomes', () => {
+  const lineId = 'a012x0000000001AAA';
+  const extraId = 'a022x0000000001AAA';
+  const normalized = variableChargeInternals.normalizeSupplierReviewPayload({
+    supplierReviewNote: 'Supplier invoice SI-100 checked',
+    rowOutcomes: [
+      { sourceId: lineId, outcome: 'correct' },
+      { sourceId: extraId, outcome: 'changed' },
+    ],
+    extraCostUpdates: [{ extraCostId: extraId }],
+  }, [
+    { Id: lineId, Original_Supplier__c: '0012x0000000001AAA' },
+    { Id: extraId, Supplier__c: '0012x0000000001AAA' },
+  ]);
+  assert.equal(normalized.reviews.length, 2);
+  assert.ok(normalized.reviews.every((row) => row.reviewed === true));
+  assert.ok(normalized.reviews.every((row) => row.referenceOrNote === 'Supplier invoice SI-100 checked'));
+  assert.throws(() => variableChargeInternals.normalizeSupplierReviewPayload({
+    supplierReviewNote: 'Checked',
+    rowOutcomes: [{ sourceId: extraId, outcome: 'changed' }],
+  }, [{ Id: extraId, Supplier__c: '0012x0000000001AAA' }]), /Save the corrected cost fields/);
+});
+
+test('simplified buyer approval uses one case note and exact include or exclude decisions', () => {
+  const lineId = 'a012x0000000001AAA';
+  const extraId = 'a022x0000000001AAA';
+  const normalized = variableChargeInternals.normalizeBuyerReviewPayload({
+    buyerReviewNote: 'Charges checked against confirmation',
+    rowChargeDecisions: [
+      { sourceId: lineId, decision: 'include' },
+      { sourceId: extraId, decision: 'exclude' },
+    ],
+  }, { lineItems: [{ Id: lineId, Original_Supplier__c: '0012x0000000001AAA' }], extraCosts: [{ Id: extraId, Supplier__c: '0012x0000000001AAA' }] });
+  assert.deepEqual(normalized.reviews.map((row) => row.buyerChargeDecision), ['include', 'exclude']);
+  assert.ok(normalized.reviews.every((row) => row.referenceOrNote === 'Charges checked against confirmation'));
+  assert.throws(() => variableChargeInternals.normalizeBuyerReviewPayload({
+    buyerReviewNote: '', rowChargeDecisions: [],
+  }, { lineItems: [], extraCosts: [] }), /Add one case note/);
+});
+
+test('financial summary is deterministic and fails closed on incomplete totals', () => {
+  assert.deepEqual(variableChargeInternals.financialSummary({
+    accounts: [{ Id: '0012x0000000001AAA', Name: 'SUPPLIER A' }],
+    lineItems: [{ Original_Supplier__c: '0012x0000000001AAA', Total_Cost__c: 100, Total_Price__c: 130 }],
+    extraCosts: [{ Supplier__c: '0012x0000000001AAA', Line_Total_Buy__c: 20, Line_Total__c: 25 }],
+  }), {
+    supplierCostTotal: 120,
+    buyerChargeTotal: 155,
+    margin: 35,
+    costsComplete: true,
+    chargesComplete: true,
+    rowCount: 2,
+    currencyBasis: 'stem_currency',
+    bySupplier: [{
+      supplierId: '0012x0000000001AAA', supplierName: 'SUPPLIER A',
+      supplierCostTotal: 120, buyerChargeTotal: 155, margin: 35,
+      costsComplete: true, chargesComplete: true, rowCount: 2,
+    }],
+  });
+  const incomplete = variableChargeInternals.financialSummary({
+    accounts: [], lineItems: [{ Total_Cost__c: null, Total_Price__c: 10 }], extraCosts: [],
+  });
+  assert.equal(incomplete.supplierCostTotal, null);
+  assert.equal(incomplete.margin, null);
+  assert.equal(incomplete.costsComplete, false);
+});
+
 test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', async () => {
   const [service, functions, policies, ui, methodology] = await Promise.all([
     repositoryFile('api/_variableCharges.js'),
@@ -188,7 +293,9 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /Cancelled__c: true/);
   assert.doesNotMatch(service, /method:\s*'DELETE'/);
   assert.doesNotMatch(service, /sendOperationalMail|sendEmail|Graph/);
-  assert.match(ui, /Row-by-row charge review/);
+  assert.match(ui, /Confirm \{activeSupplierStage\.supplierName \|\| 'supplier'\} costs/);
+  assert.match(ui, /Approve buyer charges/);
+  assert.match(ui, /Audit details/);
   assert.match(methodology, /'variable-charges'/);
 });
 
@@ -202,7 +309,8 @@ test('Variable Charges UI shows complete STEM identity and explicit readiness ba
   assert.match(service, /stemReference: live\.stem\.KeyStem__c/);
   assert.match(service, /ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c/);
   assert.match(ui, /Latest ETA \/ ETB \/ ETCD \/ ETD/);
-  assert.match(ui, /No Variable Charges due date/);
+  assert.match(ui, /Due \/ available/);
+  assert.match(ui, /Available from/);
   assert.match(methodology, /Extra-cost-only cases have no Variable Charges due date/);
 });
 
