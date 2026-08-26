@@ -296,6 +296,62 @@ test('preserves the pre-redesign parent-delivery quantity rule for STAR FLAME', 
   assert.equal(result.stems.rows[0].volumeMt, 875);
 });
 
+test('HK2627315T uses calculated buyer value while its final Buyer Invoice is not issued', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    buyerInvoices: [],
+    stems: [stem(STEM_A, {
+      Name: 'HK2627315T - NEW GLOBAL - HONG KONG',
+      KeyStem__c: 'HK2627315T',
+      Delivery_Date__c: '2026-08-22',
+      Total_Invoice_Amount__c: 0,
+      Total_Invoiced_Amount_From_Suppliers__c: 344_050,
+      Costs_Total__c: 1_274.91,
+      QLIK_STEM_Line_Item_Total_Cost__c: 344_050,
+      QLIK_Costs_Total_Cost__c: 267.51,
+    })],
+    lineItems: [
+      line('a02000000000315AAA', STEM_A, SUPPLIER_A, 363, 295_119, 284_955),
+      line('a02000000000316AAA', STEM_A, SUPPLIER_A, 53, 62_699, 59_095),
+    ],
+    extraCosts: [
+      { Id: 'a03000000000315AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A, Supplier__r: { Name: 'Agent' }, Quantity__c: 1, Line_Total__c: 1_000, Line_Total_Buy__c: 0, Cancelled__c: false },
+      { Id: 'a03000000000316AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A, Supplier__r: { Name: 'Agent' }, Quantity__c: 1, Line_Total__c: 267.51, Line_Total_Buy__c: 267.51, Cancelled__c: false },
+      { Id: 'a03000000000317AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A, Supplier__r: { Name: 'Agent' }, Quantity__c: 1, Line_Total__c: 7.4, Line_Total_Buy__c: 0, Cancelled__c: false },
+    ],
+  }), { today: '2026-08-26' });
+
+  assert.equal(result.stems.rows[0].buyerInvoiceIssued, false);
+  assert.equal(result.stems.rows[0].buyerAmountSource, 'calculated_unissued');
+  assert.ok(Math.abs(result.stems.rows[0].turnover - 359_092.91) < 0.000001);
+  assert.ok(Math.abs(result.stems.rows[0].grossProfit - 14_775.4) < 0.000001);
+});
+
+test('HK2627293T does not show a negative profit before its Buyer Invoice is issued', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    buyerInvoices: [],
+    stems: [stem(STEM_A, {
+      Name: 'HK2627293T - COREBEST OL - HONG KONG',
+      KeyStem__c: 'HK2627293T',
+      Delivery_Date__c: '2026-08-25',
+      Total_Invoice_Amount__c: 0,
+      Total_Invoiced_Amount_From_Suppliers__c: 257_174.3,
+      QLIK_STEM_Line_Item_Total_Cost__c: 257_174.3,
+      QLIK_Costs_Total_Cost__c: 0.5,
+    })],
+    lineItems: [line('a02000000007293AAA', STEM_A, SUPPLIER_A, 1, 260_207.2, 257_174.3)],
+    extraCosts: [{
+      Id: 'a03000000007293AAA', STEM__c: STEM_A, Supplier__c: SUPPLIER_A,
+      Supplier__r: { Name: 'Agent' }, Quantity__c: 1,
+      Line_Total__c: 0, Line_Total_Buy__c: 0.5,
+      Supplier_Invoice__c: null, Cancelled__c: false,
+    }],
+  }), { today: '2026-08-26' });
+
+  assert.equal(result.stems.rows[0].buyerAmountSource, 'calculated_unissued');
+  assert.ok(Math.abs(result.stems.rows[0].turnover - 260_207.2) < 0.000001);
+  assert.ok(Math.abs(result.stems.rows[0].grossProfit - 3_032.4) < 0.000001);
+});
+
 test('does not double count invoiced extra costs already included in the supplier invoice total', () => {
   const result = buildDashboardAccountInsight(dataset({
     stems: [stem(STEM_A, {

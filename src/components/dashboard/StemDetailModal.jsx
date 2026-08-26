@@ -432,6 +432,9 @@ function DocumentsSection({
 
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
+  const buyerLabel = record._Buyer_Invoice_Amount_Source === 'calculated_unissued'
+    ? 'Expected Buyer Invoice (Not issued)'
+    : 'Buyer Invoice';
   const uninvoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const invoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => !ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const sellOnlySupplierExtraCosts = extraCosts.reduce((sum, ec) => {
@@ -482,7 +485,7 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
     <div className={`mt-3 rounded-xl border px-5 py-3 ${isPositive ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
       <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
         <div className="flex flex-col">
-          <span className="text-xs text-muted-foreground mb-0.5">Buyer Invoice</span>
+          <span className="text-xs text-muted-foreground mb-0.5">{buyerLabel}</span>
           <span className="font-semibold text-foreground">{fmtMoney(buyer)}</span>
         </div>
         <div className="text-muted-foreground self-end pb-0.5">−</div>
@@ -614,7 +617,7 @@ function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerC
             <div className="text-xs text-muted-foreground">Invoice value, open receivable, and received dates.</div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <FinancialMetric label="Buyer Invoice Amount" value={record.Total_Invoice_Amount__c} />
+            <FinancialMetric label={record._Buyer_Invoice_Amount_Source === 'calculated_unissued' ? 'Expected Buyer Invoice (Not issued)' : 'Buyer Invoice Amount'} value={record.Total_Invoice_Amount__c} />
             <FinancialMetric label="Receivable Balance" value={record.Receivable_Balance__c} tone="receivable" />
           </div>
           <div>

@@ -1,6 +1,7 @@
 import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
 import { SALESFORCE_CORPORATE_CURRENCY, decisionDashboardSupplierAmount } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
+import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 
@@ -770,7 +771,15 @@ function buildStemFinancialRow(stem, context) {
   const sellOnlyUninvoicedExtra = activeExtraCosts.filter((item) => !item.Supplier_Invoice__c && Math.abs(extraBuyAmount(item, stemHasDelivery)) <= ZERO_TOLERANCE).reduce((sum, item) => sum + extraSellAmount(item, stemHasDelivery), 0);
   const salesforceBuyerAmount = number(stem.Total_Invoice_Amount__c);
   const estimatedBuyerAmount = lineSell + extraSell;
-  const buyer = !stemHasDelivery && estimatedBuyerAmount > 0 ? estimatedBuyerAmount : salesforceBuyerAmount ?? (estimatedBuyerAmount > 0 ? estimatedBuyerAmount : null);
+  const finalInvoiceIssued = context.buyerInvoiceStateKnown
+    ? context.finalBuyerInvoiceStemIds.has(stem.Id)
+    : salesforceBuyerAmount != null && Math.abs(salesforceBuyerAmount) > ZERO_TOLERANCE;
+  const buyerResolution = resolveBuyerFinancialAmount({
+    salesforceAmount: salesforceBuyerAmount,
+    calculatedAmount: estimatedBuyerAmount,
+    finalInvoiceIssued,
+  });
+  const buyer = buyerResolution.amount;
   const invoicedSupplier = number(stem.Total_Invoiced_Amount_From_Suppliers__c) ?? 0;
   const hasSupplierInvoice = activeLines.some((item) => item.Supplier_Invoice__c);
   const uninvoicedLineBuy = activeLines.filter((item) => !item.Supplier_Invoice__c).reduce((sum, item) => sum + lineBuyAmount(item, stemHasDelivery), 0);
@@ -894,10 +903,16 @@ function buildStemFinancialRow(stem, context) {
     deliveredVolumeMt,
     quantityVarianceMt: stemHasDelivery || deliveredVolumeMt > 0 ? deliveredVolumeMt - orderedVolumeMt : null,
     invoiceAmount: buyer,
-    invoiceValueSource: salesforceBuyerAmount != null ? 'invoiced' : estimatedBuyerAmount > 0 ? 'estimated' : 'unavailable',
+    invoiceValueSource: buyerResolution.source === 'issued_invoice'
+      ? 'invoiced'
+      : buyerResolution.source === 'calculated_unissued'
+        ? 'estimated'
+        : 'unavailable',
     receivableBalance: number(stem.Receivable_Balance__c),
     turnover: number(turnover),
     spend: number(spend),
+    buyerAmountSource: buyerResolution.source,
+    buyerInvoiceIssued: finalInvoiceIssued,
     grossProfit: grossProfit == null ? null : grossProfit,
     grossMarginPct: grossMarginPercent(grossProfit, turnover),
     brokerCommissions,
@@ -926,12 +941,19 @@ export function buildDashboardAccountInsight(dataset, {
   const lineItemsByStem = mapRows(dataset.lineItems);
   const extraCostsByStem = mapRows(dataset.extraCosts);
   const buyerBrokersByStem = mapRows(dataset.buyerBrokers);
+  const buyerInvoiceStateKnown = Array.isArray(dataset.buyerInvoices);
+  const finalBuyerInvoiceStemIds = new Set((dataset.buyerInvoices || [])
+    .filter(isFinalBuyerInvoice)
+    .map((invoice) => invoice.STEM__c)
+    .filter(Boolean));
   const context = {
     role,
     accountKey,
     lineItemsByStem,
     extraCostsByStem,
     buyerBrokersByStem,
+    buyerInvoiceStateKnown,
+    finalBuyerInvoiceStemIds,
     originalSupplierRelationship: dataset.schema.originalSupplierRelationship,
     extraCostSupplierField: dataset.schema.extraCostSupplierField,
     extraCostSupplierRelationship: dataset.schema.extraCostSupplierRelationship,

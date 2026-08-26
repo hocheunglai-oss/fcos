@@ -3,6 +3,7 @@ import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, dispute
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
+import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
 import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../../src/lib/paymentPostingReconciliation.js';
@@ -8846,17 +8847,19 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   if (extraSupplier.valid) extraSelect.push(extraSupplier.fieldName);
   if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Name`);
   if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Inactive_Suspended__c`);
-  const [lineItems, extraCosts, buyerBrokers] = stemIds.length ? await Promise.all([
+  const [lineItems, extraCosts, buyerBrokers, buyerInvoices] = stemIds.length ? await Promise.all([
     decisionDashboardRowsForStemIds('STEM_Line_Item__c', [...new Set(lineSelect)], stemIds),
     decisionDashboardRowsForStemIds('STEM_Extra_Cost__c', [...new Set(extraSelect)], stemIds),
     buyerBrokerCommissionField
       ? decisionDashboardRowsForStemIds('STEM_Buyer_Broker__c', ['STEM__c', buyerBrokerCommissionField], stemIds)
       : Promise.resolve([]),
-  ]) : [[], [], []];
+    decisionDashboardRowsForStemIds('Invoice__c', ['Id', 'Name', 'STEM__c', 'Proforma__c', 'Deprecated__c'], stemIds),
+  ]) : [[], [], [], []];
   const salesforceCompletedAt = Date.now();
   const lineByStem = new Map();
   const extraByStem = new Map();
   const buyerBrokerByStem = new Map();
+  const finalBuyerInvoiceStemIds = new Set(buyerInvoices.filter(isFinalBuyerInvoice).map((invoice) => invoice.STEM__c).filter(Boolean));
   for (const item of lineItems) if (!item.Cancelled__c) lineByStem.set(item.STEM__c, [...(lineByStem.get(item.STEM__c) || []), item]);
   for (const item of extraCosts) if (!item.Cancelled__c) extraByStem.set(item.STEM__c, [...(extraByStem.get(item.STEM__c) || []), item]);
   for (const item of buyerBrokers) buyerBrokerByStem.set(item.STEM__c, (buyerBrokerByStem.get(item.STEM__c) || 0) + decisionDashboardNumber(item[buyerBrokerCommissionField]));
@@ -8910,7 +8913,12 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       };
     }, { sell: 0, uninvoicedBuy: 0, invoicedBuy: 0, sellOnlyUninvoiced: 0 });
     const calculatedBuyer = lineTotals.sell + extraTotals.sell;
-    const buyer = !delivered && calculatedBuyer > 0 ? calculatedBuyer : decisionDashboardNullable(stem.Total_Invoice_Amount__c);
+    const buyerResolution = resolveBuyerFinancialAmount({
+      salesforceAmount: decisionDashboardNullable(stem.Total_Invoice_Amount__c),
+      calculatedAmount: calculatedBuyer,
+      finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
+    });
+    const buyer = buyerResolution.amount;
     const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
       ? decisionDashboardNumber(stem.QLIK_STEM_Line_Item_Total_Cost__c) + decisionDashboardNumber(stem.QLIK_Costs_Total_Cost__c)
       : null;
@@ -9017,6 +9025,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       supplierAccounts,
       supplierProductRows,
       currency: dashboardCurrency(stem.CurrencyIsoCode), buyer, supplier, costs, brokerCommissions,
+      buyerAmountSource: buyerResolution.source,
+      buyerInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
       netPnl,
       supplierAllocations,
       volumeMt: lineTotals.volumeMt,
@@ -9275,10 +9285,10 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v8-stems'
+      ? 'decision-dashboard-v9-stems'
       : handler === 'analytics'
-        ? 'decision-dashboard-v9-analytics-calendar-year'
-        : `decision-dashboard-v8-${handler}`,
+        ? 'decision-dashboard-v10-analytics-calendar-year'
+        : `decision-dashboard-v9-${handler}`,
     ttlSeconds,
     payload: cachePayload,
     tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
@@ -10309,7 +10319,7 @@ async function stemPnlFull(body, req = null, accessContext = null) {
 
   const stemIds = stems.map((s) => s.Id);
   const idChunks = chunkIds(stemIds);
-  const [lineItemArrays, buyerBrokerArrays, extraCostArrays] = await Promise.all([
+  const [lineItemArrays, buyerBrokerArrays, extraCostArrays, buyerInvoiceArrays] = await Promise.all([
     Promise.all(
       idChunks.map((chunk) => {
         const inList = chunk.map((id) => `'${id}'`).join(',');
@@ -10352,11 +10362,21 @@ async function stemPnlFull(body, req = null, accessContext = null) {
         );
       }),
     ),
+    Promise.all(
+      idChunks.map((chunk) => {
+        const inList = chunk.map((id) => `'${id}'`).join(',');
+        return queryRows(
+          `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${inList}) LIMIT 5000`,
+          { limit: 5000, softFail: true },
+        );
+      }),
+    ),
   ]);
 
   const lineItems = lineItemArrays.flat();
   const buyerBrokerItems = buyerBrokerArrays.flat();
   const extraCosts = extraCostArrays.flat();
+  const finalBuyerInvoiceStemIds = new Set(buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice).map((invoice) => invoice.STEM__c).filter(Boolean));
   const stemById = Object.fromEntries(stems.map((stem) => [stem.Id, stem]));
   const byId = {};
   const initStem = (id) => {
@@ -10412,7 +10432,12 @@ async function stemPnlFull(body, req = null, accessContext = null) {
   const rows = stems.map((s) => {
     const agg = byId[s.Id] || {};
     const calculatedBuyer = (agg.buyerLineSell ?? 0) + (agg.extraCostSell ?? 0);
-    const buyer = !s.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : (s.Total_Invoice_Amount__c ?? 0);
+    const buyerResolution = resolveBuyerFinancialAmount({
+      salesforceAmount: s.Total_Invoice_Amount__c,
+      calculatedAmount: calculatedBuyer,
+      finalInvoiceIssued: finalBuyerInvoiceStemIds.has(s.Id),
+    });
+    const buyer = buyerResolution.amount ?? 0;
     const supplierBase = (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + (agg.hasSupplierInvoice ? (agg.uninvoicedSupplierLineBuy ?? 0) : (agg.supplierLineBuy ?? 0));
     const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
     const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
@@ -10432,6 +10457,7 @@ async function stemPnlFull(body, req = null, accessContext = null) {
       Expected_Delivery_Date: s.Expected_Delivery_Date__c,
       Buyer: s['Account__r']?.Name ?? null,
       Buyer_Invoice: buyer || null,
+      Buyer_Invoice_Source: buyerResolution.source,
       Supplier_Invoice: supplier || null,
       Supplier_Broker_Name: agg.suppBrokerName || null,
       Supplier_Broker_Comm: suppBrokerComm !== 0 ? suppBrokerComm : null,
@@ -15022,9 +15048,10 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const supplierInvoicesByStem = {};
   const supplierInvoicePayableByStem = {};
   const supplierPaymentsByInvoice = {};
+  const finalBuyerInvoiceStemIds = new Set();
 
   if (stemIds.length) {
-    const [lineItemArrays, extraCostArrays, supplierInvoiceArrays] = await Promise.all([
+    const [lineItemArrays, extraCostArrays, supplierInvoiceArrays, buyerInvoiceArrays] = await Promise.all([
       compositeQueryRows(
         chunkIds(stemIds).map((chunk) => {
           const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
@@ -15081,7 +15108,21 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             }),
           )
         : Promise.resolve([]),
+      compositeQueryRows(
+        chunkIds(stemIds).map((chunk) => {
+          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
+          return {
+            soql: `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${inList}) LIMIT 5000`,
+            limit: 5000,
+            softFail: true,
+          };
+        }),
+      ),
     ]);
+
+    for (const invoice of buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice)) {
+      if (invoice.STEM__c) finalBuyerInvoiceStemIds.add(invoice.STEM__c);
+    }
 
     for (const item of lineItemArrays.flat()) {
       if (!item.STEM__c) continue;
@@ -15291,7 +15332,12 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
         const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
         const calculatedBuyerInvoice = lineSellTotal + extraSellTotal;
-        const buyerInvoiceAmount = !stem.Delivery_Date__c && calculatedBuyerInvoice > 0 ? calculatedBuyerInvoice : stem.Total_Invoice_Amount__c;
+        const buyerInvoiceResolution = resolveBuyerFinancialAmount({
+          salesforceAmount: stem.Total_Invoice_Amount__c,
+          calculatedAmount: calculatedBuyerInvoice,
+          finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
+        });
+        const buyerInvoiceAmount = buyerInvoiceResolution.amount;
         const stemBasePnl = buyerInvoiceAmount == null ? null : Number(buyerInvoiceAmount || 0) - Number(calculatedSupplierInvoice || 0);
         const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
         const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
@@ -15456,6 +15502,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const buyerFinanceRow = {
           buyerName: disputePartyRegistry.buyer?.name || (stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null),
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
+          buyerInvoiceAmountSource: buyerInvoiceResolution.source,
           paymentDueDate: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
           receivableBalance: stem.Receivable_Balance__c ?? null,
           disputeRows: [],
@@ -17790,11 +17837,12 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     });
   }
 
-  const [recordRaw, lineItems, extraCosts, buyerBrokers] = await Promise.all([
+  const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
     queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
     queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
     queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
+    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
   ]);
   const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
   const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
@@ -18017,11 +18065,17 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     return sum + extraSellAmount(ec, stemHasDelivery);
   }, 0);
   const calculatedUndatedBuyerInvoice = calculatedLineItemSell + calculatedExtraCostSell;
-  const shouldUseCalculatedBuyerInvoice = !recordRaw.Delivery_Date__c && calculatedUndatedBuyerInvoice > 0;
+  const buyerInvoiceResolution = resolveBuyerFinancialAmount({
+    salesforceAmount: recordRaw.Total_Invoice_Amount__c,
+    calculatedAmount: calculatedUndatedBuyerInvoice,
+    finalInvoiceIssued: buyerInvoices.some(isFinalBuyerInvoice),
+  });
   const calculatedSupplierInvoice = payableAmountCandidates[0] ?? 0;
   const record = {
     ...recordRaw,
-    Total_Invoice_Amount__c: shouldUseCalculatedBuyerInvoice ? calculatedUndatedBuyerInvoice : recordRaw.Total_Invoice_Amount__c,
+    Total_Invoice_Amount__c: buyerInvoiceResolution.amount,
+    _Buyer_Invoice_Amount_Source: buyerInvoiceResolution.source,
+    _Buyer_Invoice_Issued: buyerInvoices.some(isFinalBuyerInvoice),
     _Supplier_Invoice_Amount: calculatedSupplierInvoice,
     _Buyer_Pay_Term_Date: calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c,
     _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
@@ -18052,7 +18106,7 @@ async function salesforceStemDetailFull(body, req = null, accessContext = null) 
   if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-detail',
+    namespace: 'salesforce-stem-detail-v2',
     ttlSeconds: 15,
     payload: { stemId },
     tags: ['salesforce:stem', `salesforce:stem:${stemId}`],

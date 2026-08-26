@@ -208,6 +208,7 @@ function applyDashboardScope(dataset, requestedScope) {
       previousExtraCosts: dataset.previousExtraCosts.filter(keepPrevious),
       buyerBrokers: dataset.buyerBrokers.filter(keepCurrent),
       previousBuyerBrokers: dataset.previousBuyerBrokers.filter(keepPrevious),
+      buyerInvoices: (dataset.buyerInvoices || []).filter((row) => currentIds.has(row.STEM__c) || previousIds.has(row.STEM__c)),
       buyerPaymentsByStem: Object.fromEntries(Object.entries(dataset.buyerPaymentsByStem || {}).filter(([stemId]) => currentIds.has(stemId))),
       supplierInvoices: dataset.supplierInvoices.filter((row) => currentIds.has(row.stemId)),
     },
@@ -586,13 +587,14 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
 }
 
 async function loadSalesforceDataset({ accountId, role, period, interoffice, force }) {
-  const [accountDescribe, stemDescribe, lineDescribe, productDescribe, extraDescribe, buyerBrokerDescribe, invoiceDescribe, paymentDescribe] = await Promise.all([
+  const [accountDescribe, stemDescribe, lineDescribe, productDescribe, extraDescribe, buyerBrokerDescribe, buyerInvoiceDescribe, invoiceDescribe, paymentDescribe] = await Promise.all([
     describeObject('Account', force),
     describeObject('STEM__c', force),
     describeObject('STEM_Line_Item__c', force),
     describeObject('Product2', force),
     describeObject('STEM_Extra_Cost__c', force),
     describeObject('STEM_Buyer_Broker__c', force).catch(() => ({ fields: [] })),
+    describeObject('Invoice__c', force).catch(() => ({ fields: [] })),
     describeObject('Supplier_Invoice__c', force).catch(() => ({ fields: [] })),
     describeObject('Payment__c', force).catch(() => ({ fields: [] })),
   ]);
@@ -602,6 +604,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   const productFields = fieldMap(productDescribe);
   const extraFields = fieldMap(extraDescribe);
   const buyerBrokerFields = fieldMap(buyerBrokerDescribe);
+  const buyerInvoiceFields = fieldMap(buyerInvoiceDescribe);
   const invoiceFields = fieldMap(invoiceDescribe);
   const paymentFields = fieldMap(paymentDescribe);
   const buyerLookup = stemFields.get('Account__c');
@@ -633,11 +636,15 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     productUomField,
   });
   const buyerBrokerConfig = buyerBrokerQueryConfiguration(buyerBrokerFields, accountFields);
-  const [lineItems, extraCosts, buyerBrokerRows] = await Promise.all([
+  const buyerInvoiceSelect = selected(buyerInvoiceFields, ['Id', 'Name', 'STEM__c', 'Amount__c', 'Proforma__c', 'Deprecated__c', 'LastModifiedDate']);
+  const [lineItems, extraCosts, buyerBrokerRows, buyerInvoices] = await Promise.all([
     queryChildren(allStemIds, [...new Set(lineFieldsToQuery)], 'STEM_Line_Item__c'),
     queryChildren(allStemIds, extraFieldsToQuery, 'STEM_Extra_Cost__c'),
     buyerBrokerConfig.fields.length
       ? queryChildren(allStemIds, buyerBrokerConfig.fields, 'STEM_Buyer_Broker__c')
+      : Promise.resolve([]),
+    buyerInvoiceSelect.includes('STEM__c')
+      ? queryChildren(allStemIds, buyerInvoiceSelect, 'Invoice__c')
       : Promise.resolve([]),
   ]);
   const buyerBrokers = buyerBrokerRows.map((row) => ({
@@ -693,6 +700,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     previousExtraCosts: extraCosts.filter((row) => previousIds.has(row.STEM__c)),
     buyerBrokers: buyerBrokers.filter((row) => currentIds.has(row.STEM__c)),
     previousBuyerBrokers: buyerBrokers.filter((row) => previousIds.has(row.STEM__c)),
+    buyerInvoices,
     buyerPaymentsByStem: buyerPayments.byStem,
     supplierInvoices: supplierInvoices.rows,
     schema,
@@ -915,7 +923,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
   const cachePayload = { accountId: idKey(accountId), role, period };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '2',
+    version: '3',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,
