@@ -335,6 +335,9 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /expectedLastModifiedDate/);
   const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
   assert.match(liveLoader, /CurrencyIsoCode/);
+  const extraCostQuery = liveLoader.match(/SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c[^`]+FROM STEM_Extra_Cost__c/)?.[0] || '';
+  assert.ok(extraCostQuery);
+  assert.doesNotMatch(extraCostQuery, /CurrencyIsoCode/);
   assert.match(liveLoader, /Account__r\.Name/);
   assert.match(liveLoader, /Vessel__r\.Name/);
   assert.match(liveLoader, /Port__r\.Name/);
